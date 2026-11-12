@@ -19,6 +19,8 @@ import httpx
 from datetime import datetime, timezone
 
 from cryptography.fernet import Fernet, InvalidToken
+
+from .data_keyring import DataKeyring, DataKeyringError
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 MEDIA_PATTERN = re.compile(
@@ -30,13 +32,15 @@ Image.MAX_IMAGE_PIXELS = 36_000_000
 
 
 class MediaArchive:
-    def __init__(self, data_dir: Path, master_secret: str):
+    def __init__(self, data_dir: Path, master_secret: str, *, keyring: DataKeyring | None = None):
         self.root = Path(data_dir) / "media_archive"
         self.root.mkdir(parents=True, exist_ok=True)
         self.db_path = self.root / "index.sqlite3"
         self.settings_path = self.root / "settings.enc"
-        secret_key = hashlib.sha256(("chat2api:media:settings:v1:" + master_secret).encode()).digest()
+        secret_key = hashlib.sha256(("chat2api:media:settings:v1:" + str(master_secret or "")).encode()).digest()
         self._cipher = Fernet(base64.urlsafe_b64encode(secret_key))
+        self._legacy_master_secret = str(master_secret or "")
+        self.keyring = keyring
         self._init_db()
 
     def _db(self):
@@ -71,13 +75,57 @@ class MediaArchive:
                            "access_key_id": "", "secret_access_key": ""}}
         if self.settings_path.exists():
             try:
-                decoded = self._cipher.decrypt(self.settings_path.read_bytes())
+                encrypted = self.settings_path.read_bytes()
+                if self.keyring and DataKeyring.looks_like_envelope(encrypted):
+                    decoded = self.keyring.decrypt(encrypted, "media_archive.settings")
+                else:
+                    # Read-only compatibility for settings written before DataKeyring.
+                    decoded = self._cipher.decrypt(encrypted)
                 data = json.loads(decoded)
-                if isinstance(data, dict):
-                    defaults.update({k: v for k, v in data.items() if k in defaults})
-            except (InvalidToken, ValueError, OSError) as exc:
-                raise RuntimeError("Cannot decrypt media settings; verify the administrator key") from exc
+                if not isinstance(data, dict):
+                    raise ValueError("Media settings document must be an object")
+                defaults.update({k: v for k, v in data.items() if k in defaults})
+            except (DataKeyringError, InvalidToken, ValueError, OSError) as exc:
+                raise RuntimeError("Cannot decrypt media settings; restore the matching data or legacy key") from exc
         return defaults
+
+    def migrate_legacy_settings(self) -> bool:
+        """Explicitly migrate settings.enc; normal reads never rewrite legacy data."""
+        if not self.keyring or not self.settings_path.exists():
+            return False
+        encrypted = self.settings_path.read_bytes()
+        if DataKeyring.looks_like_envelope(encrypted):
+            self.keyring.decrypt(encrypted, "media_archive.settings")
+            return False
+        if not self._legacy_master_secret and not self.keyring.allow_empty_media_legacy:
+            raise RuntimeError(
+                "Migrating media settings encrypted with an empty legacy key requires explicit operator confirmation"
+            )
+        try:
+            plaintext = self._cipher.decrypt(encrypted)
+            decoded = json.loads(plaintext)
+            if not isinstance(decoded, dict):
+                raise ValueError("Media settings document must be an object")
+        except (InvalidToken, ValueError, OSError) as error:
+            raise RuntimeError("Cannot migrate media settings without the matching legacy key") from error
+        DataKeyring.backup_file(self.settings_path)
+        payload = self.keyring.encrypt(plaintext, "media_archive.settings").encode("utf-8")
+        temporary = self.settings_path.with_name(f".{self.settings_path.name}.{secrets.token_hex(8)}.tmp")
+        try:
+            with open(temporary, "xb") as stream:
+                os.fchmod(stream.fileno(), 0o600)
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, self.settings_path)
+            try:
+                os.chmod(self.settings_path, 0o600)
+            except OSError:
+                pass
+        finally:
+            temporary.unlink(missing_ok=True)
+        self._config()
+        return True
 
     def public_config(self):
         cfg = self._config()
@@ -120,12 +168,26 @@ class MediaArchive:
             raise ValueError("S3 bucket, access key and secret key are required")
         cfg.update({"backend": backend, "auto_archive": bool(incoming.get("auto_archive", cfg["auto_archive"])),
                     "public_base_url": base, "s3": s3})
-        payload = self._cipher.encrypt(json.dumps(cfg, ensure_ascii=False).encode())
-        tmp = self.settings_path.with_suffix(".tmp")
-        with open(tmp, "wb") as stream:
-            os.fchmod(stream.fileno(), 0o600)
-            stream.write(payload)
-        os.replace(tmp, self.settings_path)
+        serialized = json.dumps(cfg, ensure_ascii=False).encode("utf-8")
+        payload = (
+            self.keyring.encrypt(serialized, "media_archive.settings").encode("utf-8")
+            if self.keyring
+            else self._cipher.encrypt(serialized)
+        )
+        tmp = self.settings_path.with_name(f".{self.settings_path.name}.{secrets.token_hex(8)}.tmp")
+        try:
+            with open(tmp, "xb") as stream:
+                os.fchmod(stream.fileno(), 0o600)
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(tmp, self.settings_path)
+            try:
+                os.chmod(self.settings_path, 0o600)
+            except OSError:
+                pass
+        finally:
+            tmp.unlink(missing_ok=True)
         return self.public_config()
 
     def _s3(self, cfg):

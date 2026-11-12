@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import base64
-import hashlib
 import json
 import re
 import secrets
+import threading
 import time
 from pathlib import Path
 from types import MethodType
@@ -12,13 +11,14 @@ from typing import Any
 from urllib.parse import urlencode
 
 import httpx
-from cryptography.fernet import Fernet, InvalidToken
+from cryptography.fernet import InvalidToken
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
 from .admin_auth import SESSION_COOKIE as ADMIN_SESSION_COOKIE
 from .timezone_utils import beijing_now_iso
+from .data_keyring import DataKeyring, DataKeyringError
 from .user_commerce import USER_SESSION_COOKIE
 from .user_console_v104_patch import _parse_json_maybe_wrapped, _safe_url, _verify_zpay, _zpay_sign
 
@@ -34,18 +34,10 @@ def _now() -> str:
 
 
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{secrets.token_hex(6)}.tmp")
-    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    try:
-        temporary.chmod(0o600)
-    except OSError:
-        pass
-    temporary.replace(path)
-    try:
-        path.chmod(0o600)
-    except OSError:
-        pass
+    DataKeyring.atomic_write(
+        path,
+        (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8"),
+    )
 
 
 def _valid_tron_address(value: str) -> bool:
@@ -60,10 +52,36 @@ class PaymentChannelsStore:
     and are never returned by public/admin read APIs.
     """
 
-    def __init__(self, data_dir: Path, secret: str) -> None:
+    def __init__(
+        self,
+        data_dir: Path,
+        secret: str | DataKeyring,
+        *,
+        legacy_secrets: list[str] | tuple[str, ...] = (),
+    ) -> None:
         self.path = data_dir / "user_payment_channels_v106.json"
-        key = base64.urlsafe_b64encode(hashlib.sha256(str(secret or "chat2api-payment-v106").encode()).digest())
-        self.cipher = Fernet(key)
+        self.keyring = secret if isinstance(secret, DataKeyring) else None
+        if self.keyring:
+            candidates = list(legacy_secrets) + list(self.keyring.legacy_secrets_for("payment_channels"))
+            # v107 temporarily rebound the old Fernet cipher to data_secret.key.
+            # Keep that format decrypt-only while all new writes use the keyring.
+            candidates.append(self.keyring.root_secret)
+            normalized: list[str] = []
+            for candidate in candidates:
+                value = str(candidate or "")
+                if value and value not in normalized:
+                    normalized.append(value)
+            self.legacy_secrets = tuple(normalized)
+            self.legacy_ciphers = [DataKeyring.legacy_fernet(value) for value in normalized]
+            self.cipher = self.legacy_ciphers[0] if self.legacy_ciphers else None
+        else:
+            # Direct Store construction remains compatible with existing unit
+            # callers; production always injects the shared DataKeyring.
+            value = str(secret or "chat2api-payment-v106")
+            self.legacy_secrets = (value,)
+            self.cipher = DataKeyring.legacy_fernet(value)
+            self.legacy_ciphers = [self.cipher]
+        self.lock = threading.RLock()
         self.payload: dict[str, Any] = {
             "version": 106,
             "public_origin": "",
@@ -103,9 +121,21 @@ class PaymentChannelsStore:
             return
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, TypeError):
-            return
-        if not isinstance(raw, dict):
+            if not isinstance(raw, dict):
+                raise ValueError("Invalid payment channel document shape")
+            for group in ("aggregate", "direct"):
+                if group in raw and not isinstance(raw[group], dict):
+                    raise ValueError(f"Invalid payment channel {group} shape")
+                incoming = raw.get(group)
+                if isinstance(incoming, dict):
+                    for provider, values in incoming.items():
+                        if provider in self.payload[group] and not isinstance(values, dict):
+                            raise ValueError(f"Invalid payment channel {group}.{provider} shape")
+        except (OSError, ValueError, TypeError) as error:
+            if self.keyring:
+                raise DataKeyringError(
+                    "Stored payment channel document is unreadable; restore a verified backup"
+                ) from error
             return
         self.payload["public_origin"] = str(raw.get("public_origin") or "")
         for group in ("aggregate", "direct"):
@@ -116,18 +146,62 @@ class PaymentChannelsStore:
                 if provider in self.payload[group] and isinstance(values, dict):
                     self.payload[group][provider].update(values)
         self.payload["updated_at"] = raw.get("updated_at") or self.payload["updated_at"]
+        # A non-empty ciphertext that cannot be opened is a key mismatch or
+        # corruption, never evidence that the merchant has not configured a secret.
+        for ciphertext in (
+            self.payload["aggregate"]["zpay"].get("key_ciphertext"),
+            self.payload["direct"]["paypal"].get("client_secret_ciphertext"),
+        ):
+            if ciphertext:
+                self._decrypt(ciphertext)
 
     def _save(self) -> None:
         _atomic_json(self.path, self.payload)
+
+    def _encrypt(self, value: str) -> str:
+        if self.keyring:
+            return self.keyring.encrypt(value, "payment_channels")
+        return self.cipher.encrypt(value.encode("utf-8")).decode("ascii")
 
     def _decrypt(self, value: Any) -> str:
         text = str(value or "")
         if not text:
             return ""
-        try:
-            return self.cipher.decrypt(text.encode("ascii")).decode("utf-8")
-        except (InvalidToken, ValueError):
-            return ""
+        if self.keyring and DataKeyring.looks_like_envelope(text):
+            return self.keyring.decrypt(text, "payment_channels").decode("utf-8")
+        for cipher in self.legacy_ciphers:
+            try:
+                return cipher.decrypt(text.encode("ascii")).decode("utf-8")
+            except (InvalidToken, ValueError, UnicodeEncodeError):
+                continue
+        raise DataKeyringError(
+            "Stored payment channel credential cannot be decrypted; restore its matching legacy key before changing provider settings"
+        )
+
+    def migrate_legacy_ciphertexts(self) -> int:
+        """Explicitly migrate all known provider secrets; never run during normal load."""
+        if not self.keyring:
+            return 0
+        fields = (
+            (self.payload["aggregate"]["zpay"], "key_ciphertext"),
+            (self.payload["direct"]["paypal"], "client_secret_ciphertext"),
+        )
+        staged: list[tuple[dict[str, Any], str, str]] = []
+        for row, field in fields:
+            value = str(row.get(field) or "")
+            if not value:
+                continue
+            if DataKeyring.looks_like_envelope(value):
+                self.keyring.decrypt(value, "payment_channels")
+                continue
+            plaintext = self._decrypt(value)
+            staged.append((row, field, self.keyring.encrypt(plaintext, "payment_channels")))
+        if staged:
+            DataKeyring.backup_file(self.path)
+            for row, field, ciphertext in staged:
+                row[field] = ciphertext
+            self._save()
+        return len(staged)
 
     def zpay_key(self) -> str:
         return self._decrypt(self.payload["aggregate"]["zpay"].get("key_ciphertext"))
@@ -199,7 +273,7 @@ class PaymentChannelsStore:
             if cid and not re.fullmatch(r"\d+(?:,\d+)*", cid):
                 raise ValueError("ZPAY 渠道 ID 只能填写数字，多个 ID 使用英文逗号分隔")
         if z_in.get("key"):
-            zpay["key_ciphertext"] = self.cipher.encrypt(str(z_in["key"]).encode()).decode("ascii")
+            zpay["key_ciphertext"] = self._encrypt(str(z_in["key"]))
         if z_in.get("clear_key"):
             zpay["key_ciphertext"] = ""
 
@@ -210,7 +284,7 @@ class PaymentChannelsStore:
             "client_id": str(p_in.get("client_id") or "").strip()[:240],
         })
         if p_in.get("client_secret"):
-            paypal["client_secret_ciphertext"] = self.cipher.encrypt(str(p_in["client_secret"]).encode()).decode("ascii")
+            paypal["client_secret_ciphertext"] = self._encrypt(str(p_in["client_secret"]))
         if p_in.get("clear_secret"):
             paypal["client_secret_ciphertext"] = ""
 
@@ -274,12 +348,22 @@ def install_payment_channels_v106_patch(app: FastAPI) -> FastAPI:
     pricing = app.state.user_pricing
     admin_sessions = getattr(app.state, "admin_sessions", None)
     data_dir = Path(settings.data_dir)
+    data_keyring = getattr(app.state, "data_keyring", None)
+    if not isinstance(data_keyring, DataKeyring):
+        raise RuntimeError("PaymentChannelsStore requires the shared DataKeyring")
+    legacy_candidates: list[str] = []
     secret_path = data_dir / ".chat2api_data_secret"
     try:
-        data_secret = secret_path.read_text(encoding="utf-8").strip()
+        legacy_value = secret_path.read_text(encoding="utf-8").strip()
+        legacy_candidates.append(legacy_value or "chat2api-payment-v106")
     except OSError:
-        data_secret = str(getattr(settings, "api_key", "") or "chat2api")
-    channels = PaymentChannelsStore(data_dir, data_secret)
+        # The historical installer fell back to settings.api_key or "chat2api".
+        legacy_candidates.append("chat2api")
+    legacy_candidates.extend(
+        value for value in data_keyring.legacy_secrets_for("payment_channels") if value
+    )
+    legacy_candidates.extend([data_keyring.root_secret, "chat2api"])
+    channels = PaymentChannelsStore(data_dir, data_keyring, legacy_secrets=legacy_candidates)
     app.state.user_payment_channels_v106 = channels
 
     original_create_order = billing.create_order

@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import re
 import secrets
 import sqlite3
@@ -20,6 +21,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from .admin import admin_response
 from .admin_auth import same_origin_admin_request
 from .api_keys import ApiKeyStore, ApiPrincipal, UNSET
+from .data_keyring import DataKeyring
 from .broker import RequestBroker, RequestState
 from .chat_media_deadline_v171 import chat_timeout_window, worker_chat_timeout, long_form_text_requested
 from .chat_progress_stream_v196 import status_from_diagnostics, progress_is_real
@@ -89,10 +91,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     native_dom_evidence = NativeDomEvidenceStore(config.data_dir)
     native_content = NativeContentStore(config.data_dir)
     native_chunks = NativeChunkAssembler(native_content)
-    api_keys = ApiKeyStore(config.data_dir, config.api_key)
+    data_keyring = DataKeyring(
+        config.data_dir,
+        legacy_secrets={
+            "api_key.recoverable": [config.api_key],
+            "media_archive.settings": [config.api_key],
+            "payment_channels": [config.api_key, "chat2api"],
+        },
+        allow_empty_media_legacy=os.getenv("CHAT2API_CONFIRM_EMPTY_MEDIA_LEGACY_KEY", "").strip().lower() in {"1", "true", "yes"},
+    )
+    api_keys = ApiKeyStore(config.data_dir, config.api_key, keyring=data_keyring)
     telemetry.usage_accounting = api_keys.account_completed_usage
     file_store = FileStore(config.data_dir)
-    media_archive = MediaArchive(config.data_dir, config.api_key)
+    media_archive = MediaArchive(config.data_dir, config.api_key, keyring=data_keyring)
+    # Fail closed during application construction if persisted encrypted settings cannot be read.
+    media_archive._config()
     generated_files = GeneratedFileArchive(media_archive)
     generated_staging = GeneratedFileStaging(media_archive.root)
     generated_files.staging = generated_staging
@@ -130,6 +143,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.native_dom_evidence = native_dom_evidence
     app.state.native_content = native_content
     app.state.api_keys = api_keys
+    app.state.data_keyring = data_keyring
     app.state.file_store = file_store
     app.state.media_archive = media_archive
     app.state.generated_files = generated_files

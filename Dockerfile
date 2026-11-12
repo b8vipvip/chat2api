@@ -34,6 +34,7 @@ RUN --mount=type=cache,id=chat2api-pip,target=/root/.cache/pip,sharing=locked \
 
 COPY app ./app
 COPY scripts/bootstrap_linux_worker.sh ./scripts/bootstrap_linux_worker.sh
+COPY scripts/migrate_data_keyring.py ./scripts/migrate_data_keyring.py
 
 # Worker hosts no longer clone GitHub. Ship the exact worker payload in the
 # center-server image and expose it as a verified tarball from /bootstrap/.

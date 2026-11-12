@@ -1,9 +1,11 @@
 import base64
 import io
+import json
 from pathlib import Path
 
 import pytest
 from PIL import Image
+from app.data_keyring import DataKeyring
 from app.media_archive_v173 import MediaArchive
 
 
@@ -218,3 +220,59 @@ def test_backfill_keeps_original_backend_after_default_storage_changed(tmp_path:
     report = store.repair_thumbnails()
     assert report["repaired"] == 1 and report["failed"] == 0
     assert store.load(row["id"], row["token"], thumbnail=True)[1] == "image/webp"
+
+
+def test_media_settings_new_writes_use_keyring_and_keep_legacy_read_support(tmp_path: Path):
+    legacy_secret = "old-admin-api-key"
+    legacy_store = MediaArchive(tmp_path, legacy_secret)
+    legacy_store.configure({
+        "backend": "s3",
+        "public_base_url": "https://media.example.com",
+        "s3": {
+            "bucket": "legacy-bucket",
+            "region": "us-west-2",
+            "endpoint": "https://s3.example.com",
+            "access_key_id": "legacy-access",
+            "secret_access_key": "legacy-secret",
+        },
+    })
+
+    keyring = DataKeyring(
+        tmp_path,
+        legacy_secrets={"media_archive.settings": [legacy_secret]},
+    )
+    store = MediaArchive(tmp_path, legacy_secret, keyring=keyring)
+    legacy_config = store.public_config()
+    assert legacy_config["backend"] == "s3"
+    assert legacy_config["s3"]["bucket"] == "legacy-bucket"
+    assert legacy_config["s3"]["credentials_configured"] is True
+
+    assert store.migrate_legacy_settings() is True
+    assert store.migrate_legacy_settings() is False
+    envelope = json.loads(store.settings_path.read_text(encoding="utf-8"))
+    assert envelope["format"] == DataKeyring.FORMAT
+    assert envelope["purpose"] == "media_archive.settings"
+    assert "legacy-secret" not in str(envelope)
+
+    store.configure({"public_base_url": "https://media-v2.example.com"})
+    reloaded = MediaArchive(tmp_path, "changed-admin-api-key", keyring=keyring)
+    assert reloaded.public_config()["backend"] == "s3"
+    assert reloaded.public_config()["s3"]["bucket"] == "legacy-bucket"
+    assert reloaded.public_config()["public_base_url"] == "https://media-v2.example.com"
+
+
+def test_empty_legacy_media_key_requires_operator_confirmation_for_migration(tmp_path: Path):
+    keyring = DataKeyring(tmp_path)
+    legacy = MediaArchive(tmp_path, "")
+    legacy.configure({
+        "backend": "s3",
+        "s3": {"bucket": "empty-key-bucket", "access_key_id": "access", "secret_access_key": "secret"},
+    })
+    store = MediaArchive(tmp_path, "", keyring=keyring)
+    with pytest.raises(RuntimeError, match="explicit operator confirmation"):
+        store.migrate_legacy_settings()
+
+    confirmed = DataKeyring(tmp_path, allow_empty_media_legacy=True)
+    approved_store = MediaArchive(tmp_path, "", keyring=confirmed)
+    assert approved_store.migrate_legacy_settings() is True
+    assert approved_store.public_config()["s3"]["bucket"] == "empty-key-bucket"

@@ -17,6 +17,7 @@ chrome_extension/**
 docs
 scripts/*
 !scripts/bootstrap_linux_worker.sh
+!scripts/migrate_data_keyring.py
 !scripts/linux_worker_agent.py
 !scripts/linux_worker_agent_v43.py
 !scripts/linux_worker_agent_v44.py

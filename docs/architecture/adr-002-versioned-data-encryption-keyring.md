@@ -275,3 +275,34 @@ PaymentChannelsStore.__init__ 再用 SHA256(secret) 派生 Fernet key；若直�
 - [ ] 缺 key / 解密失败一律 fail closed，不再使用公开 fallback 或静默空值。
 - [ ] 迁移采用 dry-run、备份、原子写入、readback、rollback 的显式流程。
 - [ ] 首个实现 PR 只增加服务、迁移命令和测试；不自动迁移任何真实生产数据。
+
+
+## 8. Offline migration implementation slice (PR #786)
+
+The implementation adds `app.data_keyring_migration.DataKeyringMigrationService` and the maintenance CLI `scripts/migrate_data_keyring.py`. The tool is intentionally separate from application startup and does not run automatically.
+
+The service stages copies of the four encrypted stores (managed API keys, MediaArchive settings, PaymentConfig, and PaymentChannels), verifies legacy readability, performs purpose-scoped re-encryption in the staging directory, and verifies every resulting envelope before presenting a plan. `--dry-run` does not rewrite source ciphertext files or create a migration manifest.
+
+For an approved maintenance window, stop the API process and all Workers before applying:
+
+```bash
+# Build the image containing the maintenance CLI, then stage a read-only preview.
+docker compose build chat2api
+docker compose run --rm --no-deps chat2api python scripts/migrate_data_keyring.py --dry-run
+
+# Apply only after stopping the API and every Worker using this data volume.
+docker compose stop chat2api
+docker compose run --rm --no-deps chat2api python scripts/migrate_data_keyring.py --apply --confirm-offline
+docker compose up -d chat2api
+
+# If rollback is required, stop API/Workers again before restoring.
+docker compose stop chat2api
+docker compose run --rm --no-deps chat2api python scripts/migrate_data_keyring.py --rollback --confirm-offline
+docker compose up -d chat2api
+```
+
+Apply creates non-overwriting `.pre-keyring.bak` files and SHA-256 sidecars before replacing any source file. A mode-0600 `data_keyring_migration.json` manifest records only file paths, hashes, state and counts; it contains no keys or plaintext. Each replacement is atomic and followed by readback validation. A failed apply attempts to restore all already-replaced files and verifies the legacy state. Explicit rollback refuses to overwrite files whose current hashes no longer match either the recorded pre-migration or post-migration state.
+
+The CLI refuses to initialize a missing root key. If the historical MediaArchive settings were encrypted with an empty `CHAT2API_API_KEY`, the operator must explicitly set `CHAT2API_CONFIRM_EMPTY_MEDIA_LEGACY_KEY=1` only after confirming that historical fact. The tool does not execute a migration against any production volume.
+
+**Status remains Proposed / implementation branch only.** This code does not approve the ADR, authorize production migration, or permit removal of legacy keys/backups. A production dry-run, backup verification, apply, restart/readback and rollback rehearsal remain separate operator-controlled acceptance steps.

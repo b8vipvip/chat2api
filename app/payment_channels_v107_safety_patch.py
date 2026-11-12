@@ -1,17 +1,11 @@
 from __future__ import annotations
 
-import base64
-import hashlib
 import re
 import secrets
-from pathlib import Path
 from typing import Any
 
-from cryptography.fernet import Fernet
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
-
-from .api_keys import load_or_create_data_secret
 
 
 PATCH_REVISION = 107
@@ -34,14 +28,12 @@ def install_payment_channels_v107_safety_patch(app: FastAPI) -> FastAPI:
         return app
     app.state.payment_channels_v107_safety_installed = True
 
-    # v106 originally bootstrapped its cipher before reusing the canonical data
-    # secret. Rebind it to the same server-local secret used by managed API keys
-    # and the v104 payment store, so rotating the administrator API key cannot
-    # make PayPal/ZPAY credentials undecryptable after restart.
+    # v106 and v107 historically used different Fernet key sources. The
+    # production Store now receives the shared DataKeyring and keeps those old
+    # sources decrypt-only; this patch must never replace its active writer.
     channels = app.state.user_payment_channels_v106
-    data_secret = load_or_create_data_secret(Path(app.state.settings.data_dir))
-    key = base64.urlsafe_b64encode(hashlib.sha256(data_secret.encode("utf-8")).digest())
-    channels.cipher = Fernet(key)
+    if channels.keyring is not getattr(app.state, "data_keyring", None):
+        raise RuntimeError("PaymentChannelsStore is not bound to the application DataKeyring")
     billing = app.state.user_billing
 
     @app.middleware("http")
