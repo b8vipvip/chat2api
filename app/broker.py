@@ -16,6 +16,9 @@ class RequestState:
     final_future: asyncio.Future[str] | None = None
     text: str = ""
     created_mono: float = field(default_factory=time.perf_counter)
+    # The exact authenticated socket used to dispatch this request. Events
+    # arriving on another/reconnected Worker socket must not publish into it.
+    dispatch_socket: Any | None = field(default=None, repr=False, compare=False)
     # Server-side dispatch clocks only. A successful registry.send is not
     # proof that the Worker acknowledged or started the browser request.
     dispatch_send_started_mono: float | None = None
@@ -28,6 +31,16 @@ class RequestState:
     completed_mono: float | None = None
     terminal_event_type: str | None = None
     diagnostics: dict[str, Any] = field(default_factory=dict)
+
+    def owns_dispatch_socket(self, client_id: str, websocket: Any, current_socket: Any) -> bool:
+        """Require the exact request, Worker identity and dispatch socket."""
+        return bool(
+            client_id
+            and websocket is not None
+            and self.client_id == str(client_id)
+            and self.dispatch_socket is websocket
+            and current_socket is websocket
+        )
 
     def timings(self) -> dict[str, float | None]:
         end = self.completed_mono or time.perf_counter()
