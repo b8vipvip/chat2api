@@ -287,7 +287,7 @@ jobs:
               if line.strip().startswith("tests/") and "::" in line
           ]
           print(f"collected_test_count={len(items)}")
-          for percent in (24, 27, 55, 89, 92):
+          for percent in (24, 27, 51.5, 52, 53, 55, 89, 92):
               center = max(0, min(len(items) - 1, round(len(items) * percent / 100)))
               print(f"--- collection window {percent}% index={center} ---")
               for index in range(max(0, center - 8), min(len(items), center + 9)):
