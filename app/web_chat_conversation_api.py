@@ -70,7 +70,8 @@ def install_web_chat_conversations(app: FastAPI) -> FastAPI:
         limit: int = Query(default=30, ge=1, le=100),
         offset: int = Query(default=0, ge=0),
     ) -> dict:
-        return store.list(principal(request), limit=limit, offset=offset)
+        result = store.list(principal(request), limit=limit, offset=offset)
+        return result
 
     @app.get("/api/user/chat/conversations/{conversation_id}")
     async def get_conversation(conversation_id: str, request: Request) -> dict:
