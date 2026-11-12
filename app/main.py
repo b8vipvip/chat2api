@@ -10,6 +10,7 @@ import sqlite3
 import time
 import uuid
 from contextlib import asynccontextmanager
+from urllib.parse import urlsplit
 from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncIterator
 
@@ -803,7 +804,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=503, detail=str(error)) from error
 
     @app.put("/api/admin/modes", dependencies=[Depends(require_admin_key)])
-    async def update_admin_modes(payload: dict[str, Any]) -> dict[str, object]:
+    async def update_admin_modes(request: Request, payload: dict[str, Any]) -> dict[str, object]:
+        # This endpoint is used by the cookie-authenticated admin console.
+        # Require a same-origin browser mutation to prevent cross-site settings writes.
+        origin = str(request.headers.get("origin") or "").strip()
+        parsed_origin = urlsplit(origin)
+        request_host = str(request.headers.get("host") or "").strip().lower()
+        fetch_site = str(request.headers.get("sec-fetch-site") or "").strip().lower()
+        if (
+            parsed_origin.scheme not in {"http", "https"}
+            or not parsed_origin.netloc
+            or parsed_origin.netloc.lower() != request_host
+            or parsed_origin.path not in {"", "/"}
+            or parsed_origin.query
+            or parsed_origin.fragment
+            or fetch_site not in {"", "same-origin"}
+        ):
+            raise HTTPException(status_code=403, detail="Mode settings updates require a same-origin admin request")
         if set(payload) != {"mode1_cookie_proxy_requested"}:
             raise HTTPException(
                 status_code=422,
