@@ -7,6 +7,7 @@ The API adapter and future Web BFF remain responsible for those concerns.
 """
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
@@ -16,7 +17,7 @@ from .registry import ClientRegistry
 
 @dataclass(frozen=True)
 class ChatDispatch:
-    """Immutable description of the Worker command, never a broker terminal."""
+    """Detached Worker command snapshot, never a broker terminal."""
 
     request_id: str
     prompt: str
@@ -34,8 +35,8 @@ class ChatDispatch:
         return cls(
             request_id=request_id,
             prompt=prompt,
-            attachments=tuple(dict(value) for value in attachments),
-            options=dict(options),
+            attachments=tuple(deepcopy(dict(value)) for value in attachments),
+            options=deepcopy(dict(options)),
         )
 
     def worker_message(self) -> dict[str, object]:
@@ -43,8 +44,8 @@ class ChatDispatch:
             "type": "chat.request",
             "request_id": self.request_id,
             "prompt": self.prompt,
-            "attachments": [dict(item) for item in self.attachments],
-            "options": dict(self.options),
+            "attachments": deepcopy(list(self.attachments)),
+            "options": deepcopy(self.options),
         }
 
 
@@ -73,5 +74,16 @@ class ChatRequestService:
         attachments: Sequence[Mapping[str, object]],
         options: Mapping[str, Any],
     ) -> None:
+        # A Worker command must be backed by the exact live Broker lease. This
+        # prevents a future adapter/BFF from dispatching an untracked request or
+        # accidentally sending a reserved request to a different Worker.
+        state = self.broker.requests.get(request_id)
+        if state is None:
+            raise RuntimeError("request must be reserved before Worker dispatch")
+        if state.client_id != client_id:
+            raise RuntimeError("request lease belongs to a different Worker")
+        if state.final_future.done():
+            raise RuntimeError("request is already terminal and cannot be dispatched")
+
         command = ChatDispatch.build(request_id, prompt, attachments, options)
         await self.registry.send(client_id, command.worker_message())
