@@ -108,12 +108,23 @@ class AdminLoginRateLimiter:
                 values = [stamp for stamp in self.failures.get(key, []) if now - stamp < self.window_seconds]
                 values.append(now)
                 self.failures[key] = values
+            if len(self.failures) > 10_000:
+                cutoff = now - self.window_seconds
+                for key, values in list(self.failures.items()):
+                    kept = [stamp for stamp in values if stamp > cutoff]
+                    if kept:
+                        self.failures[key] = kept
+                    else:
+                        self.failures.pop(key, None)
+                while len(self.failures) > 10_000:
+                    self.failures.pop(next(iter(self.failures)))
 
     def record_success(self, username: str, remote_addr: str) -> None:
-        identity_key, ip_key = self._keys(username, remote_addr)
+        identity_key, _ip_key = self._keys(username, remote_addr)
         with self.lock:
+            # A successful account login must not erase the source-IP budget
+            # for attempts against other administrator identities.
             self.failures.pop(identity_key, None)
-            self.failures.pop(ip_key, None)
 
 
 SESSION_COOKIE = "chat2api_admin_session"
