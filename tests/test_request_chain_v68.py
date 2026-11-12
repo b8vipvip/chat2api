@@ -345,3 +345,15 @@ def test_native_shared_message_identity_v291_win_and_request_regression():
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "v291 shared Windows/request native identity" in result.stdout
+
+
+
+def test_r05_short_reply_stability_provenance_uses_single_request_v6_policy():
+    """Contract guard: no second terminal clock or stale fixed 8s label."""
+    request = read("chrome_extension/content_request_v6.js")
+    assert "function abortedReplyStableThreshold(rendered)" in request
+    assert "shortReplyStabilityPolicy?.requiredStableMs(rendered) ?? 8000" in request
+    assert request.count("${abortedReplyStableThreshold(rendered)}ms-stable") == 4
+    assert "+8s-stable" not in request
+    assert "response_terminal_required_stable_ms: abortedReplyStableThreshold(rendered)" in request
+    assert "response_terminal_stable_ms: abortedReplyStableElapsedMs(abortedRenderedCandidateSince)" in request

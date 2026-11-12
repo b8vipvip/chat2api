@@ -92,6 +92,7 @@
         "content_native_dom_evidence_v1.js",
         "content_native_file_v210.js",
         "content_probe_supervisor_v1.js",
+        "short_reply_stability_policy_v1.js",
         "content_request_v6.js",
         "content_chatgpt_choice_policy_v143.js",
         "content_interruption_guard_v72.js",
