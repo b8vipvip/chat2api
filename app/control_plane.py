@@ -39,16 +39,20 @@ class ControlPlaneError(ValueError):
 
 
 def permission_for_admin_route(path: str, method: str) -> str | None:
-    """Explicit, fail-closed permission map for the production admin API surface.
+    """Explicit allowlist for delegated admin endpoint patterns.
 
-    New/unknown routes require super_admin until classified by a reviewed policy.
-    Legacy admin session and CSRF middleware remains the authentication authority.
+    A new child route (including a secret/export endpoint) must never inherit a
+    broad prefix rule accidentally. Root super_admin retains legacy access.
     """
     write = method.upper() not in {"GET", "HEAD", "OPTIONS"}
     suffix = "write" if write else "read"
-    if path == "/api/clients" or path.startswith("/api/admin/extensions") or path.startswith("/api/admin/pairing-codes"):
+    if path == "/api/clients" or path == "/api/admin/extensions":
         return "system:" + suffix
-    if path == "/api/admin/control/admins" or path.startswith("/api/admin/control/admins/"):
+    if re.fullmatch(r"/api/admin/extensions/[^/]+/(disconnect|enable)", path):
+        return "system:write"
+    if path == "/api/admin/pairing-codes" or re.fullmatch(r"/api/admin/pairing-codes/[^/]+", path):
+        return "system:" + suffix
+    if path == "/api/admin/control/admins" or re.fullmatch(r"/api/admin/control/admins/[^/]+", path):
         return "admins:write" if write else "admins:read"
     if path == "/api/admin/control/client":
         return "clients:" + suffix
@@ -56,25 +60,37 @@ def permission_for_admin_route(path: str, method: str) -> str | None:
         return "admins:read"
     if path == "/api/admin/audit":
         return "audit:read"
-    if path == "/api/admin/users" or path.startswith("/api/admin/users/"):
+    if path == "/api/admin/users" or re.fullmatch(
+        r"/api/admin/users/[^/]+(?:/sessions/revoke|/keys(?:/[^/]+)?)?", path
+    ):
         return "users:" + suffix
-    if path == "/api/admin/keys" or path.startswith("/api/admin/keys/"):
-        # Legacy secret-reveal routes must never be reachable by delegated roles.
-        if path.endswith("/secret") or "/master" in path:
-            return "secrets:read"
+    if re.fullmatch(r"/api/admin/keys/[^/]+/secret", path):
+        return "secrets:read"
+    if path == "/api/admin/keys" or re.fullmatch(r"/api/admin/keys/[^/]+", path):
         return "keys:" + suffix
-    if path.startswith("/api/admin/user-pricing") or path.startswith("/api/admin/user-payments"):
+    if path in {"/api/admin/user-pricing", "/api/admin/user-payments", "/api/admin/user-payments/test"}:
         return "billing:" + suffix
-    if path.startswith("/api/admin/models") or path.startswith("/api/admin/text-model") or path.startswith("/api/admin/worker-model"):
+    if path == "/api/admin/models":
         return "models:" + suffix
-    if path.startswith("/api/admin/worker-tools") or path.startswith("/api/admin/requests") or path.startswith("/api/admin/tests"):
-        return "diagnostics:" + suffix
+    if path == "/api/admin/requests":
+        return "diagnostics:read" if not write else None
+    # Raw request detail and media can contain user content or credentials.
+    # Do not grant delegated support access until a redacted projection exists.
+    if path == "/api/admin/worker-tools/catalog":
+        return "diagnostics:read"
+    if path == "/api/admin/worker-tools/policies":
+        return "diagnostics:read"
+    if re.fullmatch(r"/api/admin/worker-tools/policies/[^/]+", path):
+        return "diagnostics:write"
     if path == "/api/admin/overview":
         return "system:read"
     if path == "/api/admin/modes":
         return "system:" + suffix
+    if path == "/api/admin/plugins" or re.fullmatch(
+        r"/api/admin/plugins/[^/]+/versions/[^/]+", path
+    ):
+        return "plugins:" + suffix
     return None
-
 
 class ControlPlaneStore:
     """Single-process durable administrator directory and client flags.
