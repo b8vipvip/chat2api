@@ -60,7 +60,7 @@ def permission_for_admin_route(path: str, method: str) -> str | None:
     if path == "/api/admin/control/roles":
         return "admins:read"
     if path == "/api/admin/model-entitlements" or re.fullmatch(
-        r"/api/admin/model-entitlements/(global|key|user|tenant)/[^/]+", path
+        r"/api/admin/model-entitlements/(global|key|user|tenant|tenant_role)/[^/]+", path
     ):
         return "models:" + suffix
     if path == "/api/admin/audit":
