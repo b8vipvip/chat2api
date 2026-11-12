@@ -51,6 +51,7 @@ def test_workspace_store_membership_and_last_owner_guard(tmp_path: Path):
     store.upsert_member(a["tenant_id"], user2, "owner")
     store.bind_key(a["tenant_id"], user1, "key_123456789")
     assert store.tenant_for_key("key_123456789") == a["tenant_id"]
+    assert store.user_for_key("key_123456789") == user1
     assert store.keys_for_tenant(a["tenant_id"])[0]["user_id"] == user1
     with pytest.raises(TenantMembershipError, match="already bound"):
         store.bind_key(b["tenant_id"], user2, "key_123456789")
