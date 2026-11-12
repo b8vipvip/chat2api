@@ -852,9 +852,9 @@
         const part = await reader.read();
         if (part.done) break;
         buffer += decoder.decode(part.value, {stream:true});
-        buffer = buffer.replace(/\\r\\n/g, "\\n");
+        buffer = buffer.replace(/\r\n/g, "\n");
         let boundary;
-        while ((boundary = buffer.indexOf("\\n\\n")) >= 0) {
+        while ((boundary = buffer.indexOf("\n\n")) >= 0) {
           const frame = buffer.slice(0, boundary);
           buffer = buffer.slice(boundary + 2);
           if (consumeSseFrame(frame, assistant)) {
@@ -921,6 +921,7 @@
       state.apiToken = String(payload.token || "");
       if (!state.apiToken) throw new Error("API Key 密钥为空");
       try { localStorage.setItem("chat2api.webchat.key." + state.user.user_id, keyId); } catch {}
+      await loadModels();
       const conversation = currentConversation();
       if (conversation?.apiKeyId && conversation.apiKeyId !== keyId) {
         setConnection("此对话需要原 API Key", "error");
@@ -928,7 +929,6 @@
         setConnection("已连接", "ready");
       }
       resizeComposer();
-      await loadModels();
       renderAll();
       return true;
     } catch (error) {
