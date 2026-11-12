@@ -192,4 +192,4 @@ def test_admin_user_routes_require_an_authenticated_admin_session(tmp_path: Path
             "/api/admin/users/usr_missing",
             headers={"Origin": "http://testserver"},
             json={"enabled": False},
-        ).status_code == 403
+        ).status_code == 401
