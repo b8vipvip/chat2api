@@ -49,8 +49,8 @@ test("short answer requires current SSE, live scoped toolbar and unchanged worki
 });
 test("short DOM terminal stays under the sole request-v6 short-only stable guard",()=>{
   assert.match(request,/verifiedShortAbortCandidate\(active\)/);
-  assert.match(request,/Date\.now\(\) - abortedRenderedCandidateSince >= abortedReplyStableThreshold\(rendered\)/);
-  assert.match(request,/return rendered\?\.shortTextVerified \? 4500 : 8000/);
+  assert.match(request,/abortedReplyStableSince\(abortedRenderedCandidateSince, rendered\)/);
+  assert.match(request,/shortReplyStabilityPolicy\?\.requiredStableMs\(rendered\) \?\? 8000/);
   assert.match(request,/&& !upstreamStillWorking\(\)/);
   assert.match(request,/verified-short-sse-rendered-answer-v207/);
 });
