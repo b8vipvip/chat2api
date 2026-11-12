@@ -108,7 +108,7 @@ function setup(){
 }
 assert.match(source,/verifiedRolelessRichAbortCandidate\(active, current\)/);
 assert.match(source,/abortedReplyStableSince\(abortedRenderedCandidateSince, rendered\)/);
-assert.match(source,/return rendered\?\.shortTextVerified \? 4500 : 8000/);
+assert.match(source,/shortReplyStabilityPolicy\?\.requiredStableMs\(rendered\) \?\? 8000/);
 assert.match(source,/response_terminal_source: rendered\.rolelessRichVerified/);
 assert.match(source,/current\.latest === current\.rolelessHeading\.nextElementSibling/);
 assert.match(source,/type: "chat.completed", request_id: active.requestId/);
