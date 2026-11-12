@@ -30,8 +30,10 @@ storage from the production `app.entry:app` composition.
 Every route requires a valid user session; mutations additionally require an
 exact same-origin `Origin` header and (when supplied) same-origin Fetch Metadata.
 
-- `GET /api/user/chat/conversations?limit=30&offset=0` — paginated summaries
-  (`data`, `total`, `limit`, `offset`); summaries omit message bodies.
+- `GET /api/user/chat/conversations?limit=30&offset=0&q=...` — paginated,
+  owner-scoped summaries with bounded title/message-text search (`q` max 120
+  characters; literal `%` and `_` are not SQL wildcards). The response includes
+  `data`, `total`, `limit`, and `offset`; summaries omit message bodies.
 - `GET /api/user/chat/conversations/{id}` — one conversation and its messages;
   returns 404 for non-owners, unknown IDs and deleted conversations.
 - `PUT /api/user/chat/conversations/{id}` — create or replace a full snapshot.
