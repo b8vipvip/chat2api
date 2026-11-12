@@ -239,6 +239,64 @@ class UserAccountStore:
                     return user_id
         return None
 
+    def admin_list(self) -> list[dict[str, Any]]:
+        """Return a safe administrator projection; never expose password/session hashes."""
+        with self.lock:
+            self._cleanup_sessions(save=True)
+            session_counts: dict[str, int] = {}
+            for session in self.sessions.values():
+                user_id = str(session.get("user_id") or "")
+                if user_id:
+                    session_counts[user_id] = session_counts.get(user_id, 0) + 1
+            rows = []
+            for user_id, row in self.users.items():
+                item = self.public(row)
+                item["key_count"] = len({str(value) for value in row.get("key_ids") or [] if value})
+                item["active_sessions"] = session_counts.get(user_id, 0)
+                rows.append(item)
+            rows.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+            return rows
+
+    def admin_get(self, user_id: str) -> dict[str, Any] | None:
+        wanted = str(user_id or "")
+        return next((row for row in self.admin_list() if row["user_id"] == wanted), None)
+
+    def is_enabled(self, user_id: str) -> bool:
+        with self.lock:
+            row = self.users.get(str(user_id or ""))
+            return bool(row and row.get("enabled", True))
+
+    def set_enabled(self, user_id: str, enabled: bool) -> tuple[dict[str, Any], int]:
+        if type(enabled) is not bool:
+            raise ValueError("enabled must be a boolean")
+        with self.lock:
+            row = self.users.get(str(user_id))
+            if not row:
+                raise KeyError("用户不存在")
+            row["enabled"] = enabled
+            row["updated_at"] = _now()
+            revoked = 0
+            if not enabled:
+                for digest, session in list(self.sessions.items()):
+                    if str(session.get("user_id") or "") == str(user_id):
+                        self.sessions.pop(digest, None)
+                        revoked += 1
+            self._save()
+            return self.public(row), revoked
+
+    def revoke_user_sessions(self, user_id: str) -> int:
+        with self.lock:
+            if str(user_id) not in self.users:
+                raise KeyError("用户不存在")
+            revoked = 0
+            for digest, session in list(self.sessions.items()):
+                if str(session.get("user_id") or "") == str(user_id):
+                    self.sessions.pop(digest, None)
+                    revoked += 1
+            if revoked:
+                self._save()
+            return revoked
+
 
 class PricingStore:
     def __init__(self, data_dir: Path) -> None:

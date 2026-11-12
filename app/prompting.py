@@ -2,7 +2,7 @@ from .models import ChatMessage
 from .media_handoff import is_internal_tool_handoff
 
 
-def build_prompt(messages: list[ChatMessage], mode: str = "last_user") -> str:
+def build_prompt(messages: list[ChatMessage], mode: str = "full") -> str:
     if mode == "full":
         labels = {
             "system": "System",

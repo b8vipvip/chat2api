@@ -47,6 +47,77 @@ def test_responses_v108_routes_and_native_web_search_contract() -> None:
         _tool_config({"tools": [{"type": "function", "name": "fdex_smoke_echo"}]})
 
 
+def test_responses_v108_replaces_only_the_known_v13_post_route_owner() -> None:
+    app = FastAPI()
+
+    @app.post("/v1/responses")
+    async def responses():
+        return {"owner": "v13"}
+
+    # Model the exact historical route owner installed by app.v13_patch.
+    responses.__module__ = "app.v13_patch"
+
+    install_responses_v108_patch(app)
+    post_routes = [
+        route for route in app.routes
+        if getattr(route, "path", None) == "/v1/responses"
+        and "POST" in (getattr(route, "methods", None) or set())
+    ]
+    assert len(post_routes) == 1
+    assert post_routes[0].endpoint.__name__ == "create_response"
+    assert post_routes[0].endpoint.__module__ == "app.responses_v108_patch"
+    retrieve_routes = [
+        route for route in app.routes
+        if getattr(route, "path", None) == "/v1/responses/{response_id}"
+        and "GET" in (getattr(route, "methods", None) or set())
+    ]
+    assert len(retrieve_routes) == 1
+
+
+def test_responses_v108_fails_closed_on_unknown_post_route_owner() -> None:
+    app = FastAPI()
+
+    @app.post("/v1/responses")
+    async def third_party_responses():
+        return {"owner": "unexpected"}
+
+    with pytest.raises(RuntimeError, match="unexpected POST /v1/responses route owner"):
+        install_responses_v108_patch(app)
+
+    assert not getattr(app.state, "responses_v108_installed", False)
+    assert app.routes[-1].endpoint is third_party_responses
+
+
+def test_responses_v108_fails_closed_on_ambiguous_post_route_owners() -> None:
+    app = FastAPI()
+
+    @app.post("/v1/responses")
+    async def first_responses():
+        return {"owner": "first"}
+
+    @app.post("/v1/responses")
+    async def second_responses():
+        return {"owner": "second"}
+
+    with pytest.raises(RuntimeError, match="Multiple POST /v1/responses owners"):
+        install_responses_v108_patch(app)
+
+    assert not getattr(app.state, "responses_v108_installed", False)
+
+
+def test_responses_v108_fails_closed_if_retrieve_route_already_exists() -> None:
+    app = FastAPI()
+
+    @app.get("/v1/responses/{response_id}")
+    async def unexpected_retrieve(response_id: str):
+        return {"id": response_id}
+
+    with pytest.raises(RuntimeError, match="already has an owner"):
+        install_responses_v108_patch(app)
+
+    assert not getattr(app.state, "responses_v108_installed", False)
+
+
 def test_responses_v108_normalizes_native_web_query_and_sources() -> None:
     assert _query('slow|site:openai.com September 2025|3650|openai.com\nlength|long') == "site:openai.com September 2025"
     assert _query('search("OpenAI today")') == "OpenAI today"

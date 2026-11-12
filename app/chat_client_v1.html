@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>Chat2API · 聊天</title>
+  <link rel="stylesheet" href="/assets/chat2api-chat-client-v1.css">
+  <script defer src="/assets/chat2api-chat-client-v1.js"></script>
+</head>
+<body>
+  <div class="app-shell" id="appShell">
+    <aside class="sidebar" id="sidebar" aria-label="会话侧栏">
+      <div class="sidebar-top">
+        <a class="brand" href="/chat" aria-label="Chat2API 首页">
+          <span class="brand-mark">c</span>
+          <span>chat2api</span>
+        </a>
+        <button class="icon-button mobile-close" id="closeSidebar" type="button" aria-label="关闭侧栏">×</button>
+      </div>
+      <button class="new-chat-button" id="newChatButton" type="button">
+        <span class="plus">＋</span><span>新建对话</span>
+      </button>
+      <label class="search-box">
+        <span aria-hidden="true">⌕</span>
+        <input id="conversationSearch" type="search" placeholder="搜索对话" autocomplete="off">
+      </label>
+      <div class="history-label">最近</div>
+      <nav class="conversation-list" id="conversationList" aria-label="历史对话"></nav>
+      <div class="sidebar-spacer"></div>
+      <div class="sidebar-account">
+        <div class="account-row">
+          <div class="avatar account-avatar" id="accountAvatar">U</div>
+          <div class="account-meta">
+            <div class="account-name" id="accountName">正在验证登录…</div>
+            <a href="/console#keys">账户与 API Key 设置</a>
+          </div>
+        </div>
+        <label class="key-picker">
+          <span>API Key</span>
+          <select id="apiKeySelect" aria-label="选择 API Key">
+            <option value="">正在加载…</option>
+          </select>
+        </label>
+        <div class="sidebar-actions">
+          <a href="/console">控制台</a>
+          <button class="text-button" id="themeToggle" type="button">切换主题</button>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main-panel">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button class="icon-button mobile-menu" id="openSidebar" type="button" aria-label="打开侧栏">☰</button>
+          <div class="mobile-brand">chat2api</div>
+          <label class="model-picker">
+            <span class="sr-only">模型</span>
+            <select id="modelSelect" aria-label="选择模型">
+              <option value="gpt-5.6-sol">gpt-5.6-sol</option>
+            </select>
+          </label>
+          <span class="connection-state" id="connectionState">连接中</span>
+        </div>
+        <div class="topbar-actions">
+          <button class="icon-button" id="exportButton" type="button" title="导出当前对话" aria-label="导出当前对话">⇩</button>
+          <a class="topbar-link" href="/console">控制台</a>
+        </div>
+      </header>
+
+      <section class="welcome-screen" id="welcomeScreen">
+        <div class="welcome-mark">c</div>
+        <h1>有什么可以帮忙的？</h1>
+        <p>由 Chat2API 提供服务。选择模型，开始一段新对话。</p>
+        <div class="prompt-suggestions">
+          <button type="button" data-prompt="解释一个复杂的技术概念，并给出实际示例。">解释一个技术概念</button>
+          <button type="button" data-prompt="帮我分析这段代码的逻辑、潜在问题和改进方案。">分析代码</button>
+          <button type="button" data-prompt="帮我制定一个清晰、可执行的项目计划。">制定项目计划</button>
+          <button type="button" data-prompt="把下面的内容整理成结构清晰的表格和摘要。">整理信息</button>
+        </div>
+      </section>
+
+      <section class="chat-screen hidden" id="chatScreen" aria-label="聊天消息">
+        <div class="messages" id="messages" aria-live="polite"></div>
+      </section>
+
+      <section class="auth-required hidden" id="authRequired">
+        <div class="auth-card">
+          <div class="welcome-mark">c</div>
+          <h1>请先登录 Chat2API</h1>
+          <p>聊天客户端使用你的 Chat2API 用户账户和 API Key。</p>
+          <a class="primary-link" href="/console">前往用户控制台登录</a>
+        </div>
+      </section>
+
+      <section class="key-required hidden" id="keyRequired">
+        <div class="auth-card">
+          <div class="welcome-mark">c</div>
+          <h1>需要一个可用的 API Key</h1>
+          <p>请在用户控制台创建一个启用状态、未过期且具有 chat 权限的 API Key。密钥不会保存在浏览器本地存储中。</p>
+          <a class="primary-link" href="/console#keys">管理 API Key</a>
+        </div>
+      </section>
+
+      <footer class="composer-area" id="composerArea">
+        <div class="composer-wrap">
+          <div class="composer" id="composer">
+            <textarea id="messageInput" rows="1" maxlength="8000" placeholder="向 Chat2API 发送消息" aria-label="输入消息"></textarea>
+            <div class="composer-bottom">
+              <div class="composer-hint">Enter 发送 · Shift + Enter 换行</div>
+              <div class="composer-controls">
+                <button class="stop-button hidden" id="stopButton" type="button">停止生成</button>
+                <button class="send-button" id="sendButton" type="button" aria-label="发送消息" disabled>
+                  <span>↑</span>
+                </button>
+              </div>
+            </div>
+          </div>
+          <div class="composer-disclaimer" id="composerDisclaimer">聊天记录保存在当前浏览器；API Key 仅在本页面运行期间保留在内存中。</div>
+        </div>
+      </footer>
+    </main>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

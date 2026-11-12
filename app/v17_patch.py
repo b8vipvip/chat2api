@@ -9,7 +9,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
-from .admin_auth import AdminSessionStore, SESSION_COOKIE
+from .admin_auth import AdminSessionStore, SESSION_COOKIE, same_origin_admin_request
 from .pairing import PairingStore
 
 
@@ -254,6 +254,12 @@ def install_v17_patch(app: FastAPI) -> FastAPI:
 
         auth_path = path.startswith("/api/admin/auth/")
         admin_path = path.startswith("/api/admin/") or path == "/api/clients"
+        if admin_path and request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}:
+            if not same_origin_admin_request(request):
+                return JSONResponse(
+                    {"detail": "Administrator state changes require a same-origin request"},
+                    status_code=403,
+                )
         if admin_path and not auth_path:
             if not session_ok(request):
                 return JSONResponse({"detail": "Administrator login required"}, status_code=401)

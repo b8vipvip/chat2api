@@ -524,8 +524,46 @@ async def _stream(app: FastAPI, request: Request, state: Any, *, principal: ApiP
 def install_responses_v108_patch(app: FastAPI) -> FastAPI:
     if getattr(app.state, "responses_v108_installed", False):
         return app
-    app.state.responses_v108_installed = True
+
+    # v13 registered one legacy POST /v1/responses handler earlier in the
+    # production installer chain. Starlette uses first-match routing, so v108
+    # must replace that exact owner. Never delete an unknown or ambiguous route:
+    # that would hide a future installer conflict instead of failing closed.
+    legacy_post_routes = [
+        route for route in app.router.routes
+        if getattr(route, "path", None) == "/v1/responses"
+        and "POST" in (getattr(route, "methods", None) or set())
+    ]
+    if len(legacy_post_routes) > 1:
+        raise RuntimeError("Multiple POST /v1/responses owners exist before v108 installation")
+    if legacy_post_routes:
+        legacy_route = legacy_post_routes[0]
+        legacy_endpoint = getattr(legacy_route, "endpoint", None)
+        legacy_methods = set(getattr(legacy_route, "methods", None) or set())
+        if (
+            getattr(legacy_endpoint, "__module__", None) != "app.v13_patch"
+            or getattr(legacy_endpoint, "__name__", None) != "responses"
+            or legacy_methods != {"POST"}
+        ):
+            raise RuntimeError(
+                "Refusing to replace an unexpected POST /v1/responses route owner"
+            )
+    existing_retrieve_routes = [
+        route for route in app.router.routes
+        if getattr(route, "path", None) == "/v1/responses/{response_id}"
+        and "GET" in (getattr(route, "methods", None) or set())
+    ]
+    if existing_retrieve_routes:
+        raise RuntimeError(
+            "GET /v1/responses/{response_id} already has an owner before v108 installation"
+        )
+
+    if legacy_post_routes:
+        app.router.routes.remove(legacy_post_routes[0])
+
+    app.openapi_schema = None
     app.state.responses_v108_store = OrderedDict()
+    app.state.responses_v108_installed = True
 
     @app.post("/v1/responses")
     async def create_response(request: Request):
