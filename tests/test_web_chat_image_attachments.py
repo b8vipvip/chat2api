@@ -164,7 +164,10 @@ def test_user_can_delete_owned_vision_image_with_session_only(tmp_path: Path) ->
         assert deleted.status_code == 200
         assert deleted.json() == {"deleted": True}
         assert client.get(f"/api/user/files/{file_id}/content").status_code == 404
-        assert client.delete(f"/api/user/files/{file_id}").status_code == 404
+        assert client.delete(
+            f"/api/user/files/{file_id}",
+            headers={"Origin": "http://testserver"},
+        ).status_code == 404
 
 
 def test_web_chat_image_picker_and_client_javascript_are_wired(tmp_path: Path) -> None:
