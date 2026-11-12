@@ -9,16 +9,39 @@ is explicitly marked `compatible_subset` or `extension_only`.
 
 ## Supported entrypoints
 
-| Route | Mode 2 mapping | Known limitations |
+The machine-readable matrix enumerates **all 20 production `/v1/*` routes**
+(19 HTTP operations plus one WebSocket), not just the primary chat routes.
+A runtime test compares the matrix against every registered production route
+and the generated OpenAPI document, failing on either an omitted route or a
+stale/duplicate owner.
+
+| Route | Classification | SDK / contract |
 | --- | --- | --- |
-| `GET /v1/models` | SDK model discovery | Only online/currently offered models; not full OpenAI model inventory |
-| `POST /v1/chat/completions` | Python/JS Chat Completions | Text and supported image/file references; multi-turn roles are serialized as an ordered prompt; no guaranteed native Chat tool calls or schema-constrained output |
-| `POST /v1/responses` | Python/JS Responses | Supported text/native web search/hosted-image and selected emulated tools; no general Responses parity |
-| `GET /v1/responses/{response_id}` | Responses retrieve | In-process bounded response store, not durable long-term remote Responses storage |
-| `POST /v1/images/generations` | Image generation | `gpt-image` only; requires image-capable Worker |
-| `POST /v1/files` | **Chat2API extension** | JSON `{filename, data_base64, mime_type, purpose}`; standard SDK `files.create` multipart upload is **not** supported |
-| `GET /v1/files/{file_id}` | Metadata lookup | API-key-scoped; no standard content/download route |
-| `DELETE /v1/files/{file_id}` | File delete | API-key-scoped; response shape is a subset |
+| `GET /v1/models` | Compatible subset | `client.models.list()`; currently online model catalog |
+| `GET /v1/models/{model_id}` | Compatible subset | `client.models.retrieve()`; online model only |
+| `POST /v1/chat/completions` | Compatible subset | `client.chat.completions.create()`; transcript bridge |
+| `POST /v1/completions` | Compatible subset | `client.completions.create()`; legacy prompt-to-chat bridge |
+| `POST /v1/responses` | Compatible subset | `client.responses.create()`; selected Responses inputs/tools |
+| `GET /v1/responses/{response_id}` | Compatible subset | `client.responses.retrieve()`; bounded in-process store |
+| `POST /v1/images/generations` | Compatible subset | `client.images.generate()`; gpt-image and image-capable Worker |
+| `POST /v1/files` | Compatible subset | Standard multipart `files.create` for `assistants`, `vision`, `user_data`; legacy JSON/base64 extension retained |
+| `GET /v1/files/{file_id}` | Compatible subset | `client.files.retrieve()`; standard FileObject metadata |
+| `GET /v1/files/{file_id}/content` | Compatible subset | `client.files.content()`; owner-scoped binary download |
+| `DELETE /v1/files/{file_id}` | Compatible subset | `client.files.delete()`; standard FileDeleted envelope |
+| `POST /v1/audio/speech` | Chat2API extension | JSON/base64 GPT-Live speech result, not standard binary audio |
+| `POST /v1/audio/conversations` | Chat2API extension | Owner-scoped uploaded audio reference and JSON result |
+| `POST /v1/audio/transcriptions` | Chat2API extension | Uses `audio_file_id`, not standard multipart transcription |
+| `POST /v1/audio/realtime/sessions` | Chat2API extension | One-time session token; not OpenAI client-secrets route |
+| `WEBSOCKET /v1/audio/realtime` | Chat2API extension | Custom `chat2api-live-v1` PCM wire protocol |
+| `GET /v1/media/{media_id}` | Chat2API extension | Owner-scoped metadata and signed media URL |
+| `GET /v1/generated-files/{file_id}` | Chat2API extension | Owner-scoped generated-file metadata and signed URL |
+| `GET /v1/native-content/{request_id}` | Chat2API extension | Owner-scoped native page snapshot |
+| `GET /v1/native-content/{request_id}/events` | Chat2API extension | Presentation-only native snapshot SSE |
+
+Standard multipart upload does not imply support for batch, fine-tune or evals
+file purposes. The standard `GET /v1/files` list endpoint is not implemented.
+The audio and realtime endpoints are explicitly classified as extensions rather
+than being presented as standard OpenAI audio/realtime compatibility.
 
 ## Behavioral contract
 
@@ -48,15 +71,15 @@ validation.
 A dedicated GitHub Actions job installs current bounded **Python OpenAI 2.x**
 and **Node OpenAI 6.x** SDKs for serialization/parser regression. These are
 test-only dependencies, not production runtime requirements.
-Python's HTTP transport forwards requests into a real Chat2API ASGI
-`TestClient` with a deterministic fake browser transport; Node's SDK runs
-against a bounded synthetic HTTP fixture for independent client encoding and
-SSE parsing checks. Neither fake fixture proves a real ChatGPT Worker outcome.
+Both official SDKs now call a live Chat2API ASGI server. Python uses the
+in-process ASGI transport; Node runs as a separate process against a loopback
+Uvicorn server. Both replace only the external Chrome/Worker transport with a
+deterministic fake that publishes through the real Broker. Neither fixture
+proves a real ChatGPT Worker outcome.
 Production-specific route ownership is separately checked against the composed
 `app.entry:app` under isolated subprocess state.
 
-The suite asserts both positive interoperability and explicit non-parity
-(standard multipart `files.create` does not work). When upstream SDK versions
+The suite asserts positive interoperability for Chat Completions, legacy Completions, Responses, models and standard Files create/retrieve/content/delete. It also checks standard error envelopes for authentication and validation failures. When upstream SDK versions
 change, update the SDK lane with a pinned compatible range and review any
 serialization differences before broadening claims.
 
