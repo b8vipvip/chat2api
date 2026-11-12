@@ -93,8 +93,9 @@
       }
       applyNavigation();
       const active = location.hash.replace(/^#/, "");
-      if (C_ROLES[active] && !roleCan(active)) {
-        show("overview");
+      if (C_ROLES[active]) {
+        if (!roleCan(active)) show("overview");
+        else show(active);
       }
       return adminSession;
     } catch (error) {
@@ -170,6 +171,7 @@
         option.textContent = role;
         selector.appendChild(option);
       });
+      if (Object.prototype.hasOwnProperty.call(roleCatalogue, "support")) selector.value = "support";
       const body = $("cAdminRows");
       body.replaceChildren();
       (admins.data || []).forEach((item) => {
