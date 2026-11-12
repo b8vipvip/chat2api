@@ -64,6 +64,10 @@ def test_role_route_map_is_explicit_and_secret_read_denied_to_key_admin():
     assert permission_for_admin_route("/api/admin/keys/id1/secret", "GET") == "secrets:read"
     assert permission_for_admin_route("/api/admin/control/client", "PUT") == "clients:write"
     assert permission_for_admin_route("/api/admin/unreviewed-future-feature", "GET") is None
+    assert permission_for_admin_route("/api/admin/keys/id1/export", "GET") is None
+    assert permission_for_admin_route("/api/admin/users/u1/secret", "GET") is None
+    assert permission_for_admin_route("/api/admin/requests/req1", "GET") is None
+    assert permission_for_admin_route("/api/admin/plugins", "POST") == "plugins:write"
 
 
 def test_delegated_admin_session_permissions_and_disable_revoke(tmp_path: Path):
