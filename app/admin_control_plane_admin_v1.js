@@ -442,10 +442,6 @@
   });
   $("cPluginReload")?.addEventListener("click", loadPlugins);
 
-  refreshSession();
-})();
-
-
   async function loadQuotaReservations() {
     try {
       const params = new URLSearchParams();
@@ -481,3 +477,7 @@
       await loadQuotaReservations();
     } catch (error) { setStatus("cQuotaStatus", error.message, true); }
   });
+
+
+  refreshSession();
+})();
