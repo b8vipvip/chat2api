@@ -37,6 +37,7 @@ class RegisterBody(BaseModel):
     email: str = Field(min_length=3, max_length=254)
     password: str = Field(min_length=8, max_length=256)
     display_name: str = Field(default="", max_length=80)
+    invite_code: str | None = Field(default=None, min_length=32, max_length=128)
 
 
 class LoginBody(BaseModel):
@@ -329,13 +330,45 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
     @app.post("/api/user/register")
     async def user_register(body: RegisterBody, request: Request) -> JSONResponse:
         control = getattr(app.state, "control_plane", None)
-        if control is not None and control.public_client()["registration_mode"] != "open":
+        registration_mode = (
+            control.public_client()["registration_mode"] if control is not None else "open"
+        )
+        if registration_mode == "closed":
             raise HTTPException(status_code=403, detail="New user registration is disabled")
+
+        invitations = getattr(app.state, "invitations", None)
+        reservation_id = None
+        if registration_mode == "invite_only":
+            if invitations is None:
+                raise HTTPException(status_code=503, detail="Invitation registration is unavailable")
+            if not body.invite_code:
+                raise HTTPException(status_code=403, detail="A valid invitation code is required")
+            try:
+                reservation_id = invitations.reserve(body.invite_code, body.email)
+            except ValueError as error:
+                raise HTTPException(status_code=403, detail="Invitation code is invalid or unavailable") from error
         try:
             user = accounts.register(body.email, body.password, body.display_name)
             token = accounts.create_session(str(user["user_id"]))
         except ValueError as error:
+            if reservation_id:
+                invitations.release(reservation_id)
             raise HTTPException(status_code=409, detail=str(error)) from error
+        except Exception:
+            if reservation_id:
+                invitations.release(reservation_id)
+            raise
+
+        if reservation_id:
+            # A failed finalize leaves a non-reusable reserved invitation; it
+            # must be reconciled by an administrator rather than silently reused.
+            try:
+                invitations.consume(reservation_id)
+            except Exception:
+                import logging
+                logging.getLogger(__name__).exception(
+                    "Invitation finalization failed after account creation"
+                )
         response = JSONResponse({"ok": True, "user": user})
         response.set_cookie(USER_SESSION_COOKIE, token, httponly=True, secure=request.url.scheme == "https", samesite="lax", max_age=accounts.session_ttl_seconds, path="/")
         return response
