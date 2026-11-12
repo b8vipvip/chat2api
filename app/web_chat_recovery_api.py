@@ -9,6 +9,7 @@ import re
 
 from fastapi import FastAPI, HTTPException, Request, Response
 
+from .admin_auth import same_origin_admin_request
 from .user_commerce import USER_SESSION_COOKIE
 
 
@@ -134,6 +135,95 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
             "response_text": "",
             "response_text_available": False,
             "updated_at": updated_at,
+        }
+
+
+    @app.post("/api/user/chat/requests/{request_id}/cancel")
+    async def cancel_chat_request(
+        request_id: str, request: Request, response: Response,
+    ) -> dict:
+        response.headers["Cache-Control"] = "private, no-store"
+        response.headers["Vary"] = "Cookie"
+        if not _REQUEST_ID_RE.fullmatch(request_id):
+            _http_error(404, "request not found")
+
+        accounts, user = current_user(request)
+        if not same_origin_admin_request(request):
+            _http_error(403, "same-origin request required")
+
+        telemetry = getattr(request.app.state, "telemetry", None)
+        broker = getattr(request.app.state, "broker", None)
+        registry = getattr(request.app.state, "registry", None)
+        if telemetry is None or broker is None or registry is None:
+            _http_error(503, "request cancellation unavailable")
+
+        row = telemetry.get(request_id)
+        if row is None:
+            _http_error(404, "request not found")
+        key_id = str(row.get("api_key_id") or "")
+        if not key_id or not accounts.owns_key(str(user["user_id"]), key_id):
+            _http_error(404, "request not found")
+
+        status = str(row.get("status") or "unknown").lower()
+        if status in _TERMINAL:
+            return {
+                "request_id": request_id,
+                "status": status,
+                "terminal": True,
+                "active": False,
+                "cancel_requested": False,
+                "already_terminal": True,
+            }
+        if status != "running":
+            _http_error(409, "request is not currently dispatched to a Worker")
+
+        state = broker.requests.get(request_id)
+        if state is None:
+            _http_error(409, "active request state is unavailable")
+        if getattr(state, "terminal_event_type", None):
+            return {
+                "request_id": request_id,
+                "status": "finalizing",
+                "terminal": False,
+                "active": True,
+                "cancel_requested": False,
+                "already_terminal": True,
+            }
+
+        client_id = str(getattr(state, "client_id", "") or "")
+        if not client_id:
+            _http_error(409, "request Worker assignment is unavailable")
+        diagnostics = getattr(state, "diagnostics", None)
+        if not isinstance(diagnostics, dict):
+            diagnostics = {}
+            state.diagnostics = diagnostics
+        if diagnostics.get("web_chat_cancel_requested") is True:
+            return {
+                "request_id": request_id,
+                "status": "cancellation_requested",
+                "terminal": False,
+                "active": True,
+                "cancel_requested": True,
+                "already_requested": True,
+            }
+
+        # This is only a signal to the assigned Worker. The Worker emits the
+        # terminal event and request-v6/Broker remain the sole terminal owner.
+        diagnostics["web_chat_cancel_requested"] = True
+        try:
+            await registry.send(
+                client_id, {"type": "chat.cancel", "request_id": request_id}
+            )
+        except Exception:
+            diagnostics.pop("web_chat_cancel_requested", None)
+            _http_error(409, "request cancellation could not be delivered to its Worker")
+        return {
+            "request_id": request_id,
+            "status": "cancellation_requested",
+            "terminal": False,
+            "active": True,
+            "cancel_requested": True,
+            "already_requested": False,
         }
 
     return app
