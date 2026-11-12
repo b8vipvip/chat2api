@@ -64,17 +64,6 @@
     },
     {
       "method": "POST",
-      "path": "/v1/audio/transcriptions",
-      "owner": "app.v7_patch",
-      "status": "extension_only",
-      "python_sdk": null,
-      "javascript_sdk": null,
-      "notes": "Chat2API dictation bridge consumes an owner-scoped audio_file_id; standard SDK multipart audio transcription is not implemented.",
-      "protocol": "http",
-      "openapi": true
-    },
-    {
-      "method": "POST",
       "path": "/v1/chat/completions",
       "owner": "app.main",
       "status": "compatible_subset",
@@ -324,6 +313,11 @@
       "id": "legacy.completions",
       "status": "supported_subset",
       "evidence": "POST /v1/completions maps a prompt to the Chat Completions worker bridge."
+    },
+    {
+      "id": "audio.transcriptions",
+      "status": "unsupported",
+      "evidence": "The legacy v7 route is explicitly removed by v9 from the composed production app; no /v1/audio/transcriptions route is exposed."
     }
   ],
   "boundary": {
