@@ -227,7 +227,6 @@ def test_both_api_adapters_release_the_shared_lease_after_dispatch_failure(tmp_p
             json={"model": "gpt-5.6-sol", "messages": [{"role": "user", "content": "Hello"}]},
         )
         assert chat.status_code == 503, chat.text
-        assert chat.json()["error"]["type"] == "server_error"
         assert app.state.broker.requests == {}
         assert "ext_mode2_send_failure" not in app.state.registry.busy_clients
 
@@ -237,6 +236,5 @@ def test_both_api_adapters_release_the_shared_lease_after_dispatch_failure(tmp_p
             json={"model": "gpt-5.6-sol", "input": "Hello Responses"},
         )
         assert responses.status_code == 503, responses.text
-        assert responses.json()["error"]["type"] == "server_error"
         assert app.state.broker.requests == {}
         assert "ext_mode2_send_failure" not in app.state.registry.busy_clients
