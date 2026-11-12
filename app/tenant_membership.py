@@ -57,6 +57,16 @@ class TenantMembershipStore:
               PRIMARY KEY(tenant_id,user_id)
             );
             CREATE INDEX IF NOT EXISTS tenant_member_user_idx ON tenant_memberships(user_id,tenant_id);
+            CREATE TABLE IF NOT EXISTS tenant_api_keys(
+              tenant_id TEXT NOT NULL,
+              key_id TEXT NOT NULL UNIQUE,
+              user_id TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              PRIMARY KEY(tenant_id,key_id),
+              FOREIGN KEY(tenant_id,user_id)
+                REFERENCES tenant_memberships(tenant_id,user_id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS tenant_api_keys_user_idx ON tenant_api_keys(user_id,tenant_id);
         """)
         os.chmod(self.path, 0o600)
 
@@ -128,6 +138,12 @@ class TenantMembershipStore:
                 ).fetchone()
                 if not existing:
                     raise KeyError("Unknown workspace membership")
+                bound = self.db.execute(
+                    "SELECT COUNT(*) FROM tenant_api_keys WHERE tenant_id=? AND user_id=?",
+                    (tenant_id, user_id),
+                ).fetchone()[0]
+                if bound:
+                    raise TenantMembershipError("Unbind the member's API keys before removing membership")
                 if existing[0] == "owner":
                     owners = self.db.execute(
                         "SELECT COUNT(*) FROM tenant_memberships WHERE tenant_id=? AND role='owner'",
@@ -163,6 +179,64 @@ class TenantMembershipStore:
             ).fetchall()
         return [{"tenant_id": tid, "slug": slug, "display_name": name, "role": role}
                 for tid, slug, name, role in rows]
+
+    def bind_key(self, tenant_id: str, user_id: str, key_id: str) -> dict[str, Any]:
+        """Bind an existing user-owned API key to exactly one workspace."""
+        if not isinstance(key_id, str) or not SUBJECT_ID.fullmatch(key_id):
+            raise TenantMembershipError("Invalid API key ID")
+        with self.lock:
+            with self.db:
+                self.db.execute("BEGIN IMMEDIATE")
+                member = self.db.execute(
+                    "SELECT 1 FROM tenant_memberships WHERE tenant_id=? AND user_id=?",
+                    (tenant_id, user_id),
+                ).fetchone()
+                if not member:
+                    raise KeyError("User is not a member of this tenant")
+                existing = self.db.execute(
+                    "SELECT tenant_id,user_id FROM tenant_api_keys WHERE key_id=?",
+                    (key_id,),
+                ).fetchone()
+                if existing:
+                    if existing == (tenant_id, user_id):
+                        return {"tenant_id": tenant_id, "user_id": user_id, "key_id": key_id}
+                    raise TenantMembershipError("API key is already bound to another tenant")
+                self.db.execute(
+                    "INSERT INTO tenant_api_keys(tenant_id,key_id,user_id,created_at) VALUES(?,?,?,?)",
+                    (tenant_id, key_id, user_id, _now()),
+                )
+        return {"tenant_id": tenant_id, "user_id": user_id, "key_id": key_id}
+
+    def unbind_key(self, tenant_id: str, key_id: str) -> None:
+        with self.lock:
+            with self.db:
+                self.db.execute("BEGIN IMMEDIATE")
+                cursor = self.db.execute(
+                    "DELETE FROM tenant_api_keys WHERE tenant_id=? AND key_id=?",
+                    (tenant_id, key_id),
+                )
+                if cursor.rowcount == 0:
+                    raise KeyError("Unknown tenant API key binding")
+
+    def tenant_for_key(self, key_id: str) -> str | None:
+        """Resolve tenant only from explicit server-side key binding."""
+        with self.lock:
+            row = self.db.execute(
+                "SELECT tenant_id FROM tenant_api_keys WHERE key_id=?",
+                (str(key_id or ""),),
+            ).fetchone()
+        return str(row[0]) if row else None
+
+    def keys_for_tenant(self, tenant_id: str) -> list[dict[str, Any]]:
+        with self.lock:
+            if not self.exists(tenant_id):
+                raise KeyError("Unknown tenant")
+            rows = self.db.execute(
+                "SELECT key_id,user_id,created_at FROM tenant_api_keys WHERE tenant_id=? ORDER BY created_at",
+                (tenant_id,),
+            ).fetchall()
+        return [{"tenant_id": tenant_id, "key_id": key, "user_id": user, "created_at": created}
+                for key, user, created in rows]
 
     def role_for(self, tenant_id: str, user_id: str) -> str | None:
         """Return membership role for an already authenticated account identity."""
