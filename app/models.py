@@ -96,7 +96,7 @@ class ChatCompletionRequest(BaseModel):
     messages: list[ChatMessage]
     stream: bool = False
     client_id: str | None = None
-    prompt_mode: Literal["last_user", "full"] = "last_user"
+    prompt_mode: Literal["last_user", "full"] = "full"
     timeout: int | None = Field(default=None, ge=5, le=900)
     attachments: list[AttachmentRef] = Field(default_factory=list, max_length=4)
     reasoning_effort: str | None = Field(default=None, max_length=40)
