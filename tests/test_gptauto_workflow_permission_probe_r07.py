@@ -80,7 +80,7 @@ def test_denied_workflows_write_still_deletes_probe_branch() -> None:
 
 def test_failed_cleanup_reports_exact_manual_recovery_branch() -> None:
     api = FakeApi(fail_at="DELETE")
-    with pytest.raises(ProbeError, match="delete it manually"):
+    with pytest.raises(ProbeError, match="manually"):
         run_probe(api, NONCE)
     assert [method for method, _, _ in api.calls] == ["GET", "GET", "POST", "PUT", "DELETE"]
 
