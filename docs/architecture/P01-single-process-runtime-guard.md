@@ -1,0 +1,37 @@
+# P-01 — single-process runtime boundary guard
+
+Status: **Draft / partial**. This work makes the current deployment boundary fail closed; it does not make the server multi-instance capable.
+
+## Why the guard exists
+
+The current runtime keeps request state in process-local components, including the Broker, ClientRegistry/Worker socket registrations and some response/recovery indexes. Running multiple ASGI server processes against one data directory can split request ownership, route Worker messages to a process that does not own the Broker lease, and produce inconsistent recovery/accounting observations.
+
+The repository's Docker Compose service currently starts one Uvicorn process and mounts one local `./data:/app/data` volume. This is the supported topology today.
+
+## Implemented in this PR
+
+- A startup/shutdown lifecycle guard obtains a non-blocking OS advisory lock at `<data_dir>/.chat2api-runtime.lock`.
+- A second server process using the same data directory fails startup rather than silently running with split in-memory request state.
+- The lock file is created with mode `0600`, rejects symlinked data directories/lock files, and is retained after shutdown. Retaining the inode is important: unlinking a locked file could let a second process create a new inode and bypass the lock.
+- Known multi-worker environment variables (`WEB_CONCURRENCY`, `UVICORN_WORKERS`, `GUNICORN_WORKERS`) with numeric values greater than one are rejected.
+- The lock is released during ASGI shutdown.
+- Tests cover exclusive ownership, release/reacquire, multi-worker environment rejection, symlink rejection and FastAPI lifespan integration.
+
+## Integration boundary
+
+The guard is installed once from `app.entry:app`, before the legacy installer chain. This PR is the sole owner of this narrow production-entry change; other workstream PRs should continue to provide independent modules and must not independently edit `app.entry.py`.
+
+## Explicit limitations
+
+- This is a guard for processes sharing the same data directory and a filesystem that implements reliable advisory locks. It is **not** a distributed lock across separate volumes, hosts or filesystems with unreliable lock semantics.
+- It does not add Redis/shared Broker state, distributed Worker leases, transactional API-key/billing storage, multi-instance telemetry, or response-store replication.
+- Do not scale the Compose service horizontally or run multiple replicas with separate data volumes. The deployment remains single server process / single instance.
+- This does not run or approve G0, DataKeyring, production secret migration, or any production data migration.
+- No production deployment or multi-instance support is claimed.
+
+## Acceptance still required
+
+- Exact-head CI and production image smoke.
+- Verify Docker Compose starts normally and a second process pointed at the same mounted data volume fails startup.
+- Verify graceful shutdown releases the lock and abrupt process death releases the OS lock without deleting the retained lock file.
+- Add a future shared-state architecture only as a separately reviewed P-01 design and migration; do not remove this guard merely to enable replica count.
