@@ -68,7 +68,7 @@ class GitHubApi:
 def run_probe(api: Any, nonce: str) -> dict[str, str]:
     """Write and clean up a disposable workflow, using the injected API."""
     if not re.fullmatch(r"[a-f0-9]{24}", nonce):
-        raise ValueError("nonce must be 12 lowercase hexadecimal characters")
+        raise ValueError("nonce must be 24 lowercase hexadecimal characters")
     root = f"/repos/{EXPECTED_REPO}"
     branch = f"diagnostics/gptauto-workflow-write-probe-{nonce}"
     branch_ref = f"refs/heads/{branch}"
@@ -145,6 +145,7 @@ def run_probe(api: Any, nonce: str) -> dict[str, str]:
         "    steps:\n      - run: echo 'Probe branch only; do not deploy'\n"
     )
     did_write = False
+    committed_sha: str | None = None
     try:
         result = api.request("PUT", root + "/contents/" + workflow_path, {
             "message": "test: verify GPTAuto token Workflows write on disposable branch",
@@ -152,19 +153,44 @@ def run_probe(api: Any, nonce: str) -> dict[str, str]:
             "branch": branch,
         })
         committed_sha = result.get("commit", {}).get("sha") if isinstance(result, dict) else None
-        if not isinstance(committed_sha, str) or not committed_sha:
-            raise ProbeError("GitHub did not return a workflow write commit")
+        if not isinstance(committed_sha, str) or not re.fullmatch(r"[a-f0-9]{40}", committed_sha):
+            raise ProbeError("GitHub did not return a valid workflow write commit")
         did_write = True
     finally:
+        # GitHub's ref-delete API has no expected-SHA precondition. Verify the
+        # exact branch head before deleting; if it changed (or cannot be read),
+        # preserve it for manual inspection rather than deleting another
+        # actor's concurrent work. An ambiguous Contents PUT also leaves the
+        # branch untouched unless its head is still the original base SHA.
         try:
+            current = api.request("GET", root + "/git/ref/heads/" + branch)
+            current_sha = (
+                current.get("object", {}).get("sha")
+                if isinstance(current, dict) else None
+            )
+            expected_sha = committed_sha or base_sha
+            if current_sha != expected_sha:
+                raise ProbeError(
+                    f"Temporary branch head changed or cannot be verified: {branch_ref}; "
+                    "refused to delete it; inspect and clean it manually"
+                )
             api.request("DELETE", root + "/git/refs/heads/" + branch)
-        except Exception as exc:
-            # A failed cleanup is actionable and must not be silently ignored,
-            # even if the write itself succeeded.
+        except ProbeError as cleanup_error:
+            if cleanup_error.status_code == 404:
+                # Another actor already removed the disposable branch.
+                pass
+            elif "refused to delete it" in str(cleanup_error):
+                raise
+            else:
+                raise ProbeError(
+                    f"Temporary branch cleanup failed: {branch_ref}; "
+                    "could not verify/delete it; inspect and clean it manually"
+                ) from None
+        except Exception:
             raise ProbeError(
                 f"Temporary branch cleanup failed: {branch_ref}; "
-                "delete it manually before rerunning"
-            ) from exc
+                "could not verify/delete it; inspect and clean it manually"
+            ) from None
     if not did_write:
         raise ProbeError("Workflow write was not confirmed")
     return {"branch": branch, "result": "workflows-write-verified-and-cleaned"}
