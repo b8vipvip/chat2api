@@ -115,6 +115,10 @@
   }
 
   function createConversation() {
+    if (state.streaming) {
+      toast("请先停止当前生成，再新建对话。");
+      return currentConversation();
+    }
     const now = new Date().toISOString();
     const conversation = {
       id: id(),
@@ -134,6 +138,10 @@
   }
 
   function setActiveConversation(conversationId) {
+    if (state.streaming) {
+      toast("当前回复仍在生成；请先停止生成再切换对话。");
+      return;
+    }
     state.activeConversationId = conversationId;
     const conversation = currentConversation();
     if (conversation) state.selectedModel = conversation.model || state.selectedModel;
@@ -145,6 +153,10 @@
   function deleteConversation(conversationId) {
     const conversation = state.conversations.find((row) => row.id === conversationId);
     if (!conversation) return;
+    if (state.streaming && conversationId === state.activeConversationId) {
+      toast("当前对话正在生成；请先停止生成再删除。");
+      return;
+    }
     if (!window.confirm("删除这段本地对话？此操作不可撤销。")) return;
     state.conversations = state.conversations.filter((row) => row.id !== conversationId);
     if (state.activeConversationId === conversationId) {
@@ -507,6 +519,7 @@
     const assistant = {id:id(),role:"assistant",content:"",createdAt:new Date().toISOString()};
     conversation.messages.push(assistant);
     conversation.updatedAt = new Date().toISOString();
+    saveHistory();
     state.streaming = true;
     state.streamingMessageId = assistant.id;
     state.abortController = new AbortController();
@@ -514,6 +527,9 @@
     resizeComposer();
     $("stopButton").classList.remove("hidden");
     $("sendButton").disabled = true;
+    $("newChatButton").disabled = true;
+    $("apiKeySelect").disabled = true;
+    $("modelSelect").disabled = true;
     renderAll();
 
     try {
@@ -547,6 +563,7 @@
       const decoder = new TextDecoder("utf-8");
       let buffer = "";
       let done = false;
+      let lastSavedLength = 0;
       while (!done) {
         const part = await reader.read();
         if (part.done) break;
@@ -563,6 +580,10 @@
         }
         if (assistant.content) {
           conversation.updatedAt = new Date().toISOString();
+          if (assistant.content.length - lastSavedLength >= 1000) {
+            saveHistory();
+            lastSavedLength = assistant.content.length;
+          }
           renderMessages();
         }
       }
@@ -589,6 +610,9 @@
       saveHistory();
       renderAll();
       $("stopButton").classList.add("hidden");
+      $("newChatButton").disabled = false;
+      $("apiKeySelect").disabled = false;
+      $("modelSelect").disabled = false;
       resizeComposer();
       $("messageInput").focus();
     }
@@ -608,10 +632,11 @@
       const payload = await apiJson("/api/user/keys/" + encodeURIComponent(keyId) + "/secret");
       state.apiToken = String(payload.token || "");
       if (!state.apiToken) throw new Error("API Key 密钥为空");
-      localStorage.setItem("chat2api.webchat.key." + state.user.user_id, keyId);
+      try { localStorage.setItem("chat2api.webchat.key." + state.user.user_id, keyId); } catch {}
       setConnection("已连接", "ready");
       resizeComposer();
       await loadModels();
+      renderAll();
       return true;
     } catch (error) {
       setConnection("Key 不可用", "error");
@@ -717,7 +742,6 @@
     if (!ready) return;
     if (currentConversation()) state.selectedModel = currentConversation().model || state.selectedModel;
     renderAll();
-    setConnection("已连接", "ready");
   }
 
   $("newChatButton").addEventListener("click", createConversation);
