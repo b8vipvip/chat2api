@@ -83,6 +83,9 @@
           <input id="adminUserSearch" placeholder="搜索邮箱、昵称或用户 ID" style="min-width:260px">
           <button class="action" id="adminUserSearchButton">搜索</button>
           <button class="action" id="adminUserReload">刷新</button>
+          <button class="action" id="adminUserPrev">上一页</button>
+          <span id="adminUserPage" class="muted">-</span>
+          <button class="action" id="adminUserNext">下一页</button>
           <span id="adminUserStatus" class="muted"></span>
         </div>
         <div class="scroll"><table>
@@ -149,16 +152,20 @@
     });
   }
   let adminUserRows = [];
+  let adminUserOffset = 0;
+  const adminUserLimit = 100;
+  let adminUserTotal = 0;
   async function loadUsers() {
     const status = document.getElementById("adminUserStatus");
     status.textContent = "正在加载用户…";
     const query = document.getElementById("adminUserSearch").value.trim();
-    const params = new URLSearchParams({limit:"100",offset:"0"});
+    const params = new URLSearchParams({limit:String(adminUserLimit),offset:String(adminUserOffset)});
     if (query) params.set("q", query);
     const payload = await adminApi("/api/admin/users?" + params.toString());
     adminUserRows = payload.data || [];
+    adminUserTotal = Number(payload.total || 0);
     renderUsers();
-    status.textContent = "共 " + (payload.total || 0) + " 个用户";
+    status.textContent = "共 " + adminUserTotal + " 个用户";
     await loadAudit();
   }
   async function loadAudit() {
@@ -198,6 +205,12 @@
         '<button class="action" data-user-action="keys" data-user-id="' + esc(user.user_id) + '">查看 Key</button>' +
         '</div></td></tr>';
     }).join("");
+    const page = document.getElementById("adminUserPage");
+    const first = adminUserTotal ? adminUserOffset + 1 : 0;
+    const last = Math.min(adminUserOffset + adminUserRows.length, adminUserTotal);
+    page.textContent = first + "-" + last + " / " + adminUserTotal;
+    document.getElementById("adminUserPrev").disabled = adminUserOffset <= 0;
+    document.getElementById("adminUserNext").disabled = adminUserOffset + adminUserLimit >= adminUserTotal;
   }
   function showUserError(error) {
     document.getElementById("adminUserStatus").textContent = "错误：" + error.message;
@@ -257,10 +270,26 @@
       button.disabled = false;
     }
   });
-  document.getElementById("adminUserSearchButton").addEventListener("click", () => loadUsers().catch(showUserError));
+  document.getElementById("adminUserSearchButton").addEventListener("click", () => {
+    adminUserOffset = 0;
+    loadUsers().catch(showUserError);
+  });
   document.getElementById("adminUserReload").addEventListener("click", () => loadUsers().catch(showUserError));
+  document.getElementById("adminUserPrev").addEventListener("click", () => {
+    adminUserOffset = Math.max(0, adminUserOffset - adminUserLimit);
+    loadUsers().catch(showUserError);
+  });
+  document.getElementById("adminUserNext").addEventListener("click", () => {
+    if (adminUserOffset + adminUserLimit < adminUserTotal) {
+      adminUserOffset += adminUserLimit;
+      loadUsers().catch(showUserError);
+    }
+  });
   document.getElementById("adminUserSearch").addEventListener("keydown", (event) => {
-    if (event.key === "Enter") loadUsers().catch(showUserError);
+    if (event.key === "Enter") {
+      adminUserOffset = 0;
+      loadUsers().catch(showUserError);
+    }
   });
   document.getElementById("adminUserKeysClose").addEventListener("click", () => {
     document.getElementById("adminUserKeysPanel").style.display = "none";
