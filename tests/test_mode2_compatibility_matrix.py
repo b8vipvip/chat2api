@@ -40,6 +40,22 @@ def test_mode2_matrix_is_machine_readable_and_non_overclaiming() -> None:
     assert capabilities["audio.transcriptions"] == "unsupported"
     assert capabilities["chat.tool_calls"] == "not_guaranteed"
     assert capabilities["chat.structured_outputs"] == "not_guaranteed"
+    assert capabilities["model.aliases"] == "supported_subset"
+    assert capabilities["responses.retrieve"] == "supported_subset"
+
+    parameters = data["request_parameters"]
+    chat = {row["name"]: row["status"] for row in parameters["POST /v1/chat/completions"]}
+    assert chat["model"] == "supported_with_aliases"
+    assert chat["reasoning_effort"] == "chat2api_extension"
+    assert chat["max_completion_tokens"] == "accepted_but_ignored"
+    assert chat["temperature"] == "accepted_but_ignored"
+    assert chat["tools"] == "accepted_but_ignored"
+
+    responses = {row["name"]: row["status"] for row in parameters["POST /v1/responses"]}
+    assert responses["tools"] == "supported_subset"
+    assert responses["store"] == "supported_subset"
+    assert responses["max_output_tokens"] == "echo_only"
+    assert responses["previous_response_id"] == "echo_only"
 
 
 def test_mode2_matrix_covers_every_production_v1_route_and_openapi_operation(tmp_path: Path) -> None:
