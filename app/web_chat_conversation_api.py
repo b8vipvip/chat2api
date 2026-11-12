@@ -130,9 +130,11 @@ def install_web_chat_conversations(app: FastAPI) -> FastAPI:
         file_store = getattr(app.state, "file_store", None)
         accounts = getattr(app.state, "user_accounts", None)
         attachment_key_ids: set[str] = set()
+        allowed_image_types = {"image/png", "image/jpeg", "image/webp", "image/gif"}
         for message in messages:
             if not isinstance(message.content, list):
                 continue
+            message_image_bytes = 0
             for part in message.content:
                 if not isinstance(part, ImageContentPart):
                     continue
@@ -140,13 +142,18 @@ def install_web_chat_conversations(app: FastAPI) -> FastAPI:
                 item = file_store.get(file_id) if file_store is not None else None
                 if (
                     item is None
-                    or item.purpose != "vision"
                     or not item.owner_key_id
                     or accounts is None
                     or not accounts.owns_key(owner, str(item.owner_key_id))
                 ):
                     _http_error(404, "attachment not found")
-                attachment_key_ids.add(str(item.owner_key_id))
+                if item.purpose != "vision" or item.mime_type not in allowed_image_types:
+                    _http_error(422, "image attachment must be a PNG, JPEG, WebP or GIF vision file")
+                if type(item.size) is not int or item.size < 1 or item.size > 10 * 1024 * 1024:
+                    _http_error(413, "each image attachment must be at most 10 MiB")
+                message_image_bytes += item.size
+            if message_image_bytes > 20 * 1024 * 1024:
+                _http_error(413, "all image attachments in one message must be at most 20 MiB")
         # Mode 2 attachment resolution is API-Key scoped. A single Web Chat
         # conversation must not accumulate images from multiple owned keys,
         # or later turns could not resolve the whole history with one key.
