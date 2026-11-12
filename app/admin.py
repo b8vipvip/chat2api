@@ -11,7 +11,7 @@ ADMIN_HTML = r'''<!doctype html>
 @media(max-width:1250px){.labConfig{grid-template-columns:1fr 1fr}.labConfig>button{align-self:end}.testKeyBox{grid-template-columns:1fr}}
 @media(max-width:1050px){.shell{grid-template-columns:1fr}.side{border-right:0;border-bottom:1px solid var(--line)}.nav{display:flex;overflow:auto}.nav button{width:auto;white-space:nowrap}.top{position:static}.grid{grid-template-columns:repeat(2,1fr)}.panels,.split{grid-template-columns:1fr}.wide{grid-column:auto}.labConfig{grid-template-columns:1fr}.timelineRow{grid-template-columns:1fr 1fr}.auth{min-width:0}.testKeyBox{grid-template-columns:1fr}}
 </style></head><body><div class="shell">
-<aside class="side"><div class="brand">chat2api<small>Server Console · v0.5</small></div><div class="nav"><button data-view="overview">概览</button><button data-view="modes">模式管理</button><button data-view="keys">API Key</button><button data-view="requests">请求记录</button><button data-view="media-storage">转存管理</button><button data-view="docs">开发文档</button><button data-view="playground">测试场</button><button data-view="control-admins" data-cview>管理员 RBAC</button><button data-view="client-policy" data-cview>客户端配置</button><button data-view="tenants" data-cview>租户管理</button><button data-view="model-entitlements" data-cview>模型权限</button><button data-view="plugins" data-cview>插件目录</button><button data-view="quota-ledger" data-cview>额度预留</button></div></aside>
+<aside class="side"><div class="brand">chat2api<small>Server Console · v0.5</small></div><div class="nav"><button data-view="overview">概览</button><button data-view="modes">模式管理</button><button data-view="keys">API Key</button><button data-view="requests">请求记录</button><button data-view="media-storage">转存管理</button><button data-view="docs">开发文档</button><button data-view="playground">测试场</button><button data-view="control-admins" data-cview>管理员 RBAC</button><button data-view="client-policy" data-cview>客户端配置</button><button data-view="tenants" data-cview>租户管理</button><button data-view="model-entitlements" data-cview>模型权限</button><button data-view="plugins" data-cview>插件目录</button><button data-view="quota-ledger" data-cview>额度预留</button><button data-view="users" data-cview>用户管理</button><button data-view="api-keys" data-cview>API Key 管理</button></div></aside>
 <main class="main"><header class="top"><div><b id="pageTitle">概览</b><div id="status" class="muted">输入管理员主密钥后连接</div></div><div class="auth"><input id="adminKey" type="password" placeholder="CHAT2API_API_KEY 管理员主密钥"><button class="action" id="connect">连接</button><button class="action" id="refresh">刷新</button></div><div class="sessionAuth"><input id="adminSessionUser" autocomplete="username" placeholder="管理员用户名"><input id="adminSessionPassword" type="password" autocomplete="current-password" placeholder="管理员密码"><button class="action good" id="adminSessionLogin">会话登录</button><button class="action" id="adminSessionLogout">退出会话</button><span id="adminSessionState" class="muted">未检查管理会话</span></div></header><div class="content">
 <section class="view" id="view-overview"><div class="grid"><div class="card"><div class="muted">在线扩展</div><div class="n" id="sExt">-</div></div><div class="card"><div class="muted">请求记录</div><div class="n" id="sReq">-</div></div><div class="card"><div class="muted">成功率</div><div class="n" id="sSuccess">-</div></div><div class="card"><div class="muted">平均首 Token</div><div class="n" id="sFirst">-</div></div><div class="card"><div class="muted">估算 Token</div><div class="n" id="sToken">-</div></div></div><div class="panels"><div class="panel"><h3>Chrome 扩展</h3><table><thead><tr><th>ID</th><th>名称</th><th>状态</th><th>版本</th><th>能力</th></tr></thead><tbody id="extBody"></tbody></table></div><div class="panel"><h3>模型目录</h3><table><thead><tr><th>ID</th><th>能力</th></tr></thead><tbody id="modelBody"></tbody></table></div><div class="panel wide"><h3>最近请求</h3><div class="scroll"><table><thead><tr><th>时间</th><th>类型</th><th>状态</th><th>Key</th><th>模型</th><th>首包</th><th>总耗时</th><th>Token</th></tr></thead><tbody id="recentBody"></tbody></table></div></div></div></section>
 <section class="view" id="view-modes">
@@ -115,6 +115,20 @@ ADMIN_HTML = r'''<!doctype html>
     <pre id="cPluginDetail" class="codebox" style="margin-top:12px;white-space:pre-wrap"></pre>
   </div>
 </section>
+<section class="view" id="view-users">
+  <div class="panel"><h2>用户账户管理</h2><p class="c-note">用户状态与 Session 撤销由 UserAccountStore 管理。Support / System Admin 只读；User Admin 可启停账户和撤销会话。用户 API Key 明文不会在此页展示。</p>
+    <div class="c-form"><label>搜索<input id="cUserSearch" placeholder="邮箱 / 显示名 / User ID"></label><button class="action" id="cUserReload">搜索 / 刷新</button></div>
+    <div id="cUserStatus" class="muted"></div><div class="scroll"><table class="c-table"><thead><tr><th>User ID</th><th>邮箱</th><th>显示名</th><th>状态</th><th>余额</th><th>操作</th></tr></thead><tbody id="cUserRows"></tbody></table></div>
+    <pre id="cUserKeyDetail" class="codebox" style="margin-top:12px;white-space:pre-wrap"></pre>
+  </div>
+</section>
+<section class="view" id="view-api-keys">
+  <div class="panel"><h2>API Key 管理</h2><p class="c-note">API Key Admin 可创建、调整额度、停用或撤销 Key。完整 Token 只在创建时显示一次；本页不提供历史密钥读取接口。</p>
+    <div class="c-form"><label>名称<input id="cKeyName" placeholder="integration-prod"></label><label>有效天数<input id="cKeyExpiry" type="number" min="1" max="3650" placeholder="留空不过期"></label><label>Token 额度<input id="cKeyQuota" type="number" min="0" placeholder="留空不限"></label><button class="action good" id="cKeyCreate">创建 Key</button><button class="action" id="cKeyReload">刷新</button></div>
+    <div id="cKeySecret" class="secret hidden" style="margin:10px 0;white-space:pre-wrap;word-break:break-all"></div><div id="cKeyStatus" class="muted"></div>
+    <div class="scroll"><table class="c-table"><thead><tr><th>Key ID</th><th>名称</th><th>状态</th><th>Token 使用</th><th>额度</th><th>操作</th></tr></thead><tbody id="cKeyRows"></tbody></table></div>
+  </div>
+</section>
 <section class="view" id="view-quota-ledger">
   <div class="panel"><h2>API Key 配额预留流水</h2><p class="c-note">这里只显示尚未完成的 token 预留和与 ApiKeyStore 完成用量账本的恢复状态。它不是钱包余额、已完成 usage 或退款账本；当前运行时接入状态会由服务端明确显示。</p>
     <div class="c-form"><label>状态筛选<select id="cQuotaState"><option value="">全部</option><option value="reserved">reserved</option><option value="committing">committing</option><option value="settled">settled</option><option value="released">released</option><option value="expired">expired</option></select></label><label>API Key ID<input id="cQuotaKeyId" placeholder="可选"></label><button class="action" id="cQuotaReload">刷新</button><button class="action good" id="cQuotaReconcile">恢复未完成结算</button></div>
@@ -142,7 +156,7 @@ function status(t,c='muted'){$('status').className=c;$('status').textContent=t}
 $('adminKey').value=key();
 $('connect').onclick=()=>{sessionStorage.setItem('chat2api_admin_key',$('adminKey').value.trim());loadOverview()};
 $('refresh').onclick=()=>show((location.hash||'#overview').slice(1));
-const titles={overview:'概览',modes:'模式管理',keys:'API Key',requests:'请求记录','media-storage':'转存管理',docs:'开发文档',playground:'测试场','control-admins':'管理员 RBAC','client-policy':'客户端配置',tenants:'租户管理','model-entitlements':'模型权限',plugins:'插件目录','quota-ledger':'额度预留'};
+const titles={overview:'概览',modes:'模式管理',keys:'API Key',requests:'请求记录','media-storage':'转存管理',docs:'开发文档',playground:'测试场','control-admins':'管理员 RBAC','client-policy':'客户端配置',tenants:'租户管理','model-entitlements':'模型权限',plugins:'插件目录','quota-ledger':'额度预留',users:'用户管理','api-keys':'API Key 管理'};
 function show(v){document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.nav button').forEach(x=>x.classList.toggle('active',x.dataset.view===v));$('view-'+v)?.classList.add('active');$('pageTitle').textContent=titles[v]||v;location.hash=v;if(v==='overview')loadOverview();if(v==='modes')loadModes();if(v==='keys')loadKeys();if(v==='requests')loadRequests();if(v==='media-storage')loadMediaStorage();if(v==='docs')renderDocs();if(v==='playground'){loadOverview().then(loadTests)}}
 document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>show(b.dataset.view));
 let modeSettings=null;
@@ -333,5 +347,5 @@ const cTrackAdminScript=document.createElement("script");cTrackAdminScript.src="
 
 
 def admin_response(initial_view: str = "overview") -> HTMLResponse:
-    view = initial_view if initial_view in {"overview", "modes", "keys", "requests", "media-storage", "docs", "playground", "control-admins", "client-policy", "tenants", "model-entitlements", "plugins", "quota-ledger"} else "overview"
+    view = initial_view if initial_view in {"overview", "modes", "keys", "requests", "media-storage", "docs", "playground", "control-admins", "client-policy", "tenants", "model-entitlements", "plugins", "quota-ledger", "users", "api-keys"} else "overview"
     return HTMLResponse(ADMIN_HTML.replace("__INITIAL_VIEW__", view), headers={"Cache-Control": "no-store"})
