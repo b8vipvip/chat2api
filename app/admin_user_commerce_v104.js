@@ -42,7 +42,7 @@
     if (sessionCheckSucceeded && !currentAdminRole && String(document.getElementById("adminKey")?.value || "").trim()) {
       currentAdminRole = "super_admin";
     }
-    adminRoleResolved = true;
+    adminRoleResolved = sessionCheckSucceeded;
     pricingButton.hidden = !["super_admin", "billing_admin"].includes(currentAdminRole);
     paymentButton.hidden = !["super_admin", "billing_admin"].includes(currentAdminRole);
     usersButton.hidden = !["super_admin", "user_admin", "system_admin", "support"].includes(currentAdminRole);
