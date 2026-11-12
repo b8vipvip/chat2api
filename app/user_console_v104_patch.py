@@ -66,6 +66,15 @@ class AdminUserStatusBody(BaseModel):
     enabled: bool
 
 
+class AdminUserKeyUpdateBody(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    enabled: bool | None = None
+    token_quota: int | None = Field(default=None, ge=0)
+
+    class Config:
+        extra = "forbid"
+
+
 class PaymentBody(BaseModel):
     enabled: bool = False
     pid: str = Field(default="", max_length=80)
@@ -701,6 +710,121 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
                 rows.append(public_key(item))
         rows.sort(key=lambda row: str(row.get("created_at") or ""), reverse=True)
         return {"data": rows}
+
+    @app.patch("/api/admin/users/{user_id}/keys/{key_id}")
+    async def admin_update_user_key(
+        user_id: str, key_id: str, body: AdminUserKeyUpdateBody, request: Request
+    ) -> dict[str, Any]:
+        if not admin_ok(request):
+            raise HTTPException(status_code=401, detail="Administrator login required")
+        if not accounts.admin_get(user_id) or not accounts.owns_key(user_id, key_id):
+            raise HTTPException(status_code=404, detail="用户 API Key 不存在")
+
+        fields = set(body.model_fields_set)
+        if not fields:
+            raise HTTPException(status_code=400, detail="至少提供一个需要修改的字段")
+        if "enabled" in fields and body.enabled is None:
+            raise HTTPException(status_code=400, detail="enabled 必须是布尔值")
+        if "name" in fields and (body.name is None or not body.name.strip()):
+            raise HTTPException(status_code=400, detail="Key 名称不能为空")
+
+        current = api_keys.get_public(key_id)
+        if not current:
+            raise HTTPException(status_code=404, detail="用户 API Key 不存在")
+        if current.get("revoked_at"):
+            raise HTTPException(status_code=409, detail="已永久撤销的 API Key 不可修改")
+
+        updates: dict[str, Any] = {}
+        if "name" in fields:
+            updates["name"] = str(body.name).strip()
+        if "enabled" in fields:
+            updates["enabled"] = body.enabled
+        if "token_quota" in fields:
+            updates["token_quota"] = body.token_quota
+
+        effective_quota = updates.get("token_quota", current.get("token_quota"))
+        if updates.get("enabled") is True and (
+            current.get("expired")
+            or (
+                effective_quota is not None
+                and int(current.get("tokens_used") or 0) >= int(effective_quota)
+            )
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="API Key 已过期或 Token 额度已耗尽；请先调整额度或创建新 Key",
+            )
+
+        audit_context = {
+            "actor": settings.admin_username,
+            "action": "api_key.update_requested",
+            "target_type": "api_key",
+            "target_id": key_id,
+            "request_id": str(request.headers.get("x-request-id") or ""),
+            "details": {"user_id": user_id, "fields": sorted(fields), **updates},
+        }
+        mutation_applied = False
+        try:
+            admin_audit.append(**audit_context)
+            item = await api_keys.update(key_id, **updates)
+            mutation_applied = True
+            admin_audit.append(
+                **{
+                    **audit_context,
+                    "action": "api_key.update_completed",
+                    "details": {"user_id": user_id, "fields": sorted(fields)},
+                }
+            )
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="用户 API Key 不存在") from error
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except AdminAuditError as error:
+            detail = (
+                "API Key 已更新，但完成审计事件写入失败；请检查服务端审计日志"
+                if mutation_applied
+                else "审计存储不可用，API Key 未修改"
+            )
+            raise HTTPException(status_code=503, detail=detail) from error
+        return {"key": public_key(item)}
+
+    @app.delete("/api/admin/users/{user_id}/keys/{key_id}")
+    async def admin_revoke_user_key(user_id: str, key_id: str, request: Request) -> dict[str, Any]:
+        if not admin_ok(request):
+            raise HTTPException(status_code=401, detail="Administrator login required")
+        if not accounts.admin_get(user_id) or not accounts.owns_key(user_id, key_id):
+            raise HTTPException(status_code=404, detail="用户 API Key 不存在")
+
+        audit_context = {
+            "actor": settings.admin_username,
+            "action": "api_key.revoke_requested",
+            "target_type": "api_key",
+            "target_id": key_id,
+            "request_id": str(request.headers.get("x-request-id") or ""),
+            "details": {"user_id": user_id},
+        }
+        mutation_applied = False
+        try:
+            admin_audit.append(**audit_context)
+            item = await api_keys.revoke(key_id)
+            mutation_applied = True
+            admin_audit.append(
+                **{
+                    **audit_context,
+                    "action": "api_key.revoke_completed",
+                    "details": {"user_id": user_id},
+                }
+            )
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="用户 API Key 不存在") from error
+        except AdminAuditError as error:
+            detail = (
+                "API Key 已撤销，但完成审计事件写入失败；请检查服务端审计日志"
+                if mutation_applied
+                else "审计存储不可用，API Key 未撤销"
+            )
+            raise HTTPException(status_code=503, detail=detail) from error
+        return {"key": public_key(item)}
 
     @app.get("/api/admin/audit")
     async def admin_audit_events(
