@@ -55,6 +55,9 @@ assert.equal(finished, true);
 const response = await client.responses.create({ model: "gpt-5.6-sol", input: "Hello Responses" });
 assert.equal(response.status, "completed");
 assert.equal(response.output_text, "mode2-node-sdk-answer");
+const retrievedResponse = await client.responses.retrieve(response.id);
+assert.equal(retrievedResponse.id, response.id);
+assert.equal(retrievedResponse.output_text, response.output_text);
 
 const image = await client.images.generate({
   model: "gpt-image",
@@ -80,6 +83,12 @@ for await (const event of responseStream) {
 }
 assert.equal(responseStreamText, "mode2-node-sdk-answer");
 assert.equal(responseCompleted, true);
+
+const aliased = await client.chat.completions.create({
+  model: "gpt-5-6-thinking",
+  messages: [{ role: "user", content: "Check model alias" }],
+});
+assert.equal(aliased.model, "gpt-5-6-thinking");
 
 const uploaded = await client.files.create({
   file: new File(["one two three"], "测试 sample.txt", { type: "text/plain" }),
