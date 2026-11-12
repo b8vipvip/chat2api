@@ -266,6 +266,57 @@ def test_structured_image_references_are_owner_scoped_and_round_trip(tmp_path):
             json=remote, headers=ORIGIN,
         ).status_code == 422
 
+        wrong_mime_upload = alice.post(
+            "/v1/files",
+            headers={"Authorization": "Bearer " + token},
+            json={
+                "filename": "not-an-image.svg",
+                "mime_type": "image/svg+xml",
+                "data_base64": base64.b64encode(b"<svg/>").decode("ascii"),
+                "purpose": "vision",
+            },
+        )
+        assert wrong_mime_upload.status_code == 200
+        wrong_mime = alice.put(
+            "/api/user/chat/conversations/conversation_image06",
+            json={
+                **body,
+                "mutation_id": "mutation_image06",
+                "messages": [{
+                    **message,
+                    "id": "message_image06",
+                    "content": [{
+                        "type": "image_url",
+                        "image_url": {"url": wrong_mime_upload.json()["id"]},
+                    }],
+                }],
+            },
+            headers=ORIGIN,
+        )
+        assert wrong_mime.status_code == 422
+
+        stored = app.state.file_store.get(file_id)
+        original_size = stored.size
+        stored.size = 10 * 1024 * 1024 + 1
+        oversized = alice.put(
+            "/api/user/chat/conversations/conversation_image07",
+            json={
+                **body,
+                "mutation_id": "mutation_image07",
+                "messages": [{
+                    **message,
+                    "id": "message_image07",
+                    "content": [{
+                        "type": "image_url",
+                        "image_url": {"url": file_id},
+                    }],
+                }],
+            },
+            headers=ORIGIN,
+        )
+        stored.size = original_size
+        assert oversized.status_code == 413
+
         assistant_image = {
             **body,
             "mutation_id": "mutation_image04",
