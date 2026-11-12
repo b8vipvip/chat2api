@@ -114,8 +114,36 @@ def test_installer_wraps_and_preserves_existing_lifespan(tmp_path: Path):
 def test_production_entry_installs_guard_before_startup():
     from app.entry import app
 
-    assert app.state.single_process_runtime_guard_installed is True
-    assert isinstance(app.state.single_process_runtime_guard, SingleProcessRuntimeGuard)
+    guard = app.state.single_process_runtime_guard
+    try:
+        assert app.state.single_process_runtime_guard_installed is True
+        assert isinstance(guard, SingleProcessRuntimeGuard)
+        assert guard._fd is not None
+    finally:
+        # Import-time acquisition protects store construction. The real server
+        # retains the descriptor until ASGI shutdown; tests release their import.
+        guard.release()
+
+
+def test_production_entry_acquires_guard_before_importing_main():
+    import app.entry as entry
+    from pathlib import Path
+
+    source = Path(entry.__file__).read_text(encoding="utf-8")
+    assert source.index("_runtime_guard.acquire()") < source.index("from .main import app")
+    assert source.index("_runtime_guard.acquire()") < source.index("install_single_process_runtime_guard(app")
+
+def test_installer_reuses_a_pre_acquired_guard(tmp_path: Path):
+    guard = SingleProcessRuntimeGuard(tmp_path)
+    guard.acquire()
+    app = FastAPI()
+    app.state.settings = SimpleNamespace(data_dir=tmp_path)
+    install_single_process_runtime_guard(app, guard=guard)
+    assert app.state.single_process_runtime_guard is guard
+    with TestClient(app):
+        assert guard._fd is not None
+    assert guard._fd is None
+
 
 def test_fastapi_installer_holds_and_releases_guard_with_lifespan(tmp_path: Path):
     app = FastAPI()
