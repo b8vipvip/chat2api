@@ -317,6 +317,27 @@ def test_structured_image_references_are_owner_scoped_and_round_trip(tmp_path):
         stored.size = original_size
         assert oversized.status_code == 413
 
+        stored.size = 7 * 1024 * 1024
+        oversized_total = alice.put(
+            "/api/user/chat/conversations/conversation_image08",
+            json={
+                **body,
+                "mutation_id": "mutation_image08",
+                "messages": [{
+                    **message,
+                    "id": "message_image08",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": file_id}},
+                        {"type": "image_url", "image_url": {"url": file_id}},
+                        {"type": "image_url", "image_url": {"url": file_id}},
+                    ],
+                }],
+            },
+            headers=ORIGIN,
+        )
+        stored.size = original_size
+        assert oversized_total.status_code == 413
+
         assistant_image = {
             **body,
             "mutation_id": "mutation_image04",
