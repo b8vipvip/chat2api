@@ -7,13 +7,50 @@ ADMIN_HTML = r'''<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>chat2api Console</title>
 <style>
-:root{color-scheme:dark;--bg:#09101d;--panel:#111a2b;--panel2:#0c1526;--line:#26344d;--text:#eef4ff;--muted:#8c9ab2;--accent:#72a7ff;--ok:#39d6a1;--warn:#ffd166;--bad:#ff727d}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}.shell{display:grid;grid-template-columns:220px 1fr;min-height:100vh}.side{border-right:1px solid var(--line);padding:20px 14px;background:#0b1322}.brand{font-size:22px;font-weight:850;padding:0 10px 18px}.brand small{display:block;color:var(--muted);font-size:11px}.nav button{display:block;width:100%;border:0;background:transparent;color:var(--muted);text-align:left;padding:10px 12px;border-radius:9px;cursor:pointer;margin:2px 0}.nav button.active,.nav button:hover{background:#17233a;color:var(--text)}.top{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:15px 22px;border-bottom:1px solid var(--line);position:sticky;top:0;background:rgba(9,16,29,.94);z-index:5}.auth{display:flex;gap:8px;min-width:min(100%,560px)}input,select,button,textarea{font:inherit}.field,select,input,textarea,button.action{border:1px solid var(--line);background:var(--panel2);color:var(--text);border-radius:9px;padding:9px 11px}.auth input{flex:1}.action{cursor:pointer;background:#18345e!important}.action.good{background:#154634!important}.action.warn{background:#4b3d15!important}.action.danger{background:#4d2028!important}.main{min-width:0}.content{padding:22px;max-width:1600px;margin:auto}.view{display:none}.view.active{display:block}.muted{color:var(--muted)}.ok{color:var(--ok)}.warnText{color:var(--warn)}.bad{color:var(--bad)}.grid{display:grid;grid-template-columns:repeat(5,minmax(130px,1fr));gap:12px;margin-bottom:14px}.card,.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:15px}.card .n{font-size:25px;font-weight:850}.panels{display:grid;grid-template-columns:1fr 1fr;gap:14px}.wide{grid-column:1/-1}.scroll{overflow:auto;max-height:590px}table{width:100%;border-collapse:collapse;white-space:nowrap}th,td{text-align:left;border-bottom:1px solid var(--line);padding:8px 9px;vertical-align:top}th{color:var(--muted);font-weight:650;position:sticky;top:0;background:var(--panel)}code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}code{color:#c8d9ff}.pill{display:inline-block;padding:2px 7px;border-radius:999px;background:#1a2943}.pill.ok{background:#123b30}.pill.bad{background:#48242c}.pill.warn{background:#493b17}.toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}.toolbar>*{min-width:120px}.secret{border:1px solid var(--ok);background:#07101e;padding:12px;border-radius:10px;word-break:break-all}.rowactions{display:flex;gap:6px}.rowactions button{padding:5px 7px}.split{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(330px,.75fr);gap:14px}.detail pre{white-space:pre-wrap;word-break:break-word;font-size:12px}.codebox{background:#07101e;border:1px solid var(--line);border-radius:10px;padding:12px;white-space:pre-wrap;overflow:auto}.doc h2{margin-top:26px}.doc p,.doc li{color:#cbd5e7}.labConfig{display:grid;grid-template-columns:180px 200px minmax(330px,1.2fr) minmax(260px,1fr) auto;gap:9px;align-items:end}.labConfig label{display:block;color:var(--muted);font-size:12px;margin-bottom:5px}.testKeyBox{display:grid;grid-template-columns:1fr 1.25fr;gap:7px}.testKeyHint{grid-column:1/-1;font-size:11px;color:var(--muted);margin-top:-2px}.testStatus{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:14px 0}.timeline{min-height:70px}.timelineRow{display:grid;grid-template-columns:130px 130px 1fr 100px 100px 100px;gap:8px;padding:8px;border-bottom:1px solid var(--line);align-items:center}.clickable{cursor:pointer}.clickable:hover{background:#172137}.hidden{display:none!important}.footer{margin-top:18px;color:var(--muted)}dialog{width:min(980px,92vw);max-height:86vh;border:1px solid var(--line);border-radius:14px;background:var(--panel);color:var(--text);padding:0;box-shadow:0 28px 90px rgba(0,0,0,.55)}dialog::backdrop{background:rgba(0,0,0,.66)}.dialogHead,.dialogFoot{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line)}.dialogFoot{border-top:1px solid var(--line);border-bottom:0;justify-content:flex-end}.dialogBody{padding:16px;overflow:auto;max-height:65vh}.dialogBody pre{white-space:pre-wrap;word-break:break-word;margin:0;font-size:12px}.keyBadge{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+:root{color-scheme:dark;--bg:#09101d;--panel:#111a2b;--panel2:#0c1526;--line:#26344d;--text:#eef4ff;--muted:#8c9ab2;--accent:#72a7ff;--ok:#39d6a1;--warn:#ffd166;--bad:#ff727d}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}.shell{display:grid;grid-template-columns:220px 1fr;min-height:100vh}.side{border-right:1px solid var(--line);padding:20px 14px;background:#0b1322}.brand{font-size:22px;font-weight:850;padding:0 10px 18px}.brand small{display:block;color:var(--muted);font-size:11px}.nav button{display:block;width:100%;border:0;background:transparent;color:var(--muted);text-align:left;padding:10px 12px;border-radius:9px;cursor:pointer;margin:2px 0}.nav button.active,.nav button:hover{background:#17233a;color:var(--text)}.top{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:15px 22px;border-bottom:1px solid var(--line);position:sticky;top:0;background:rgba(9,16,29,.94);z-index:5}.auth{display:flex;gap:8px;min-width:min(100%,560px)}input,select,button,textarea{font:inherit}.field,select,input,textarea,button.action{border:1px solid var(--line);background:var(--panel2);color:var(--text);border-radius:9px;padding:9px 11px}.auth input{flex:1}.action{cursor:pointer;background:#18345e!important}.action.good{background:#154634!important}.action.warn{background:#4b3d15!important}.action.danger{background:#4d2028!important}.main{min-width:0}.content{padding:22px;max-width:1600px;margin:auto}.view{display:none}.view.active{display:block}.muted{color:var(--muted)}.ok{color:var(--ok)}.warnText{color:var(--warn)}.bad{color:var(--bad)}.grid{display:grid;grid-template-columns:repeat(5,minmax(130px,1fr));gap:12px;margin-bottom:14px}.card,.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:15px}.card .n{font-size:25px;font-weight:850}.panels{display:grid;grid-template-columns:1fr 1fr;gap:14px}.wide{grid-column:1/-1}.scroll{overflow:auto;max-height:590px}table{width:100%;border-collapse:collapse;white-space:nowrap}th,td{text-align:left;border-bottom:1px solid var(--line);padding:8px 9px;vertical-align:top}th{color:var(--muted);font-weight:650;position:sticky;top:0;background:var(--panel)}code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}code{color:#c8d9ff}.pill{display:inline-block;padding:2px 7px;border-radius:999px;background:#1a2943}.pill.ok{background:#123b30}.pill.bad{background:#48242c}.pill.warn{background:#493b17}.toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}.toolbar>*{min-width:120px}.secret{border:1px solid var(--ok);background:#07101e;padding:12px;border-radius:10px;word-break:break-all}.rowactions{display:flex;gap:6px}.rowactions button{padding:5px 7px}.split{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(330px,.75fr);gap:14px}.detail pre{white-space:pre-wrap;word-break:break-word;font-size:12px}.codebox{background:#07101e;border:1px solid var(--line);border-radius:10px;padding:12px;white-space:pre-wrap;overflow:auto}.doc h2{margin-top:26px}.doc p,.doc li{color:#cbd5e7}.labConfig{display:grid;grid-template-columns:180px 200px minmax(330px,1.2fr) minmax(260px,1fr) auto;gap:9px;align-items:end}.labConfig label{display:block;color:var(--muted);font-size:12px;margin-bottom:5px}.testKeyBox{display:grid;grid-template-columns:1fr 1.25fr;gap:7px}.testKeyHint{grid-column:1/-1;font-size:11px;color:var(--muted);margin-top:-2px}.testStatus{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:14px 0}.timeline{min-height:70px}.timelineRow{display:grid;grid-template-columns:130px 130px 1fr 100px 100px 100px;gap:8px;padding:8px;border-bottom:1px solid var(--line);align-items:center}.clickable{cursor:pointer}.clickable:hover{background:#172137}.hidden{display:none!important}.footer{margin-top:18px;color:var(--muted)}dialog{width:min(980px,92vw);max-height:86vh;border:1px solid var(--line);border-radius:14px;background:var(--panel);color:var(--text);padding:0;box-shadow:0 28px 90px rgba(0,0,0,.55)}dialog::backdrop{background:rgba(0,0,0,.66)}.dialogHead,.dialogFoot{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line)}.dialogFoot{border-top:1px solid var(--line);border-bottom:0;justify-content:flex-end}.dialogBody{padding:16px;overflow:auto;max-height:65vh}.dialogBody pre{white-space:pre-wrap;word-break:break-word;margin:0;font-size:12px}.keyBadge{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.modeCard{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:16px;margin:12px 0}.modeHead{display:flex;justify-content:space-between;align-items:center;gap:18px}.modeHead h3{margin:0 0 5px}.modeHead p{margin:0}.modeMeta{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.modeGate{margin-top:14px;padding:12px;border:1px solid #755c27;border-radius:10px;background:#2a2415}.modeGate strong{color:var(--warn)}.modeSwitch{position:relative;display:inline-flex;width:54px;height:30px;flex:0 0 auto}.modeSwitch input{position:absolute;opacity:0;width:1px;height:1px}.modeSwitch .track{position:absolute;inset:0;border-radius:99px;background:#34445e;cursor:pointer;transition:background .18s}.modeSwitch .track:before{content:"";position:absolute;width:22px;height:22px;left:4px;top:4px;border-radius:50%;background:#eef4ff;transition:transform .18s}.modeSwitch input:checked+.track{background:#315d9d}.modeSwitch input:checked+.track:before{transform:translateX(24px)}.modeSwitch input:focus-visible+.track{outline:2px solid var(--accent);outline-offset:3px}.modeActions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:14px}
 @media(max-width:1250px){.labConfig{grid-template-columns:1fr 1fr}.labConfig>button{align-self:end}.testKeyBox{grid-template-columns:1fr}}
 @media(max-width:1050px){.shell{grid-template-columns:1fr}.side{border-right:0;border-bottom:1px solid var(--line)}.nav{display:flex;overflow:auto}.nav button{width:auto;white-space:nowrap}.top{position:static}.grid{grid-template-columns:repeat(2,1fr)}.panels,.split{grid-template-columns:1fr}.wide{grid-column:auto}.labConfig{grid-template-columns:1fr}.timelineRow{grid-template-columns:1fr 1fr}.auth{min-width:0}.testKeyBox{grid-template-columns:1fr}}
 </style></head><body><div class="shell">
-<aside class="side"><div class="brand">chat2api<small>Server Console · v0.5</small></div><div class="nav"><button data-view="overview">概览</button><button data-view="keys">API Key</button><button data-view="requests">请求记录</button><button data-view="media-storage">转存管理</button><button data-view="docs">开发文档</button><button data-view="playground">测试场</button></div></aside>
+<aside class="side"><div class="brand">chat2api<small>Server Console · v0.5</small></div><div class="nav"><button data-view="overview">概览</button><button data-view="modes">模式管理</button><button data-view="keys">API Key</button><button data-view="requests">请求记录</button><button data-view="media-storage">转存管理</button><button data-view="docs">开发文档</button><button data-view="playground">测试场</button></div></aside>
 <main class="main"><header class="top"><div><b id="pageTitle">概览</b><div id="status" class="muted">输入管理员主密钥后连接</div></div><div class="auth"><input id="adminKey" type="password" placeholder="CHAT2API_API_KEY 管理员主密钥"><button class="action" id="connect">连接</button><button class="action" id="refresh">刷新</button></div></header><div class="content">
 <section class="view" id="view-overview"><div class="grid"><div class="card"><div class="muted">在线扩展</div><div class="n" id="sExt">-</div></div><div class="card"><div class="muted">请求记录</div><div class="n" id="sReq">-</div></div><div class="card"><div class="muted">成功率</div><div class="n" id="sSuccess">-</div></div><div class="card"><div class="muted">平均首 Token</div><div class="n" id="sFirst">-</div></div><div class="card"><div class="muted">估算 Token</div><div class="n" id="sToken">-</div></div></div><div class="panels"><div class="panel"><h3>Chrome 扩展</h3><table><thead><tr><th>ID</th><th>名称</th><th>状态</th><th>版本</th><th>能力</th></tr></thead><tbody id="extBody"></tbody></table></div><div class="panel"><h3>模型目录</h3><table><thead><tr><th>ID</th><th>能力</th></tr></thead><tbody id="modelBody"></tbody></table></div><div class="panel wide"><h3>最近请求</h3><div class="scroll"><table><thead><tr><th>时间</th><th>类型</th><th>状态</th><th>Key</th><th>模型</th><th>首包</th><th>总耗时</th><th>Token</th></tr></thead><tbody id="recentBody"></tbody></table></div></div></div></section>
+<section class="view" id="view-modes">
+  <div class="panel">
+    <h2>模式管理</h2>
+    <p class="muted">管理服务端模式配置。当前未指定模式的 API 请求固定使用 Mode 2；本页面的 Mode 1 开关只记录可行性测试意向，不改变请求路由。</p>
+    <div class="modeCard">
+      <div class="modeHead">
+        <div>
+          <div class="modeMeta"><h3>Mode 2 · OpenAI 兼容 API</h3><span class="pill ok">默认启用</span></div>
+          <p class="muted">现有 /v1/* API、SDK、Worker 调度和请求处理保持当前行为。未明确指定模式时继续使用 Mode 2。</p>
+        </div>
+      </div>
+    </div>
+    <div class="modeCard">
+      <div class="modeHead">
+        <div>
+          <h3>Mode 1 · Cookie 代理</h3>
+          <p class="muted">仅用于后台配置与可行性测试，不代表代理服务已获准或已实现。</p>
+        </div>
+        <label class="modeSwitch" title="保存 Mode 1 测试配置意向">
+          <input id="mode1CookieProxyRequested" type="checkbox" aria-label="Mode 1 Cookie 代理测试开关">
+          <span class="track"></span>
+        </label>
+      </div>
+      <div class="modeGate">
+        <strong>NO-GO 授权门禁 · 实际运行能力始终关闭</strong>
+        <p>托管多用户、服务端持有 ChatGPT session/Cookie 并代理私有网页 API，当前不得进入生产实现。须先取得 OpenAI 明确书面授权 / partner approval，并完成独立安全审查。</p>
+      </div>
+      <p id="mode1RuntimeStatus" class="warnText">实际运行：关闭。打开上方开关只保存测试意向，不会启动代理。</p>
+      <p class="muted">本开关不会收集、读取、保存或转发 ChatGPT Cookie / session，不会创建私有网页代理路由，不会绕过登录、访问控制、验证码或其他保护措施。即使测试配置为开启，服务端 effective_enabled 仍固定为 false。</p>
+      <div class="modeActions">
+        <button class="action good" id="saveModeSettings">保存测试开关</button>
+        <button class="action" id="reloadModeSettings">重新读取</button>
+        <span id="modeSettingsStatus" class="muted">尚未读取</span>
+      </div>
+    </div>
+  </div>
+</section>
 <section class="view" id="view-keys"><div class="panel"><h3>创建业务 API Key</h3><div class="toolbar"><input id="keyName" placeholder="名称"><input id="keyDays" type="number" min="1" max="3650" placeholder="有效天数"><input id="keyQuota" type="number" min="0" placeholder="Token 额度（留空不限）"><button class="action good" id="createKey">创建</button></div><div class="secret hidden" id="newSecret"><span id="newToken"></span> <button class="action" id="copyNew">复制</button></div></div><div class="panel" style="margin-top:14px"><h3>令牌列表</h3><div class="scroll"><table><thead><tr><th>名称</th><th>前缀</th><th>状态</th><th>权限</th><th>最后使用</th><th>请求/Token</th><th>Token 额度</th><th>操作</th></tr></thead><tbody id="keysBody"></tbody></table></div></div><div class="footer">新版本业务 Key 的可复制副本使用管理员主密钥派生密钥加密保存；鉴权仍只比较哈希。旧版 0.4 Key 没有密文副本，因此无法恢复。</div></section>
 <section class="view" id="view-requests"><div class="split"><div class="panel"><h3>请求记录</h3><div class="toolbar"><input id="rqSearch" placeholder="request / error / client"><select id="rqStatus"><option value="">全部状态</option><option>completed</option><option>error</option></select><input id="rqModel" placeholder="模型"><button class="action" id="rqGo">筛选</button></div><div class="scroll"><table><thead><tr><th>时间</th><th>类型</th><th>状态</th><th>Key</th><th>模型</th><th>附件</th><th>首包</th><th>总耗时</th><th>Token</th></tr></thead><tbody id="rqBody"></tbody></table></div></div><div class="panel detail"><h3>请求详情</h3><div id="rqDetail" class="muted">点击记录查看诊断。</div></div></div></section>
 <section class="view" id="view-media-storage">
@@ -65,9 +102,58 @@ function status(t,c='muted'){$('status').className=c;$('status').textContent=t}
 $('adminKey').value=key();
 $('connect').onclick=()=>{sessionStorage.setItem('chat2api_admin_key',$('adminKey').value.trim());loadOverview()};
 $('refresh').onclick=()=>show((location.hash||'#overview').slice(1));
-const titles={overview:'概览',keys:'API Key',requests:'请求记录','media-storage':'转存管理',docs:'开发文档',playground:'测试场'};
-function show(v){document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.nav button').forEach(x=>x.classList.toggle('active',x.dataset.view===v));$('view-'+v)?.classList.add('active');$('pageTitle').textContent=titles[v]||v;location.hash=v;if(v==='overview')loadOverview();if(v==='keys')loadKeys();if(v==='requests')loadRequests();if(v==='media-storage')loadMediaStorage();if(v==='docs')renderDocs();if(v==='playground'){loadOverview().then(loadTests)}}
+const titles={overview:'概览',modes:'模式管理',keys:'API Key',requests:'请求记录','media-storage':'转存管理',docs:'开发文档',playground:'测试场'};
+function show(v){document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.nav button').forEach(x=>x.classList.toggle('active',x.dataset.view===v));$('view-'+v)?.classList.add('active');$('pageTitle').textContent=titles[v]||v;location.hash=v;if(v==='overview')loadOverview();if(v==='modes')loadModes();if(v==='keys')loadKeys();if(v==='requests')loadRequests();if(v==='media-storage')loadMediaStorage();if(v==='docs')renderDocs();if(v==='playground'){loadOverview().then(loadTests)}}
 document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>show(b.dataset.view));
+let modeSettings=null;
+function renderModeSettings(data){
+  modeSettings=data;
+  const mode1=data?.mode1_cookie_proxy||{};
+  $('mode1CookieProxyRequested').checked=mode1.requested_enabled===true;
+  $('mode1RuntimeStatus').textContent=mode1.effective_enabled===true
+    ? '实际运行：已启用'
+    : (mode1.requested_enabled===true
+      ? '测试开关已开启并已保存；实际运行仍为关闭，NO-GO 授权门禁继续阻断。'
+      : '测试开关：默认关闭。实际运行：关闭，NO-GO 授权门禁继续阻断。');
+  $('modeSettingsStatus').textContent=mode1.updated_at
+    ? '最近保存：'+fmtTime(mode1.updated_at)
+    : '尚未保存过 Mode 1 测试意向';
+}
+async function loadModes(){
+  if(!key()){status('请先登录管理员账号');return}
+  try{
+    const data=await api('/api/admin/modes');
+    renderModeSettings(data);
+    status('模式配置已读取；Mode 1 实际运行仍受 NO-GO 阻断','ok');
+  }catch(error){
+    $('modeSettingsStatus').textContent='读取失败：'+error.message;
+    status('模式配置读取失败：'+error.message,'bad');
+  }
+}
+$('mode1CookieProxyRequested')?.addEventListener('change',()=>{
+  $('modeSettingsStatus').textContent='有未保存的测试配置变更';
+});
+$('saveModeSettings')?.addEventListener('click',async()=>{
+  const button=$('saveModeSettings');
+  button.disabled=true;
+  try{
+    const data=await api('/api/admin/modes',{
+      method:'PUT',
+      body:{mode1_cookie_proxy_requested:$('mode1CookieProxyRequested').checked}
+    });
+    renderModeSettings(data);
+    $('modeSettingsStatus').textContent=data.mode1_cookie_proxy?.requested_enabled===true
+      ? '已保存测试开启意向；实际代理仍被 NO-GO 阻断'
+      : '已保存：Mode 1 测试开关关闭';
+    status('模式配置已保存；未启用任何 Cookie 代理','ok');
+  }catch(error){
+    $('modeSettingsStatus').textContent='保存失败：'+error.message;
+    status('模式配置保存失败：'+error.message,'bad');
+  }finally{
+    button.disabled=false;
+  }
+});
+$('reloadModeSettings')?.addEventListener('click',loadModes);
 async function loadOverview(){if(!key()){status('请输入管理员主密钥');return}try{overview=await api('/api/admin/overview');status(`已连接 · v${overview.version}`,'ok');const s=overview.telemetry||{};$('sExt').textContent=overview.health?.online_extensions??0;$('sReq').textContent=s.retained_requests??0;$('sSuccess').textContent=(s.success_rate??100)+'%';$('sFirst').textContent=fmtMs(s.avg_first_token_ms);$('sToken').textContent=s.estimated_total_tokens??0;$('extBody').innerHTML=(overview.clients||[]).map(c=>`<tr><td><code>${esc(c.client_id)}</code></td><td>${esc(c.name)}</td><td>${pill(c.online?(c.busy?'busy':'online'):'offline')}</td><td>${esc(c.version)}</td><td>${esc((c.metadata?.capabilities||[]).join(', '))}</td></tr>`).join('')||'<tr><td colspan="5">暂无扩展</td></tr>';$('modelBody').innerHTML=(overview.models||[]).map(m=>`<tr><td><code>${esc(m.id)}</code></td><td>${esc((m.capabilities||[]).join(', '))}</td></tr>`).join('');$('recentBody').innerHTML=(overview.recent_requests||[]).map(r=>`<tr><td>${fmtTime(r.recorded_at)}</td><td>${esc(r.request_type||'text')}</td><td>${pill(r.status)}</td><td>${esc(r.api_key_name||'-')}</td><td><code>${esc(r.requested_model||'-')}</code></td><td>${fmtMs(r.timings?.first_token_ms)}</td><td>${fmtMs(r.timings?.total_ms)}</td><td>${esc(r.usage?.total_tokens??0)}</td></tr>`).join('');fillModels();return overview}catch(e){status('连接失败：'+e.message,'bad')}}
 // Test only concrete models discovered AND validated on an online Worker.
 // Preserve the operator selection across live catalog refreshes.
@@ -206,5 +292,5 @@ const start=(location.hash||'#'+INITIAL_VIEW).slice(1);show(titles[start]?start:
 
 
 def admin_response(initial_view: str = "overview") -> HTMLResponse:
-    view = initial_view if initial_view in {"overview", "keys", "requests", "media-storage", "docs", "playground"} else "overview"
+    view = initial_view if initial_view in {"overview", "modes", "keys", "requests", "media-storage", "docs", "playground"} else "overview"
     return HTMLResponse(ADMIN_HTML.replace("__INITIAL_VIEW__", view), headers={"Cache-Control": "no-store"})

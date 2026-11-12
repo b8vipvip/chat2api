@@ -10,6 +10,7 @@ import sqlite3
 import time
 import uuid
 from contextlib import asynccontextmanager
+from urllib.parse import urlsplit
 from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncIterator
 
@@ -31,6 +32,7 @@ from .archive_write_stop_v280 import ArchiveWriteStop
 from .config import Settings, get_settings
 from .file_store import FileStore
 from .media_archive_v173 import MediaArchive
+from .mode_management import ModeManagementError, ModeManagementStore
 from .generated_files_v196 import GeneratedFileArchive
 from .generated_file_staging_v238 import GeneratedFileStaging
 from .generated_file_deferred_v247 import DeferredGeneratedFiles, FileStillProcessing, FileTransferFailed
@@ -95,6 +97,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     generated_files.staging = generated_staging
     deferred_generated_files = DeferredGeneratedFiles(generated_files)
     test_runs = TestRunStore(config.data_dir)
+    mode_management = ModeManagementStore(config.data_dir)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -132,6 +135,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.generated_staging = generated_staging
     app.state.deferred_generated_files = deferred_generated_files
     app.state.test_runs = test_runs
+    app.state.mode_management = mode_management
     # Keep detached-stream supervisors alive until their Broker terminal is persisted.
     app.state.detached_sse_tasks = set()
     app.add_middleware(
@@ -791,6 +795,49 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "desktop_agent": False,
             },
         }
+
+    @app.get("/api/admin/modes", dependencies=[Depends(require_admin_key)])
+    async def admin_modes() -> dict[str, object]:
+        try:
+            return mode_management.public_state()
+        except ModeManagementError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+
+    @app.put("/api/admin/modes", dependencies=[Depends(require_admin_key)])
+    async def update_admin_modes(request: Request, payload: dict[str, Any]) -> dict[str, object]:
+        # This endpoint is used by the cookie-authenticated admin console.
+        # Require a same-origin browser mutation to prevent cross-site settings writes.
+        origin = str(request.headers.get("origin") or "").strip()
+        parsed_origin = urlsplit(origin)
+        request_host = str(request.headers.get("host") or "").strip().lower()
+        forwarded_proto = str(request.headers.get("x-forwarded-proto") or "").split(",", 1)[0].strip().lower()
+        expected_scheme = forwarded_proto if forwarded_proto in {"http", "https"} else request.url.scheme.lower()
+        fetch_site = str(request.headers.get("sec-fetch-site") or "").strip().lower()
+        if (
+            parsed_origin.scheme.lower() != expected_scheme
+            or not parsed_origin.netloc
+            or parsed_origin.netloc.lower() != request_host
+            or parsed_origin.path not in {"", "/"}
+            or parsed_origin.query
+            or parsed_origin.fragment
+            or fetch_site not in {"", "same-origin"}
+        ):
+            raise HTTPException(status_code=403, detail="Mode settings updates require a same-origin admin request")
+        if set(payload) != {"mode1_cookie_proxy_requested"}:
+            raise HTTPException(
+                status_code=422,
+                detail="Only mode1_cookie_proxy_requested may be updated",
+            )
+        requested = payload.get("mode1_cookie_proxy_requested")
+        if type(requested) is not bool:
+            raise HTTPException(
+                status_code=422,
+                detail="mode1_cookie_proxy_requested must be a boolean",
+            )
+        try:
+            return mode_management.set_mode1_cookie_proxy_requested(requested)
+        except ModeManagementError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
 
     @app.get("/api/admin/keys", dependencies=[Depends(require_admin_key)])
     async def admin_keys() -> dict[str, object]:
