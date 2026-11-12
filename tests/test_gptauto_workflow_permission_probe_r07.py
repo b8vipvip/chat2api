@@ -82,7 +82,8 @@ def test_failed_cleanup_reports_exact_manual_recovery_branch() -> None:
 
 def test_no_execute_is_real_dry_run_without_reading_token(monkeypatch, capsys) -> None:
     # Absent --execute, no credential or network path should be instantiated.
-    monkeypatch.delenv("GPTAUTO_GITHUB_TOKEN", raising=False)
+    for name in ("GPTAUTO_GITHUB_TOKEN", "GPTAUTO_SYNC_TOKEN", "GPTAUTO_EXECUTOR_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
     assert main([]) == 0
     assert "DRY RUN" in capsys.readouterr().out
     assert main(["--execute"]) == 2
