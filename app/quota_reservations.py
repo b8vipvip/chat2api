@@ -141,7 +141,14 @@ class QuotaReservationStore:
                     value = self._row(existing)
                     if value["key_id"] != key_id:
                         raise QuotaReservationError("request_id is already reserved by another API key")
-                    # A request ID is idempotent and cannot be reused after release/expiry.
+                    # Idempotent retries may observe an in-flight reservation or
+                    # the same completed settlement. A terminal release/expiry
+                    # must never be returned as if it were a fresh reservation:
+                    # otherwise a reused request_id would bypass quota admission.
+                    if value["state"] in {"released", "expired"}:
+                        raise QuotaReservationError(
+                            "request_id belongs to a released or expired reservation and cannot be reused"
+                        )
                     return value
                 active = self.db.execute(
                     "SELECT COALESCE(SUM(reserved_tokens),0) FROM quota_reservations WHERE key_id=? AND state IN ('reserved','committing')",
