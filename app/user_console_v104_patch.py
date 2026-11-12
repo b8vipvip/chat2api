@@ -397,6 +397,42 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
         except (KeyError, ValueError) as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
 
+    @app.get("/api/user/files/{file_id}/content")
+    async def user_file_content(file_id: str, request: Request) -> Response:
+        """Serve only this user's image attachments through the HttpOnly session.
+
+        FileStore ownership is API-Key scoped. Resolve that owner back to the
+        authenticated account before returning bytes; never accept an owner ID
+        or path from the browser.
+        """
+        user = current_user(request)
+        file_store = app.state.file_store
+        item = file_store.get(file_id)
+        allowed_image_types = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+        if (
+            not item
+            or item.purpose != "vision"
+            or item.mime_type not in allowed_image_types
+            or not accounts.owns_key(str(user["user_id"]), str(item.owner_key_id or ""))
+        ):
+            raise HTTPException(status_code=404, detail="图片附件不存在")
+        try:
+            stored, payload = file_store.read(file_id)
+        except (KeyError, FileNotFoundError) as error:
+            raise HTTPException(status_code=404, detail="图片附件内容不存在") from error
+        return Response(
+            payload,
+            media_type=stored.mime_type,
+            headers={
+                "Cache-Control": "private, no-store",
+                "Content-Disposition": "inline",
+                "X-Content-Type-Options": "nosniff",
+                "Content-Security-Policy": "default-src 'none'; sandbox",
+                "Cross-Origin-Resource-Policy": "same-origin",
+                "Referrer-Policy": "no-referrer",
+            },
+        )
+
     @app.patch("/api/user/keys/{key_id}/quota")
     async def user_update_key_quota(key_id: str, body: UserKeyQuotaBody, request: Request) -> dict[str, Any]:
         user = current_user(request)
