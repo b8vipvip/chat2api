@@ -144,7 +144,18 @@ def test_user_can_delete_owned_vision_image_with_session_only(tmp_path: Path) ->
         assert uploaded.status_code == 200, uploaded.text
         file_id = uploaded.json()["id"]
 
-        deleted = client.delete(f"/api/user/files/{file_id}")
+        missing_origin = client.delete(f"/api/user/files/{file_id}")
+        assert missing_origin.status_code == 403
+        cross_origin = client.delete(
+            f"/api/user/files/{file_id}",
+            headers={"Origin": "https://attacker.example"},
+        )
+        assert cross_origin.status_code == 403
+
+        deleted = client.delete(
+            f"/api/user/files/{file_id}",
+            headers={"Origin": "http://testserver"},
+        )
         assert deleted.status_code == 200
         assert deleted.json() == {"deleted": True}
         assert client.get(f"/api/user/files/{file_id}/content").status_code == 404
