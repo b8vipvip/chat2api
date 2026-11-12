@@ -134,6 +134,34 @@ def install_control_plane_v1(app: FastAPI) -> FastAPI:
         )
         return {"admin": admin, "revoked_sessions": revoked}
 
+    @app.post("/api/admin/control/self/password")
+    async def rotate_own_admin_password(body: AdminPasswordUpdate, request: Request) -> dict:
+        actor = str(getattr(request.state, "admin_username", "") or "")
+        if not actor or actor.casefold() == app.state.settings.admin_username.casefold():
+            raise HTTPException(
+                status_code=409,
+                detail="The environment-managed root password must be rotated through deployment configuration",
+            )
+        if not body.current_password or not store.verify_admin(actor, body.current_password):
+            raise HTTPException(status_code=403, detail="Current administrator password is incorrect")
+        audit_event(
+            request, "admin.self_password_rotation_requested", "admin", actor,
+            {"self_service": True},
+        )
+        try:
+            admin = store.set_admin_password(actor, body.new_password)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Unknown administrator") from exc
+        except ControlPlaneError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        sessions = getattr(app.state, "admin_sessions", None)
+        revoked = sessions.revoke_username(actor) if sessions is not None else 0
+        audit_event(
+            request, "admin.self_password_rotation_completed", "admin", actor,
+            {"revoked_sessions": revoked},
+        )
+        return {"admin": admin, "revoked_sessions": revoked}
+
     @app.get("/api/admin/control/client")
     async def get_client_policy() -> dict:
         return store.public_client()
