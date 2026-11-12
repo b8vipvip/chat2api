@@ -98,7 +98,7 @@ def test_allowlists_intersect_denies_override_and_unresolved_aliases_fail_closed
     assert store.evaluate("gpt-5-5-thinking", key_id="key_1", user_id=None)["allowed"]
     assert not store.evaluate("gpt-5.6-sol", key_id="key_1", user_id=None)["allowed"]
     assert not store.evaluate("default", key_id="key_1", user_id=None)["allowed"]
-    assert store.evaluate("gpt-5.6-sol", key_id="key_2", user_id=None)["allowed"] is False
+    assert store.evaluate("gpt-5.6-sol", key_id="key_2", user_id=None)["allowed"] is True
     # A policy scoped to another key does not restrict this key.
     assert store.evaluate("gpt-5.5", key_id="key_2", user_id=None)["allowed"]
     store.close()
@@ -137,7 +137,7 @@ def test_api_key_and_owner_policies_filter_catalog_and_gate_dispatch(tmp_path: P
 
     # Non-user-managed keys retain their own key rule only; master bypass is explicit.
     registry.routing_key_context.set("key_2")
-    assert len(registry.model_catalog()) == 4
+    assert [row["id"] for row in registry.model_catalog()] == ["gpt-5.5", "gpt-5.6-sol"]
     registry.routing_key_context.set("master")
     assert len(registry.model_catalog()) == 4
     tokens = set_model_context("gpt-5.6-sol")
