@@ -90,8 +90,11 @@ def permission_for_admin_route(path: str, method: str) -> str | None:
         return "secrets:write" if write else "billing:read"
     if path == "/api/admin/user-payments/test":
         return "billing:write"
+    if path == "/api/admin/payment-channels-v106":
+        # This settings document contains provider credentials; keep writes
+        # root-only until the G0 keyring migration is accepted.
+        return "secrets:write" if write else "billing:read"
     if path in {
-        "/api/admin/payment-channels-v106",
         "/api/admin/payment-channels-v106/usdt-orders",
         "/api/admin/payment-channels-v106/test",
     } or re.fullmatch(r"/api/admin/payment-channels-v106/usdt-orders/[^/]+/(confirm|reject)", path):
