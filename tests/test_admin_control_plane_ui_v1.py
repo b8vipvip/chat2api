@@ -55,7 +55,7 @@ def test_admin_console_rejects_unknown_initial_view():
 
 def test_existing_commerce_console_is_the_single_user_and_billing_ui_owner():
     source = (Path(__file__).resolve().parents[1] / "app" / "admin_user_commerce_v104.js").read_text(encoding="utf-8")
-    assert 'session.authenticated ? session.role : null' in source
+    assert 'sessionAuthenticated ? (session.role || "unknown") : null' in source
     assert 'currentAdminRole !== "super_admin"' in source
     assert 'adminRoleResolved = sessionCheckSucceeded' in source
     assert '["super_admin", "billing_admin"]' in source
