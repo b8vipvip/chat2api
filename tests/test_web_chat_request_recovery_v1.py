@@ -339,6 +339,16 @@ assert(/^req_[A-Za-z0-9_-]{8,120}$/.test(api.createRequestId({randomUUID:()=>"12
     fetcher:async()=>({status:409,ok:false})
   }).cancel({request_id:"req_12345678",assistant_message_id:"message_123456"});
   assert.strictEqual(unavailable.status, "cancel_unavailable");
+
+  const finalizing = await api.create({
+    fetcher:async()=>({status:200,ok:true,json:async()=>({
+      request_id:"req_12345678", status:"finalizing",
+      terminal:false, active:true, cancel_requested:false,
+      already_terminal:true
+    })})
+  }).cancel({request_id:"req_12345678",assistant_message_id:"message_123456"});
+  assert.strictEqual(finalizing.status, "finalizing");
+  assert.strictEqual(finalizing.terminal, false);
   console.log("recovery-harness-passed");
 })().catch(error=>{console.error(error);process.exitCode=1;});
 """
