@@ -19,13 +19,59 @@
   },
   "endpoints": [
     {
-      "method": "GET",
-      "path": "/v1/models",
-      "owner": "app.main",
-      "status": "compatible_subset",
-      "python_sdk": "client.models.list()",
-      "javascript_sdk": "client.models.list()",
-      "notes": "Only currently online model catalog; requires models scope."
+      "method": "POST",
+      "path": "/v1/audio/conversations",
+      "owner": "app.voice_patch",
+      "status": "extension_only",
+      "python_sdk": null,
+      "javascript_sdk": null,
+      "notes": "Chat2API audio conversation extension; consumes an owner-scoped audio_file_id and returns JSON audio/transcript data.",
+      "protocol": "http",
+      "openapi": true
+    },
+    {
+      "method": "WEBSOCKET",
+      "path": "/v1/audio/realtime",
+      "owner": "app.live_voice_patch",
+      "status": "extension_only",
+      "python_sdk": null,
+      "javascript_sdk": null,
+      "notes": "Custom chat2api-live-v1 full-duplex PCM/WebSocket protocol; not OpenAI Realtime WebSocket wire compatibility.",
+      "protocol": "websocket",
+      "openapi": false
+    },
+    {
+      "method": "POST",
+      "path": "/v1/audio/realtime/sessions",
+      "owner": "app.live_voice_patch",
+      "status": "extension_only",
+      "python_sdk": null,
+      "javascript_sdk": null,
+      "notes": "Issues a one-time 60-second Chat2API realtime session token; this is not the standard OpenAI client_secrets route.",
+      "protocol": "http",
+      "openapi": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/audio/speech",
+      "owner": "app.voice_patch",
+      "status": "extension_only",
+      "python_sdk": null,
+      "javascript_sdk": null,
+      "notes": "GPT-Live speech generation returns JSON containing base64 audio and diagnostics; it does not implement the standard binary audio/speech response contract.",
+      "protocol": "http",
+      "openapi": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/audio/transcriptions",
+      "owner": "app.v7_patch",
+      "status": "extension_only",
+      "python_sdk": null,
+      "javascript_sdk": null,
+      "notes": "Chat2API dictation bridge consumes an owner-scoped audio_file_id; standard SDK multipart audio transcription is not implemented.",
+      "protocol": "http",
+      "openapi": true
     },
     {
       "method": "POST",
@@ -34,52 +80,31 @@
       "status": "compatible_subset",
       "python_sdk": "client.chat.completions.create()",
       "javascript_sdk": "client.chat.completions.create()",
-      "notes": "Text and supported uploaded image/file references. Default prompt_mode=full preserves the ordered multi-turn transcript. Client extension fields may appear in output."
+      "notes": "Text and supported uploaded image/file references. Default prompt_mode=full preserves the ordered multi-turn transcript. Client extension fields may appear in output.",
+      "protocol": "http",
+      "openapi": true
     },
     {
       "method": "POST",
-      "path": "/v1/responses",
-      "owner": "app.responses_v108_patch",
+      "path": "/v1/completions",
+      "owner": "app.v13_patch",
       "status": "compatible_subset",
-      "python_sdk": "client.responses.create()",
-      "javascript_sdk": "client.responses.create()",
-      "notes": "Text, native web search, hosted images and selected emulated tools via later patch layers; do not infer complete Responses feature parity."
-    },
-    {
-      "method": "GET",
-      "path": "/v1/responses/{response_id}",
-      "owner": "app.responses_v108_patch",
-      "status": "compatible_subset",
-      "python_sdk": "client.responses.retrieve()",
-      "javascript_sdk": "client.responses.retrieve()",
-      "notes": "Best-effort bounded in-process response store, not durable OpenAI storage semantics."
-    },
-    {
-      "method": "POST",
-      "path": "/v1/images/generations",
-      "owner": "app.main",
-      "status": "compatible_subset",
-      "python_sdk": "client.images.generate()",
-      "javascript_sdk": "client.images.generate()",
-      "notes": "gpt-image only; requires active image-capable Worker and images scope."
+      "python_sdk": "client.completions.create()",
+      "javascript_sdk": "client.completions.create()",
+      "notes": "Legacy text completions adapter over Chat Completions; prompt is converted to one user turn and usage remains estimated.",
+      "protocol": "http",
+      "openapi": true
     },
     {
       "method": "POST",
       "path": "/v1/files",
       "owner": "app.main",
-      "status": "extension_only",
-      "python_sdk": null,
-      "javascript_sdk": null,
-      "notes": "JSON with filename, data_base64, mime_type and purpose; OpenAI SDK multipart files.create is NOT supported by this route."
-    },
-    {
-      "method": "GET",
-      "path": "/v1/files/{file_id}",
-      "owner": "app.main",
       "status": "compatible_subset",
-      "python_sdk": "client.files.retrieve()",
-      "javascript_sdk": "client.files.retrieve()",
-      "notes": "Metadata is API-key scoped. No standard GET /v1/files list or /v1/files/{id}/content contract."
+      "python_sdk": "client.files.create(file=..., purpose=...)",
+      "javascript_sdk": "client.files.create({file, purpose})",
+      "notes": "Supports standard multipart file upload for assistants, vision and user_data purposes, plus the legacy Chat2API JSON/base64 extension. batch/fine-tune/evals purposes are unsupported.",
+      "protocol": "http",
+      "openapi": true
     },
     {
       "method": "DELETE",
@@ -88,7 +113,130 @@
       "status": "compatible_subset",
       "python_sdk": "client.files.delete()",
       "javascript_sdk": "client.files.del()",
-      "notes": "API-key scoped deletion; server reply uses {deleted:true}, not guaranteed full OpenAI deletion schema."
+      "notes": "Returns standard FileDeleted {id, object, deleted}; owner-scoped.",
+      "protocol": "http",
+      "openapi": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/files/{file_id}",
+      "owner": "app.main",
+      "status": "compatible_subset",
+      "python_sdk": "client.files.retrieve()",
+      "javascript_sdk": "client.files.retrieve()",
+      "notes": "Returns standard FileObject metadata (created_at Unix seconds, status=processed) with Chat2API mime_type extension; owner scoped.",
+      "protocol": "http",
+      "openapi": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/files/{file_id}/content",
+      "owner": "app.main",
+      "status": "compatible_subset",
+      "python_sdk": "client.files.content(file_id)",
+      "javascript_sdk": "client.files.content(file_id)",
+      "notes": "Returns owner-scoped binary file bytes; no list endpoint is currently implemented.",
+      "protocol": "http",
+      "openapi": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/generated-files/{file_id}",
+      "owner": "app.main",
+      "status": "extension_only",
+      "python_sdk": null,
+      "javascript_sdk": null,
+      "notes": "Returns owner-scoped Chat2API generated-file metadata and signed download URL.",
+      "protocol": "http",
+      "openapi": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/images/generations",
+      "owner": "app.main",
+      "status": "compatible_subset",
+      "python_sdk": "client.images.generate()",
+      "javascript_sdk": "client.images.generate()",
+      "notes": "gpt-image only; requires active image-capable Worker and images scope.",
+      "protocol": "http",
+      "openapi": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/media/{media_id}",
+      "owner": "app.main",
+      "status": "extension_only",
+      "python_sdk": null,
+      "javascript_sdk": null,
+      "notes": "Returns owner-scoped Chat2API media metadata and signed asset URLs; binary assets are served by /api/media capability URLs.",
+      "protocol": "http",
+      "openapi": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/models",
+      "owner": "app.main",
+      "status": "compatible_subset",
+      "python_sdk": "client.models.list()",
+      "javascript_sdk": "client.models.list()",
+      "notes": "Only currently online model catalog; requires models scope.",
+      "protocol": "http",
+      "openapi": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/models/{model_id}",
+      "owner": "app.v13_patch",
+      "status": "compatible_subset",
+      "python_sdk": "client.models.retrieve(model_id)",
+      "javascript_sdk": "client.models.retrieve(model_id)",
+      "notes": "Retrieves an online model from the current browser-backed catalog; offline or unknown models return not-found.",
+      "protocol": "http",
+      "openapi": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/native-content/{request_id}",
+      "owner": "app.main",
+      "status": "extension_only",
+      "python_sdk": null,
+      "javascript_sdk": null,
+      "notes": "Owner-scoped native page snapshot sidecar; not an OpenAI Responses resource.",
+      "protocol": "http",
+      "openapi": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/native-content/{request_id}/events",
+      "owner": "app.main",
+      "status": "extension_only",
+      "python_sdk": null,
+      "javascript_sdk": null,
+      "notes": "Owner-scoped native snapshot update SSE; presentation-only stream and not a generation terminal authority.",
+      "protocol": "http",
+      "openapi": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/responses",
+      "owner": "app.responses_v108_patch",
+      "status": "compatible_subset",
+      "python_sdk": "client.responses.create()",
+      "javascript_sdk": "client.responses.create()",
+      "notes": "Text, native web search, hosted images and selected emulated tools via later patch layers; do not infer complete Responses feature parity.",
+      "protocol": "http",
+      "openapi": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/responses/{response_id}",
+      "owner": "app.responses_v108_patch",
+      "status": "compatible_subset",
+      "python_sdk": "client.responses.retrieve()",
+      "javascript_sdk": "client.responses.retrieve()",
+      "notes": "Best-effort bounded in-process response store, not durable OpenAI storage semantics.",
+      "protocol": "http",
+      "openapi": true
     }
   ],
   "capabilities": [
@@ -139,13 +287,13 @@
     },
     {
       "id": "files.multipart",
-      "status": "unsupported",
-      "evidence": "JSON FileUploadRequest, standard SDK multipart upload receives validation error."
+      "status": "supported_subset",
+      "evidence": "Standard multipart files.create supported for assistants, vision and user_data; batch/fine-tune/evals unsupported; legacy JSON/base64 extension remains."
     },
     {
       "id": "errors",
-      "status": "partial",
-      "evidence": "Responses uses {error:{...}}; some base API validation/authentication emits FastAPI {detail:...}."
+      "status": "openai_envelope_for_http_exceptions_and_validation",
+      "evidence": "HTTPException and FastAPI request-validation failures under /v1 use {error:{message,type,param,code}}; endpoint-specific direct error responses still require contract tests."
     },
     {
       "id": "auth.scope",
@@ -156,6 +304,26 @@
       "id": "mode2.default",
       "status": "supported",
       "evidence": "ModeResolverMiddleware defaults /v1 to mode2; mode1 rejected."
+    },
+    {
+      "id": "files.content",
+      "status": "supported_subset",
+      "evidence": "GET /v1/files/{file_id}/content returns owner-scoped binary content."
+    },
+    {
+      "id": "files.list",
+      "status": "unsupported",
+      "evidence": "GET /v1/files list is not implemented."
+    },
+    {
+      "id": "audio.standard",
+      "status": "extension_only",
+      "evidence": "Speech, transcription and realtime paths use Chat2API-specific body/response/wire formats."
+    },
+    {
+      "id": "legacy.completions",
+      "status": "supported_subset",
+      "evidence": "POST /v1/completions maps a prompt to the Chat Completions worker bridge."
     }
   ],
   "boundary": {
