@@ -6,7 +6,7 @@ Status: first interactive browser client; not a complete ChatGPT 1:1 replacement
 
 - `GET /chat` serves the standalone chat UI.
 - `/console` links to the chat client.
-- `/assets/chat2api-chat-client-v1.js` and `/assets/chat2api-chat-client-v1.css` are served with no-store headers.
+- `/assets/chat2api-image-drop-v1.js`, `/assets/chat2api-chat-client-v1.js` and `/assets/chat2api-chat-client-v1.css` are served with no-store headers.
 - The HTML response applies a restrictive same-origin Content Security Policy and `X-Content-Type-Options: nosniff`.
 
 ## Authentication and API flow
@@ -26,7 +26,7 @@ The page sends the full ordered conversation using only standard Chat Completion
 - User-session check and owner-scoped API Key selection.
 - Online model list with user model-catalog fallback.
 - New conversation, local conversation list, local search, rename and delete.
-- Image attachments: PNG, JPEG, WebP and GIF; up to 4 images per message, 10 MiB per image and 20 MiB total per message. Images are uploaded through Chat2API's JSON `/v1/files` endpoint under the selected Key's `files` scope. The message uses the standard Chat Completions `image_url` content-part envelope, with a Chat2API-specific `file_...` reference in `image_url.url` to avoid storing/re-sending base64 bytes in browser history.
+- Image attachments: PNG, JPEG, WebP and GIF; up to 4 images per message, 10 MiB per image and 20 MiB total per message. Files can be selected, pasted or dragged onto the composer. Drag/drop uses an isolated event adapter and funnels accepted File objects through the same MIME/size/key-owner validation as the picker. Images are uploaded through Chat2API's JSON `/v1/files` endpoint under the selected Key's `files` scope. The message uses the standard Chat Completions `image_url` content-part envelope, with a Chat2API-specific `file_...` reference in `image_url.url` to avoid storing/re-sending base64 bytes in browser history.
 - Streaming Chat Completions, incremental text, stop generation and incomplete-stream warning when `[DONE]` is missing.
 - Safe basic Markdown rendering for headings, paragraphs, lists, blockquotes, tables, inline code, fenced code and HTTPS/HTTP links. Raw HTML is rendered as text, not executed.
 - Copy message/code and export current conversation to Markdown.
