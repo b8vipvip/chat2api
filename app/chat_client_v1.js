@@ -566,7 +566,7 @@
           renderMessages();
         }
       }
-      if (buffer.trim()) consumeSseFrame(buffer, assistant);
+      if (buffer.trim() && consumeSseFrame(buffer, assistant)) done = true;
       if (!assistant.content.trim()) {
         conversation.messages = conversation.messages.filter((message) => message.id !== assistant.id);
         toast("模型没有返回文本内容。");
