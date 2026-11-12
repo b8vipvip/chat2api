@@ -50,10 +50,9 @@ def test_production_responses_web_search_and_image_tool_use_v108_owner(tmp_path:
     # external Worker/image execution boundaries are deterministic fakes; no
     # upstream account or browser session is used.
     script = r'''
-import asyncio
 import uuid
-import httpx
 from fastapi.responses import JSONResponse
+from fastapi.testclient import TestClient
 from app.entry import app
 from app.api_keys import ApiPrincipal
 import app.responses_v108_patch as responses
@@ -115,37 +114,33 @@ route_globals["_archive_response_media"] = fake_archive
 assert route_globals["_dispatch"] is fake_dispatch
 image_tool.handle_image_tool = fake_image_tool
 
-async def main():
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        headers = {"Authorization": "Bearer route-owner-e2e-principal"}
-        web = await client.post("/v1/responses", headers=headers, json={
-            "model": "gpt-5.6",
-            "input": "Find a source for the route owner test.",
-            "tools": [{"type": "web_search_preview"}],
-        })
-        assert web.status_code == 200, web.text
-        web_payload = web.json()
-        assert web_payload["status"] == "completed", web_payload
-        assert any(item.get("type") == "web_search_call" for item in web_payload.get("output", [])), web_payload
-        assert len(dispatch_calls) == 1, dispatch_calls
-        assert dispatch_calls[0]["native_tools"] == ["web_search"]
+with TestClient(app) as client:
+    headers = {"Authorization": "Bearer route-owner-e2e-principal"}
+    web = client.post("/v1/responses", headers=headers, json={
+        "model": "gpt-5.6",
+        "input": "Find a source for the route owner test.",
+        "tools": [{"type": "web_search_preview"}],
+    })
+    assert web.status_code == 200, web.text
+    web_payload = web.json()
+    assert web_payload["status"] == "completed", web_payload
+    assert any(item.get("type") == "web_search_call" for item in web_payload.get("output", [])), web_payload
+    assert len(dispatch_calls) == 1, dispatch_calls
+    assert dispatch_calls[0]["native_tools"] == ["web_search"]
 
-        response_id = web_payload["id"]
-        retrieved = await client.get(f"/v1/responses/{response_id}", headers=headers)
-        assert retrieved.status_code == 200, retrieved.text
-        assert retrieved.json()["id"] == response_id
+    response_id = web_payload["id"]
+    retrieved = client.get(f"/v1/responses/{response_id}", headers=headers)
+    assert retrieved.status_code == 200, retrieved.text
+    assert retrieved.json()["id"] == response_id
 
-        image = await client.post("/v1/responses", headers=headers, json={
-            "model": "gpt-5.6",
-            "input": "Create a simple test image.",
-            "tools": [{"type": "image_generation"}],
-        })
-        assert image.status_code == 200, image.text
-        assert image.json()["id"] == "resp_route_owner_image"
-        assert len(image_calls) == 1, image_calls
-
-asyncio.run(main())
+    image = client.post("/v1/responses", headers=headers, json={
+        "model": "gpt-5.6",
+        "input": "Create a simple test image.",
+        "tools": [{"type": "image_generation"}],
+    })
+    assert image.status_code == 200, image.text
+    assert image.json()["id"] == "resp_route_owner_image"
+    assert len(image_calls) == 1, image_calls
 '''
     repository_root = Path(__file__).resolve().parents[1]
     env = os.environ.copy()
