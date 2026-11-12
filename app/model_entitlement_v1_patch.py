@@ -169,7 +169,6 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
         payload["data"] = [
             row for row in payload["data"]
             if isinstance(row, dict)
-            and _decision(None, str(row.get("id") or row.get("model") or "")).get("allowed") is True
             and store.evaluate(
                 str(row.get("id") or row.get("model") or ""),
                 key_id=None, user_id=user_id,
