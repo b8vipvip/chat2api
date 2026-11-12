@@ -160,3 +160,46 @@ def test_timeout_publish_exception_still_finalizes_and_releases_detached_request
         assert state.diagnostics["api_stream_detached_settled"] is True
 
     asyncio.run(exercise())
+
+
+def test_timeout_publish_exception_after_broker_terminal_keeps_real_terminal(monkeypatch) -> None:
+    async def exercise() -> None:
+        loop = asyncio.get_running_loop()
+        state = SimpleNamespace(
+            request_id="req_r03_publish_after_accept",
+            final_future=loop.create_future(),
+            terminal_event_type=None,
+            diagnostics={},
+        )
+        finalized = []
+        released = []
+
+        async def timeout(_future, timeout):
+            assert timeout >= 1
+            raise asyncio.TimeoutError()
+
+        class AcceptedThenRaisedBroker:
+            async def publish(self, *_args):
+                # Broker committed the terminal before a downstream notification
+                # raised. Its own state is the authority, not the call exception.
+                state.terminal_event_type = "chat.completed"
+                raise RuntimeError("simulated post-accept notification failure")
+
+        async def finalize(error):
+            finalized.append(error)
+
+        async def release():
+            released.append(True)
+
+        monkeypatch.setattr(detached.asyncio, "wait_for", timeout)
+        await detached.settle_detached_stream(
+            state=state, broker=AcceptedThenRaisedBroker(), finalize=finalize,
+            release=release, wait_seconds=1,
+        )
+        assert finalized == [None]
+        assert released == [True]
+        assert state.diagnostics["detached_stream_timeout_publish_error"] == "RuntimeError"
+        assert state.diagnostics["detached_stream_worker_won_timeout_race"] is True
+        assert state.diagnostics["api_stream_detached_worker_terminal"] == "chat.completed"
+
+    asyncio.run(exercise())
