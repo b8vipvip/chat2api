@@ -1,9 +1,10 @@
 """R-06: separate server admission/send time from Worker browser startup."""
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
-from app.broker import RequestState
+from app.broker import RequestBroker, RequestState
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -136,3 +137,34 @@ def test_worker_event_ingress_requires_exact_request_client_and_socket() -> None
     ownership_gate = ingress.index("active_state.owns_dispatch_socket(")
     broker_publish = ingress.index("await broker.publish(request_id, message)")
     assert ownership_gate < broker_publish
+
+
+
+def test_worker_content_ack_requires_the_fixed_request_v6_dispatch_source() -> None:
+    async def exercise() -> None:
+        broker = RequestBroker()
+        state = await broker.create("req_r06_ack_source", "ext_r06")
+        forged = await broker.publish("req_r06_ack_source", {
+            "type": "chat.diagnostics",
+            "request_id": "req_r06_ack_source",
+            "diagnostics": {
+                "worker_content_dispatch_ack_v1": True,
+                "worker_content_dispatch_ack_source": "arbitrary-worker-event",
+            },
+        })
+        assert forged is True
+        assert state.worker_content_ack_mono is None
+
+        accepted = await broker.publish("req_r06_ack_source", {
+            "type": "chat.diagnostics",
+            "request_id": "req_r06_ack_source",
+            "diagnostics": {
+                "worker_content_dispatch_ack_v1": True,
+                "worker_content_dispatch_ack_source": "background-tabs-sendMessage-request-v6",
+            },
+        })
+        assert accepted is True
+        assert state.worker_content_ack_mono is not None
+        await broker.release("req_r06_ack_source")
+
+    asyncio.run(exercise())
