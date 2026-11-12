@@ -191,6 +191,19 @@ class DataKeyring:
             os.close(fd)
 
     @staticmethod
+    def _fsync_parent(path: Path) -> None:
+        try:
+            fd = os.open(Path(path).parent, os.O_RDONLY)
+        except OSError:
+            return
+        try:
+            os.fsync(fd)
+        except OSError:
+            pass
+        finally:
+            os.close(fd)
+
+    @staticmethod
     def atomic_write(path: Path, payload: bytes, *, mode: int = 0o600) -> None:
         """Atomically write a private file with restrictive permissions before data is written."""
         target = Path(path)
@@ -253,6 +266,7 @@ class DataKeyring:
                 stream.write(digest + "\n")
                 stream.flush()
                 os.fsync(stream.fileno())
+            DataKeyring._fsync_parent(source)
         except Exception:
             # Only remove artifacts created by this invocation. Never unlink a
             # checksum sidecar won by another process after the initial preflight.
@@ -288,6 +302,7 @@ class DataKeyring:
                 if hashlib.sha256(temporary.read_bytes()).digest() != hashlib.sha256(payload).digest():
                     raise DataKeyringError("Encrypted data restore verification failed")
                 os.replace(temporary, target)
+                DataKeyring._fsync_parent(target)
             finally:
                 temporary.unlink(missing_ok=True)
         except OSError as error:
