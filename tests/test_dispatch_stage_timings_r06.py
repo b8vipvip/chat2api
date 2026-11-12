@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 from app.broker import RequestBroker, RequestState
+from app.registry import ClientRegistry
 
 
 ROOT = Path(__file__).resolve().parents[1]
