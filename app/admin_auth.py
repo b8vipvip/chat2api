@@ -21,7 +21,10 @@ def same_origin_admin_request(request) -> bool:
     same-origin. This helper does not make arbitrary forwarded hosts trusted.
     """
     origin = str(request.headers.get("origin") or "").strip()
-    parsed = urlsplit(origin)
+    try:
+        parsed = urlsplit(origin)
+    except ValueError:
+        return False
     request_host = str(request.headers.get("host") or "").strip().lower()
     forwarded_proto = (
         str(request.headers.get("x-forwarded-proto") or "")
