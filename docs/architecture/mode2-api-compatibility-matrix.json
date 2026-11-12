@@ -307,7 +307,7 @@
     {
       "id": "audio.standard",
       "status": "extension_only",
-      "evidence": "Speech, transcription and realtime paths use Chat2API-specific body/response/wire formats."
+      "evidence": "Speech and realtime routes use Chat2API-specific request/response/wire formats; the legacy audio transcription route is not exposed by the composed app."
     },
     {
       "id": "legacy.completions",
@@ -318,6 +318,11 @@
       "id": "audio.transcriptions",
       "status": "unsupported",
       "evidence": "The legacy v7 route is explicitly removed by v9 from the composed production app; no /v1/audio/transcriptions route is exposed."
+    },
+    {
+      "id": "images.generation",
+      "status": "supported_subset",
+      "evidence": "Official Python and Node SDKs exercise POST /v1/images/generations against the real ASGI route with deterministic image.completed Worker output; real Chrome image generation remains an external release gate."
     }
   ],
   "boundary": {
