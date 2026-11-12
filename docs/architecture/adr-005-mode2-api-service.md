@@ -16,11 +16,12 @@ Duplicating these authorities in a new API or Web BFF would permit conflicting
 terminals, double writes and inconsistent cancellation behavior.
 
 At the same time, OpenAI SDKs expect well-defined JSON/SSE and upload
-semantics. Existing endpoints provide different fidelity levels: the
-`/v1/files` upload is a JSON/base64 extension rather than standard SDK
-multipart; Chat usage is estimated; echoed requested model is not a
-verified served-model claim. These differences must not be hidden behind a
-blanket "OpenAI-compatible" promise.
+semantics. The initial `/v1/files` route accepted only JSON/base64; this
+slice adds standard multipart support for `assistants`, `vision` and
+`user_data`, plus standard metadata/content/delete response shapes. File
+listing and batch/fine-tune/evals purposes remain unsupported. Chat usage is
+estimated; echoed requested model is not a verified served-model claim. These
+differences must not be hidden behind a blanket "OpenAI-compatible" promise.
 
 ## Decision
 
@@ -47,11 +48,13 @@ blanket "OpenAI-compatible" promise.
    extensions, unimplemented standard functionality and estimates. Tests
    enforce route-owner uniqueness on the actual production patch chain.
    The matrix is updated before any future claim of added SDK parity.
-6. **Official SDK smoke tests are isolated.** Python SDK tests must
-   exercise the actual ASGI handlers with a deterministic fake Worker;
-   Node SDK tests independently verify serialization and stream parsing.
-   Real Worker end-to-end testing remains a separate release gate and
-   must not be inferred from either fixture.
+6. **Official SDK smoke tests exercise the real API.** Both Python OpenAI
+   2.x and Node OpenAI 6.x SDKs call a live Chat2API ASGI/Uvicorn server.
+   The external Chrome/Worker socket is the only replaced boundary; fake
+   Worker completions are published through the real Broker. These tests
+   cover JSON/SSE, model retrieval, legacy Completions, Responses, standard
+   multipart Files create/retrieve/content/delete and error envelopes.
+   Real Chrome Worker end-to-end testing remains a separate release gate.
 
 ### Boundary table
 
@@ -79,7 +82,7 @@ blanket "OpenAI-compatible" promise.
 
 ## Rollout and verification
 
-1. M-01 independently delivers matrix, SDK regressions and route-owner checks.
+1. M-01 independently delivers the full 20-route matrix, OpenAPI route-coverage checks, multipart Files and HTTP error normalization, plus live Python/Node SDK regressions.
 2. M-02a delivers the new service with a fake registry, real Broker and
    negative tests for Worker busy collision and dispatch failure.
 3. M-02b integrates one service instance into `create_app` and both real
@@ -90,8 +93,9 @@ blanket "OpenAI-compatible" promise.
    verify no extra `/v1/responses` route owner, and check Python and
    JavaScript SDKs against a real on-prem Worker with request IDs and
    redacted provenance. The latter is not part of this patch slice.
-5. Future standard multipart uploads and error-shape normalization need
-   independently scoped changes and explicit API compatibility tests.
+5. Future Files list, batch/fine-tune/evals purpose support, complete
+   endpoint-specific error normalization and remaining standard SDK
+   parameters require separately scoped compatibility tests.
 
 ## Decision status
 
