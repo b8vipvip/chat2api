@@ -133,8 +133,16 @@ class SingleProcessRuntimeGuard:
                 os.close(fd)
 
 
-def install_single_process_runtime_guard(app: Any) -> Any:
-    """Install one startup/shutdown lock on the production FastAPI app."""
+def install_single_process_runtime_guard(
+    app: Any, *, guard: SingleProcessRuntimeGuard | None = None
+) -> Any:
+    """Install one startup/shutdown lock on the production FastAPI app.
+
+    Production entrypoints may acquire the guard before importing app.main so
+    store constructors cannot touch the data directory before ownership is
+    established. Passing that already-held guard preserves the same lock inode
+    through the full ASGI lifespan.
+    """
     if getattr(app.state, "single_process_runtime_guard_installed", False):
         return app
     settings = getattr(app.state, "settings", None)
@@ -142,7 +150,11 @@ def install_single_process_runtime_guard(app: Any) -> Any:
     if data_dir is None:
         raise RuntimeTopologyError("Runtime guard requires the configured Chat2API data directory")
 
-    guard = SingleProcessRuntimeGuard(data_dir)
+    if guard is None:
+        guard = SingleProcessRuntimeGuard(data_dir)
+    elif Path(guard.data_dir) != Path(data_dir):
+        raise RuntimeTopologyError("Pre-acquired runtime guard does not match the configured data directory")
+    guard.acquire()
     app.state.single_process_runtime_guard = guard
 
     # The production FastAPI app already supplies a lifespan context manager
