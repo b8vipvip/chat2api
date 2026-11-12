@@ -56,6 +56,33 @@ def test_guard_rejects_symlinked_lock_file(tmp_path: Path):
         SingleProcessRuntimeGuard(tmp_path).acquire()
 
 
+
+def test_installer_wraps_and_preserves_existing_lifespan(tmp_path: Path):
+    from contextlib import asynccontextmanager
+
+    events = []
+
+    @asynccontextmanager
+    async def existing_lifespan(app):
+        events.append(("startup", app.state.single_process_runtime_guard._fd is not None))
+        yield
+        events.append(("shutdown", app.state.single_process_runtime_guard._fd is not None))
+
+    app = FastAPI(lifespan=existing_lifespan)
+    app.state.settings = SimpleNamespace(data_dir=tmp_path)
+    install_single_process_runtime_guard(app)
+    with TestClient(app):
+        assert events == [("startup", True)]
+    assert events == [("startup", True), ("shutdown", True)]
+    assert app.state.single_process_runtime_guard._fd is None
+
+
+def test_production_entry_installs_guard_before_startup():
+    from app.entry import app
+
+    assert app.state.single_process_runtime_guard_installed is True
+    assert isinstance(app.state.single_process_runtime_guard, SingleProcessRuntimeGuard)
+
 def test_fastapi_installer_holds_and_releases_guard_with_lifespan(tmp_path: Path):
     app = FastAPI()
     app.state.settings = SimpleNamespace(data_dir=tmp_path)
