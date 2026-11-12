@@ -16,7 +16,7 @@ Status: **Draft / partial**. This is a server-side invitation service stacked on
 - Public registration policy now supports `open`, `closed`, and `invite_only`. The existing `/api/user/register` endpoint remains the single registration owner.
 - User Console registration reads the public policy and displays the invite-code field only for invite-only mode. The server remains authoritative if the public config cannot load.
 - Public announcement text is rendered through DOM `textContent`, not HTML injection.
-- Delegated administrator self-service password rotation is available with current-password verification, PBKDF2 rehash and immediate Session revocation. Root password remains environment-managed; root can reset delegated administrator passwords.
+- Every delegated administrator role has an explicit self-password permission and a current-password-verified rotation endpoint. Passwords are PBKDF2-rehashed and all existing sessions for that administrator are immediately revoked. Root password remains environment-managed; root can reset delegated administrator passwords through the admin API.
 
 ## Security / failure semantics
 
