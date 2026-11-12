@@ -308,7 +308,7 @@ class ClientRegistry:
         async with lock:
             if request_type in {
                 "chat.request", "image.request", "voice.request",
-                "voice.live.start", "voice.live.request",
+                "voice.live.start", "voice.live.request", "dictation.request",
             }:
                 # Bind the same original authenticated socket for every
                 # Broker-backed request family. GPT Live reuses image.progress
