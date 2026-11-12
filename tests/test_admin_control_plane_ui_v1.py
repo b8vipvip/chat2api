@@ -20,6 +20,7 @@ def test_admin_console_exposes_c_views_and_one_control_plane_asset():
     assert 'id="view-quota-ledger"' in html
     assert 'id="view-tenants"' in html
     assert 'id="view-model-entitlements"' in html
+    assert 'value="tenant_role"' in html
     assert '/assets/chat2api-control-plane-admin-v1.js' in html
     assert 'id="adminSessionPassword"' in html
     assert "sessionStorage.setItem('chat2api_admin_key'" in html
