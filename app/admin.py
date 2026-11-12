@@ -347,7 +347,7 @@ $('connect').disabled=true;$('refresh').disabled=true;document.querySelectorAll(
     $('adminKey').value='';$('adminKey').disabled=true;$('connect').hidden=true;$('refresh').hidden=true;
     document.querySelectorAll('.nav button:not([data-cview])').forEach(button=>{button.hidden=true;button.disabled=true});
     document.querySelectorAll('.nav button[data-cview]').forEach(button=>{button.disabled=false});
-    const defaults={system_admin:'client-policy',tenant_admin:'tenants',api_key_admin:'api-keys',plugin_admin:'plugins',support:'model-entitlements',billing_admin:'user-pricing',user_admin:'admin-users'};
+    const defaults={system_admin:'client-policy',api_key_admin:'api-keys',plugin_admin:'plugins',support:'model-entitlements',billing_admin:'user-pricing',user_admin:'admin-users'};
     if(defaults[session.role])location.hash=defaults[session.role];
     status('已识别委派管理员 Session：'+session.username+' · '+session.role,'ok');
   }else if(sessionCheckSucceeded){
