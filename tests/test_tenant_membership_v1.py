@@ -49,6 +49,15 @@ def test_workspace_store_membership_and_last_owner_guard(tmp_path: Path):
     with pytest.raises(TenantMembershipError, match="last workspace owner"):
         store.upsert_member(a["tenant_id"], user1, "member")
     store.upsert_member(a["tenant_id"], user2, "owner")
+    store.bind_key(a["tenant_id"], user1, "key_123456789")
+    assert store.tenant_for_key("key_123456789") == a["tenant_id"]
+    assert store.keys_for_tenant(a["tenant_id"])[0]["user_id"] == user1
+    with pytest.raises(TenantMembershipError, match="already bound"):
+        store.bind_key(b["tenant_id"], user2, "key_123456789")
+    with pytest.raises(TenantMembershipError, match="Unbind"):
+        store.remove_member(a["tenant_id"], user1)
+    store.unbind_key(a["tenant_id"], "key_123456789")
+    assert store.tenant_for_key("key_123456789") is None
     store.remove_member(a["tenant_id"], user1)
     assert store.role_for(a["tenant_id"], user1) is None
     assert store.role_for(a["tenant_id"], user2) == "owner"
@@ -96,6 +105,19 @@ def test_admin_and_user_routes_enforce_session_csrf_and_scoped_member_discovery(
             assert root.put(f"/api/admin/tenants/{tid2}/members", headers=ORIGIN, json={
                 "user_id": uid2, "role": "owner"
             }).status_code == 200
+            created_key = alice.post("/api/user/keys", json={"name": "Alice workspace key"})
+            assert created_key.status_code == 200, created_key.text
+            key_id = created_key.json()["key"]["key_id"]
+            bound = root.put(f"/api/admin/tenants/{tid}/keys/{key_id}", headers=ORIGIN, json={
+                "user_id": uid1,
+            })
+            assert bound.status_code == 200, bound.text
+            assert app.state.tenant_memberships.tenant_for_key(key_id) == tid
+            assert root.get(f"/api/admin/tenants/{tid}/keys").json()["data"][0]["key_id"] == key_id
+            cross_tenant = root.put(f"/api/admin/tenants/{tid2}/keys/{key_id}", headers=ORIGIN, json={
+                "user_id": uid1,
+            })
+            assert cross_tenant.status_code == 404
             assert root.put(f"/api/admin/tenants/{tid}/members", headers=ORIGIN, json={
                 "user_id": "usr_NOT_REAL123", "role": "owner"
             }).status_code == 404
@@ -109,6 +131,8 @@ def test_admin_and_user_routes_enforce_session_csrf_and_scoped_member_discovery(
             assert [x["tenant_id"] for x in b_rows.json()["data"]] == [tid2]
             assert alice.get("/api/admin/tenants").status_code == 401
             assert root.delete(f"/api/admin/tenants/{tid}/members/{uid1}", headers=ORIGIN).status_code == 409
+            assert root.delete(f"/api/admin/tenants/{tid}/keys/{key_id}", headers=ORIGIN).status_code == 200
+            assert app.state.tenant_memberships.tenant_for_key(key_id) is None
             assert root.get(f"/api/admin/tenants/{tid}/members").json()["data"][0]["user_id"] == uid1
 
         # No change to the existing Mode 2 business API's auth contract.
