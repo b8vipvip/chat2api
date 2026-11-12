@@ -99,9 +99,7 @@ const asyncTarget = new Target();
 const asyncDocument = new Target();
 let rejectionHandled = false;
 const destroyAsync = api.install(asyncTarget, asyncDocument, {
-  onFiles: () => Promise.reject(new Error("simulated handler failure")).catch(() => {
-    rejectionHandled = true;
-  }),
+  onFiles: () => Promise.reject(new Error("simulated handler failure")),
 });
 asyncTarget.dispatch("drop", fileDrag());
 await Promise.resolve();
