@@ -167,6 +167,14 @@ assert(/^req_[A-Za-z0-9_-]{8,120}$/.test(api.createRequestId({randomUUID:()=>"12
   assert(calls.every(call=>call.url==="/api/user/chat/requests/req_12345678/recovery"));
   assert(updates.some(value=>value.status==="running"));
   assert(updates.some(value=>value.status==="completed"));
+  const inconsistent = await api.create({
+    fetcher:async()=>({status:200,ok:true,json:async()=>({
+      request_id:"req_12345678", status:"completed", terminal:false,
+      recoverable:false, active:false, response_text_available:true,
+      response_text:"must not be accepted"
+    })})
+  }).resume({request_id:"req_12345678", assistant_message_id:"message_123456"});
+  assert.strictEqual(inconsistent.status, "invalid_response");
   console.log("recovery-harness-passed");
 })().catch(error=>{console.error(error);process.exitCode=1;});
 """
