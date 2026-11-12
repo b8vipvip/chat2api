@@ -14,6 +14,11 @@ from .user_commerce import USER_SESSION_COOKIE
 
 _REQUEST_ID_RE = re.compile(r"^req_[A-Za-z0-9_-]{8,120}$")
 _TERMINAL = {"completed", "error", "cancelled", "stalled"}
+_PRIVATE_HEADERS = {"Cache-Control": "private, no-store", "Vary": "Cookie"}
+
+
+def _http_error(status_code: int, detail: str) -> None:
+    raise HTTPException(status_code=status_code, detail=detail, headers=_PRIVATE_HEADERS)
 
 
 def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
@@ -24,10 +29,10 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
     def current_user(request: Request):
         accounts = getattr(request.app.state, "user_accounts", None)
         if accounts is None:
-            raise HTTPException(status_code=503, detail="user account service unavailable")
+            _http_error(503, "user account service unavailable")
         user = accounts.authenticate(request.cookies.get(USER_SESSION_COOKIE))
         if not user:
-            raise HTTPException(status_code=401, detail="user login required")
+            _http_error(401, "user login required")
         return accounts, user
 
     @app.get("/api/user/chat/requests/{request_id}/recovery")
@@ -37,21 +42,21 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
         response.headers["Cache-Control"] = "private, no-store"
         response.headers["Vary"] = "Cookie"
         if not _REQUEST_ID_RE.fullmatch(request_id):
-            raise HTTPException(status_code=404, detail="request not found")
+            _http_error(404, "request not found")
 
         accounts, user = current_user(request)
         telemetry = getattr(request.app.state, "telemetry", None)
         broker = getattr(request.app.state, "broker", None)
         if telemetry is None or broker is None:
-            raise HTTPException(status_code=503, detail="request recovery unavailable")
+            _http_error(503, "request recovery unavailable")
 
         row = telemetry.get(request_id)
         if row is None:
-            raise HTTPException(status_code=404, detail="request not found")
+            _http_error(404, "request not found")
         key_id = str(row.get("api_key_id") or "")
         # Deliberately conceal both unknown and non-owned request IDs.
         if not key_id or not accounts.owns_key(str(user["user_id"]), key_id):
-            raise HTTPException(status_code=404, detail="request not found")
+            _http_error(404, "request not found")
 
         status = str(row.get("status") or "unknown").lower()
         state = broker.requests.get(request_id)
