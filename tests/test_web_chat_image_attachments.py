@@ -199,6 +199,16 @@ def test_web_chat_image_picker_and_client_javascript_are_wired(tmp_path: Path) -
         assert "orphanedFileIds" in script.text
         assert "remainingFileIds" in script.text
 
+
+        drop_script = client.get("/assets/chat2api-image-drop-v1.js")
+        assert drop_script.status_code == 200
+        assert "Chat2APIImageDropV1" in drop_script.text
+        assert drop_script.headers["x-content-type-options"] == "nosniff"
+        assert "no-store" in drop_script.headers["cache-control"]
+        assert page.text.index("chat2api-image-drop-v1.js") < page.text.index("chat2api-chat-client-v1.js")
+        assert "Chat2APIImageDropV1.install" in script.text
+        assert "drag-over" in client.get("/assets/chat2api-chat-client-v1.css").text
+
         node = shutil.which("node")
         if node:
             checked = subprocess.run(
