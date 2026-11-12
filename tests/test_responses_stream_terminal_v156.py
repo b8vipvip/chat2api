@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.api_keys import ApiPrincipal
+from app.chat_request_service import ChatRequestService
 from app.responses_model_routing_v108_patch import (
     _ResponsesModelContextMiddleware,
     _SSEStreamObserver,
@@ -250,6 +251,7 @@ def test_dispatch_correlates_worker_and_protocol_repair_attempts() -> None:
     broker = SimpleNamespace(create=create)
     app = SimpleNamespace(state=SimpleNamespace(
         registry=registry, broker=broker,
+        chat_request_service=ChatRequestService(registry, broker),
         settings=SimpleNamespace(request_timeout_seconds=120),
         telemetry=_Telemetry(),
     ))
