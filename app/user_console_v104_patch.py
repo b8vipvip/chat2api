@@ -15,6 +15,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from pydantic import BaseModel, Field
 
 from .admin_auth import SESSION_COOKIE as ADMIN_SESSION_COOKIE
+from .admin_audit import AdminAuditError, AdminAuditStore
 from .api_keys import load_or_create_data_secret, token_hash
 from .user_commerce import (
     BillingStore,
@@ -160,6 +161,8 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
     telemetry = app.state.telemetry
     admin_sessions = getattr(app.state, "admin_sessions", None)
 
+    admin_audit = AdminAuditStore(data_dir)
+    app.state.admin_audit = admin_audit
     app.state.user_accounts = accounts
     app.state.user_pricing = pricing
     app.state.user_billing = billing
@@ -617,22 +620,64 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
     ) -> dict[str, Any]:
         if not admin_ok(request):
             raise HTTPException(status_code=401, detail="Administrator login required")
+        audit_context = {
+            "actor": settings.admin_username,
+            "action": "user.status_change_requested",
+            "target_type": "user",
+            "target_id": user_id,
+            "request_id": str(request.headers.get("x-request-id") or ""),
+            "details": {"enabled": body.enabled},
+        }
         try:
+            admin_audit.append(**audit_context)
             user, revoked_sessions = accounts.set_enabled(user_id, body.enabled)
+            admin_audit.append(
+                **{
+                    **audit_context,
+                    "action": "user.status_change_completed",
+                    "details": {"enabled": body.enabled, "revoked_sessions": revoked_sessions},
+                }
+            )
         except KeyError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
+        except AdminAuditError as error:
+            raise HTTPException(
+                status_code=503,
+                detail="用户状态操作未能完成审计持久化；请检查服务端审计日志",
+            ) from error
         return {"user": user, "revoked_sessions": revoked_sessions}
 
     @app.post("/api/admin/users/{user_id}/sessions/revoke")
     async def admin_revoke_user_sessions(user_id: str, request: Request) -> dict[str, Any]:
         if not admin_ok(request):
             raise HTTPException(status_code=401, detail="Administrator login required")
+        audit_context = {
+            "actor": settings.admin_username,
+            "action": "user.sessions_revoke_requested",
+            "target_type": "user",
+            "target_id": user_id,
+            "request_id": str(request.headers.get("x-request-id") or ""),
+            "details": {},
+        }
         try:
+            admin_audit.append(**audit_context)
             revoked = accounts.revoke_user_sessions(user_id)
+            admin_audit.append(
+                **{
+                    **audit_context,
+                    "action": "user.sessions_revoke_completed",
+                    "details": {"revoked_sessions": revoked},
+                }
+            )
         except KeyError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
+        except AdminAuditError as error:
+            raise HTTPException(
+                status_code=503,
+                detail="会话撤销操作未能完成审计持久化；请检查服务端审计日志",
+            ) from error
         return {"user_id": user_id, "revoked_sessions": revoked}
 
     @app.get("/api/admin/users/{user_id}/keys")
@@ -648,6 +693,18 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
                 rows.append(public_key(item))
         rows.sort(key=lambda row: str(row.get("created_at") or ""), reverse=True)
         return {"data": rows}
+
+    @app.get("/api/admin/audit")
+    async def admin_audit_events(
+        request: Request,
+        limit: int = Query(default=100, ge=1, le=200),
+    ) -> dict[str, Any]:
+        if not admin_ok(request):
+            raise HTTPException(status_code=401, detail="Administrator login required")
+        try:
+            return {"data": admin_audit.recent(limit)}
+        except (AdminAuditError, ValueError) as error:
+            raise HTTPException(status_code=503, detail="Administrator audit log is unavailable") from error
 
     @app.get("/api/admin/user-pricing")
     async def admin_user_pricing(request: Request) -> dict[str, Any]:
