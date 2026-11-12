@@ -108,7 +108,7 @@
           <tbody id="adminAuditBody"><tr><td colspan="6" class="muted">加载用户管理后读取</td></tr></tbody>
         </table></div>
       </div>
-    </section>\`);
+    </section>`);
 
   function activate(view) {
     document.querySelectorAll(".nav button").forEach((button) => button.classList.toggle("active", button.dataset.view === view));
