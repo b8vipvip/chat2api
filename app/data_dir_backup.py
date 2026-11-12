@@ -41,7 +41,7 @@ def _kind(path: Path) -> str:
     return "binary"
 
 
-def _walk_files(root: Path) -> list[Path]:
+def _walk_files(root: Path, *, allow_manifest: bool = False) -> list[Path]:
     if root.is_symlink() or not root.is_dir():
         raise BackupError("Data directory must be a real directory")
     result: list[Path] = []
@@ -61,6 +61,8 @@ def _walk_files(root: Path) -> list[Path]:
             if relative == LOCK_NAME:
                 continue
             if relative == MANIFEST_NAME:
+                if allow_manifest:
+                    continue
                 raise BackupError("Reserved backup manifest name exists in source data")
             result.append(path)
     return sorted(result, key=lambda item: item.relative_to(root).as_posix())
@@ -158,7 +160,7 @@ def _validate_manifest(value: Any) -> list[dict[str, Any]]:
 
 
 def _verify_entries(root: Path, entries: list[dict[str, Any]]) -> dict[str, Any]:
-    actual = _walk_files(root)
+    actual = _walk_files(root, allow_manifest=(root / MANIFEST_NAME).is_file())
     actual_names = {path.relative_to(root).as_posix() for path in actual}
     expected_names = {entry["path"] for entry in entries}
     if actual_names != expected_names:
