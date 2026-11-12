@@ -13,6 +13,7 @@ const policy = context.__CHAT2API_SHORT_REPLY_STABILITY_POLICY_V1__;
 assert.ok(policy, "standalone short-reply policy must install its immutable API");
 
 assert.equal(policy.requiredStableMs({ shortTextVerified: true }), 4500);
+assert.equal(policy.requiredStableMs({ shortTextVerified: true, rolelessRichVerified: true }), 8000);
 assert.equal(policy.requiredStableMs({ shortTextVerified: false }), 8000);
 assert.equal(policy.requiredStableMs({}), 8000);
 assert.equal(policy.requiredStableMs({ shortTextVerified: "true" }), 8000);
@@ -20,7 +21,8 @@ assert.equal(policy.requiredStableMs({ shortTextVerified: "true" }), 8000);
 // Exact boundary: 4,499ms is not stable; 4,500ms is.
 assert.equal(policy.isStable({ shortTextVerified: true }, 100, 4599), false);
 assert.equal(policy.isStable({ shortTextVerified: true }, 100, 4600), true);
-// Long/unknown candidates must not inherit the short window.
+// Long/unknown/rich candidates must not inherit the short window.
+assert.equal(policy.isStable({ shortTextVerified: true, rolelessRichVerified: true }, 100, 4599), false);
 assert.equal(policy.isStable({ shortTextVerified: false }, 100, 8099), false);
 assert.equal(policy.isStable({ shortTextVerified: false }, 100, 8100), true);
 assert.equal(policy.isStable({}, 100, 8099), false);
