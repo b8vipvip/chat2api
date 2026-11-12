@@ -44,10 +44,10 @@ def test_openai_chat_completions_default_preserves_the_complete_messages_history
 
     assert request.prompt_mode == "full"
     assert build_prompt(request.messages, request.prompt_mode) == (
-        "[System]\\nBe concise.\\n\\n"
-        "[User]\\nFirst question\\n\\n"
-        "[Assistant]\\nFirst answer\\n\\n"
-        "[User]\\nFollow-up"
+        "[System]\nBe concise.\n\n"
+        "[User]\nFirst question\n\n"
+        "[Assistant]\nFirst answer\n\n"
+        "[User]\nFollow-up"
     )
 
 
