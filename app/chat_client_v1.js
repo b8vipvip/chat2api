@@ -625,7 +625,7 @@
   async function loadKeys() {
     const payload = await apiJson("/api/user/keys");
     state.keys = Array.isArray(payload.data) ? payload.data : [];
-    const usable = state.keys.filter((key) => key.enabled && !key.expired && !key.revoked_at && key.secret_recoverable);
+    const usable = state.keys.filter((key) => key.enabled && !key.expired && !key.revoked_at && key.secret_recoverable && (!Array.isArray(key.scopes) || key.scopes.includes("chat")));
     const select = $("apiKeySelect");
     select.replaceChildren();
     if (!usable.length) {
@@ -716,7 +716,6 @@
     const ready = await loadKeys();
     if (!ready) return;
     if (currentConversation()) state.selectedModel = currentConversation().model || state.selectedModel;
-    await loadModels();
     renderAll();
     setConnection("已连接", "ready");
   }
