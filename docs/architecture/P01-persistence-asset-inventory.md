@@ -12,11 +12,12 @@ Inventory baseline: repository main at `b682e1d445008df57e4de9675e2952ae040b8027
 | data_dir/user_accounts.json | UserAccountStore | JSON document, atomic JSON replace | User accounts and session-related records; sensitive account data. |
 | data_dir/user_pricing.json | PricingStore | JSON document | Pricing configuration. |
 | data_dir/user_billing.json | BillingStore | JSON document | Wallet, charge and order records; existing billing owner must remain authoritative. |
-| data_dir/user_payment_config.json | Payment configuration store | JSON document | Provider configuration may include secrets; G0/secret migration gate applies. |
+| data_dir/user_payment_config.json | Payment configuration store | JSON document | Provider configuration may include plaintext secrets; G0/secret migration gate applies. |
 | data_dir/pairing_codes.json | PairingStore | JSON document | Pairing code hashes and encrypted recoverable code ciphertext; uses the server-local data secret. |
+| data_dir/data_secret.key | load_or_create_data_secret / PairingStore | Plaintext local key file, mode 0600 after creation | Key material used to encrypt recoverable pairing-code ciphertext; loss/rotation breaks recovery. This is a G0 secret asset. |
 | data_dir/files/index.json + data_dir/files/* | FileStore | JSON index plus binary file payloads | File metadata/owner and bytes must migrate together; owner checks and byte hashes are required. |
 | data_dir/media_archive/index.sqlite3 | MediaArchive | SQLite | Existing media metadata store. |
-| data_dir/media_archive/settings.enc | MediaArchive | Encrypted settings blob | Key ownership/rotation/restore must be handled by G0; do not re-key or migrate here. |
+| data_dir/media_archive/settings.enc | MediaArchive | Encrypted settings blob | Fernet key is derived from the configured CHAT2API_API_KEY; changing that master key without a reviewed re-encryption procedure makes the settings unreadable. Key ownership/rotation/restore is a G0 gate. |
 | data_dir/media_archive/* | MediaArchive | Binary media payloads | Must remain byte-identical and owner-correlated across backup/restore. |
 | data_dir/mode_management.json | ModeManagementStore | Versioned JSON, private atomic replace | Mode 2 remains default; Mode 1 request flag never overrides NO-GO authorization/runtime constants. |
 | data_dir/native_content/*.json | NativeContentStore | Per-request JSON snapshots, atomic write and cross-process commit lock | Request ownership, snapshot finality and rich-content provenance must be preserved. |
