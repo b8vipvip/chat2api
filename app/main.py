@@ -2581,7 +2581,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "image.completed", "image.error", "image.cancelled",
                     }
                     active_state = broker.requests.get(request_id)
-                    if terminal_message and active_state and active_state.client_id == client_id:
+                    if not active_state or not active_state.owns_dispatch_socket(
+                        client_id, websocket, registry.sockets.get(client_id)
+                    ):
+                        # A valid extension token is not authority over every
+                        # Broker request. Bind every progress/diagnostic/terminal
+                        # event to the exact Worker socket that received this
+                        # request, preventing cross-client or stale-socket writes.
+                        logger.warning(
+                            "Rejected Worker event without exact request/socket ownership request=%s client=%s type=%s",
+                            request_id, client_id, message_type,
+                        )
+                        continue
+                    if terminal_message:
                         active_state.diagnostics["terminal_transport_server_seen"] = True
                         active_state.diagnostics["terminal_transport_server_received_at"] = time.time()
                         active_state.diagnostics["terminal_transport_payload_chars"] = len(str(message.get("text") or ""))
