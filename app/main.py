@@ -10,7 +10,6 @@ import sqlite3
 import time
 import uuid
 from contextlib import asynccontextmanager
-from urllib.parse import urlsplit
 from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncIterator
 
@@ -19,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from .admin import admin_response
+from .admin_auth import same_origin_admin_request
 from .api_keys import ApiKeyStore, ApiPrincipal, UNSET
 from .broker import RequestBroker, RequestState
 from .chat_media_deadline_v171 import chat_timeout_window, worker_chat_timeout, long_form_text_requested
@@ -810,23 +810,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.put("/api/admin/modes", dependencies=[Depends(require_admin_key)])
     async def update_admin_modes(request: Request, payload: dict[str, Any]) -> dict[str, object]:
-        # This endpoint is used by the cookie-authenticated admin console.
-        # Require a same-origin browser mutation to prevent cross-site settings writes.
-        origin = str(request.headers.get("origin") or "").strip()
-        parsed_origin = urlsplit(origin)
-        request_host = str(request.headers.get("host") or "").strip().lower()
-        forwarded_proto = str(request.headers.get("x-forwarded-proto") or "").split(",", 1)[0].strip().lower()
-        expected_scheme = forwarded_proto if forwarded_proto in {"http", "https"} else request.url.scheme.lower()
-        fetch_site = str(request.headers.get("sec-fetch-site") or "").strip().lower()
-        if (
-            parsed_origin.scheme.lower() != expected_scheme
-            or not parsed_origin.netloc
-            or parsed_origin.netloc.lower() != request_host
-            or parsed_origin.path not in {"", "/"}
-            or parsed_origin.query
-            or parsed_origin.fragment
-            or fetch_site not in {"", "same-origin"}
-        ):
+        if not same_origin_admin_request(request):
             raise HTTPException(status_code=403, detail="Mode settings updates require a same-origin admin request")
         if set(payload) != {"mode1_cookie_proxy_requested"}:
             raise HTTPException(
