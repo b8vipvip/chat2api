@@ -30,7 +30,7 @@ def test_mode2_matrix_is_machine_readable_and_non_overclaiming() -> None:
     assert sum(row["protocol"] == "http" for row in records) == 18
     assert sum(row["protocol"] == "websocket" for row in records) == 1
     assert all(r["status"] in {"compatible_subset", "extension_only"} for r in records)
-    assert next(r for r in records if r["path"] == "/v1/files" and r["method"] == "POST")["status"] == "extension_only"
+    assert next(r for r in records if r["path"] == "/v1/files" and r["method"] == "POST")["status"] == "compatible_subset"
     capabilities = {row["id"]: row["status"] for row in data["capabilities"]}
     assert capabilities["chat.usage"] == "estimated"
     assert capabilities["chat.model_provenance"] == "requested_only"
