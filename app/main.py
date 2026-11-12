@@ -15,7 +15,10 @@ from typing import Any, AsyncIterator
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import http_exception_handler, request_validation_exception_handler
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from pydantic import ValidationError
 
 from .admin import admin_response
 from .admin_auth import same_origin_admin_request
@@ -139,6 +142,55 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.mode_management = mode_management
     # Keep detached-stream supervisors alive until their Broker terminal is persisted.
     app.state.detached_sse_tasks = set()
+
+    @app.exception_handler(HTTPException)
+    async def mode2_http_exception_handler(request: Request, error: HTTPException):
+        if not request.url.path.startswith("/v1/"):
+            return await http_exception_handler(request, error)
+        detail = error.detail
+        if isinstance(detail, dict) and isinstance(detail.get("error"), dict):
+            payload = {"error": detail["error"]}
+        else:
+            values = detail if isinstance(detail, dict) else {}
+            if isinstance(detail, dict):
+                message = str(values.get("message") or values.get("detail") or "Request failed")
+            else:
+                message = str(detail or "Request failed")
+            status_code = int(error.status_code)
+            default_type = (
+                "authentication_error" if status_code == 401 else
+                "permission_error" if status_code == 403 else
+                "not_found_error" if status_code == 404 else
+                "conflict_error" if status_code == 409 else
+                "rate_limit_error" if status_code == 429 else
+                "server_error" if status_code >= 500 else
+                "invalid_request_error"
+            )
+            payload = {"error": {
+                "message": message,
+                "type": str(values.get("type") or default_type),
+                "param": values.get("param"),
+                "code": values.get("code"),
+            }}
+        return JSONResponse(payload, status_code=error.status_code, headers=error.headers)
+
+    @app.exception_handler(RequestValidationError)
+    async def mode2_validation_exception_handler(request: Request, error: RequestValidationError):
+        if not request.url.path.startswith("/v1/"):
+            return await request_validation_exception_handler(request, error)
+        errors = error.errors()
+        first = errors[0] if errors else {}
+        location = first.get("loc") or ()
+        param = ".".join(str(part) for part in location if part not in {"body", "query", "path", "header", "cookie"})
+        return JSONResponse({
+            "error": {
+                "message": str(first.get("msg") or "Invalid request"),
+                "type": "invalid_request_error",
+                "param": param or None,
+                "code": str(first.get("type") or "invalid_request_error"),
+            }
+        }, status_code=422)
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=config.origins,
@@ -1006,9 +1058,89 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def clients() -> list[dict[str, object]]:
         return registry.summaries()
 
-    @app.post("/v1/files")
-    async def upload_file(body: FileUploadRequest, principal: ApiPrincipal = Depends(require_api_key)) -> dict[str, object]:
+    def standard_file_object(item) -> dict[str, object]:
+        try:
+            created_at = int(datetime.fromisoformat(str(item.created_at).replace("Z", "+00:00")).timestamp())
+        except (TypeError, ValueError, OverflowError):
+            created_at = int(time.time())
+        return {
+            "id": item.file_id,
+            "object": "file",
+            "bytes": int(item.size),
+            "created_at": created_at,
+            "filename": item.filename,
+            "purpose": item.purpose,
+            "status": "processed",
+            "status_details": None,
+            "mime_type": item.mime_type,
+            "created_at_iso": item.created_at,
+        }
+
+    @app.post(
+        "/v1/files",
+        openapi_extra={"requestBody": {
+            "required": True,
+            "content": {
+                "multipart/form-data": {"schema": {
+                    "type": "object", "required": ["file", "purpose"],
+                    "properties": {
+                        "file": {"type": "string", "format": "binary"},
+                        "purpose": {"type": "string", "enum": ["assistants", "vision", "user_data"]},
+                    },
+                }},
+                "application/json": {"schema": {
+                    "type": "object", "required": ["filename", "data_base64"],
+                    "properties": {
+                        "filename": {"type": "string"},
+                        "data_base64": {"type": "string"},
+                        "mime_type": {"type": "string"},
+                        "purpose": {"type": "string"},
+                    },
+                }},
+            },
+        }},
+    )
+    async def upload_file(request: Request, principal: ApiPrincipal = Depends(require_api_key)) -> dict[str, object]:
         require_scope(principal, "files")
+        content_type = str(request.headers.get("content-type") or "").lower()
+        if content_type.startswith("multipart/form-data"):
+            try:
+                form = await request.form()
+            except Exception as error:
+                raise HTTPException(status_code=400, detail="Invalid multipart file upload") from error
+            upload = form.get("file")
+            if upload is None or not callable(getattr(upload, "read", None)):
+                raise HTTPException(status_code=422, detail="Multipart upload requires a file field")
+            purpose = str(form.get("purpose") or "").strip()
+            if purpose not in {"assistants", "vision", "user_data"}:
+                raise HTTPException(status_code=400, detail="Unsupported file purpose; use assistants, vision, or user_data")
+            filename = str(getattr(upload, "filename", "") or "upload.bin")
+            mime_type = str(getattr(upload, "content_type", "") or "application/octet-stream")
+            try:
+                payload = await upload.read(file_store.max_file_bytes + 1)
+            finally:
+                close = getattr(upload, "close", None)
+                if callable(close):
+                    await close()
+            if not payload:
+                raise HTTPException(status_code=400, detail="Uploaded file is empty")
+            if len(payload) > file_store.max_file_bytes:
+                raise HTTPException(status_code=413, detail="Uploaded file exceeds the configured size limit")
+            body = FileUploadRequest(
+                filename=filename,
+                data_base64=base64.b64encode(payload).decode("ascii"),
+                mime_type=mime_type,
+                purpose=purpose,
+            )
+            standard_response = True
+        elif content_type.startswith("application/json"):
+            try:
+                body = FileUploadRequest.model_validate(await request.json())
+            except (ValueError, TypeError, ValidationError) as error:
+                raise HTTPException(status_code=422, detail="Invalid JSON file upload request") from error
+            standard_response = False
+        else:
+            raise HTTPException(status_code=415, detail="Use multipart/form-data or the Chat2API JSON upload format")
         try:
             item = await file_store.create(
                 filename=body.filename,
@@ -1019,7 +1151,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
-        return item.public()
+        return standard_file_object(item) if standard_response else item.public()
 
     @app.get("/v1/files/{file_id}")
     async def file_metadata(file_id: str, principal: ApiPrincipal = Depends(require_api_key)) -> dict[str, object]:
@@ -1029,10 +1161,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Unknown file_id")
         if principal.kind != "master" and item.owner_key_id != principal.key_id:
             raise HTTPException(status_code=403, detail="File belongs to another API key")
-        return item.public()
+        return standard_file_object(item)
+
+    @app.get(
+        "/v1/files/{file_id}/content",
+        responses={200: {"content": {"application/octet-stream": {}}}},
+    )
+    async def file_content(file_id: str, principal: ApiPrincipal = Depends(require_api_key)) -> Response:
+        require_scope(principal, "files")
+        item = file_store.get(file_id)
+        if not item:
+            raise HTTPException(status_code=404, detail="Unknown file_id")
+        if principal.kind != "master" and item.owner_key_id != principal.key_id:
+            raise HTTPException(status_code=403, detail="File belongs to another API key")
+        try:
+            _, payload = await asyncio.to_thread(file_store.read, file_id)
+        except FileNotFoundError as error:
+            raise HTTPException(status_code=410, detail="Stored file content is missing") from error
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Unknown file_id") from error
+        filename = item.filename.replace('"', "")
+        return Response(payload, media_type="application/octet-stream", headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-store",
+        })
 
     @app.delete("/v1/files/{file_id}")
-    async def delete_file(file_id: str, principal: ApiPrincipal = Depends(require_api_key)) -> dict[str, bool]:
+    async def delete_file(file_id: str, principal: ApiPrincipal = Depends(require_api_key)) -> dict[str, object]:
         require_scope(principal, "files")
         try:
             await file_store.delete(file_id, None if principal.kind == "master" else principal.key_id)
@@ -1040,7 +1196,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except PermissionError as error:
             raise HTTPException(status_code=403, detail=str(error)) from error
-        return {"deleted": True}
+        return {"id": file_id, "object": "file", "deleted": True}
 
     @app.get("/api/extensions/files/{file_id}")
     async def extension_file(file_id: str, client_id: str = Query(...), token: str = Query(...)) -> Response:
