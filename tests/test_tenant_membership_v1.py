@@ -117,7 +117,7 @@ def test_admin_and_user_routes_enforce_session_csrf_and_scoped_member_discovery(
             cross_tenant = root.put(f"/api/admin/tenants/{tid2}/keys/{key_id}", headers=ORIGIN, json={
                 "user_id": uid1,
             })
-            assert cross_tenant.status_code == 404
+            assert cross_tenant.status_code == 409
             assert root.put(f"/api/admin/tenants/{tid}/members", headers=ORIGIN, json={
                 "user_id": "usr_NOT_REAL123", "role": "owner"
             }).status_code == 404
