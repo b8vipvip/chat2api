@@ -184,12 +184,12 @@ def run_probe(api: Any, nonce: str) -> dict[str, str]:
             else:
                 raise ProbeError(
                     f"Temporary branch cleanup failed: {branch_ref}; "
-                    "could not verify/delete it; inspect and clean it manually"
+                    "could not verify/delete it; delete it manually"
                 ) from None
         except Exception:
             raise ProbeError(
                 f"Temporary branch cleanup failed: {branch_ref}; "
-                "could not verify/delete it; inspect and clean it manually"
+                "could not verify/delete it; delete it manually"
             ) from None
     if not did_write:
         raise ProbeError("Workflow write was not confirmed")
