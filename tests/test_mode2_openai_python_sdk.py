@@ -187,8 +187,8 @@ def test_python_sdk_error_statuses_and_openai_error_envelope(sdk_transport) -> N
     with pytest.raises(openai.APIStatusError) as invalid:
         sdk.chat.completions.create(model="gpt-5.6-sol", messages=[])
     assert invalid.value.status_code == 422
-    assert invalid.value.body["error"]["type"] == "invalid_request_error"
-    assert invalid.value.body["error"]["param"] == "messages"
+    assert invalid.value.body["type"] == "invalid_request_error"
+    assert invalid.value.body["param"] == "messages"
 
 
 def test_raw_mode2_auth_failure_uses_openai_error_object(sdk_app) -> None:
@@ -210,4 +210,4 @@ def test_python_sdk_rejects_unsupported_standard_file_purpose(sdk_transport) -> 
             purpose="batch",
         )
     assert error.value.status_code == 400
-    assert error.value.body["error"]["type"] == "invalid_request_error"
+    assert error.value.body["type"] == "invalid_request_error"
