@@ -120,11 +120,17 @@ class AdminAuditStore:
                     os.fsync(fd)
                 finally:
                     os.close(fd)
-                directory_fd = os.open(self.data_dir, os.O_RDONLY)
                 try:
-                    os.fsync(directory_fd)
-                finally:
-                    os.close(directory_fd)
+                    directory_fd = os.open(self.data_dir, os.O_RDONLY)
+                except OSError:
+                    directory_fd = None
+                if directory_fd is not None:
+                    try:
+                        os.fsync(directory_fd)
+                    except OSError:
+                        pass
+                    finally:
+                        os.close(directory_fd)
             except OSError as error:
                 raise AdminAuditError("Unable to persist administrator audit event") from error
             return row
