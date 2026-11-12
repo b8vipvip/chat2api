@@ -91,7 +91,7 @@
     <section class="view" id="view-user-payments">
       <div class="panel">
         <h2>用户端支付配置</h2>
-        <div class="muted">当前接入 ZPAY，用于用户费用中心的支付宝 / 微信充值。商户密钥加密保存，读取配置时不会返回明文。</div>
+        <div class="muted">当前接入 ZPAY，用于用户费用中心的支付宝 / 微信充值。商户密钥加密保存，读取配置时不会返回明文。受 G0 DataKeyring 迁移门禁约束：Billing Admin 仅可查看，旧版支付密钥及其配置修改暂时仅允许 root Super Admin。</div>
         <div class="panels" style="margin-top:14px">
           <div class="panel">
             <h3>基础配置</h3>
