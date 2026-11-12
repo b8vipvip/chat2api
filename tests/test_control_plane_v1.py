@@ -157,12 +157,19 @@ def test_user_admin_can_mutate_users_but_not_keys_or_billing(tmp_path: Path):
     app = make_app(tmp_path)
     with TestClient(app) as root:
         login(root, "owner", "strong-root-password")
+        created_user = root.post("/api/user/register", json={
+            "email": "user-admin-test@example.com", "password": "user-admin-test-password"
+        })
+        assert created_user.status_code == 200
         assert root.post("/api/admin/control/admins", json={
             "username": "users_agent", "password": "strong-users-password", "role": "user_admin"
         }, headers=ORIGIN).status_code == 201
         with TestClient(app) as delegated:
             assert login(delegated, "users_agent", "strong-users-password").status_code == 200
-            assert delegated.get("/api/admin/users").status_code == 200
+            user_list = delegated.get("/api/admin/users")
+            assert user_list.status_code == 200
+            assert user_list.json()["data"]
+            assert "balance_cents" not in user_list.json()["data"][0]
             assert delegated.post("/api/admin/users/missing/sessions/revoke", headers=ORIGIN).status_code == 404
             assert delegated.get("/api/admin/user-pricing").status_code == 403
             assert delegated.patch("/api/admin/keys/missing", json={"enabled": False}, headers=ORIGIN).status_code == 403
