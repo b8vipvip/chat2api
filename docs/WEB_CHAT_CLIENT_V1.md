@@ -26,6 +26,7 @@ The page sends the full ordered conversation using only standard Chat Completion
 - User-session check and owner-scoped API Key selection.
 - Online model list with user model-catalog fallback.
 - New conversation, local conversation list, local search, rename and delete.
+- Image attachments: PNG, JPEG, WebP and GIF; up to 4 images per message, 10 MiB per image and 20 MiB total per message. Images are uploaded through the selected Key's `files` scope and sent as standard Chat Completions `image_url` content parts using Chat2API-owned file IDs.
 - Streaming Chat Completions, incremental text, stop generation and incomplete-stream warning when `[DONE]` is missing.
 - Safe basic Markdown rendering for headings, paragraphs, lists, blockquotes, tables, inline code, fenced code and HTTPS/HTTP links. Raw HTML is rendered as text, not executed.
 - Copy message/code and export current conversation to Markdown.
@@ -47,3 +48,5 @@ The page sends the full ordered conversation using only standard Chat Completion
 - The page uses a same-origin CSP and does not render untrusted HTML.
 - API Key plaintext is not stored in localStorage, sessionStorage, conversation history or exported Markdown.
 - User session and Key ownership are enforced by existing server endpoints; the page is not an authorization boundary.
+- Image preview uses `GET /api/user/files/{file_id}/content`, which requires the HttpOnly user session, checks that the file's owner API Key belongs to the current account, and serves only `vision` PNG/JPEG/WebP/GIF bytes with `nosniff`, sandbox CSP, same-origin resource policy and `private, no-store` caching.
+- Image file IDs are validated before being restored from localStorage. The client never persists raw image bytes or API Key plaintext.
