@@ -62,4 +62,5 @@ def test_existing_commerce_console_is_the_single_user_and_billing_ui_owner():
     assert '["super_admin", "billing_admin"]' in source
     assert '["super_admin", "user_admin", "system_admin", "support"]' in source
     assert 'if (canReadAudit()) await loadAudit()' in source
+    assert 'const canWritePaymentSecrets = currentAdminRole === "super_admin"' in source
     assert '!canWriteUsers()' in source
