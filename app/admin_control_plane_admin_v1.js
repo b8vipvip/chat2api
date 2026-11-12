@@ -77,6 +77,11 @@
     });
     if ($("adminKey")) $("adminKey").disabled = !!(adminSession && adminSession.authenticated && !root);
     if ($("connect")) $("connect").hidden = !!(adminSession && adminSession.authenticated && !root);
+    if ($("adminSessionRotatePassword")) {
+      $("adminSessionRotatePassword").hidden = !(
+        adminSession && adminSession.authenticated && adminSession.role !== "super_admin"
+      );
+    }
     const canWriteModels = adminSession && ["super_admin", "system_admin"].includes(adminSession.role);
     ["cEntSave"].forEach((id) => { if ($(id)) $(id).hidden = !canWriteModels; });
     const canReconcileQuota = adminSession && ["super_admin", "system_admin", "api_key_admin"].includes(adminSession.role);
@@ -159,6 +164,45 @@
       if (typeof status === "function") status("管理员 Session 已退出", "ok");
     } catch (error) {
       setStatus("adminSessionState", "退出失败：" + error.message, true);
+    }
+  });
+
+  $("adminSessionRotatePassword")?.addEventListener("click", () => {
+    if (!adminSession || !adminSession.authenticated || adminSession.role === "super_admin") return;
+    $("adminPasswordCurrent").value = "";
+    $("adminPasswordNew").value = "";
+    $("adminPasswordConfirm").value = "";
+    setStatus("adminPasswordStatus", "请先输入当前密码和新密码");
+    $("adminPasswordDialog").showModal();
+  });
+  $("adminPasswordClose")?.addEventListener("click", () => $("adminPasswordDialog").close());
+  $("adminPasswordSave")?.addEventListener("click", async () => {
+    const current_password = $("adminPasswordCurrent").value;
+    const new_password = $("adminPasswordNew").value;
+    const confirmation = $("adminPasswordConfirm").value;
+    if (new_password.length < 12 || new_password.length > 256) {
+      return setStatus("adminPasswordStatus", "新密码必须为 12-256 个字符", true);
+    }
+    if (new_password !== confirmation) {
+      return setStatus("adminPasswordStatus", "两次输入的新密码不一致", true);
+    }
+    $("adminPasswordSave").disabled = true;
+    try {
+      await sessionApi("/api/admin/control/self/password", {
+        method:"POST",
+        body:{current_password, new_password}
+      });
+      $("adminPasswordDialog").close();
+      $("adminPasswordCurrent").value = "";
+      $("adminPasswordNew").value = "";
+      $("adminPasswordConfirm").value = "";
+      adminSession = null;
+      await refreshSession();
+      setStatus("adminSessionState", "密码已更新；请使用新密码重新登录");
+    } catch (error) {
+      setStatus("adminPasswordStatus", error.message, true);
+    } finally {
+      $("adminPasswordSave").disabled = false;
     }
   });
 
