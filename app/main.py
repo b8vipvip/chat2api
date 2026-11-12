@@ -1993,6 +1993,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 request_type=request_type,
                 attachments_count=len(attachments),
             )
+            # Record the point at which the *server* hands the request to
+            # the existing transport. This is not a Worker dispatch ACK.
+            state.dispatch_send_started_mono = time.perf_counter()
             await registry.send(
                 client_id,
                 {
@@ -2004,6 +2007,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 "probe_policy": state.probe_policy},
                 },
             )
+            state.dispatch_send_completed_mono = time.perf_counter()
         except Exception as error:
             state.completed_mono = time.perf_counter()
             await record_request(state, body.model, prompt, "error", principal, stream=body.stream,
