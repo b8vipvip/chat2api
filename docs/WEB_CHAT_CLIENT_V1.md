@@ -18,7 +18,7 @@ Status: first interactive browser client; not a complete ChatGPT 1:1 replacement
 5. The raw Key is held only in page memory and used as a Bearer token for standard `POST /v1/chat/completions` streaming requests. The Key ID preference may be stored locally; the raw Key is never written to localStorage.
 6. The request does not set a Mode 1 header. It uses the default Mode 2 OpenAI-compatible API ingress.
 
-The page sends the full ordered conversation and currently includes the explicit Chat2API `prompt_mode=full` extension for compatibility with servers predating the standard full-history default fix.
+The page sends the full ordered conversation using only standard Chat Completions fields (`model`, `messages`, `stream`). The server's default full-history behavior preserves multi-turn context; no private `prompt_mode` field is required.
 
 ## Implemented in v1
 
