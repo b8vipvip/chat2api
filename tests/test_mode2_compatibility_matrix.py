@@ -66,7 +66,13 @@ for path, operations in openapi.get("paths", {}).items():
         for method in operations:
             if method.lower() in {"get", "post", "put", "patch", "delete", "head", "options"}:
                 schema.append((method.upper(), path))
-print(json.dumps({"routes": entries, "openapi": schema}, separators=(",", ":")))
+file_body = openapi["paths"]["/v1/files"]["post"].get("requestBody", {})
+file_upload_media_types = sorted((file_body.get("content") or {}).keys())
+print(json.dumps({
+    "routes": entries,
+    "openapi": schema,
+    "file_upload_media_types": file_upload_media_types,
+}, separators=(",", ":")))
 '''
     env = dict(os.environ)
     env["CHAT2API_DATA_DIR"] = str(tmp_path / "isolated")
@@ -79,6 +85,7 @@ print(json.dumps({"routes": entries, "openapi": schema}, separators=(",", ":")))
     runtime = json.loads(result.stdout.strip().splitlines()[-1])
     routes = runtime["routes"]
     schema = set(tuple(row) for row in runtime["openapi"])
+    assert {"multipart/form-data", "application/json"} <= set(runtime["file_upload_media_types"])
     matrix = _matrix()
     specs = matrix["endpoints"]
     expected = {(row["method"], row["path"], row["protocol"]) for row in specs}
