@@ -90,6 +90,24 @@ async def _telemetry_upsert_best_effort(
         )
 
 
+def _native_snapshot_persist_best_effort(
+    native_content: Any, request_id: str, owner: str,
+    diagnostics: dict[str, Any],
+) -> bool:
+    """Persist native content without allowing archive I/O to reverse Broker finality."""
+    if not owner:
+        return False
+    try:
+        return bool(native_content.persist(request_id, owner))
+    except Exception:
+        diagnostics["native_snapshot_persist_error"] = "persistence-failed"
+        logger.exception(
+            "Broker accepted terminal but native snapshot persistence failed request_id=%s",
+            request_id,
+        )
+        return False
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     config = settings or get_settings()
     registry = ClientRegistry(config.data_dir)
@@ -2601,16 +2619,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         # Disk persistence is a separate delivery projection.
                         # Its failure must remain visible without reversing an
                         # already accepted Broker terminal or dropping the socket.
-                        try:
-                            persisted = bool(owner and native_content.persist(request_id, owner))
-                        except Exception:
-                            persisted = False
-                            active_state.diagnostics["native_snapshot_persist_error"] = "persistence-failed"
-                            logger.exception(
-                                "Broker accepted terminal but native snapshot persistence failed request_id=%s",
-                                request_id,
+                        active_state.diagnostics["native_snapshot_persisted"] = (
+                            _native_snapshot_persist_best_effort(
+                                native_content, request_id, owner, active_state.diagnostics,
                             )
-                        active_state.diagnostics["native_snapshot_persisted"] = persisted
+                        )
                     if terminal_message:
                         if active_state and active_state.client_id == client_id:
                             active_state.diagnostics["terminal_transport_broker_accepted"] = bool(accepted)
