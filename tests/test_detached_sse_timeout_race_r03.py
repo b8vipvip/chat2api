@@ -49,7 +49,7 @@ def test_worker_terminal_winning_lease_timeout_race_is_not_fabricated_error(monk
             ("release",),
         ]
         assert "detached_stream_terminal_wait_timeout" not in state.diagnostics
-        assert state.diagnostics["detached_stream_worker_won_timeout_race"] is True
+        assert state.diagnostics["detached_stream_terminal_won_timeout_race"] is True
         assert state.diagnostics["api_stream_detached_worker_terminal"] == "chat.completed"
 
     asyncio.run(exercise())
@@ -116,7 +116,7 @@ def test_missing_future_cannot_override_existing_broker_terminal() -> None:
         )
         assert finalized == [None]
         assert state.diagnostics["api_stream_detached_worker_terminal"] == "chat.completed"
-        assert state.diagnostics["detached_stream_worker_won_timeout_race"] is True
+        assert state.diagnostics["detached_stream_terminal_won_timeout_race"] is True
 
     asyncio.run(exercise())
 
@@ -199,7 +199,7 @@ def test_timeout_publish_exception_after_broker_terminal_keeps_real_terminal(mon
         assert finalized == [None]
         assert released == [True]
         assert state.diagnostics["detached_stream_timeout_publish_error"] == "RuntimeError"
-        assert state.diagnostics["detached_stream_worker_won_timeout_race"] is True
+        assert state.diagnostics["detached_stream_terminal_won_timeout_race"] is True
         assert state.diagnostics["api_stream_detached_worker_terminal"] == "chat.completed"
 
     asyncio.run(exercise())
