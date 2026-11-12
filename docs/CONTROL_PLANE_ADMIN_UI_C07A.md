@@ -21,7 +21,8 @@ request-history table owner.
 - Client policy: open/closed registration, Web Chat enable flag and plain-text
   announcement.
 - Tenants: create/list workspaces, manage membership roles, bind/unbind
-  user-owned API keys. Key binding requires an existing UserAccountStore owner
+  user-owned API keys. Cross-tenant administration is system_admin/super_admin
+  only until tenant-scoped delegated console identities are implemented. Key binding requires an existing UserAccountStore owner
   and an existing membership.
 - Model entitlements: global, tenant, tenant membership role (owner/admin/member/viewer), user and API-key allow/deny policies.
 - Product plugin registry: manifest registration and read-only metadata
