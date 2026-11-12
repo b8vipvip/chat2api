@@ -146,14 +146,15 @@ def test_python_sdk_models_and_responses_nonstream(sdk_transport) -> None:
     assert commands[-1]["options"]["response_protocol"] == "responses-v108"
 
 
-def test_python_sdk_standard_multipart_files_create_retrieve_content_delete(sdk_transport) -> None:
+@pytest.mark.parametrize("purpose", ["assistants", "vision", "user_data"])
+def test_python_sdk_standard_multipart_files_create_retrieve_content_delete(sdk_transport, purpose: str) -> None:
     sdk, commands = sdk_transport
     created = sdk.files.create(
         file=("sample.txt", io.BytesIO(b"one two three")),
-        purpose="assistants",
+        purpose=purpose,
     )
     assert created.object == "file"
-    assert created.purpose == "assistants"
+    assert created.purpose == purpose
     assert created.status == "processed"
     assert created.bytes == len(b"one two three")
     assert created.created_at > 0
@@ -194,3 +195,13 @@ def test_raw_mode2_auth_failure_uses_openai_error_object(sdk_app) -> None:
     assert response.status_code == 401
     assert response.json()["error"]["type"] == "authentication_error"
     assert response.json()["error"]["message"]
+
+def test_python_sdk_rejects_unsupported_standard_file_purpose(sdk_transport) -> None:
+    sdk, _ = sdk_transport
+    with pytest.raises(openai.APIStatusError) as error:
+        sdk.files.create(
+            file=("batch.jsonl", io.BytesIO(b"unsupported batch payload")),
+            purpose="batch",
+        )
+    assert error.value.status_code == 400
+    assert error.value.body["error"]["type"] == "invalid_request_error"
