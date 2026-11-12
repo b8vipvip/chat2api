@@ -12,6 +12,7 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncIterator
+from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -1180,9 +1181,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=410, detail="Stored file content is missing") from error
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Unknown file_id") from error
-        filename = item.filename.replace('"', "")
+        ascii_filename = re.sub(r"[^A-Za-z0-9._-]", "_", item.filename).strip("._") or "download"
+        encoded_filename = quote(item.filename, safe="")
         return Response(payload, media_type="application/octet-stream", headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Disposition": f"attachment; filename=\"{ascii_filename}\"; filename*=UTF-8''{encoded_filename}",
             "X-Content-Type-Options": "nosniff",
             "Cache-Control": "private, no-store",
         })
