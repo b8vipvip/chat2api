@@ -52,6 +52,8 @@
       const mode = ["open", "closed", "invite_only"].includes(policy.registration_mode)
         ? policy.registration_mode : "closed";
       state.registrationMode = mode;
+      // Public announcements are untrusted administrator text; never inject HTML.
+      $("publicAnnouncement").textContent = String(policy.announcement || "").slice(0, 500);
       const inviteField = $("registerInviteField");
       const inviteInput = $("registerInviteCode");
       const registerTab = $("registerTab");
