@@ -111,6 +111,26 @@ def test_backup_refuses_symlinked_restore_target(tmp_path: Path):
         )
 
 
+def test_backup_manifest_rejects_non_scalar_schema_and_file_kind(tmp_path: Path):
+    source = tmp_path / "source-data"
+    backup = tmp_path / "backup"
+    make_data_dir(source)
+    create_backup(source, backup, acknowledge_plaintext_sensitive_data=True)
+    manifest_path = backup / ".chat2api-backup-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    manifest["schema_version"] = True
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(BackupError, match="Unsupported"):
+        verify_backup(backup)
+
+    manifest["schema_version"] = 1
+    manifest["files"][0]["kind"] = {}
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(BackupError, match="file kind"):
+        verify_backup(backup)
+
+
 def test_backup_refuses_invalid_json_and_sqlite_integrity_failure(tmp_path: Path):
     source = tmp_path / "source-data"
     source.mkdir()
