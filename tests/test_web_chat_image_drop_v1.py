@@ -97,14 +97,16 @@ assert.strictEqual((document.listeners.get("drop") || []).length, 0);
 
 const asyncTarget = new Target();
 const asyncDocument = new Target();
-let rejectionHandled = false;
+let unhandled = false;
+const onUnhandled = () => { unhandled = true; };
+process.on("unhandledRejection", onUnhandled);
 const destroyAsync = api.install(asyncTarget, asyncDocument, {
   onFiles: () => Promise.reject(new Error("simulated handler failure")),
 });
 asyncTarget.dispatch("drop", fileDrag());
-await Promise.resolve();
-await Promise.resolve();
-assert.strictEqual(rejectionHandled, true);
+await new Promise(resolve => setTimeout(resolve, 0));
+process.removeListener("unhandledRejection", onUnhandled);
+assert.strictEqual(unhandled, false);
 destroyAsync();
 console.log("image-drop-harness-passed");
 })().catch(error => { console.error(error); process.exitCode = 1; });
