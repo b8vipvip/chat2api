@@ -5,6 +5,7 @@ on:
     paths:
       - "docs/architecture/mode2-api-compatibility-matrix.json"
       - "docs/architecture/MODE2_API_COMPATIBILITY.md"
+      - "docs/architecture/adr-005-mode2-api-service.md"
       - "tests/test_mode2_compatibility_matrix.py"
       - "tests/test_mode2_openai_python_sdk.py"
       - "tests/test_mode2_openai_node_sdk.py"
