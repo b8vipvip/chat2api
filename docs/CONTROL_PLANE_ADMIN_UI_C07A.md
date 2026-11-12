@@ -8,10 +8,14 @@ request-history table owner.
 
 - Administrator RBAC: list/create delegated admins, change roles and enable/
   disable accounts. Password is sent only at creation and never rendered again.
-- User accounts: search/list users, enable/disable and revoke sessions according
-  to role; delegated listings redact wallet balances.
-- API Keys: list/create/update quota/disable/revoke; a newly created token is
-  displayed once and historical secret reveal remains root-only.
+- User accounts and billing/pricing/payment configuration reuse the existing
+  admin_user_commerce_v104.js view owner, now role-gated for user_admin,
+  support/system read-only, and billing_admin. Delegated user listings redact
+  wallet balances and audit events remain root-only.
+- API Keys: the new C API-key view lists/creates/updates quota/disables/revokes;
+  a newly created token is displayed once and historical secret reveal remains
+  root-only. The user-commerce key subview remains the existing owner for
+  per-user key operations.
 - Client policy: open/closed registration, Web Chat enable flag and plain-text
   announcement.
 - Tenants: create/list workspaces, manage membership roles, bind/unbind
@@ -45,6 +49,8 @@ execution.
 
 - app/admin.py remains the one HTML composition owner.
 - app/admin_control_plane_admin_v1.js owns only the new C views.
+- app/admin_user_commerce_v104.js remains the existing single owner for user,
+  billing and payment views; this PR adds role-aware access and action controls.
 - app/admin_control_plane_ui_v1_patch.py serves the cache-disabled JS asset.
 - This PR does not modify app.entry:app. One central C integration PR must
   install the asset route and the C service installers together after module
