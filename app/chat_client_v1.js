@@ -1078,6 +1078,17 @@
     renderAll();
   }
 
+  if (window.Chat2APIImageDropV1) {
+    state.destroyImageDrop = window.Chat2APIImageDropV1.install(
+      $("composerArea"),
+      document,
+      {
+        onFiles: (files) => { void handleImageFiles(files); },
+        onActive: (active) => $("composerArea").classList.toggle("drag-over", active),
+      },
+    );
+  }
+
   $("newChatButton").addEventListener("click", createConversation);
   $("conversationSearch").addEventListener("input", renderSidebar);
   $("apiKeySelect").addEventListener("change", (event) => {
@@ -1149,6 +1160,7 @@
     if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
   } catch {}
   window.addEventListener("beforeunload", () => {
+    if (typeof state.destroyImageDrop === "function") state.destroyImageDrop();
     state.pendingImages.forEach((image) => {
       if (image.previewUrl) URL.revokeObjectURL(image.previewUrl);
     });
