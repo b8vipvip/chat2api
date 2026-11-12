@@ -56,6 +56,10 @@ def permission_for_admin_route(path: str, method: str) -> str | None:
         return "admins:write" if write else "admins:read"
     if path == "/api/admin/control/client":
         return "clients:" + suffix
+    if path == "/api/admin/control/invitations" or re.fullmatch(
+        r"/api/admin/control/invitations/[^/]+/revoke", path
+    ):
+        return "users:" + suffix
     if path == "/api/admin/control/roles":
         return "admins:read"
     if path == "/api/admin/model-entitlements" or re.fullmatch(
@@ -195,8 +199,8 @@ class ControlPlaneStore:
 
     @staticmethod
     def _validate_client(payload: dict[str, Any]) -> None:
-        if payload.get("registration_mode") not in {"open", "closed"}:
-            raise ControlPlaneError("registration_mode must be open or closed")
+        if payload.get("registration_mode") not in {"open", "closed", "invite_only"}:
+            raise ControlPlaneError("registration_mode must be open, closed or invite_only")
         if type(payload.get("web_chat_enabled")) is not bool:
             raise ControlPlaneError("web_chat_enabled must be a boolean")
         announcement = payload.get("announcement")
