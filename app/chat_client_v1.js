@@ -78,7 +78,8 @@
           createdAt: String(row.createdAt || new Date().toISOString()),
           updatedAt: String(row.updatedAt || row.createdAt || new Date().toISOString()),
           messages: Array.isArray(row.messages) ? row.messages.slice(-MAX_MESSAGES).filter((message) =>
-            message && (message.role === "user" || message.role === "assistant") && typeof message.content === "string"
+            message && (message.role === "user" || message.role === "assistant") &&
+            typeof message.content === "string" && (message.role === "user" || message.content.trim())
           ).map((message) => ({
             id: String(message.id || id()),
             role: message.role,
