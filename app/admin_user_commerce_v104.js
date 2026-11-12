@@ -50,6 +50,14 @@
     usersButton.hidden = !["super_admin", "user_admin", "system_admin", "support"].includes(currentAdminRole);
     const auditPanel = document.getElementById("adminAuditPanel");
     if (auditPanel) auditPanel.hidden = !canReadAudit();
+    const canWritePaymentSecrets = currentAdminRole === "super_admin";
+    document.querySelectorAll("#view-user-payments input, #view-user-payments select, #view-user-payments textarea").forEach((node) => {
+      node.disabled = !canWritePaymentSecrets;
+    });
+    ["commerceSavePayment", "commerceTestPayment"].forEach((id) => {
+      const node = document.getElementById(id);
+      if (node) node.disabled = !canWritePaymentSecrets;
+    });
   }
 
   const pricingButton = document.createElement("button");
