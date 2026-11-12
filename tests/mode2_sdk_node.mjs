@@ -1,125 +1,92 @@
-/** Real official Node OpenAI SDK transport/stream smoke (synthetic loopback fixture).
+/** Official Node OpenAI SDK against the real Chat2API ASGI app.
  *
- * This is intentionally NOT an upstream-worker integration test: Python
- * test_mode2_openai_python_sdk.py checks the real Chat2API ASGI handlers.
+ * tests/test_mode2_openai_node_sdk.py starts the composed API app on loopback,
+ * injects a deterministic Worker transport, and runs this SDK process against
+ * it. This is not a synthetic protocol fixture or a real browser-worker test.
  */
 import assert from "node:assert/strict";
-import { createServer } from "node:http";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 
-const require = createRequire(import.meta.url);
 const modules = process.env.MODE2_SDK_NODE_MODULES;
+const baseURL = process.env.MODE2_BASE_URL;
+const apiKey = process.env.MODE2_API_KEY;
 assert.ok(modules, "MODE2_SDK_NODE_MODULES must point to the isolated npm dependencies");
+assert.ok(baseURL, "MODE2_BASE_URL must point to the real Chat2API ASGI server");
+assert.ok(apiKey, "MODE2_API_KEY is required");
+const require = createRequire(join(modules, "openai"));
 const sdkPackage = require(join(modules, "openai"));
 const OpenAI = sdkPackage.default || sdkPackage.OpenAI || sdkPackage;
+const client = new OpenAI({ apiKey, baseURL, maxRetries: 0 });
 
-const seen = [];
-const server = createServer(async (req, res) => {
-  const parts = [];
-  for await (const part of req) parts.push(part);
-  const body = Buffer.concat(parts);
-  seen.push({ method: req.method, url: req.url, authorization: req.headers.authorization, contentType: req.headers["content-type"], body });
-  const json = (status, data) => {
-    res.writeHead(status, { "Content-Type": "application/json" });
-    res.end(JSON.stringify(data));
-  };
-  if (req.headers.authorization !== "Bearer mode2-node-sdk-fixture") {
-    return json(401, { error: { message: "Missing API key", type: "authentication_error" } });
-  }
-  if (req.url === "/v1/models" && req.method === "GET") {
-    return json(200, { object: "list", data: [{ id: "gpt-5.6-sol", object: "model", created: 1, owned_by: "chat2api" }] });
-  }
-  if (req.url === "/v1/chat/completions" && req.method === "POST") {
-    const request = JSON.parse(body.toString("utf8"));
-    if (request.stream === true) {
-      res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
-      const base = { id: "chatcmpl_mode2_sdk", object: "chat.completion.chunk", created: 1, model: request.model };
-      res.write("data: " + JSON.stringify({ ...base, choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }] }) + "\n\n");
-      res.write("data: " + JSON.stringify({ ...base, choices: [{ index: 0, delta: { content: "hello SDK" }, finish_reason: null }] }) + "\n\n");
-      res.write("data: " + JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 } }) + "\n\n");
-      return res.end("data: [DONE]\n\n");
-    }
-    return json(200, {
-      id: "chatcmpl_mode2_sdk", object: "chat.completion", created: 1, model: request.model,
-      choices: [{ index: 0, message: { role: "assistant", content: "hello SDK" }, finish_reason: "stop" }],
-      usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 },
-    });
-  }
-  if (req.url === "/v1/responses" && req.method === "POST") {
-    const request = JSON.parse(body.toString("utf8"));
-    return json(200, {
-      id: "resp_mode2_sdk", object: "response", created_at: 1, status: "completed", model: request.model,
-      output: [{ id: "msg_sdk", type: "message", status: "completed", role: "assistant", content: [{ type: "output_text", text: "hello SDK", annotations: [] }] }],
-      output_text: "hello SDK",
-    });
-  }
-  if (req.url === "/v1/files" && req.method === "POST") {
-    return json(415, { error: { message: "multipart upload is not supported", type: "invalid_request_error" } });
-  }
-  return json(404, { error: { message: "Unknown route", type: "invalid_request_error" } });
-});
-await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-try {
-  const address = server.address();
-  const client = new OpenAI({
-    apiKey: "mode2-node-sdk-fixture",
-    baseURL: `http://127.0.0.1:${address.port}/v1`,
-    maxRetries: 0,
-  });
+const models = await client.models.list();
+assert.ok(Array.isArray(models.data));
+const model = await client.models.retrieve("gpt-5.6-sol");
+assert.equal(model.id, "gpt-5.6-sol");
 
-  const models = await client.models.list();
-  assert.equal(models.data[0].id, "gpt-5.6-sol");
+const messages = [
+  { role: "system", content: "Use Chinese." },
+  { role: "user", content: "First turn" },
+  { role: "assistant", content: "Previous reply" },
+  { role: "user", content: "Second turn" },
+];
 
-  const messages = [
-    { role: "system", content: "Use Chinese." },
-    { role: "user", content: "First turn" },
-    { role: "assistant", content: "Previous reply" },
-    { role: "user", content: "Second turn" },
-  ];
-  const completion = await client.chat.completions.create({ model: "gpt-5.6-sol", messages });
-  assert.equal(completion.choices[0].message.content, "hello SDK");
-  assert.equal(completion.usage.total_tokens, 6);
+const legacy = await client.completions.create({ model: "gpt-5.6-sol", prompt: "Legacy completion" });
+assert.equal(legacy.object, "text_completion");
+assert.equal(legacy.choices[0].text, "mode2-node-sdk-answer");
 
-  const streaming = await client.chat.completions.create({ model: "gpt-5.6-sol", messages, stream: true });
-  let text = "";
-  let finished = false;
-  for await (const chunk of streaming) {
-    for (const choice of chunk.choices || []) {
-      text += choice.delta?.content || "";
-      if (choice.finish_reason === "stop") finished = true;
-    }
+const completion = await client.chat.completions.create({ model: "gpt-5.6-sol", messages });
+assert.equal(completion.object, "chat.completion");
+assert.equal(completion.choices[0].message.content, "mode2-node-sdk-answer");
+assert.equal(completion.usage.total_tokens > 0, true);
+
+const streaming = await client.chat.completions.create({ model: "gpt-5.6-sol", messages, stream: true });
+let streamedText = "";
+let finished = false;
+for await (const chunk of streaming) {
+  for (const choice of chunk.choices || []) {
+    streamedText += choice.delta?.content || "";
+    if (choice.finish_reason === "stop") finished = true;
   }
-  assert.equal(text, "hello SDK");
-  assert.equal(finished, true);
-
-  const response = await client.responses.create({ model: "gpt-5.6-sol", input: "Hello response endpoint" });
-  assert.equal(response.status, "completed");
-  assert.equal(response.output_text, "hello SDK");
-
-  let rejectedFileUpload = false;
-  try {
-    await client.files.create({
-      file: new File(["sample"], "sample.txt", { type: "text/plain" }),
-      purpose: "assistants",
-    });
-  } catch (error) {
-    rejectedFileUpload = error.status === 415;
-  }
-  assert.equal(rejectedFileUpload, true, "SDK multipart upload must be documented as unsupported");
-
-  const chatRequests = seen.filter((item) => item.url === "/v1/chat/completions");
-  assert.equal(chatRequests.length, 2);
-  for (const request of chatRequests) {
-    assert.equal(request.authorization, "Bearer mode2-node-sdk-fixture");
-    const payload = JSON.parse(request.body.toString("utf8"));
-    assert.equal(payload.model, "gpt-5.6-sol");
-    assert.deepEqual(payload.messages, messages);
-    assert.equal(payload.prompt_mode, undefined, "ordinary SDK should not require private prompt_mode");
-  }
-  const upload = seen.find((item) => item.url === "/v1/files");
-  assert.ok(upload.contentType.startsWith("multipart/form-data"));
-  process.stdout.write("Mode 2 Node SDK serialization, JSON, SSE and unsupported multipart checks passed\n");
-} finally {
-  await new Promise((resolve) => server.close(resolve));
 }
+assert.equal(streamedText, "mode2-node-sdk-answer");
+assert.equal(finished, true);
+
+const response = await client.responses.create({ model: "gpt-5.6-sol", input: "Hello Responses" });
+assert.equal(response.status, "completed");
+assert.equal(response.output_text, "mode2-node-sdk-answer");
+
+const uploaded = await client.files.create({
+  file: new File(["one two three"], "sample.txt", { type: "text/plain" }),
+  purpose: "assistants",
+});
+assert.equal(uploaded.object, "file");
+assert.equal(uploaded.purpose, "assistants");
+assert.equal(uploaded.status, "processed");
+assert.equal(uploaded.bytes, 13);
+const retrieved = await client.files.retrieve(uploaded.id);
+assert.equal(retrieved.id, uploaded.id);
+const binary = await client.files.content(uploaded.id);
+const content = Buffer.from(await binary.arrayBuffer());
+assert.equal(content.toString("utf8"), "one two three");
+const deleted = await client.files.delete(uploaded.id);
+assert.equal(deleted.id, uploaded.id);
+assert.equal(deleted.deleted, true);
+
+let authRejected = false;
+try {
+  await client.withOptions({ apiKey: "invalid-mode2-node-key" }).models.list();
+} catch (error) {
+  authRejected = error.status === 401 && error.error?.type === "authentication_error";
+}
+assert.equal(authRejected, true, "real API must return a standard authentication error envelope");
+
+let validationRejected = false;
+try {
+  await client.chat.completions.create({ model: "gpt-5.6-sol", messages: [] });
+} catch (error) {
+  validationRejected = error.status === 422 && error.error?.type === "invalid_request_error";
+}
+assert.equal(validationRejected, true, "real API must return a standard validation error envelope");
+
+process.stdout.write("Official Node OpenAI SDK passed against real Chat2API ASGI routes (fake Worker transport)\n");
