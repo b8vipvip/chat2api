@@ -7,12 +7,18 @@ on:
       - "docs/architecture/MODE2_API_COMPATIBILITY.md"
       - "tests/test_mode2_compatibility_matrix.py"
       - "tests/test_mode2_openai_python_sdk.py"
+      - "tests/test_mode2_openai_node_sdk.py"
       - "tests/mode2_sdk_node.mjs"
       - ".github/workflows/mode2-sdk-contract.yml"
       - "app/main.py"
       - "app/responses_v108_patch.py"
       - "app/models.py"
       - "app/mode_resolver.py"
+      - "app/entry.py"
+      - "app/v7_patch.py"
+      - "app/v13_patch.py"
+      - "app/voice_patch.py"
+      - "app/live_voice_patch.py"
   push:
     branches: [main]
     paths:
@@ -23,6 +29,11 @@ on:
       - ".github/workflows/mode2-sdk-contract.yml"
       - "app/main.py"
       - "app/responses_v108_patch.py"
+      - "app/entry.py"
+      - "app/v7_patch.py"
+      - "app/v13_patch.py"
+      - "app/voice_patch.py"
+      - "app/live_voice_patch.py"
   workflow_dispatch:
 
 permissions:
@@ -46,11 +57,9 @@ jobs:
           node-version: "22"
       - name: Install Python project and official SDK
         run: python -m pip install -e '.[dev]' pytest-timeout 'openai>=2,<3'
-      - name: Python SDK and real ASGI contract
-        run: pytest -q tests/test_mode2_compatibility_matrix.py tests/test_mode2_openai_python_sdk.py --timeout=120
       - name: Install official Node SDK in isolated test directory
         run: npm install --prefix "$RUNNER_TEMP/mode2-sdk" --no-save --ignore-scripts 'openai@^6'
-      - name: Node SDK streaming and multipart compatibility
+      - name: Python and Node SDK against real Mode 2 ASGI routes
         env:
           MODE2_SDK_NODE_MODULES: ${{ runner.temp }}/mode2-sdk/node_modules
-        run: node tests/mode2_sdk_node.mjs
+        run: pytest -q tests/test_mode2_compatibility_matrix.py tests/test_mode2_openai_python_sdk.py tests/test_mode2_openai_node_sdk.py --timeout=120
