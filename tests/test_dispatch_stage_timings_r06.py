@@ -115,3 +115,24 @@ def test_production_chat_ingress_only_marks_socket_send_not_worker_ack() -> None
     assert 'diagnostics.get("worker_content_dispatch_ack_v1") is True' in broker
     assert "state.worker_content_ack_mono = state.worker_content_ack_mono or now" in broker
     assert "state.browser_started_mono = state.browser_started_mono or now" in broker
+
+
+
+def test_worker_event_ingress_requires_exact_request_client_and_socket() -> None:
+    dispatched_socket = object()
+    replacement_socket = object()
+    state = RequestState(
+        request_id="req_r06_owned", client_id="ext_r06",
+        dispatch_socket=dispatched_socket,
+    )
+
+    assert state.owns_dispatch_socket("ext_r06", dispatched_socket, dispatched_socket)
+    assert not state.owns_dispatch_socket("ext_other", dispatched_socket, dispatched_socket)
+    assert not state.owns_dispatch_socket("ext_r06", replacement_socket, replacement_socket)
+    assert not state.owns_dispatch_socket("ext_r06", dispatched_socket, replacement_socket)
+
+    source = (ROOT / "app/main.py").read_text(encoding="utf-8")
+    ingress = source[source.index('if request_id and message_type in {'):]
+    ownership_gate = ingress.index("active_state.owns_dispatch_socket(")
+    broker_publish = ingress.index("await broker.publish(request_id, message)")
+    assert ownership_gate < broker_publish
