@@ -311,8 +311,8 @@ class ClientRegistry:
                 "voice.live.start", "voice.live.request", "dictation.request",
             }:
                 # Bind the same original authenticated socket for every
-                # Broker-backed request family. GPT Live reuses image.progress
-                # and image.error as its Worker-to-server transport events.
+                # Broker-backed request family. Voice and legacy dictation
+                # reuse image.* events as their Worker-to-server transport.
                 request_id = str(payload.get("request_id") or "")
                 broker = getattr(self, "request_broker", None)
                 state = getattr(broker, "requests", {}).get(request_id) if broker else None
