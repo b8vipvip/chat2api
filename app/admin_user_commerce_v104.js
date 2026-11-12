@@ -29,14 +29,17 @@
   const canWriteUsers = () => ["super_admin", "user_admin"].includes(currentAdminRole);
   const canReadAudit = () => currentAdminRole === "super_admin";
   async function refreshAdminRole() {
+    let sessionCheckSucceeded = false;
     try {
       const response = await fetch("/api/admin/auth/session", {credentials:"same-origin", cache:"no-store"});
+      if (!response.ok) throw new Error("Admin session lookup failed");
       const session = await response.json();
       currentAdminRole = session.authenticated ? session.role : null;
+      sessionCheckSucceeded = true;
     } catch (_) {
       currentAdminRole = null;
     }
-    if (!currentAdminRole && String(document.getElementById("adminKey")?.value || "").trim()) {
+    if (sessionCheckSucceeded && !currentAdminRole && String(document.getElementById("adminKey")?.value || "").trim()) {
       currentAdminRole = "super_admin";
     }
     adminRoleResolved = true;
