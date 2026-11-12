@@ -126,8 +126,11 @@ def install_tenant_memberships(app: FastAPI) -> FastAPI:
         # existing tenant membership. No caller-supplied tenant header is used.
         if accounts.admin_get(body.user_id) is None or not accounts.owns_key(body.user_id, key_id):
             raise HTTPException(status_code=404, detail="User-owned API key not found")
-        if api_keys.get_public(key_id) is None:
+        public_key = api_keys.get_public(key_id)
+        if public_key is None:
             raise HTTPException(status_code=404, detail="API key not found")
+        if not public_key.get("enabled") or public_key.get("revoked_at"):
+            raise HTTPException(status_code=409, detail="Only active, non-revoked API keys can be bound")
         if not store.exists(tenant_id):
             raise HTTPException(status_code=404, detail="Unknown tenant")
         audit_write(request, "tenant.api_key_bind_requested", "tenant_api_key", tenant_id, {
