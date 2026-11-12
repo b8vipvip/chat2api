@@ -189,7 +189,20 @@ def install_model_observability_v144_patch(app: FastAPI) -> FastAPI:
                 message["routing"] = routing
                 if request_id:
                     authorities[request_id] = authority
-                    await telemetry.upsert({"request_id": request_id, **_trace(authority, None), "client_id": client_id})
+                    try:
+                        await telemetry.upsert({
+                            "request_id": request_id,
+                            **_trace(authority, None),
+                            "client_id": client_id,
+                        })
+                    except Exception:
+                        # Model routing metadata is carried by the request and
+                        # in-memory authority map; telemetry must not block the
+                        # actual Worker dispatch when its store is unavailable.
+                        logger.exception(
+                            "Failed to persist model routing projection request_id=%s",
+                            request_id,
+                        )
         await base_send(client_id, message)
 
     async def publish_with_model_evidence(request_id: str, event: dict[str, Any]) -> bool:
