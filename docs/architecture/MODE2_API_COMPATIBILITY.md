@@ -80,7 +80,7 @@ proves a real ChatGPT Worker outcome.
 Production-specific route ownership is separately checked against the composed
 `app.entry:app` under isolated subprocess state.
 
-The suite asserts positive interoperability for Chat Completions, legacy Completions, Responses, models and standard Files create/retrieve/content/delete. It also checks standard error envelopes for authentication and validation failures. When upstream SDK versions
+The suite asserts positive interoperability for Chat Completions JSON/SSE, legacy Completions, Responses JSON/SSE, model list/retrieve and standard Files create/retrieve/content/delete across all three supported purposes. It also checks standard error envelopes for authentication, validation and unsupported file-purpose failures. When upstream SDK versions
 change, update the SDK lane with a pinned compatible range and review any
 serialization differences before broadening claims.
 
