@@ -100,6 +100,7 @@
         state.className = adminSession.authenticated ? "ok" : "muted";
       }
       applyNavigation();
+      window.dispatchEvent(new CustomEvent("chat2api-admin-session-changed", { detail: adminSession }));
       const active = location.hash.replace(/^#/, "");
       if (C_ROLES[active]) {
         if (!roleCan(active)) show("overview");
