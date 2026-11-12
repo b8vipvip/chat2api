@@ -193,11 +193,92 @@
       }
     }
 
+    async function cancel(record) {
+      if (!fetcher) throw new Error("Recovery transport is unavailable");
+      const requestId = String(record && record.request_id || "");
+      const assistantId = String(record && record.assistant_message_id || "");
+      if (!REQUEST_ID.test(requestId) || !MESSAGE_ID.test(assistantId)) {
+        throw new TypeError("Invalid pending chat recovery record");
+      }
+      const safeRecord = {request_id:requestId, assistant_message_id:assistantId};
+      let response;
+      try {
+        response = await fetcher(
+          "/api/user/chat/requests/" + encodeURIComponent(requestId) + "/cancel",
+          {
+            method:"POST",
+            credentials:"same-origin",
+            headers:{Accept:"application/json"},
+          }
+        );
+      } catch {
+        const result = {status:"cancel_unavailable", active:true, terminal:false, cancel_requested:false};
+        emit(safeRecord, result);
+        return result;
+      }
+      if (response.status === 401 || response.status === 403) {
+        const result = {status:"auth_required", active:false, terminal:false, cancel_requested:false};
+        emit(safeRecord, result);
+        return result;
+      }
+      if (response.status === 404) {
+        const result = {status:"not_found", active:false, terminal:false, cancel_requested:false};
+        emit(safeRecord, result);
+        return result;
+      }
+      if (response.status === 409 || response.status === 429 || response.status >= 500) {
+        const result = {status:"cancel_unavailable", active:true, terminal:false, cancel_requested:false};
+        emit(safeRecord, result);
+        return result;
+      }
+      if (!response.ok) {
+        const result = {status:"cancel_failed", active:true, terminal:false, cancel_requested:false};
+        emit(safeRecord, result);
+        return result;
+      }
+      let payload;
+      try { payload = await response.json(); }
+      catch {
+        const result = {status:"invalid_response", active:true, terminal:false, cancel_requested:false};
+        emit(safeRecord, result);
+        return result;
+      }
+      if (!payload || payload.request_id !== requestId) {
+        const result = {status:"request_mismatch", active:false, terminal:false, cancel_requested:false};
+        emit(safeRecord, result);
+        return result;
+      }
+      if (payload.terminal === true) {
+        const result = {
+          status:TERMINAL.has(String(payload.status || "")) ? String(payload.status) : "invalid_response",
+          active:false,
+          terminal:TERMINAL.has(String(payload.status || "")),
+          cancel_requested:false,
+        };
+        emit(safeRecord, result);
+        return result;
+      }
+      if (payload.cancel_requested !== true) {
+        const result = {status:"cancel_unavailable", active:true, terminal:false, cancel_requested:false};
+        emit(safeRecord, result);
+        return result;
+      }
+      const result = {
+        status:"cancellation_requested",
+        active:true,
+        terminal:false,
+        cancel_requested:true,
+        already_requested:payload.already_requested === true,
+      };
+      emit(safeRecord, result);
+      return result;
+    }
+
     function stop() {
       if (activeController) activeController.abort();
     }
 
-    return Object.freeze({resume, stop});
+    return Object.freeze({resume, cancel, stop});
   }
 
   Object.defineProperty(window, "Chat2APIStreamRecoveryV1", {
