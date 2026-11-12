@@ -20,6 +20,9 @@ class RequestState:
     # proof that the Worker acknowledged or started the browser request.
     dispatch_send_started_mono: float | None = None
     dispatch_send_completed_mono: float | None = None
+    # Server timestamp of the authenticated Worker's request-v6 content ACK.
+    # This is dispatch evidence only; it does not own request finality.
+    worker_content_ack_mono: float | None = None
     browser_started_mono: float | None = None
     first_token_mono: float | None = None
     completed_mono: float | None = None
@@ -43,6 +46,18 @@ class RequestState:
                 if self.dispatch_send_started_mono is not None
                 and self.dispatch_send_completed_mono is not None
                 and self.dispatch_send_completed_mono >= self.dispatch_send_started_mono else None
+            ),
+            "server_send_to_worker_content_ack_ms": (
+                round((self.worker_content_ack_mono - self.dispatch_send_completed_mono) * 1000, 1)
+                if self.worker_content_ack_mono is not None
+                and self.dispatch_send_completed_mono is not None
+                and self.worker_content_ack_mono >= self.dispatch_send_completed_mono else None
+            ),
+            "worker_content_ack_to_browser_started_ms": (
+                round((self.browser_started_mono - self.worker_content_ack_mono) * 1000, 1)
+                if self.browser_started_mono is not None
+                and self.worker_content_ack_mono is not None
+                and self.browser_started_mono >= self.worker_content_ack_mono else None
             ),
             "server_send_to_browser_started_ms": (
                 round((self.browser_started_mono - self.dispatch_send_completed_mono) * 1000, 1)
@@ -301,6 +316,10 @@ class RequestBroker:
             diagnostics = event.get("diagnostics")
             if isinstance(diagnostics, dict):
                 state.diagnostics.update(diagnostics)
+                if (event_type == "chat.diagnostics"
+                        and diagnostics.get("worker_content_dispatch_ack_v1") is True):
+                    state.worker_content_ack_mono = state.worker_content_ack_mono or now
+                    state.diagnostics["worker_content_dispatch_ack_received"] = True
         elif event_type in {"chat.started", "image.started"}:
             state.browser_started_mono = state.browser_started_mono or now
             diagnostics = event.get("diagnostics")
