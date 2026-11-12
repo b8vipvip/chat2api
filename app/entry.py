@@ -75,7 +75,6 @@ from .prompt_config_v72_patch import install_prompt_config_v72_patch
 from .attachment_download_v82_patch import install_attachment_download_v82_patch
 from .request_history_v94_patch import install_request_history_v94_patch
 from .user_console_v104_patch import install_user_console_v104_patch
-from .tenant_membership_v1_patch import install_tenant_memberships
 from .user_console_privacy_v105_patch import install_user_console_privacy_v105_patch
 from .payment_channels_v106_patch import install_payment_channels_v106_patch
 from .payment_channels_v107_safety_patch import install_payment_channels_v107_safety_patch
@@ -263,8 +262,6 @@ install_request_history_v94_patch(app)
 # payment channels and enforce the user-facing privacy boundary before reasserting
 # the legacy final-owner sentinel.
 install_user_console_v104_patch(app)
-# Independent tenant membership metadata owner; no /v1 request authorization change.
-install_tenant_memberships(app)
 install_payment_channels_v106_patch(app)
 install_payment_channels_v107_safety_patch(app)
 install_user_console_privacy_v105_patch(app)
