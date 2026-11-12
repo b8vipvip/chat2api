@@ -75,7 +75,12 @@ assert.equal(deleted.deleted, true);
 
 let authRejected = false;
 try {
-  await client.withOptions({ apiKey: "invalid-mode2-node-key" }).models.list();
+  const invalidClient = new OpenAI({
+    apiKey: "invalid-mode2-node-key",
+    baseURL,
+    maxRetries: 0,
+  });
+  await invalidClient.models.list();
 } catch (error) {
   authRejected = error.status === 401 && error.error?.type === "authentication_error";
 }
