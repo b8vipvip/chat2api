@@ -56,6 +56,23 @@ const response = await client.responses.create({ model: "gpt-5.6-sol", input: "H
 assert.equal(response.status, "completed");
 assert.equal(response.output_text, "mode2-node-sdk-answer");
 
+const responseStream = await client.responses.create({
+  model: "gpt-5.6-sol",
+  input: "Stream Responses events",
+  stream: true,
+});
+let responseStreamText = "";
+let responseCompleted = false;
+for await (const event of responseStream) {
+  if (event.type === "response.output_text.delta") responseStreamText += event.delta;
+  if (event.type === "response.completed") {
+    responseCompleted = true;
+    assert.equal(event.response.output_text, "mode2-node-sdk-answer");
+  }
+}
+assert.equal(responseStreamText, "mode2-node-sdk-answer");
+assert.equal(responseCompleted, true);
+
 const uploaded = await client.files.create({
   file: new File(["one two three"], "sample.txt", { type: "text/plain" }),
   purpose: "assistants",
