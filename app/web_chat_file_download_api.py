@@ -61,6 +61,7 @@ def install_web_chat_file_download_api(app: FastAPI) -> FastAPI:
             media_type=content_type,
             headers={
                 "Cache-Control": "private, no-store",
+                "Vary": "Cookie",
                 "Content-Disposition": disposition,
                 "X-Content-Type-Options": "nosniff",
                 "Content-Security-Policy": "default-src 'none'; sandbox",
