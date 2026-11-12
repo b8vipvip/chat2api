@@ -204,6 +204,44 @@ def test_structured_image_references_are_owner_scoped_and_round_trip(tmp_path):
         assert saved.status_code == 200, saved.text
         assert saved.json()["messages"][0]["content"] == message["content"]
 
+        second_key = alice.post(
+            "/api/user/keys", headers=ORIGIN, json={"name": "second image owner"}
+        )
+        assert second_key.status_code == 200
+        second_upload = alice.post(
+            "/v1/files",
+            headers={"Authorization": "Bearer " + second_key.json()["token"]},
+            json={
+                "filename": "second.png",
+                "mime_type": "image/png",
+                "data_base64": base64.b64encode(b"second-fake-png").decode("ascii"),
+                "purpose": "vision",
+            },
+        )
+        assert second_upload.status_code == 200
+        mixed = alice.put(
+            "/api/user/chat/conversations/conversation_image05",
+            json={
+                **body,
+                "mutation_id": "mutation_image05",
+                "messages": [
+                    message,
+                    {
+                        "id": "message_image05",
+                        "role": "user",
+                        "content": [{
+                            "type": "image_url",
+                            "image_url": {"url": second_upload.json()["id"]},
+                        }],
+                        "createdAt": "",
+                    },
+                ],
+            },
+            headers=ORIGIN,
+        )
+        assert mixed.status_code == 409
+        assert mixed.headers["cache-control"] == "private, no-store"
+
         foreign = bob.put(
             "/api/user/chat/conversations/conversation_image02",
             json={**body, "mutation_id": "mutation_image02"},
