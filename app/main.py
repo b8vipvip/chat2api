@@ -33,6 +33,7 @@ from .config import Settings, get_settings
 from .file_store import FileStore
 from .media_archive_v173 import MediaArchive
 from .mode_management import ModeManagementError, ModeManagementStore
+from .mode_resolver import ModeResolverMiddleware
 from .generated_files_v196 import GeneratedFileArchive
 from .generated_file_staging_v238 import GeneratedFileStaging
 from .generated_file_deferred_v247 import DeferredGeneratedFiles, FileStillProcessing, FileTransferFailed
@@ -148,6 +149,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Pure ASGI receive/send observer: records HTTP disconnect and actual
     # body send boundaries, never contents, and never owns Broker terminal.
     app.add_middleware(SSETransportTruth, telemetry=telemetry)
+    # Resolve the optional mode extension before request handlers and transport
+    # observers. All unmarked /v1 requests are explicitly Mode 2; Mode 1 cannot
+    # be selected through the OpenAI API ingress.
+    app.add_middleware(ModeResolverMiddleware)
 
     def supplied_token(authorization: str | None, x_api_key: str | None) -> str:
         supplied = (x_api_key or "").strip()
