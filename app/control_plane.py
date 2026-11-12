@@ -22,7 +22,8 @@ from typing import Any
 POLICY_VERSION = 1
 ROLES: dict[str, frozenset[str]] = {
     "super_admin": frozenset({"*"}),
-    "system_admin": frozenset({"system:read", "system:write", "clients:read", "clients:write", "models:read", "models:write", "users:read", "diagnostics:read"}),
+    "system_admin": frozenset({"system:read", "system:write", "clients:read", "clients:write", "models:read", "models:write", "users:read", "diagnostics:read", "tenants:read", "tenants:write"}),
+    "tenant_admin": frozenset({"tenants:read", "tenants:write"}),
     "user_admin": frozenset({"users:read", "users:write"}),
     "api_key_admin": frozenset({"keys:read", "keys:write"}),
     "billing_admin": frozenset({"billing:read", "billing:write"}),
@@ -60,6 +61,10 @@ def permission_for_admin_route(path: str, method: str) -> str | None:
         return "admins:read"
     if path == "/api/admin/audit":
         return "audit:read"
+    if path == "/api/admin/tenants" or re.fullmatch(
+        r"/api/admin/tenants/[^/]+/members(?:/[^/]+)?", path
+    ):
+        return "tenants:" + suffix
     if path == "/api/admin/users" or re.fullmatch(
         r"/api/admin/users/[^/]+(?:/sessions/revoke|/keys(?:/[^/]+)?)?", path
     ):
@@ -68,9 +73,15 @@ def permission_for_admin_route(path: str, method: str) -> str | None:
         return "secrets:read"
     if path == "/api/admin/keys" or re.fullmatch(r"/api/admin/keys/[^/]+", path):
         return "keys:" + suffix
-    if path in {"/api/admin/user-pricing", "/api/admin/user-payments", "/api/admin/user-payments/test"}:
+    if path in {
+        "/api/admin/user-pricing", "/api/admin/user-payments",
+        "/api/admin/user-payments/test", "/api/admin/payment-channels-v106",
+        "/api/admin/payment-channels-v106/usdt-orders",
+    } or re.fullmatch(r"/api/admin/payment-channels-v106/usdt-orders/[^/]+/(approve|reject)", path):
         return "billing:" + suffix
-    if path == "/api/admin/models":
+    if path in {"/api/admin/models", "/api/admin/text-models", "/api/admin/text-model-minimum"} or re.fullmatch(
+        r"/api/admin/text-models/[^/]+", path
+    ):
         return "models:" + suffix
     if path == "/api/admin/requests":
         return "diagnostics:read" if not write else None
@@ -81,7 +92,9 @@ def permission_for_admin_route(path: str, method: str) -> str | None:
     if path == "/api/admin/worker-tools/policies":
         return "diagnostics:read"
     if re.fullmatch(r"/api/admin/worker-tools/policies/[^/]+", path):
-        return "diagnostics:write"
+        return "system:write"
+    if path == "/api/admin/worker-tools/runs":
+        return "diagnostics:read"
     if path == "/api/admin/overview":
         return "system:read"
     if path == "/api/admin/modes":
