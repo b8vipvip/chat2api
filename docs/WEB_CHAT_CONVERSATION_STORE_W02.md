@@ -1,8 +1,11 @@
 # W-02 — Server-owned Web Chat conversation projection (preview)
 
-Status: **backend API implemented; browser cross-device integration not yet implemented**.
+Status: **isolated backend prototype and contract tests implemented; not wired into production**.
 Tracks #784 (parallel track W). This PR is intentionally independent of the
-image-attachment work in #793 and of the Mode 2 request service.
+image-attachment work in #793 and of the Mode 2 request service. Per #784 §18.5,
+W-02 integration depends on the data-storage ADR and key infrastructure; because
+G0 is intentionally deferred, this PR must not expose plaintext conversation
+storage from the production `app.entry:app` composition.
 
 ## Scope and ownership
 
@@ -67,7 +70,7 @@ with changed content returns 409. Clients should fetch the latest snapshot on
 - Client-generated IDs are restricted to 8–100 alphanumeric/underscore/hyphen
   characters. All SQL statements use bound parameters.
 
-## Browser integration handoff
+## Production gate and browser integration handoff
 
 After #793's attachment branch lands, W-02 client integration should:
 
