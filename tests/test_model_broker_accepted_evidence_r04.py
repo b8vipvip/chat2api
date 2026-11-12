@@ -200,7 +200,6 @@ def test_model_routing_telemetry_outage_does_not_block_worker_dispatch(monkeypat
         assert sent[0]["type"] == "chat.request"
         assert sent[0]["routing"]["requested_model"] == "gpt-6"
         assert sent[0]["routing"]["routed_model"] == "gpt-6"
-        assert request_id in model_patch.__dict__ or request_id not in ()
         # Broker remains the only terminal owner even when observability is down.
         assert await broker.publish(request_id, {
             "type": "chat.completed", "request_id": request_id, "text": "done",
