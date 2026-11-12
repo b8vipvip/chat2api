@@ -544,6 +544,7 @@
         }
       } catch {
         state.apiToken = "";
+        state.user = null;
         showOnly("authRequired");
         setConnection("登录已失效", "error");
         throw new Error("用户登录状态已失效，请重新登录后再继续聊天");
@@ -566,6 +567,11 @@
       if (!response.ok) {
         let payload = {};
         try { payload = await response.json(); } catch {}
+        if (response.status === 401 || response.status === 403) {
+          state.apiToken = "";
+          showOnly("keyRequired");
+          setConnection("API Key 已失效或权限不足", "error");
+        }
         throw new Error(payload?.error?.message || payload.detail || "请求失败，HTTP " + response.status);
       }
       if (!response.body) throw new Error("当前浏览器不支持流式响应读取");
@@ -619,7 +625,8 @@
       state.abortController = null;
       conversation.updatedAt = new Date().toISOString();
       saveHistory();
-      renderAll();
+      if (state.apiToken) renderAll();
+      else showOnly(state.user ? "keyRequired" : "authRequired");
       $("stopButton").classList.add("hidden");
       $("newChatButton").disabled = false;
       $("apiKeySelect").disabled = false;
