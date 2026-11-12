@@ -56,6 +56,14 @@ const response = await client.responses.create({ model: "gpt-5.6-sol", input: "H
 assert.equal(response.status, "completed");
 assert.equal(response.output_text, "mode2-node-sdk-answer");
 
+const image = await client.images.generate({
+  model: "gpt-image",
+  prompt: "Generate a small test image",
+  response_format: "b64_json",
+});
+assert.equal(image.model, "gpt-image");
+assert.equal(image.data[0].b64_json, process.env.MODE2_EXPECTED_IMAGE_B64);
+
 const responseStream = await client.responses.create({
   model: "gpt-5.6-sol",
   input: "Stream Responses events",
