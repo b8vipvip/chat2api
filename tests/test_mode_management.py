@@ -88,6 +88,12 @@ def test_admin_modes_api_requires_master_admin_key_and_persists_only_test_intent
         CHAT2API_DATA_DIR=str(tmp_path),
     )
     app = create_app(settings)
+    registered_paths = {getattr(route, "path", "") for route in app.routes}
+    assert "/api/admin/modes" in registered_paths
+    assert not any(
+        "/mode1" in path.lower() or "cookie-proxy" in path.lower()
+        for path in registered_paths
+    )
 
     with TestClient(app) as client:
         assert client.get("/api/admin/modes").status_code == 401
