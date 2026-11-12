@@ -24,6 +24,9 @@ from .runtime_single_process_guard import RuntimeTopologyError, SingleProcessRun
 MANIFEST_NAME = ".chat2api-backup-manifest.json"
 LOCK_NAME = ".chat2api-runtime.lock"
 MANIFEST_VERSION = 1
+MAX_MANIFEST_BYTES = 16 * 1024 * 1024
+MAX_MANIFEST_FILES = 100_000
+MAX_JSON_FILE_BYTES = 256 * 1024 * 1024
 
 
 class BackupError(RuntimeError):
@@ -92,14 +95,18 @@ def _validate_content(root: Path, entry: dict[str, Any]) -> None:
     kind = entry["kind"]
     if kind == "json":
         try:
-            json.loads(path.read_text(encoding="utf-8-sig"))
+            if path.stat().st_size > MAX_JSON_FILE_BYTES:
+                raise BackupError("JSON file exceeds the offline validation size limit")
+            with path.open("r", encoding="utf-8-sig") as handle:
+                json.load(handle)
         except (OSError, UnicodeError, ValueError) as exc:
             raise BackupError("Backup contains invalid JSON data") from exc
     elif kind == "jsonl":
         try:
-            for line in path.read_text(encoding="utf-8-sig").splitlines():
-                if line.strip():
-                    json.loads(line)
+            with path.open("r", encoding="utf-8-sig") as handle:
+                for line in handle:
+                    if line.strip():
+                        json.loads(line)
         except (OSError, UnicodeError, ValueError) as exc:
             raise BackupError("Backup contains invalid JSONL data") from exc
     elif kind == "sqlite":
@@ -135,8 +142,8 @@ def _validate_manifest(value: Any) -> list[dict[str, Any]]:
     ):
         raise BackupError("Unsupported or invalid backup manifest")
     entries = value.get("files")
-    if not isinstance(entries, list):
-        raise BackupError("Invalid backup manifest file list")
+    if not isinstance(entries, list) or len(entries) > MAX_MANIFEST_FILES:
+        raise BackupError("Invalid or oversized backup manifest file list")
     seen: set[str] = set()
     for entry in entries:
         if not isinstance(entry, dict) or set(entry) != {"path", "size", "sha256", "mode", "kind"}:
@@ -219,10 +226,14 @@ def create_backup(
                 shutil.copy2(path, target, follow_symlinks=False)
             manifest = _manifest(dest)
             manifest_path = dest / MANIFEST_NAME
+            encoded_manifest = (json.dumps(
+                manifest, ensure_ascii=False, sort_keys=True, indent=2
+            ) + "\n").encode("utf-8")
+            if len(encoded_manifest) > MAX_MANIFEST_BYTES:
+                raise BackupError("Backup manifest exceeds the 16 MiB limit")
             fd = os.open(manifest_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                json.dump(manifest, handle, ensure_ascii=False, sort_keys=True, indent=2)
-                handle.write("\n")
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(encoded_manifest)
                 handle.flush()
                 os.fsync(handle.fileno())
             return {"ok": True, "file_count": len(manifest["files"]), "manifest": MANIFEST_NAME}
@@ -240,6 +251,8 @@ def verify_backup(backup: Path | str) -> dict[str, Any]:
     manifest_path = root / MANIFEST_NAME
     if manifest_path.is_symlink() or not manifest_path.is_file():
         raise BackupError("Backup manifest is missing")
+    if manifest_path.stat().st_size > MAX_MANIFEST_BYTES:
+        raise BackupError("Backup manifest exceeds the 16 MiB limit")
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, ValueError) as exc:
