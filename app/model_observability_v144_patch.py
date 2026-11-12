@@ -190,16 +190,22 @@ def install_model_observability_v144_patch(app: FastAPI) -> FastAPI:
         await base_send(client_id, message)
 
     async def publish_with_model_evidence(request_id: str, event: dict[str, Any]) -> bool:
-        evidence = _evidence_from_event(event)
-        if evidence:
-            authority = authorities.get(str(request_id))
-            trace = _trace(authority, evidence)
-            state = broker.requests.get(str(request_id))
-            if state is not None:
-                state.diagnostics.update(trace)
-                state.diagnostics["model_evidence_v144"] = evidence
-            await telemetry.upsert({"request_id": str(request_id), **trace})
+        # The Broker is the sole authority on whether an event belongs to an
+        # active request and is still admissible. A late Worker diagnostic or
+        # second terminal must never overwrite the accepted model provenance.
+        # Publish first; the evidence is an optional projection, not a second
+        # decision maker or a reason to fail a client-facing request.
         published = await base_publish(request_id, event)
+        if published:
+            evidence = _evidence_from_event(event)
+            if evidence:
+                authority = authorities.get(str(request_id))
+                trace = _trace(authority, evidence)
+                state = broker.requests.get(str(request_id))
+                if state is not None:
+                    state.diagnostics.update(trace)
+                    state.diagnostics["model_evidence_v144"] = evidence
+                await telemetry.upsert({"request_id": str(request_id), **trace})
         if str(event.get("type") or "") in {"chat.completed", "chat.error", "chat.cancelled"}:
             authorities.pop(str(request_id), None)
         return published
