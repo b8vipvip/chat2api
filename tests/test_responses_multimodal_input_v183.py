@@ -14,6 +14,7 @@ from fastapi import HTTPException, Request
 from PIL import Image
 
 from app.api_keys import ApiPrincipal
+from app.chat_request_service import ChatRequestService
 from app.file_store import FileStore
 from app.media_archive_v173 import MediaArchive
 from app.responses_multimodal_input_v183 import (
@@ -133,11 +134,27 @@ def test_responses_dispatch_transfers_canonical_attachments_to_one_worker(tmp_pa
     async def send(client_id, message):
         events.append((client_id, message))
     registry.send = send
+    requests = {}
+
     async def create(request_id, client_id):
-        return SimpleNamespace(request_id=request_id, client_id=client_id)
-    app = SimpleNamespace(state=SimpleNamespace(registry=registry,
-        broker=SimpleNamespace(create=create),
-        settings=SimpleNamespace(request_timeout_seconds=600)))
+        state = SimpleNamespace(
+            request_id=request_id,
+            client_id=client_id,
+            final_future=asyncio.get_running_loop().create_future(),
+        )
+        requests[request_id] = state
+        return state
+
+    async def release(request_id):
+        requests.pop(request_id, None)
+
+    broker = SimpleNamespace(create=create, release=release, requests=requests)
+    app = SimpleNamespace(state=SimpleNamespace(
+        registry=registry,
+        broker=broker,
+        chat_request_service=ChatRequestService(registry, broker),
+        settings=SimpleNamespace(request_timeout_seconds=600),
+    ))
     state, request_id, client, timeout = asyncio.run(_dispatch(
         app, _request(), {"model":"gpt-6"}, _key(), "描述图片", [],
         attachments=specs,

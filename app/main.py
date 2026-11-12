@@ -21,6 +21,7 @@ from .admin import admin_response
 from .admin_auth import same_origin_admin_request
 from .api_keys import ApiKeyStore, ApiPrincipal, UNSET
 from .broker import RequestBroker, RequestState
+from .chat_request_service import ChatRequestService
 from .chat_media_deadline_v171 import chat_timeout_window, worker_chat_timeout, long_form_text_requested
 from .chat_progress_stream_v196 import status_from_diagnostics, progress_is_real
 from .chat_stream_delivery_v194 import StagedStreamText, final_text_chunks, sse_heartbeat_interval
@@ -81,6 +82,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     config = settings or get_settings()
     registry = ClientRegistry(config.data_dir)
     broker = RequestBroker()
+    chat_request_service = ChatRequestService(registry, broker)
     # The request origin is the actual dispatch socket; disconnection of an
     # old socket must not terminate requests already sent on its replacement.
     registry.request_broker = broker
@@ -125,6 +127,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = config
     app.state.registry = registry
     app.state.broker = broker
+    app.state.chat_request_service = chat_request_service
     app.state.telemetry = telemetry
     app.state.worker_probes = worker_probes
     app.state.native_dom_evidence = native_dom_evidence
@@ -1910,7 +1913,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 extra={"request_id": request_id, "client_id": client_id,
                        "admission_stage": "waiting-capacity"},
             )
-            state = await broker.create(request_id, client_id)
+            state = await chat_request_service.reserve(request_id, client_id)
         except HTTPException as error:
             await record_early_error(request_id=request_id, response_id=response_id, requested_model=body.model,
                                      prompt=prompt, principal=principal, stream=body.stream, prompt_mode=body.prompt_mode,
@@ -1993,16 +1996,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 request_type=request_type,
                 attachments_count=len(attachments),
             )
-            await registry.send(
+            await chat_request_service.dispatch(
                 client_id,
-                {
-                    "type": "chat.request",
-                    "request_id": request_id,
-                    "prompt": prompt,
-                    "attachments": attachments,
-                    "options": {"auto_switch_text": True, "timeout_seconds": browser_timeout_seconds, "model": body.model,
-                                "probe_policy": state.probe_policy},
-                },
+                request_id=request_id,
+                prompt=prompt,
+                attachments=attachments,
+                options={"auto_switch_text": True, "timeout_seconds": browser_timeout_seconds, "model": body.model,
+                         "probe_policy": state.probe_policy},
             )
         except Exception as error:
             state.completed_mono = time.perf_counter()
