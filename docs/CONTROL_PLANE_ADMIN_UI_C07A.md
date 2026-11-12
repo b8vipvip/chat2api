@@ -11,7 +11,9 @@ request-history table owner.
 - User accounts and billing/pricing/payment configuration reuse the existing
   admin_user_commerce_v104.js view owner, now role-gated for user_admin,
   support/system read-only, and billing_admin. Delegated user listings redact
-  wallet balances and audit events remain root-only.
+  wallet balances and audit events remain root-only. Billing Admin can edit
+  pricing and view redacted payment settings, but legacy provider-secret writes
+  remain root-only until the G0 DataKeyring gate is accepted.
 - API Keys: the new C API-key view lists/creates/updates quota/disables/revokes;
   a newly created token is displayed once and historical secret reveal remains
   root-only. The user-commerce key subview remains the existing owner for
