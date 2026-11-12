@@ -1,0 +1,179 @@
+"""C-03a model entitlement API and enforcement adapter.
+
+The adapter consumes the authenticated API-key routing context and the existing
+model request context. It never selects a Worker or asserts served-model truth.
+"""
+from __future__ import annotations
+
+from typing import Any
+
+from fastapi import FastAPI, HTTPException, Request
+from pydantic import BaseModel, ConfigDict, Field
+
+from .admin_audit import AdminAuditError, AdminAuditStore
+from .admin_auth import SESSION_COOKIE
+from .model_entitlements import (
+    ModelEntitlementError,
+    ModelEntitlementStore,
+    SUBJECT_TYPES,
+)
+from . import model_capability_routing_patch as model_routing
+from . import v13_patch
+
+
+class ModelEntitlementUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    effect: str
+    models: list[str] = Field(min_length=1, max_length=200)
+    enabled: bool = True
+
+
+def install_model_entitlements(app: FastAPI) -> FastAPI:
+    if getattr(app.state, "model_entitlements_installed", False):
+        return app
+    registry = app.state.registry
+    store = ModelEntitlementStore(app.state.settings.data_dir)
+    accounts = getattr(app.state, "user_accounts", None)
+    api_keys = getattr(app.state, "api_keys", None)
+    if api_keys is None:
+        raise RuntimeError("Model entitlements require the existing ApiKeyStore")
+    app.state.model_entitlements = store
+
+    audit = getattr(app.state, "admin_audit", None) or AdminAuditStore(app.state.settings.data_dir)
+    app.state.admin_audit = audit
+
+    def admin_actor(request: Request) -> str:
+        sessions = getattr(app.state, "admin_sessions", None)
+        token = request.cookies.get(SESSION_COOKIE)
+        if sessions is None or not sessions.authenticate(token):
+            raise HTTPException(status_code=401, detail="Administrator login required")
+        identity = getattr(sessions, "identity", None)
+        username = identity(token) if callable(identity) else app.state.settings.admin_username
+        control = getattr(app.state, "control_plane", None)
+        if control is not None and not control.permitted(username, request.url.path, request.method):
+            raise HTTPException(status_code=403, detail="Administrator permission denied")
+        return str(username)
+
+    def audit_event(actor: str, action: str, subject_type: str, subject_id: str, details: dict[str, Any]) -> None:
+        try:
+            audit.append(
+                actor=actor, action=action, target_type="model_entitlement",
+                target_id=f"{subject_type}:{subject_id}", request_id="",
+                details=details,
+            )
+        except AdminAuditError as exc:
+            raise HTTPException(status_code=503, detail="Administrator audit unavailable; policy change denied") from exc
+
+    def _validate_subject(subject_type: str, subject_id: str) -> None:
+        if subject_type not in SUBJECT_TYPES:
+            raise ModelEntitlementError("Unsupported subject_type")
+        if subject_type == "global":
+            if subject_id != "default":
+                raise ModelEntitlementError("Global policy subject_id must be 'default'")
+            return
+        if subject_type == "key":
+            try:
+                exists = api_keys.get_public(subject_id) is not None
+            except Exception:
+                exists = subject_id in getattr(api_keys, "keys", {})
+            if not exists:
+                raise KeyError("Unknown API key")
+            return
+        if subject_type == "user":
+            if accounts is None or accounts.admin_get(subject_id) is None:
+                raise KeyError("Unknown user")
+            return
+
+    def _identity(key_id: str | None) -> str | None:
+        if not key_id or key_id == "master" or accounts is None:
+            return None
+        try:
+            return accounts.owner_for_key(str(key_id))
+        except Exception:
+            return None
+
+    def _decision(key_id: str | None, model_id: str | None) -> dict[str, Any]:
+        if not key_id or key_id == "master":
+            return {"allowed": True, "reason": "master_key", "model": model_id, "matched_rules": []}
+        return store.evaluate(
+            str(model_id or ""),
+            key_id=str(key_id),
+            user_id=_identity(key_id),
+        )
+
+    base_catalog = registry.model_catalog
+
+    def model_catalog_with_entitlements(online_only: bool = True) -> list[dict[str, Any]]:
+        rows = base_catalog(online_only=online_only)
+        key_id = registry.routing_key_context.get()
+        if not key_id or key_id == "master":
+            return rows
+        return [
+            row for row in rows
+            if _decision(str(key_id), str(row.get("id") or "")).get("allowed") is True
+        ]
+
+    registry.model_catalog = model_catalog_with_entitlements
+
+    base_resolve_client = registry.resolve_client
+
+    def resolve_client_with_entitlements(requested: str | None) -> str:
+        key_id = registry.routing_key_context.get()
+        if key_id and key_id != "master":
+            target = model_routing._MODEL_CONTEXT.get() or v13_patch._target_context.get() or {}
+            model_id = str(target.get("model") or "")
+            decision = _decision(str(key_id), model_id)
+            if not decision.get("allowed"):
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "code": "model_not_entitled",
+                        "message": "API key or owning user is not entitled to the requested model",
+                        "reason": decision.get("reason"),
+                        "model": decision.get("model"),
+                    },
+                )
+        return base_resolve_client(requested)
+
+    registry.resolve_client = resolve_client_with_entitlements
+
+    @app.get("/api/admin/model-entitlements")
+    async def list_model_entitlements(request: Request) -> dict[str, Any]:
+        admin_actor(request)
+        return {"data": store.list_rules(), "supported_subject_types": sorted(SUBJECT_TYPES)}
+
+    @app.put("/api/admin/model-entitlements/{subject_type}/{subject_id}")
+    async def put_model_entitlement(
+        subject_type: str, subject_id: str, body: ModelEntitlementUpdate, request: Request
+    ) -> dict[str, Any]:
+        actor = admin_actor(request)
+        try:
+            _validate_subject(subject_type, subject_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ModelEntitlementError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        details = {"effect": body.effect, "models": body.models, "enabled": body.enabled}
+        audit_event(actor, "model.entitlement_requested", subject_type, subject_id, details)
+        try:
+            rule = store.upsert(subject_type, subject_id, body.effect, body.models, enabled=body.enabled)
+        except ModelEntitlementError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        audit_event(actor, "model.entitlement_completed", subject_type, subject_id, {
+            "effect": rule["effect"], "models": rule["models"], "enabled": rule["enabled"],
+        })
+        return {"rule": rule}
+
+    @app.delete("/api/admin/model-entitlements/{subject_type}/{subject_id}")
+    async def delete_model_entitlement(subject_type: str, subject_id: str, request: Request) -> dict[str, bool]:
+        actor = admin_actor(request)
+        audit_event(actor, "model.entitlement_delete_requested", subject_type, subject_id, {})
+        try:
+            deleted = store.delete(subject_type, subject_id)
+        except ModelEntitlementError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        audit_event(actor, "model.entitlement_delete_completed", subject_type, subject_id, {"deleted": deleted})
+        return {"deleted": deleted}
+
+    app.state.model_entitlements_installed = True
+    return app
