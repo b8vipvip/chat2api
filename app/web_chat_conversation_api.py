@@ -151,6 +151,7 @@ def install_web_chat_conversations(app: FastAPI) -> FastAPI:
                     _http_error(422, "image attachment must be a PNG, JPEG, WebP or GIF vision file")
                 if type(item.size) is not int or item.size < 1 or item.size > 10 * 1024 * 1024:
                     _http_error(413, "each image attachment must be at most 10 MiB")
+                attachment_key_ids.add(str(item.owner_key_id))
                 message_image_bytes += item.size
             if message_image_bytes > 20 * 1024 * 1024:
                 _http_error(413, "all image attachments in one message must be at most 20 MiB")
