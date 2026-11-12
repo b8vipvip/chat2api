@@ -3,7 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
+from app.admin_auth import same_origin_admin_request
 from app.config import Settings
 from app.main import create_app
 from app.user_commerce import USER_SESSION_COOKIE
@@ -31,6 +33,40 @@ def _admin_login(client: TestClient) -> None:
         json={"username": "owner", "password": "strong-admin-password"},
     )
     assert response.status_code == 200, response.text
+
+
+def test_same_origin_guard_supports_tls_termination_and_rejects_malformed_origin() -> None:
+    base_scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/api/admin/users",
+        "raw_path": b"/api/admin/users",
+        "query_string": b"",
+        "server": ("testserver", 80),
+        "client": ("127.0.0.1", 1234),
+    }
+    proxied = Request({
+        **base_scope,
+        "headers": [
+            (b"host", b"testserver"),
+            (b"origin", b"https://testserver"),
+            (b"x-forwarded-proto", b"https"),
+            (b"sec-fetch-site", b"same-origin"),
+        ],
+    })
+    malformed = Request({
+        **base_scope,
+        "headers": [
+            (b"host", b"testserver"),
+            (b"origin", b"http://[invalid"),
+        ],
+    })
+
+    assert same_origin_admin_request(proxied) is True
+    assert same_origin_admin_request(malformed) is False
 
 
 def test_admin_mutations_require_same_origin_for_login_and_all_admin_routes(tmp_path: Path) -> None:
