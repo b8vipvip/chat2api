@@ -94,7 +94,7 @@ def test_official_node_sdk_uses_real_mode2_routes_and_worker_dispatch(tmp_path: 
         )
         assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
 
-        assert len(commands) == 5
+        assert len(commands) == 6
         assert len(image_requests) == 1
         assert image_requests[0]["prompt"] == "Generate a small test image"
         assert "Legacy completion" in commands[0]["prompt"]
@@ -103,6 +103,7 @@ def test_official_node_sdk_uses_real_mode2_routes_and_worker_dispatch(tmp_path: 
         assert commands[2]["prompt"] == chat_prompt
         assert commands[3]["options"]["response_protocol"] == "responses-v108"
         assert commands[4]["options"]["response_protocol"] == "responses-v108"
+        assert commands[5]["options"]["model"] == "gpt-5.6-sol"
         assert app.state.broker.requests == {}
     finally:
         server.should_exit = True
