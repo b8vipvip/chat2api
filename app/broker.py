@@ -16,6 +16,10 @@ class RequestState:
     final_future: asyncio.Future[str] | None = None
     text: str = ""
     created_mono: float = field(default_factory=time.perf_counter)
+    # Server-side dispatch clocks only. A successful registry.send is not
+    # proof that the Worker acknowledged or started the browser request.
+    dispatch_send_started_mono: float | None = None
+    dispatch_send_completed_mono: float | None = None
     browser_started_mono: float | None = None
     first_token_mono: float | None = None
     completed_mono: float | None = None
@@ -26,6 +30,26 @@ class RequestState:
         end = self.completed_mono or time.perf_counter()
         return {
             "browser_started_ms": round((self.browser_started_mono - self.created_mono) * 1000, 1) if self.browser_started_mono else None,
+            # Stage durations are for diagnostics, never Broker finality.
+            # Missing/overlapping clocks return unknown, not a made-up zero.
+            "request_admission_wait_ms": self.diagnostics.get("request_admission_wait_ms"),
+            "server_send_start_after_broker_ms": (
+                round((self.dispatch_send_started_mono - self.created_mono) * 1000, 1)
+                if self.dispatch_send_started_mono is not None
+                and self.dispatch_send_started_mono >= self.created_mono else None
+            ),
+            "server_dispatch_send_ms": (
+                round((self.dispatch_send_completed_mono - self.dispatch_send_started_mono) * 1000, 1)
+                if self.dispatch_send_started_mono is not None
+                and self.dispatch_send_completed_mono is not None
+                and self.dispatch_send_completed_mono >= self.dispatch_send_started_mono else None
+            ),
+            "server_send_to_browser_started_ms": (
+                round((self.browser_started_mono - self.dispatch_send_completed_mono) * 1000, 1)
+                if self.browser_started_mono is not None
+                and self.dispatch_send_completed_mono is not None
+                and self.browser_started_mono >= self.dispatch_send_completed_mono else None
+            ),
             "first_token_ms": round((self.first_token_mono - self.created_mono) * 1000, 1) if self.first_token_mono else None,
             "generation_ms": round((end - self.first_token_mono) * 1000, 1) if self.first_token_mono else None,
             "total_ms": round((end - self.created_mono) * 1000, 1),
