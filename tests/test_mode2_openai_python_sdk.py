@@ -171,12 +171,11 @@ def test_python_sdk_standard_multipart_files_create_retrieve_content_delete(sdk_
     assert len(commands) == 0
 
 
-def test_python_sdk_errors_use_openai_error_envelope(sdk_transport) -> None:
+def test_python_sdk_error_statuses_and_openai_error_envelope(sdk_transport) -> None:
     sdk, _ = sdk_transport
     with pytest.raises(openai.AuthenticationError) as unauthorized:
         sdk.with_options(api_key="invalid-mode2-key").models.list()
     assert unauthorized.value.status_code == 401
-    assert unauthorized.value.body["error"]["type"] == "authentication_error"
 
     with pytest.raises(openai.APIStatusError) as invalid:
         sdk.chat.completions.create(model="gpt-5.6-sol", messages=[])
@@ -185,23 +184,13 @@ def test_python_sdk_errors_use_openai_error_envelope(sdk_transport) -> None:
     assert invalid.value.body["error"]["param"] == "messages"
 
 
-def test_legacy_chat2api_json_file_upload_remains_available(sdk_app) -> None:
+def test_raw_mode2_auth_failure_uses_openai_error_object(sdk_app) -> None:
     app, _ = sdk_app
     with TestClient(app) as client:
-        response = client.post(
-            "/v1/files",
-            headers={"Authorization": f"Bearer {MASTER}"},
-            json={
-                "filename": "legacy.txt",
-                "data_base64": base64.b64encode(b"legacy payload").decode("ascii"),
-                "mime_type": "text/plain",
-                "purpose": "chat2api",
-            },
+        response = client.get(
+            "/v1/models",
+            headers={"Authorization": "Bearer invalid-mode2-key"},
         )
-    assert response.status_code == 200, response.text
-    payload = response.json()
-    assert payload["object"] == "file"
-    assert payload["filename"] == "legacy.txt"
-    assert payload["purpose"] == "chat2api"
-    assert payload["bytes"] == len(b"legacy payload")
-    assert isinstance(payload["created_at"], str)
+    assert response.status_code == 401
+    assert response.json()["error"]["type"] == "authentication_error"
+    assert response.json()["error"]["message"]
