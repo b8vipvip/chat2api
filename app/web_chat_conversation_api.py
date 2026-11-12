@@ -85,10 +85,11 @@ def install_web_chat_conversations(app: FastAPI) -> FastAPI:
         response: Response,
         limit: int = Query(default=30, ge=1, le=100),
         offset: int = Query(default=0, ge=0),
+        q: str = Query(default="", max_length=120),
     ) -> dict:
         response.headers["Cache-Control"] = "private, no-store"
         response.headers["Vary"] = "Cookie"
-        result = store.list(principal(request), limit=limit, offset=offset)
+        result = store.list(principal(request), limit=limit, offset=offset, query=q)
         return result
 
     @app.get("/api/user/chat/conversations/{conversation_id}")
