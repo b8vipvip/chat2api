@@ -5,8 +5,8 @@ import re
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException, Path as ApiPath, Query, Request, Response
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi import FastAPI, HTTPException, Query, Request, Response
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .admin_auth import same_origin_admin_request
 from .user_commerce import USER_SESSION_COOKIE
@@ -35,6 +35,21 @@ class ConversationPutBody(BaseModel):
     messages: list[MessageSnapshot] = Field(default_factory=list, max_length=30)
     expected_revision: int = Field(ge=0)
     mutation_id: str = Field(min_length=8, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
+
+    @field_validator("title", "model")
+    @classmethod
+    def require_nonblank(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("title and model must not be blank")
+        return normalized
+
+    @model_validator(mode="after")
+    def require_unique_message_ids(self):
+        ids = [message.id for message in self.messages]
+        if len(ids) != len(set(ids)):
+            raise ValueError("message IDs must be unique within a conversation")
+        return self
 
 
 def install_web_chat_conversations(app: FastAPI) -> FastAPI:
