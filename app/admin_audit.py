@@ -97,6 +97,8 @@ class AdminAuditStore:
                 "target_type": str(target_type or "")[:80],
                 "target_id": str(target_id or "")[:160],
                 "request_id": str(request_id or "")[:128],
+                "result": "completed" if str(action or "").endswith("_completed") else "requested",
+                "policy_version": 1,
                 "details": dict(details or {}),
                 "previous_hash": events[-1]["event_hash"] if events else self.ZERO_HASH,
             }
