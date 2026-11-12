@@ -41,12 +41,22 @@ def test_user_session_csrf_owner_isolation_and_revisions(tmp_path):
     app = application(tmp_path)
     path = "/api/user/chat/conversations/conversation_001"
     with TestClient(app) as alice, TestClient(app) as bob:
-        assert alice.get(path).status_code == 401
-        assert alice.get("/api/user/chat/conversations").status_code == 401
+        unauthorized = alice.get(path)
+        unauthorized_list = alice.get("/api/user/chat/conversations")
+        assert unauthorized.status_code == 401
+        assert unauthorized_list.status_code == 401
+        for denied in (unauthorized, unauthorized_list):
+            assert denied.headers["cache-control"] == "private, no-store"
+            assert "cookie" in {value.strip().lower() for value in denied.headers["vary"].split(",")}
         register(alice, "alice@example.org")
         register(bob, "bob@example.org")
-        assert alice.put(path, json=snapshot()).status_code == 403
-        assert alice.put(path, json=snapshot(), headers={"Origin": "https://evil.example"}).status_code == 403
+        missing_origin = alice.put(path, json=snapshot())
+        cross_origin = alice.put(path, json=snapshot(), headers={"Origin": "https://evil.example"})
+        assert missing_origin.status_code == 403
+        assert cross_origin.status_code == 403
+        for denied in (missing_origin, cross_origin):
+            assert denied.headers["cache-control"] == "private, no-store"
+            assert "cookie" in {value.strip().lower() for value in denied.headers["vary"].split(",")}
         first = alice.put(path, json=snapshot(), headers=ORIGIN)
         assert first.status_code == 200, first.text
         assert first.headers["cache-control"] == "private, no-store"
@@ -57,13 +67,21 @@ def test_user_session_csrf_owner_isolation_and_revisions(tmp_path):
         # with different content is forbidden even if the revision matches.
         assert alice.put(path, json=snapshot(), headers=ORIGIN).json()["revision"] == 1
         assert alice.put(path, json=snapshot(title="tampered"), headers=ORIGIN).status_code == 409
-        assert bob.get(path).status_code == 404
-        assert bob.delete(path, params={"expected_revision": 1}, headers=ORIGIN).status_code == 404
+        hidden = bob.get(path)
+        hidden_delete = bob.delete(path, params={"expected_revision": 1}, headers=ORIGIN)
+        assert hidden.status_code == 404
+        assert hidden_delete.status_code == 404
+        for denied in (hidden, hidden_delete):
+            assert denied.headers["cache-control"] == "private, no-store"
+            assert "cookie" in {value.strip().lower() for value in denied.headers["vary"].split(",")}
         assert bob.get("/api/user/chat/conversations").json()["total"] == 0
         assert alice.get("/api/user/chat/conversations").json()["total"] == 1
         assert "messages" not in alice.get("/api/user/chat/conversations").json()["data"][0]
 
-        assert alice.put(path, json=snapshot(revision=0, mutation="mutation_0002"), headers=ORIGIN).status_code == 409
+        stale_write = alice.put(path, json=snapshot(revision=0, mutation="mutation_0002"), headers=ORIGIN)
+        assert stale_write.status_code == 409
+        assert stale_write.headers["cache-control"] == "private, no-store"
+        assert "cookie" in {value.strip().lower() for value in stale_write.headers["vary"].split(",")}
         update = alice.put(path, json=snapshot(revision=1, mutation="mutation_0002", title="new"), headers=ORIGIN)
         assert update.status_code == 200 and update.json()["revision"] == 2
         assert alice.delete(path, params={"expected_revision": 1}, headers=ORIGIN).status_code == 409
