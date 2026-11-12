@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 from app.config import Settings
 from app.main import create_app
 from app.responses_v108_patch import install_responses_v108_patch
+from app.v13_patch import install_v13_patch
 
 openai = pytest.importorskip("openai")
 
@@ -30,8 +31,12 @@ def sdk_app(tmp_path: Path):
         CHAT2API_API_KEY=MASTER,
         CHAT2API_DATA_DIR=str(tmp_path),
     ))
+    install_v13_patch(app)
     install_responses_v108_patch(app)
     commands: list[dict] = []
+    app.state.registry.model_catalog = lambda online_only=True: [{
+        "id": "gpt-5.6-sol", "object": "model", "created": 0, "owned_by": "chat2api",
+    }]
     app.state.registry.resolve_client = lambda requested: EXPECTED_WORKER
 
     async def fake_worker_send(client_id: str, payload: dict):
@@ -122,6 +127,13 @@ def test_python_sdk_models_and_responses_nonstream(sdk_transport) -> None:
     assert models.object == "list"
     assert isinstance(models.data, list)
 
+    model = sdk.models.retrieve("gpt-5.6-sol")
+    assert model.id == "gpt-5.6-sol"
+
+    legacy = sdk.completions.create(model="gpt-5.6-sol", prompt="Legacy completion")
+    assert legacy.object == "text_completion"
+    assert legacy.choices[0].text == "mode2-sdk-fixture-answer"
+
     response = sdk.responses.create(
         model="gpt-5.6-sol",
         input="Respond from the bridge",
@@ -133,12 +145,40 @@ def test_python_sdk_models_and_responses_nonstream(sdk_transport) -> None:
     assert commands[-1]["options"]["response_protocol"] == "responses-v108"
 
 
-def test_python_sdk_standard_multipart_file_upload_is_not_compatibly_implemented(sdk_transport) -> None:
+def test_python_sdk_standard_multipart_files_create_retrieve_content_delete(sdk_transport) -> None:
     sdk, commands = sdk_transport
-    with pytest.raises(openai.APIStatusError) as error:
-        sdk.files.create(
-            file=("sample.txt", io.BytesIO(b"one two three")),
-            purpose="assistants",
-        )
-    assert error.value.status_code in {400, 415, 422}
-    assert commands == []
+    created = sdk.files.create(
+        file=("sample.txt", io.BytesIO(b"one two three")),
+        purpose="assistants",
+    )
+    assert created.object == "file"
+    assert created.purpose == "assistants"
+    assert created.status == "processed"
+    assert created.bytes == len(b"one two three")
+    assert created.created_at > 0
+
+    retrieved = sdk.files.retrieve(created.id)
+    assert retrieved.id == created.id
+    assert retrieved.status == "processed"
+    downloaded = sdk.files.content(created.id)
+    assert downloaded.read() == b"one two three"
+
+    deleted = sdk.files.delete(created.id)
+    assert deleted.id == created.id
+    assert deleted.object == "file"
+    assert deleted.deleted is True
+    assert len(commands) == 0
+
+
+def test_python_sdk_errors_use_openai_error_envelope(sdk_transport) -> None:
+    sdk, _ = sdk_transport
+    with pytest.raises(openai.AuthenticationError) as unauthorized:
+        sdk.with_options(api_key="invalid-mode2-key").models.list()
+    assert unauthorized.value.status_code == 401
+    assert unauthorized.value.body["error"]["type"] == "authentication_error"
+
+    with pytest.raises(openai.APIStatusError) as invalid:
+        sdk.chat.completions.create(model="gpt-5.6-sol", messages=[])
+    assert invalid.value.status_code == 422
+    assert invalid.value.body["error"]["type"] == "invalid_request_error"
+    assert invalid.value.body["error"]["param"] == "messages"
