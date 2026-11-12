@@ -24,6 +24,7 @@ def test_dispatch_stage_timing_separates_the_160s_browser_gap() -> None:
     assert durations["request_admission_wait_ms"] == 1300.0
     assert durations["server_send_start_after_broker_ms"] == 1250.0
     assert durations["server_dispatch_send_ms"] == 50.0
+    assert durations["server_send_start_to_worker_content_ack_ms"] == 3750.0
     assert durations["server_send_to_worker_content_ack_ms"] == 3700.0
     assert durations["worker_content_ack_to_browser_started_ms"] == 159300.0
     assert durations["server_send_to_browser_started_ms"] == 163000.0
@@ -55,9 +56,26 @@ def test_dispatch_timing_missing_or_overlapping_events_are_unknown() -> None:
         browser_started_mono=102.0,
         completed_mono=104.0,
     )
-    assert overlap.timings()["server_send_to_worker_content_ack_ms"] == 2500.0
+    assert overlap.timings()["server_send_start_to_worker_content_ack_ms"] == 2500.0
+    assert overlap.timings()["server_send_to_worker_content_ack_ms"] == 500.0
     assert overlap.timings()["worker_content_ack_to_browser_started_ms"] is None
     assert overlap.timings()["server_send_to_browser_started_ms"] is None
+
+    # The content ACK can race the completion of the server's async socket
+    # send. The start-to-ACK clock remains valid; completion-to-ACK is unknown.
+    early_ack = RequestState(
+        request_id="req_r06_early_ack", client_id="ext_r06",
+        created_mono=100.0,
+        dispatch_send_started_mono=101.0,
+        dispatch_send_completed_mono=103.0,
+        worker_content_ack_mono=102.0,
+        browser_started_mono=104.0,
+        completed_mono=105.0,
+    )
+    assert early_ack.timings()["server_send_start_to_worker_content_ack_ms"] == 1000.0
+    assert early_ack.timings()["server_send_to_worker_content_ack_ms"] is None
+    assert early_ack.timings()["worker_content_ack_to_browser_started_ms"] == 2000.0
+    assert early_ack.timings()["server_send_to_browser_started_ms"] == 1000.0
 
     invalid = RequestState(
         request_id="req_r06_clock", client_id="ext_r06",
