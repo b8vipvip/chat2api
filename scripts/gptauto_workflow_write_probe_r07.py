@@ -126,6 +126,11 @@ def run_probe(api: Any, nonce: str) -> dict[str, str]:
                 f"Temporary branch name collision: {branch_ref}; "
                 "ref was not deleted because it does not point at the expected base"
             ) from create_error
+        else:
+            raise ProbeError(
+                f"Temporary branch head cannot be verified: {branch_ref}; "
+                "ref was not deleted; inspect it manually before rerunning"
+            ) from create_error
         raise create_error
     workflow = (
         "name: GPTAuto Workflows permission probe\n"
