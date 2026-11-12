@@ -25,6 +25,8 @@ on:
     branches: [main]
     paths:
       - "docs/architecture/mode2-api-compatibility-matrix.json"
+      - "docs/architecture/MODE2_API_COMPATIBILITY.md"
+      - "docs/architecture/adr-005-mode2-api-service.md"
       - "tests/test_mode2_compatibility_matrix.py"
       - "tests/test_mode2_openai_python_sdk.py"
       - "tests/test_mode2_openai_node_sdk.py"
@@ -36,6 +38,7 @@ on:
       - "app/mode_resolver.py"
       - "app/entry.py"
       - "app/v7_patch.py"
+      - "app/v9_patch.py"
       - "app/v13_patch.py"
       - "app/voice_patch.py"
       - "app/live_voice_patch.py"
