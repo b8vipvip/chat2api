@@ -19,7 +19,7 @@ Web Chat document cards:
   archive, hash authority, file status machine, or retention owner.
 - Uses `Content-Disposition: attachment`, RFC 5987 UTF-8 filename encoding,
   `nosniff`, sandbox CSP, same-origin resource policy, no-referrer and
-  private no-store caching.
+  private no-store caching on successful downloads and application-level error responses.
 - Filename is normalized with the existing FileStore `safe_name` helper.
 
 ## Explicit limits
@@ -40,3 +40,5 @@ Web Chat document cards:
 
 Covers exact byte delivery, session requirement, cross-account 404, missing
 disk content, MIME handling, safe filename disposition and security headers.
+
+Storage I/O failures are mapped to a generic private/no-store 503 response; raw filesystem errors are not returned to the caller.
