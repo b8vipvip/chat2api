@@ -95,6 +95,21 @@ def test_restart_persistence_and_validation(tmp_path):
         assert restored.json()["messages"][0]["content"] == "<script>alert(1)</script>"
 
 
+
+def test_message_ids_must_be_unique_and_metadata_nonblank(tmp_path):
+    app = application(tmp_path)
+    path = "/api/user/chat/conversations/conversation_004"
+    with TestClient(app) as client:
+        register(client, "validation@example.org")
+        duplicate = snapshot()
+        duplicate["messages"] = [
+            {"id": "message_same", "role": "user", "content": "one", "createdAt": ""},
+            {"id": "message_same", "role": "assistant", "content": "two", "createdAt": ""},
+        ]
+        assert client.put(path, json=duplicate, headers=ORIGIN).status_code == 422
+        assert client.put(path, json={**snapshot(), "title": "   "}, headers=ORIGIN).status_code == 422
+        assert client.get("/api/user/chat/conversations").json()["total"] == 0
+
 def test_concurrent_expected_revision_only_one_writer_wins(tmp_path):
     app = application(tmp_path)
     store = app.state.web_chat_conversations
