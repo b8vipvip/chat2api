@@ -21,6 +21,18 @@ The repository's Docker Compose service currently starts one Uvicorn process and
 
 The guard is installed once from `app.entry:app`, before the legacy installer chain. This PR is the sole owner of this narrow production-entry change; other workstream PRs should continue to provide independent modules and must not independently edit `app.entry.py`.
 
+## Offline backup / restore verification helper
+
+The same PR adds an offline manifest-based verifier:
+
+- `python -m app.data_dir_backup create --source ./data --destination /secure-backups/chat2api-YYYYMMDD --acknowledge-plaintext-sensitive-data`
+- `python -m app.data_dir_backup verify --backup /secure-backups/chat2api-YYYYMMDD`
+- `python -m app.data_dir_backup restore-check --backup /secure-backups/chat2api-YYYYMMDD --target /tmp/chat2api-restore-check --acknowledge-plaintext-sensitive-data`
+
+Creation acquires the runtime data-directory lock, refuses to run while a server owns it, excludes the runtime lock inode, rejects symlinks, and writes a 0600 manifest with relative paths, sizes, SHA256, modes and file types. Verification checks the exact file set, checksums, JSON/JSONL parseability and SQLite integrity. Restore-check writes only to a new target, verifies the restored copy, and never overwrites an existing directory.
+
+**This helper does not encrypt backups.** It requires an explicit plaintext-sensitive-data acknowledgement because G0/DataKeyring remains deferred. Store backups only in access-controlled locations; do not treat the helper as permission to back up production secrets to an untrusted destination.
+
 ## Explicit limitations
 
 - This is a guard for processes sharing the same data directory and a filesystem that implements reliable advisory locks. It is **not** a distributed lock across separate volumes, hosts or filesystems with unreliable lock semantics.
