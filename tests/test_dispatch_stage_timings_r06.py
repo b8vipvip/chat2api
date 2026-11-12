@@ -188,7 +188,7 @@ def test_registry_send_binds_the_exact_socket_for_every_broker_request_family(tm
         registry.chatgpt_routing_ready = lambda _client_id: True
         request_types = (
             "chat.request", "image.request", "voice.request",
-            "voice.live.start", "voice.live.request",
+            "voice.live.start", "voice.live.request", "dictation.request",
         )
         states = {
             f"req_r06_{index}": SimpleNamespace(dispatch_socket=None)
