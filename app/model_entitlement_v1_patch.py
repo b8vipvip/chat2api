@@ -5,13 +5,16 @@ model request context. It never selects a Worker or asserts served-model truth.
 """
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from .admin_audit import AdminAuditError, AdminAuditStore
 from .admin_auth import SESSION_COOKIE
+from .user_commerce import USER_SESSION_COOKIE
 from .model_entitlements import (
     ModelEntitlementError,
     ModelEntitlementStore,
@@ -136,6 +139,43 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
         return base_resolve_client(requested)
 
     registry.resolve_client = resolve_client_with_entitlements
+
+    async def _response_bytes(response) -> bytes:
+        body = getattr(response, "body", None)
+        if body is not None:
+            return bytes(body)
+        chunks: list[bytes] = []
+        iterator = getattr(response, "body_iterator", None)
+        if iterator is not None:
+            async for part in iterator:
+                chunks.append(part.encode("utf-8") if isinstance(part, str) else bytes(part))
+        return b"".join(chunks)
+
+    @app.middleware("http")
+    async def user_model_entitlement_filter(request: Request, call_next):
+        response = await call_next(request)
+        if request.url.path != "/api/user/models" or response.status_code != 200 or accounts is None:
+            return response
+        user = accounts.authenticate(request.cookies.get(USER_SESSION_COOKIE))
+        if not user:
+            return response
+        try:
+            payload = json.loads((await _response_bytes(response)).decode("utf-8"))
+        except (UnicodeDecodeError, ValueError, TypeError):
+            return response
+        if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+            return response
+        user_id = str(user.get("user_id") or "")
+        payload["data"] = [
+            row for row in payload["data"]
+            if isinstance(row, dict)
+            and _decision(None, str(row.get("id") or row.get("model") or "")).get("allowed") is True
+            and store.evaluate(
+                str(row.get("id") or row.get("model") or ""),
+                key_id=None, user_id=user_id,
+            ).get("allowed") is True
+        ]
+        return JSONResponse(payload, status_code=response.status_code, headers={"Cache-Control": "private, no-store"})
 
     @app.get("/api/admin/model-entitlements")
     async def list_model_entitlements(request: Request) -> dict[str, Any]:
