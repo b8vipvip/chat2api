@@ -90,6 +90,9 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
         if subject_type == "tenant":
             if tenant_memberships is None or not tenant_memberships.exists(subject_id):
                 raise KeyError("Unknown tenant")
+        if subject_type == "tenant_role":
+            if subject_id not in {"owner", "admin", "member", "viewer"}:
+                raise ValueError("Unknown tenant membership role")
             return
 
     def _identity(key_id: str | None) -> str | None:
@@ -100,23 +103,27 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
         except Exception:
             return None
 
-    def _tenant_for_key(key_id: str | None) -> str | None:
-        resolver = getattr(tenant_memberships, "tenant_for_key", None)
-        if not key_id or key_id == "master" or not callable(resolver):
-            return None
+    def _tenant_context_for_key(key_id: str | None) -> tuple[str | None, str | None]:
+        if not key_id or key_id == "master" or tenant_memberships is None:
+            return None, None
         try:
-            return resolver(str(key_id))
+            tenant_id = tenant_memberships.tenant_for_key(str(key_id))
+            user_id = tenant_memberships.user_for_key(str(key_id))
+            role = tenant_memberships.role_for(tenant_id, user_id) if tenant_id and user_id else None
+            return tenant_id, role
         except Exception:
-            return None
+            return None, None
 
     def _decision(key_id: str | None, model_id: str | None) -> dict[str, Any]:
         if not key_id or key_id == "master":
             return {"allowed": True, "reason": "master_key", "model": model_id, "matched_rules": []}
+        tenant_id, tenant_role = _tenant_context_for_key(key_id)
         return store.evaluate(
             str(model_id or ""),
             key_id=str(key_id),
             user_id=_identity(key_id),
-            tenant_id=_tenant_for_key(key_id),
+            tenant_id=tenant_id,
+            tenant_role=tenant_role,
         )
 
     base_catalog = registry.model_catalog
