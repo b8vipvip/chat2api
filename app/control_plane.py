@@ -290,6 +290,29 @@ class ControlPlaneStore:
                 raise
             return self._public_admin(self.admins[key])
 
+    def set_admin_password(self, username: str, password: str) -> dict[str, Any]:
+        if not isinstance(password, str) or len(password) < 12 or len(password) > 256:
+            raise ControlPlaneError("Password must contain 12-256 characters")
+        key = str(username or "").casefold()
+        if not key or key == self.root_username:
+            raise ControlPlaneError("The environment-managed root password cannot be changed here")
+        with self.lock:
+            row = self.admins.get(key)
+            if not row:
+                raise KeyError(username)
+            previous = dict(row)
+            salt = secrets.token_bytes(16)
+            row["salt"] = salt.hex()
+            row["password_hash"] = hashlib.pbkdf2_hmac(
+                "sha256", password.encode("utf-8"), salt, ITERATIONS
+            ).hex()
+            try:
+                self._save()
+            except Exception:
+                self.admins[key] = previous
+                raise
+            return self._public_admin(row)
+
     def update_admin(self, username: str, *, role: str | None = None, enabled: bool | None = None) -> dict[str, Any]:
         if role is None and enabled is None:
             raise ControlPlaneError("No administrator change supplied")
