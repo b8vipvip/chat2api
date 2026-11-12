@@ -33,8 +33,6 @@ def sdk_app(tmp_path: Path):
         CHAT2API_API_KEY=MASTER,
         CHAT2API_DATA_DIR=str(tmp_path),
     ))
-    install_v13_patch(app)
-    install_responses_v108_patch(app)
     commands: list[dict] = []
     image_buffer = io.BytesIO()
     Image.new("RGB", (8, 8), (30, 60, 90)).save(image_buffer, format="PNG")
@@ -63,7 +61,12 @@ def sdk_app(tmp_path: Path):
                 }],
             })
 
+    # Install the fake transport first, then let v13 wrap it. Replacing
+    # registry.send after install_v13_patch would bypass the production model
+    # alias/reasoning adapter and make this SDK fixture lie about dispatch.
     app.state.registry.send = fake_worker_send
+    install_v13_patch(app)
+    install_responses_v108_patch(app)
     return app, commands
 
 
