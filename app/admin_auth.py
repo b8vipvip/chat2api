@@ -60,6 +60,7 @@ logger = logging.getLogger("chat2api.admin_auth")
 class AdminSession:
     token_hash: str
     expires_at: float
+    username: str = ""
 
 
 def _token_hash(token: str) -> str:
@@ -117,26 +118,41 @@ class AdminSessionStore:
             str(password or ""), self.password
         )
 
-    def create(self) -> str:
+    def create(self, username: str | None = None) -> str:
         self.cleanup()
         token = secrets.token_urlsafe(40)
         digest = _token_hash(token)
-        self.sessions[digest] = AdminSession(token_hash=digest, expires_at=time.time() + self.ttl_seconds)
+        self.sessions[digest] = AdminSession(token_hash=digest, expires_at=time.time() + self.ttl_seconds, username=str(username or self.username))
         self._save()
         return token
 
     def authenticate(self, token: str | None) -> bool:
+        return self.identity(token) is not None
+
+    def identity(self, token: str | None) -> str | None:
         if not token:
-            return False
+            return None
         digest = _token_hash(str(token))
         item = self.sessions.get(digest)
         if not item:
-            return False
+            return None
         if item.expires_at <= time.time():
             self.sessions.pop(digest, None)
             self._save()
-            return False
-        return True
+            return None
+        # Historical persisted v1 sessions lack username and belong to the
+        # configured root administrator only, never to delegated users.
+        return item.username or self.username
+
+    def revoke_username(self, username: str) -> int:
+        count = 0
+        for digest, item in list(self.sessions.items()):
+            if (item.username or self.username).casefold() == str(username).casefold():
+                del self.sessions[digest]
+                count += 1
+        if count:
+            self._save()
+        return count
 
     def revoke(self, token: str | None) -> None:
         if not token:
@@ -191,7 +207,7 @@ class AdminSessionStore:
                     continue
                 if expires_at <= time.time():
                     continue
-                loaded[digest] = AdminSession(token_hash=digest, expires_at=expires_at)
+                loaded[digest] = AdminSession(token_hash=digest, expires_at=expires_at, username=str(row.get("username") or self.username))
             self.sessions.update(loaded)
             self.last_persistence_error = ""
         except (OSError, json.JSONDecodeError) as exc:
@@ -205,7 +221,7 @@ class AdminSessionStore:
         payload = {
             "version": SESSION_STORE_VERSION,
             "sessions": [
-                {"token_hash": item.token_hash, "expires_at": item.expires_at}
+                {"token_hash": item.token_hash, "expires_at": item.expires_at, "username": item.username or self.username}
                 for item in sorted(self.sessions.values(), key=lambda value: value.expires_at)
             ],
         }
