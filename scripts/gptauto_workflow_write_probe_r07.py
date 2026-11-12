@@ -56,7 +56,7 @@ class GitHubApi:
             # Never print token values, request headers, response bodies or
             # credentials embedded in providers' generic exception messages.
             raise ProbeError(f"GitHub {method} rejected with HTTP {exc.code}") from None
-        except urllib.error.URLError:
+        except (urllib.error.URLError, TimeoutError, OSError):
             raise ProbeError(f"GitHub {method} failed to reach API") from None
 
 
