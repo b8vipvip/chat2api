@@ -524,8 +524,6 @@ async def _stream(app: FastAPI, request: Request, state: Any, *, principal: ApiP
 def install_responses_v108_patch(app: FastAPI) -> FastAPI:
     if getattr(app.state, "responses_v108_installed", False):
         return app
-    app.state.responses_v108_installed = True
-    app.state.responses_v108_store = OrderedDict()
 
     # v13 registered one legacy POST /v1/responses handler earlier in the
     # production installer chain. Starlette uses first-match routing, so v108
@@ -563,6 +561,8 @@ def install_responses_v108_patch(app: FastAPI) -> FastAPI:
         )
 
     app.openapi_schema = None
+    app.state.responses_v108_store = OrderedDict()
+    app.state.responses_v108_installed = True
 
     @app.post("/v1/responses")
     async def create_response(request: Request):
