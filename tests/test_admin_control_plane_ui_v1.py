@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pathlib import Path
 
 from app.admin import admin_response
 from app.admin_control_plane_ui_v1_patch import install_admin_control_plane_ui_v1
@@ -13,10 +14,9 @@ def test_admin_console_exposes_c_views_and_one_control_plane_asset():
     assert 'data-view="model-entitlements"' in html
     assert 'data-view="plugins"' in html
     assert 'data-view="quota-ledger"' in html
-    assert 'data-view="users"' in html
     assert 'data-view="api-keys"' in html
-    assert 'id="view-users"' in html
     assert 'id="view-api-keys"' in html
+    assert 'id="view-users"' not in html
     assert 'id="view-quota-ledger"' in html
     assert 'id="view-tenants"' in html
     assert 'id="view-model-entitlements"' in html
@@ -48,3 +48,13 @@ def test_admin_console_rejects_unknown_initial_view():
     html = admin_response("not-a-real-view").body.decode("utf-8")
     assert "__INITIAL_VIEW__" not in html
     assert "const INITIAL_VIEW='overview'" in html
+
+
+def test_existing_commerce_console_is_the_single_user_and_billing_ui_owner():
+    source = (Path(__file__).resolve().parents[1] / "app" / "admin_user_commerce_v104.js").read_text(encoding="utf-8")
+    assert 'currentAdminRole = session.role' in source
+    assert 'currentAdminRole !== "super_admin"' in source
+    assert '["super_admin", "billing_admin"]' in source
+    assert '["super_admin", "user_admin", "system_admin", "support"]' in source
+    assert 'if (canReadAudit()) await loadAudit()' in source
+    assert 'if (!canWriteUsers())' in source
