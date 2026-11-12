@@ -36,6 +36,12 @@ Mode 1 is a separate web-proxy entrypoint, not an OpenAI API transport. The midd
 
 The hosted multi-user private-web proxy remains NO-GO pending explicit written authorization and a separately reviewed implementation. The admin Mode 1 checkbox records test intent only; effective_enabled remains false.
 
+## Chat Completions message semantics
+
+The standard `messages` array is the conversation context. For `POST /v1/chat/completions`, the default is now `prompt_mode=full`: system/developer instructions and the ordered user/assistant/tool history are preserved for the current request. Standard OpenAI SDK clients do not need to send any Chat2API-specific field to receive full-history behavior.
+
+`prompt_mode=last_user` remains available as an explicit Chat2API extension for legacy one-turn callers. It is opt-in and must not be assumed by clients that omit the field.
+
 ## Compatibility guarantees
 
 - An unmarked /v1 request stays on Mode 2.
