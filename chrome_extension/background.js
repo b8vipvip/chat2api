@@ -286,6 +286,18 @@ async function handleServerMessage(message) {
         options: message.options || {},
       });
       if (!response?.ok) throw new Error(response?.error || "ChatGPT tab rejected the request");
+      // This response is the content-script's request-v6 acceptance ACK, not
+      // proof that ChatGPT has started generating or that the request succeeded.
+      if (response.controller === "request-v6" && !response.reroute_pending) {
+        await trySendSocket({
+          type: "chat.diagnostics",
+          request_id: message.request_id,
+          diagnostics: {
+            worker_content_dispatch_ack_v1: true,
+            worker_content_dispatch_ack_source: "background-tabs-sendMessage-request-v6",
+          },
+        });
+      }
     } catch (error) {
       const detail = String(error?.message || error);
       if (message?.routing?.api_key_id && /No tab with id:\s*\d+/i.test(detail)) {
