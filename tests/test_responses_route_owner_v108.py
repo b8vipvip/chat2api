@@ -46,10 +46,9 @@ assert get_routes[0].endpoint.__name__ == "retrieve_response"
 
 
 def test_production_responses_web_search_and_image_tool_use_v108_owner(tmp_path: Path) -> None:
-    # Exercise the actual composed app.entry:app router while bypassing only
-    # middleware that selects a live Worker. Authentication and external
-    # Worker/image execution boundaries are deterministic fakes; no upstream
-    # account or browser session is used.
+    # Exercise the actual composed app.entry:app ASGI app. Authentication and
+    # external Worker/image execution boundaries are deterministic fakes; no
+    # upstream account or browser session is used.
     script = r'''
 import asyncio
 import uuid
@@ -108,7 +107,7 @@ responses._archive_response_media = fake_archive
 image_tool.handle_image_tool = fake_image_tool
 
 async def main():
-    transport = httpx.ASGITransport(app=app.router)
+    transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         headers = {"Authorization": "Bearer route-owner-e2e-principal"}
         web = await client.post("/v1/responses", headers=headers, json={
