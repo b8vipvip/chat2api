@@ -9,7 +9,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
-from .admin_auth import AdminSessionStore, SESSION_COOKIE, same_origin_admin_request
+from .admin_auth import AdminLoginRateLimiter, AdminSessionStore, SESSION_COOKIE, same_origin_admin_request
 from .pairing import PairingStore
 
 
@@ -66,6 +66,7 @@ def install_v17_patch(app: FastAPI) -> FastAPI:
     )
     pairings = PairingStore(settings.data_dir)
     app.state.admin_sessions = sessions
+    app.state.admin_login_rate_limiter = AdminLoginRateLimiter()
     app.state.pairings = pairings
     app.version = PATCH_VERSION
 
@@ -96,11 +97,26 @@ def install_v17_patch(app: FastAPI) -> FastAPI:
 
     @app.post("/api/admin/auth/login")
     async def admin_login(body: AdminLogin, request: Request) -> Response:
+        limiter = app.state.admin_login_rate_limiter
+        remote_addr = request.client.host if request.client else "unknown"
+        retry_after = limiter.retry_after(body.username, remote_addr)
+        if retry_after:
+            return JSONResponse(
+                {"detail": "管理员登录尝试过于频繁，请稍后重试"},
+                status_code=429,
+                headers={"Retry-After": str(retry_after), "Cache-Control": "no-store"},
+            )
         control = getattr(app.state, "control_plane", None)
         root_valid = sessions.verify_credentials(body.username, body.password)
         delegated_valid = bool(control and control.verify_admin(body.username, body.password))
         if not root_valid and not delegated_valid:
-            return JSONResponse({"detail": "管理员账号或密码错误"}, status_code=401)
+            limiter.record_failure(body.username, remote_addr)
+            return JSONResponse(
+                {"detail": "管理员账号或密码错误"},
+                status_code=401,
+                headers={"Cache-Control": "no-store"},
+            )
+        limiter.record_success(body.username, remote_addr)
         username = settings.admin_username if root_valid else body.username
         token = sessions.create(username=username)
         response = JSONResponse({"ok": True, "username": username, "version": PATCH_VERSION})
