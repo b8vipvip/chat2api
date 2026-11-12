@@ -112,6 +112,37 @@ def test_message_ids_must_be_unique_and_metadata_nonblank(tmp_path):
         assert client.put(path, json={**snapshot(), "title": "   "}, headers=ORIGIN).status_code == 422
         assert client.get("/api/user/chat/conversations").json()["total"] == 0
 
+
+def test_owner_scoped_search_finds_titles_and_message_text_without_like_wildcards(tmp_path):
+    app = application(tmp_path)
+    with TestClient(app) as alice, TestClient(app) as bob:
+        register(alice, "search-alice@example.org")
+        register(bob, "search-bob@example.org")
+        first = snapshot(mutation="mutation_0005", title="Release notes")
+        first["messages"] = [
+            {"id": "message_search1", "role": "user", "content": "needle 100% complete", "createdAt": ""}
+        ]
+        second = snapshot(mutation="mutation_0006", title="Another chat")
+        second["messages"] = [
+            {"id": "message_search2", "role": "user", "content": "unrelated", "createdAt": ""}
+        ]
+        assert alice.put(
+            "/api/user/chat/conversations/conversation_005", json=first, headers=ORIGIN
+        ).status_code == 200
+        assert alice.put(
+            "/api/user/chat/conversations/conversation_006", json=second, headers=ORIGIN
+        ).status_code == 200
+        found = alice.get("/api/user/chat/conversations", params={"q": "NEEDLE 100%"}).json()
+        assert found["total"] == 1
+        assert found["data"][0]["id"] == "conversation_005"
+        assert "messages" not in found["data"][0]
+        assert bob.get(
+            "/api/user/chat/conversations", params={"q": "NEEDLE 100%"}
+        ).json()["total"] == 0
+        assert alice.get(
+            "/api/user/chat/conversations", params={"q": "x" * 121}
+        ).status_code == 422
+
 def test_concurrent_expected_revision_only_one_writer_wins(tmp_path):
     app = application(tmp_path)
     store = app.state.web_chat_conversations
