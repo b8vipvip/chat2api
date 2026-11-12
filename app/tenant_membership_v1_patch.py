@@ -128,6 +128,8 @@ def install_tenant_memberships(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=404, detail="User-owned API key not found")
         if api_keys.get_public(key_id) is None:
             raise HTTPException(status_code=404, detail="API key not found")
+        if not store.exists(tenant_id):
+            raise HTTPException(status_code=404, detail="Unknown tenant")
         audit_write(request, "tenant.api_key_bind_requested", "tenant_api_key", tenant_id, {
             "user_id": body.user_id, "key_id": key_id,
         })
