@@ -21,6 +21,14 @@ The repository's Docker Compose service currently starts one Uvicorn process and
 
 The guard is installed once from `app.entry:app`, before the legacy installer chain. This PR is the sole owner of this narrow production-entry change; other workstream PRs should continue to provide independent modules and must not independently edit `app.entry.py`.
 
+## Persistence inventory
+
+The source-level asset inventory, current storage owners, process-local state,
+and the unselected JSON-to-transactional-database migration boundary are
+documented in [P-01 persistence asset inventory](P01-persistence-asset-inventory.md).
+It is explicitly a repository inventory, not a claim that production data has
+been inspected.
+
 ## Offline backup / restore verification helper
 
 The same PR adds an offline manifest-based verifier:
