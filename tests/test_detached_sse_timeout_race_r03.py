@@ -134,7 +134,8 @@ def test_timeout_publish_exception_still_finalizes_and_releases_detached_request
         finalized = []
         released = []
 
-        async def timeout(_future, _seconds):
+        async def timeout(_future, timeout):
+            assert timeout >= 1
             raise asyncio.TimeoutError()
 
         class BrokenBroker:
