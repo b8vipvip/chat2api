@@ -15,6 +15,7 @@ def test_dispatch_stage_timing_separates_the_160s_browser_gap() -> None:
         created_mono=100.0,
         dispatch_send_started_mono=101.25,
         dispatch_send_completed_mono=101.30,
+        worker_content_ack_mono=105.0,
         browser_started_mono=264.30,
         completed_mono=268.30,
         diagnostics={"request_admission_wait_ms": 1300.0},
@@ -23,6 +24,8 @@ def test_dispatch_stage_timing_separates_the_160s_browser_gap() -> None:
     assert durations["request_admission_wait_ms"] == 1300.0
     assert durations["server_send_start_after_broker_ms"] == 1250.0
     assert durations["server_dispatch_send_ms"] == 50.0
+    assert durations["server_send_to_worker_content_ack_ms"] == 3700.0
+    assert durations["worker_content_ack_to_browser_started_ms"] == 159300.0
     assert durations["server_send_to_browser_started_ms"] == 163000.0
     assert durations["browser_started_ms"] == 164300.0
     assert durations["total_ms"] == 168300.0
@@ -48,9 +51,12 @@ def test_dispatch_timing_missing_or_overlapping_events_are_unknown() -> None:
         created_mono=100.0,
         dispatch_send_started_mono=101.0,
         dispatch_send_completed_mono=103.0,
+        worker_content_ack_mono=103.5,
         browser_started_mono=102.0,
         completed_mono=104.0,
     )
+    assert overlap.timings()["server_send_to_worker_content_ack_ms"] == 2500.0
+    assert overlap.timings()["worker_content_ack_to_browser_started_ms"] is None
     assert overlap.timings()["server_send_to_browser_started_ms"] is None
 
     invalid = RequestState(
@@ -79,6 +85,15 @@ def test_production_chat_ingress_only_marks_socket_send_not_worker_ack() -> None
     assert "This is not a Worker dispatch ACK." in chat
     # Browser-start truth still comes only from authenticated Worker via Broker,
     # not from a successful socket write or an invented acknowledgement.
+    background = (ROOT / "chrome_extension/background.js").read_text(encoding="utf-8")
+    ack = background.index("worker_content_dispatch_ack_v1: true")
+    send_ack = background.index("await chrome.tabs.sendMessage(tab.id, {", background.index('if (message.type === "chat.request")'))
+    assert send_ack < ack
+    assert 'response.controller === "request-v6" && !response.reroute_pending' in background
+    assert "worker_content_dispatch_ack_source: \"background-tabs-sendMessage-request-v6\"" in background
+
     broker = (ROOT / "app/broker.py").read_text(encoding="utf-8")
     assert 'elif event_type in {"chat.started", "image.started"}:' in broker
+    assert 'diagnostics.get("worker_content_dispatch_ack_v1") is True' in broker
+    assert "state.worker_content_ack_mono = state.worker_content_ack_mono or now" in broker
     assert "state.browser_started_mono = state.browser_started_mono or now" in broker
