@@ -5,6 +5,10 @@ event in the positive case is deliberately published by the existing Broker.
 """
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -238,3 +242,28 @@ def test_both_api_adapters_release_the_shared_lease_after_dispatch_failure(tmp_p
         assert responses.status_code == 503, responses.text
         assert app.state.broker.requests == {}
         assert "ext_mode2_send_failure" not in app.state.registry.busy_clients
+
+
+def test_composed_production_entry_uses_the_single_shared_service(tmp_path) -> None:
+    script = r'''
+from app.entry import app
+from app.chat_request_service import ChatRequestService
+assert isinstance(app.state.chat_request_service, ChatRequestService)
+assert app.state.chat_request_service.broker is app.state.broker
+assert app.state.chat_request_service.registry is app.state.registry
+print("production entry shared ChatRequestService wiring passed")
+'''
+    env = dict(os.environ)
+    env["CHAT2API_DATA_DIR"] = str(tmp_path / "production-entry")
+    env["CHAT2API_API_KEY"] = "mode2-entry-wiring-test"
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[1],
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=75,
+    )
+    assert result.returncode == 0, result.stderr[-3000:]
+    assert "production entry shared ChatRequestService wiring passed" in result.stdout
