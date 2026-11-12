@@ -67,7 +67,7 @@ class GitHubApi:
 
 def run_probe(api: Any, nonce: str) -> dict[str, str]:
     """Write and clean up a disposable workflow, using the injected API."""
-    if not re.fullmatch(r"[a-f0-9]{12}", nonce):
+    if not re.fullmatch(r"[a-f0-9]{24}", nonce):
         raise ValueError("nonce must be 12 lowercase hexadecimal characters")
     root = f"/repos/{EXPECTED_REPO}"
     branch = f"diagnostics/gptauto-workflow-write-probe-{nonce}"
@@ -191,7 +191,7 @@ def main(argv: list[str] | None = None) -> int:
               "Contents, Pull requests and Workflows write", file=sys.stderr)
         return 2
     try:
-        result = run_probe(GitHubApi(token), uuid.uuid4().hex[:12])
+        result = run_probe(GitHubApi(token), uuid.uuid4().hex[:24])
     except (ProbeError, ValueError) as exc:
         print(f"PROBE FAILED: {exc}", file=sys.stderr)
         return 1
