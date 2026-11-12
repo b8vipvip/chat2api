@@ -131,30 +131,29 @@ class ApiKeyStore:
             return
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict) or not isinstance(payload.get("keys", []), list):
+                raise ValueError("Invalid API key document shape")
             loaded: dict[str, ManagedApiKey] = {}
             for raw in payload.get("keys", []):
                 if not isinstance(raw, dict):
-                    continue
+                    raise ValueError("Invalid API key record shape")
                 item = ManagedApiKey(**raw)
                 loaded[item.key_id] = item
             self.keys = loaded
-        except (OSError, ValueError, TypeError):
+        except (OSError, ValueError, TypeError) as error:
+            if self.keyring:
+                raise DataKeyringError(
+                    "Stored API key document is unreadable; refusing to discard encrypted credentials"
+                ) from error
             self.keys = {}
 
     async def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = {"keys": [asdict(item) for item in self.keys.values()]}
-        temporary = self.path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        try:
-            temporary.chmod(0o600)
-        except OSError:
-            pass
-        temporary.replace(self.path)
-        try:
-            self.path.chmod(0o600)
-        except OSError:
-            pass
+        DataKeyring.atomic_write(
+            self.path,
+            json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"),
+        )
 
     def _decrypt_recoverable(self, value: str) -> bytes:
         if self.keyring and DataKeyring.looks_like_envelope(value):
