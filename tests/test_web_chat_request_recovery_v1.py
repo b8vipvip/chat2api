@@ -117,6 +117,27 @@ def test_queued_admission_and_failed_partial_text_are_not_misreported(tmp_path):
         assert failed["response_text_available"] is False
 
 
+
+def test_recovery_respects_bounded_telemetry_retention_window(tmp_path):
+    app = make_app(tmp_path)
+    request_id = "req_oldrecord1"
+    with TestClient(app) as client:
+        user_id = register(client, "retention@example.org")
+        app.state.user_accounts.attach_key(user_id, "key_retention")
+        remember(
+            app, request_id, "key_retention", status="completed",
+            response_text="old final answer", response_text_available=True,
+        )
+        for index in range(500):
+            remember(
+                app, f"req_new{index:08d}", "key_retention",
+                status="completed", response_text=f"answer {index}",
+                response_text_available=True,
+            )
+        assert client.get(
+            f"/api/user/chat/requests/{request_id}/recovery"
+        ).status_code == 404
+
 def test_unknown_and_malformed_ids_are_not_disclosed(tmp_path):
     app = make_app(tmp_path)
     with TestClient(app) as client:
