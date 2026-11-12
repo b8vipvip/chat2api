@@ -306,7 +306,13 @@ class ClientRegistry:
             raise RuntimeError("Chrome extension is offline")
         lock = self.socket_locks.setdefault(client_id, asyncio.Lock())
         async with lock:
-            if request_type in {"chat.request", "image.request"}:
+            if request_type in {
+                "chat.request", "image.request", "voice.request",
+                "voice.live.start", "voice.live.request",
+            }:
+                # Bind the same original authenticated socket for every
+                # Broker-backed request family. GPT Live reuses image.progress
+                # and image.error as its Worker-to-server transport events.
                 request_id = str(payload.get("request_id") or "")
                 broker = getattr(self, "request_broker", None)
                 state = getattr(broker, "requests", {}).get(request_id) if broker else None
