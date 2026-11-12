@@ -96,10 +96,14 @@ def install_v17_patch(app: FastAPI) -> FastAPI:
 
     @app.post("/api/admin/auth/login")
     async def admin_login(body: AdminLogin, request: Request) -> Response:
-        if not sessions.verify_credentials(body.username, body.password):
+        control = getattr(app.state, "control_plane", None)
+        root_valid = sessions.verify_credentials(body.username, body.password)
+        delegated_valid = bool(control and control.verify_admin(body.username, body.password))
+        if not root_valid and not delegated_valid:
             return JSONResponse({"detail": "管理员账号或密码错误"}, status_code=401)
-        token = sessions.create()
-        response = JSONResponse({"ok": True, "username": settings.admin_username, "version": PATCH_VERSION})
+        username = settings.admin_username if root_valid else body.username
+        token = sessions.create(username=username)
+        response = JSONResponse({"ok": True, "username": username, "version": PATCH_VERSION})
         response.set_cookie(
             SESSION_COOKIE,
             token,
@@ -113,10 +117,13 @@ def install_v17_patch(app: FastAPI) -> FastAPI:
 
     @app.get("/api/admin/auth/session")
     async def admin_session(request: Request) -> dict[str, Any]:
-        authenticated = sessions.authenticate(request.cookies.get(SESSION_COOKIE))
+        username = sessions.identity(request.cookies.get(SESSION_COOKIE))
+        control = getattr(app.state, "control_plane", None)
+        role = control.role_for(username) if control else ("super_admin" if username else None)
         return {
-            "authenticated": authenticated,
-            "username": settings.admin_username if authenticated else None,
+            "authenticated": role is not None,
+            "username": username if role else None,
+            "role": role,
             "version": PATCH_VERSION,
         }
 
@@ -191,7 +198,9 @@ def install_v17_patch(app: FastAPI) -> FastAPI:
         return Response(path.read_text(encoding="utf-8"), media_type="application/javascript", headers={"Cache-Control": "no-store"})
 
     def session_ok(request: Request) -> bool:
-        return sessions.authenticate(request.cookies.get(SESSION_COOKIE))
+        username = sessions.identity(request.cookies.get(SESSION_COOKIE))
+        control = getattr(app.state, "control_plane", None)
+        return bool(username and (control is None or control.role_for(username)))
 
     def inject_internal_admin_header(request: Request) -> None:
         headers = [
@@ -263,6 +272,11 @@ def install_v17_patch(app: FastAPI) -> FastAPI:
         if admin_path and not auth_path:
             if not session_ok(request):
                 return JSONResponse({"detail": "Administrator login required"}, status_code=401)
+            control = getattr(app.state, "control_plane", None)
+            username = sessions.identity(request.cookies.get(SESSION_COOKIE))
+            if control is not None and not control.permitted(username, path, request.method):
+                return JSONResponse({"detail": "Administrator permission denied"}, status_code=403)
+            request.state.admin_username = username
             if "/api/admin/keys/master" in path:
                 return JSONResponse({"detail": "Administrator master API key has been removed"}, status_code=404)
             inject_internal_admin_header(request)
