@@ -22,7 +22,7 @@ No second completed-usage counter or second wallet balance is introduced.
 - BEGIN IMMEDIATE serializes concurrent reservations across independent SQLite
   connections; completed tokens plus active reserved tokens are checked against
   the current API-key token_quota.
-- Request IDs are idempotent and cannot be reused across API keys.
+- Request IDs are idempotent while active or settled, cannot be reused across API keys, and are rejected after release/expiry so a terminal reservation cannot be mistaken for a fresh quota admission.
 - State machine: reserved -> committing -> settled; failed request releases;
   only unstarted reservations expire. A committing reservation is never
   silently expired or released.
