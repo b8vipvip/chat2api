@@ -8,9 +8,9 @@ Administrator identity remains with the existing v17 AdminSessionStore and brows
 
 ## Built-in administrator roles
 
-Super Admin, System Admin, User Admin, API Key Admin, Billing Admin, Plugin Admin, Support. The configured root administrator is a virtual Super Admin, not copied into a second password store. Delegated admins have unique 3–64 character ASCII usernames and 12–256 character passwords. Passwords are hashed with per-account 128-bit random salt and 310000 PBKDF2-HMAC-SHA256 iterations. Admin login is the existing POST /api/admin/auth/login. Disabled accounts lose their existing sessions; role changes apply to subsequent requests immediately.
+Super Admin, System Admin, User Admin, API Key Admin, Billing Admin, Plugin Admin, Tenant Admin, Support. The configured root administrator is a virtual Super Admin, not copied into a second password store. Delegated admins have unique 3–64 character ASCII usernames and 12–256 character passwords. Passwords are hashed with per-account 128-bit random salt and 310000 PBKDF2-HMAC-SHA256 iterations. Admin login is the existing POST /api/admin/auth/login. Disabled accounts lose their existing sessions; role changes apply to subsequent requests immediately. Login attempts are limited to 5 failures per username and 20 per source IP in a 15-minute window; the identity budget is shared across source IPs. The limiter is process-local and requires a shared store before multi-instance deployment.
 
-The existing v17 same-origin mutation guard and Session authentication gate apply to **all** admin endpoints. Permission decisions are evaluated at server ingress, not just in the UI. Unknown admin routes are denied to delegated roles until classified. The legacy secret-reveal API remains root-only while the G0 key migration is deferred.
+The existing v17 same-origin mutation guard and Session authentication gate apply to **all** admin endpoints. The reviewed route matrix includes explicit tenant membership/key binding, global/tenant/tenant-role/user/API-Key model policy, plugin manifest and quota reservation routes. API Key secret reveal and raw request detail remain root-only; delegated user listings do not include wallet balances. Permission decisions are evaluated at server ingress, not just in the UI. Unknown admin routes are denied to delegated roles until classified. The legacy secret-reveal API remains root-only while the G0 key migration is deferred.
 
 ## Client API and enforced policy
 
@@ -27,7 +27,7 @@ Client policy defaults: registration_mode=open, web_chat_enabled=true, announcem
 
 ## Persistence and acceptance limits
 
-The new single-instance JSON store uses atomic replace, 0600 permissions and strict schema validation. Bad/missing keys, corrupt JSON and unsupported schema are not silently reset. It is **not multi-process or multi-instance transactional storage**. All production deployments must set a strong root admin password; login rate limiting, administrator MFA, browser UI and storage concurrency are follow-ups. The PR requires a completed full CI and production image smoke before review or merge.
+The new single-instance JSON store uses atomic replace, 0600 permissions and strict schema validation. Bad/missing keys, corrupt JSON and unsupported schema are not silently reset. It is **not multi-process or multi-instance transactional storage**. All production deployments must set a strong root admin password; administrator MFA, password rotation, browser E2E and storage concurrency remain follow-ups. The quota reservation admin API is inspection/recovery only until request admission and terminal hooks are integrated. The PR requires a completed full CI and production image smoke before review or merge.
 
 ## Parallel remaining C packages
 
