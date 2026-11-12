@@ -548,8 +548,6 @@ def install_responses_v108_patch(app: FastAPI) -> FastAPI:
             raise RuntimeError(
                 "Refusing to replace an unexpected POST /v1/responses route owner"
             )
-        app.router.routes.remove(legacy_route)
-
     existing_retrieve_routes = [
         route for route in app.router.routes
         if getattr(route, "path", None) == "/v1/responses/{response_id}"
@@ -559,6 +557,9 @@ def install_responses_v108_patch(app: FastAPI) -> FastAPI:
         raise RuntimeError(
             "GET /v1/responses/{response_id} already has an owner before v108 installation"
         )
+
+    if legacy_post_routes:
+        app.router.routes.remove(legacy_post_routes[0])
 
     app.openapi_schema = None
     app.state.responses_v108_store = OrderedDict()
