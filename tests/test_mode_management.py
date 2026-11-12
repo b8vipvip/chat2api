@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from app.admin import admin_response
 from app.config import Settings
 from app.main import create_app
+from app.v17_patch import install_v17_patch
 from app.mode_management import (
     MODE1_COOKIE_PROXY_AUTHORIZATION_APPROVED,
     MODE1_COOKIE_PROXY_RUNTIME_IMPLEMENTED,
@@ -130,6 +131,37 @@ def test_admin_modes_api_requires_master_admin_key_and_persists_only_test_intent
         assert state.status_code == 200
         assert state.json()["mode1_cookie_proxy"]["requested_enabled"] is True
         assert state.json()["mode1_cookie_proxy"]["effective_enabled"] is False
+
+
+def test_production_admin_session_can_save_mode_intent_without_enabling_proxy(tmp_path: Path) -> None:
+    settings = Settings(
+        CHAT2API_ADMIN_USERNAME="mode-owner",
+        CHAT2API_ADMIN_PASSWORD="strong-test-password",
+        CHAT2API_DATA_DIR=str(tmp_path),
+    )
+    app = create_app(settings)
+    install_v17_patch(app)
+
+    with TestClient(app) as client:
+        assert client.get("/api/admin/modes").status_code == 401
+        login = client.post(
+            "/api/admin/auth/login",
+            json={"username": "mode-owner", "password": "strong-test-password"},
+        )
+        assert login.status_code == 200
+        assert "chat2api_admin_session" in client.cookies
+
+        loaded = client.get("/api/admin/modes")
+        assert loaded.status_code == 200
+        assert loaded.json()["mode1_cookie_proxy"]["requested_enabled"] is False
+
+        saved = client.put(
+            "/api/admin/modes",
+            json={"mode1_cookie_proxy_requested": True},
+        )
+        assert saved.status_code == 200
+        assert saved.json()["mode1_cookie_proxy"]["requested_enabled"] is True
+        assert saved.json()["mode1_cookie_proxy"]["effective_enabled"] is False
 
 
 def test_admin_mode_management_view_and_switch_are_present_and_default_off() -> None:
