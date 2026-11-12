@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
+from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi import FastAPI
 
 from app.broker import RequestBroker
+from app.main import _native_snapshot_persist_best_effort, _telemetry_upsert_best_effort
 from app import model_observability_v144_patch as model_patch
 from app import model_capability_routing_patch as routing
 
@@ -207,3 +209,33 @@ def test_model_routing_telemetry_outage_does_not_block_worker_dispatch(monkeypat
         await broker.release(request_id)
 
     asyncio.run(exercise())
+
+
+
+def test_terminal_telemetry_and_native_persistence_are_best_effort() -> None:
+    async def exercise() -> None:
+        telemetry = _Telemetry()
+        telemetry.fail = True
+        await _telemetry_upsert_best_effort(
+            telemetry, {"request_id": "req_r04_projection_failure"},
+            request_id="req_r04_projection_failure",
+            projection="worker-terminal-receipt",
+        )
+        assert telemetry.rows == []
+
+        class BrokenNativeStore:
+            def persist(self, _request_id: str, _owner: str) -> bool:
+                raise OSError("simulated disk outage")
+
+        diagnostics: dict = {}
+        persisted = _native_snapshot_persist_best_effort(
+            BrokenNativeStore(), "req_r04_projection_failure", "owner_r04", diagnostics,
+        )
+        assert persisted is False
+        assert diagnostics["native_snapshot_persist_error"] == "persistence-failed"
+
+    asyncio.run(exercise())
+
+    source = (Path(__file__).resolve().parents[1] / "app/main.py").read_text(encoding="utf-8")
+    assert 'projection="worker-terminal-receipt"' in source
+    assert "_native_snapshot_persist_best_effort(" in source
