@@ -211,6 +211,54 @@ def test_invite_only_requires_code_closed_rejects_and_open_remains_compatible(tm
         assert opened.status_code == 200
 
 
+def test_delegated_admin_self_password_rotation_revokes_existing_sessions(tmp_path: Path):
+    app = make_app(tmp_path)
+    with TestClient(app) as client:
+        assert login(client).status_code == 200
+        created = client.post(
+            "/api/admin/control/admins",
+            json={"username": "useradmin", "password": "strong-useradmin-password", "role": "user_admin"},
+            headers=ORIGIN,
+        )
+        assert created.status_code == 201
+        client.post("/api/admin/auth/logout", headers=ORIGIN)
+        assert client.post(
+            "/api/admin/auth/login",
+            json={"username": "useradmin", "password": "strong-useradmin-password"},
+            headers=ORIGIN,
+        ).status_code == 200
+
+        rotated = client.post(
+            "/api/admin/control/admins/useradmin/password",
+            json={
+                "current_password": "strong-useradmin-password",
+                "new_password": "rotated-useradmin-password",
+            },
+            headers=ORIGIN,
+        )
+        assert rotated.status_code == 200
+        assert rotated.json()["revoked_sessions"] >= 1
+        assert client.get("/api/admin/control/admins").status_code == 401
+
+        assert client.post(
+            "/api/admin/auth/login",
+            json={"username": "useradmin", "password": "strong-useradmin-password"},
+            headers=ORIGIN,
+        ).status_code == 401
+        assert client.post(
+            "/api/admin/auth/login",
+            json={"username": "useradmin", "password": "rotated-useradmin-password"},
+            headers=ORIGIN,
+        ).status_code == 200
+
+        root_rotation = client.post(
+            "/api/admin/control/admins/owner/password",
+            json={"new_password": "new-root-password-123"},
+            headers=ORIGIN,
+        )
+        assert root_rotation.status_code == 409
+
+
 def test_delegated_user_admin_can_issue_invitation_but_not_root_only_routes(tmp_path: Path):
     app = make_app(tmp_path)
     app.state.control_plane.update_client({"registration_mode": "invite_only"})
