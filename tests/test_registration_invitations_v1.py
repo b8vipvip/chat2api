@@ -259,6 +259,39 @@ def test_delegated_admin_self_password_rotation_revokes_existing_sessions(tmp_pa
         assert root_rotation.status_code == 409
 
 
+def test_all_delegated_roles_can_rotate_their_own_password(tmp_path: Path):
+    app = make_app(tmp_path)
+    with TestClient(app) as client:
+        assert login(client).status_code == 200
+        created = client.post(
+            "/api/admin/control/admins",
+            json={"username": "pluginagent", "password": "strong-plugin-password", "role": "plugin_admin"},
+            headers=ORIGIN,
+        )
+        assert created.status_code == 201
+        client.post("/api/admin/auth/logout", headers=ORIGIN)
+        assert client.post(
+            "/api/admin/auth/login",
+            json={"username": "pluginagent", "password": "strong-plugin-password"},
+            headers=ORIGIN,
+        ).status_code == 200
+        rotated = client.post(
+            "/api/admin/control/self/password",
+            json={
+                "current_password": "strong-plugin-password",
+                "new_password": "rotated-plugin-password",
+            },
+            headers=ORIGIN,
+        )
+        assert rotated.status_code == 200
+        assert rotated.json()["revoked_sessions"] >= 1
+        assert client.post(
+            "/api/admin/auth/login",
+            json={"username": "pluginagent", "password": "rotated-plugin-password"},
+            headers=ORIGIN,
+        ).status_code == 200
+
+
 def test_delegated_user_admin_can_issue_invitation_but_not_root_only_routes(tmp_path: Path):
     app = make_app(tmp_path)
     app.state.control_plane.update_client({"registration_mode": "invite_only"})
