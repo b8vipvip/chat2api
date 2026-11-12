@@ -107,7 +107,7 @@ function setup(){
    "toolbar after a subsequent user turn is not proof of previous answer");
 }
 assert.match(source,/verifiedRolelessRichAbortCandidate\(active, current\)/);
-assert.match(source,/abortedRenderedCandidateSince >= abortedReplyStableThreshold\(rendered\)/);
+assert.match(source,/abortedReplyStableSince\(abortedRenderedCandidateSince, rendered\)/);
 assert.match(source,/return rendered\?\.shortTextVerified \? 4500 : 8000/);
 assert.match(source,/response_terminal_source: rendered\.rolelessRichVerified/);
 assert.match(source,/current\.latest === current\.rolelessHeading\.nextElementSibling/);
