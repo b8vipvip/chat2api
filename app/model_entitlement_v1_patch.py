@@ -37,6 +37,7 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
     registry = app.state.registry
     store = ModelEntitlementStore(app.state.settings.data_dir)
     accounts = getattr(app.state, "user_accounts", None)
+    tenant_memberships = getattr(app.state, "tenant_memberships", None)
     api_keys = getattr(app.state, "api_keys", None)
     if api_keys is None:
         raise RuntimeError("Model entitlements require the existing ApiKeyStore")
@@ -86,12 +87,25 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
             if accounts is None or accounts.admin_get(subject_id) is None:
                 raise KeyError("Unknown user")
             return
+        if subject_type == "tenant":
+            if tenant_memberships is None or not tenant_memberships.exists(subject_id):
+                raise KeyError("Unknown tenant")
+            return
 
     def _identity(key_id: str | None) -> str | None:
         if not key_id or key_id == "master" or accounts is None:
             return None
         try:
             return accounts.owner_for_key(str(key_id))
+        except Exception:
+            return None
+
+    def _tenant_for_key(key_id: str | None) -> str | None:
+        resolver = getattr(tenant_memberships, "tenant_for_key", None)
+        if not key_id or key_id == "master" or not callable(resolver):
+            return None
+        try:
+            return resolver(str(key_id))
         except Exception:
             return None
 
@@ -102,6 +116,7 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
             str(model_id or ""),
             key_id=str(key_id),
             user_id=_identity(key_id),
+            tenant_id=_tenant_for_key(key_id),
         )
 
     base_catalog = registry.model_catalog
