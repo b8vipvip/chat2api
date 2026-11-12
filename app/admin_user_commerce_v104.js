@@ -455,14 +455,26 @@
   document.getElementById("commerceSavePricing").onclick = () => savePricing().catch(showPricingError);
   document.getElementById("commerceSavePayment").onclick = () => savePayments().catch(showPaymentError);
   document.getElementById("commerceTestPayment").onclick = () => testPayments().catch(showPaymentError);
-  window.addEventListener("chat2api-admin-session-changed", refreshAdminRole);
-  refreshAdminRole().then(() => {
+  function activateRoleDefault() {
     const initial = location.hash.replace(/^#/, "");
     const allowed = {
       "user-pricing": ["super_admin", "billing_admin"],
       "user-payments": ["super_admin", "billing_admin"],
       "admin-users": ["super_admin", "user_admin", "system_admin", "support"]
     };
-    if (allowed[initial] && allowed[initial].includes(currentAdminRole)) activate(initial);
+    if (allowed[initial] && allowed[initial].includes(currentAdminRole)) {
+      activate(initial);
+    } else if (currentAdminRole === "user_admin") {
+      location.hash = "admin-users";
+      activate("admin-users");
+    } else if (currentAdminRole === "billing_admin") {
+      location.hash = "user-pricing";
+      activate("user-pricing");
+    }
+  }
+  window.addEventListener("chat2api-admin-session-changed", async () => {
+    await refreshAdminRole();
+    activateRoleDefault();
   });
+  refreshAdminRole().then(activateRoleDefault);
 })();
