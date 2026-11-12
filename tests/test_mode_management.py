@@ -121,6 +121,13 @@ def test_admin_modes_api_requires_master_admin_key_and_persists_only_test_intent
         )
         assert cross_origin.status_code == 403
 
+        wrong_scheme = client.put(
+            "/api/admin/modes",
+            headers={**headers, "Origin": "https://testserver"},
+            json={"mode1_cookie_proxy_requested": True},
+        )
+        assert wrong_scheme.status_code == 403
+
         invalid = client.put(
             "/api/admin/modes",
             headers=mutation_headers,
