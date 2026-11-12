@@ -87,12 +87,14 @@ def install_web_chat_conversations(app: FastAPI) -> FastAPI:
         offset: int = Query(default=0, ge=0),
     ) -> dict:
         response.headers["Cache-Control"] = "private, no-store"
+        response.headers["Vary"] = "Cookie"
         result = store.list(principal(request), limit=limit, offset=offset)
         return result
 
     @app.get("/api/user/chat/conversations/{conversation_id}")
     async def get_conversation(conversation_id: str, request: Request, response: Response) -> dict:
         response.headers["Cache-Control"] = "private, no-store"
+        response.headers["Vary"] = "Cookie"
         row = store.get(principal(request), valid_id(conversation_id))
         if row is None:
             raise HTTPException(status_code=404, detail="conversation not found")
@@ -103,6 +105,7 @@ def install_web_chat_conversations(app: FastAPI) -> FastAPI:
         conversation_id: str, body: ConversationPutBody, request: Request, response: Response
     ) -> dict:
         response.headers["Cache-Control"] = "private, no-store"
+        response.headers["Vary"] = "Cookie"
         owner = principal(request)
         mutation_origin(request)
         if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
@@ -132,6 +135,6 @@ def install_web_chat_conversations(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=409, detail=str(error)) from error
         if not found:
             raise HTTPException(status_code=404, detail="conversation not found")
-        return Response(status_code=204, headers={"Cache-Control": "private, no-store"})
+        return Response(status_code=204, headers={"Cache-Control": "private, no-store", "Vary": "Cookie"})
 
     return app
