@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -43,6 +44,7 @@ class WebChatConversationStore:
         self.path = data_dir / "web_chat_conversations.sqlite3"
         self._init_lock = threading.Lock()
         with self._init_lock, self._connect() as db:
+            db.execute("PRAGMA journal_mode=WAL")
             db.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS web_chat_conversations (
@@ -63,6 +65,9 @@ class WebChatConversationStore:
                     ON web_chat_conversations(user_id, deleted_at, updated_at DESC, conversation_id DESC);
                 """
             )
+        # Conversation text is currently plaintext pending G0/DataKeyring;
+        # restrict database access to the service account at the filesystem layer.
+        os.chmod(self.path, 0o600)
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
