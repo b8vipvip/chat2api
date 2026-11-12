@@ -14,7 +14,7 @@ The repository's Docker Compose service currently starts one Uvicorn process and
 - The already-acquired guard is held through the existing ASGI lifespan and released at shutdown.
 - A second server process using the same data directory fails before `app.main` can initialize stores.
 - A preloaded Gunicorn-style fork worker detects that the lock descriptor belongs to the parent PID and fails closed instead of inheriting the parent's lock.
-- The lock file is created with mode `0600`, rejects symlinked data directories/lock files, and is retained after shutdown. Retaining the inode is important: unlinking a locked file could let a second process create a new inode and bypass the lock.
+- On POSIX, the lock file is mode `0600`; Windows uses the ACL inherited from the data directory, which must itself be access-controlled. The guard rejects symlinked data directories/lock files and retains the lock inode after shutdown. Retaining the inode is important: unlinking a locked file could let a second process create a new inode and bypass the lock.
 - Known multi-worker environment variables (`WEB_CONCURRENCY`, `UVICORN_WORKERS`, `GUNICORN_WORKERS`) with numeric values greater than one are rejected.
 - The lock is released during ASGI shutdown.
 - Tests cover exclusive ownership, release/reacquire, multi-worker environment rejection, symlink rejection, preloaded-fork rejection and FastAPI lifespan integration.
@@ -39,7 +39,7 @@ The same PR adds an offline manifest-based verifier:
 - `python -m app.data_dir_backup verify --backup /secure-backups/chat2api-YYYYMMDD`
 - `python -m app.data_dir_backup restore-check --backup /secure-backups/chat2api-YYYYMMDD --target /tmp/chat2api-restore-check --acknowledge-plaintext-sensitive-data`
 
-Creation acquires the runtime data-directory lock, refuses to run while a server owns it, excludes the runtime lock inode, rejects symlinks, and writes a 0600 manifest with relative paths, sizes, SHA256, modes and file types. Verification checks the exact file set, checksums, JSON/JSONL parseability and SQLite integrity. Restore-check writes only to a new target, verifies the restored copy, and never overwrites an existing directory.
+Creation acquires the runtime data-directory lock, refuses to run while a server owns it, excludes the runtime lock inode, rejects symlinks, and writes a private manifest (POSIX mode `0600`; Windows inherited directory ACL) with relative paths, sizes, SHA256, modes and file types. Verification checks the exact file set, checksums, JSON/JSONL parseability and SQLite integrity. Restore-check writes only to a new target, verifies the restored copy, and never overwrites an existing directory.
 
 **This helper does not encrypt or sign backups.** Its SHA256 manifest detects accidental corruption but is not an authenticity guarantee against an attacker who can modify both files and manifest. It requires an explicit plaintext-sensitive-data acknowledgement because G0/DataKeyring remains deferred. Store backups only in access-controlled locations; do not treat the helper as permission to back up production secrets to an untrusted destination.
 
