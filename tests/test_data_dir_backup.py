@@ -35,10 +35,10 @@ def test_backup_verify_and_restore_check_hashes_json_sqlite_and_binary(tmp_path:
         source, backup, acknowledge_plaintext_sensitive_data=True
     )
     assert created["ok"] is True
-    assert created["file_count"] == 3
+    assert created["file_count"] == 4
     assert not (backup / ".chat2api-runtime.lock").exists()
     assert verify_backup(backup) == {
-        "ok": True, "file_count": 3, "schema_version": 1
+        "ok": True, "file_count": 4, "schema_version": 1
     }
 
     restored = restore_backup(
@@ -46,7 +46,7 @@ def test_backup_verify_and_restore_check_hashes_json_sqlite_and_binary(tmp_path:
     )
     assert restored["ok"] is True
     assert restored["restored"] is True
-    assert restored["file_count"] == 3
+    assert restored["file_count"] == 4
     for name in ("api_keys.json", "telemetry.jsonl", "opaque.bin", "users.sqlite3"):
         assert (target / name).read_bytes() == (source / name).read_bytes()
     assert (target / ".chat2api-runtime.lock").exists()
@@ -95,6 +95,19 @@ def test_backup_refuses_symlinked_source_and_restore_target(tmp_path: Path):
         create_backup(
             source_link, tmp_path / "backup",
             acknowledge_plaintext_sensitive_data=True,
+        )
+
+
+def test_backup_refuses_symlinked_restore_target(tmp_path: Path):
+    source = tmp_path / "source-data"
+    make_data_dir(source)
+    backup = tmp_path / "backup"
+    create_backup(source, backup, acknowledge_plaintext_sensitive_data=True)
+    target = tmp_path / "restore-link"
+    target.symlink_to(tmp_path / "nonexistent-target", target_is_directory=True)
+    with pytest.raises(BackupError, match="symbolic links"):
+        restore_backup(
+            backup, target, acknowledge_plaintext_sensitive_data=True
         )
 
 
