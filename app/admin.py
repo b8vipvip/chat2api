@@ -111,7 +111,7 @@ ADMIN_HTML = r'''<!doctype html>
   <div class="panel"><h2>产品插件目录</h2><p class="c-note">当前只允许登记经过字段校验的 Manifest 元数据。所有插件仍然 untrusted，执行能力固定关闭；SHA-256 仅是完整性指纹，不是签名或信任证明。</p>
     <label>Manifest JSON<textarea id="cPluginManifest" spellcheck="false" style="width:100%;min-height:260px;font-family:ui-monospace,monospace" placeholder='{"id":"sample_tool","name":"Sample Tool","description":"...","publisher":"...","version":"1.0.0","tools":[...]}'></textarea></label>
     <div class="c-form"><button class="action good" id="cPluginRegister">登记 Manifest</button><button class="action" id="cPluginReload">刷新目录</button><span id="cPluginStatus" class="muted"></span></div>
-    <div class="scroll"><table class="c-table"><thead><tr><th>插件</th><th>版本</th><th>SHA-256</th><th>信任</th><th>执行</th></tr></thead><tbody id="cPluginRows"></tbody></table></div>
+    <div class="scroll"><table class="c-table"><thead><tr><th>插件</th><th>版本</th><th>SHA-256</th><th>信任</th><th>执行</th><th>操作</th></tr></thead><tbody id="cPluginRows"></tbody></table></div>
     <pre id="cPluginDetail" class="codebox" style="margin-top:12px;white-space:pre-wrap"></pre>
   </div>
 </section>
