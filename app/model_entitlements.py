@@ -142,11 +142,14 @@ class ModelEntitlementStore:
         } for kind, sid, effect, models, enabled, updated in rows]
 
     def rules_for(
-        self, *, key_id: str | None, user_id: str | None, tenant_id: str | None = None
+        self, *, key_id: str | None, user_id: str | None, tenant_id: str | None = None,
+        tenant_role: str | None = None,
     ) -> list[dict[str, Any]]:
         pairs = [("global", "default")]
         if tenant_id:
             pairs.append(("tenant", str(tenant_id)))
+        if tenant_role:
+            pairs.append(("tenant_role", str(tenant_role)))
         if user_id:
             pairs.append(("user", str(user_id)))
         if key_id and key_id != "master":
@@ -171,8 +174,11 @@ class ModelEntitlementStore:
         key_id: str | None,
         user_id: str | None,
         tenant_id: str | None = None,
+        tenant_role: str | None = None,
     ) -> dict[str, Any]:
-        rules = self.rules_for(key_id=key_id, user_id=user_id, tenant_id=tenant_id)
+        rules = self.rules_for(
+            key_id=key_id, user_id=user_id, tenant_id=tenant_id, tenant_role=tenant_role
+        )
         if not rules:
             return {"allowed": True, "reason": "no_policy", "model": model_id, "matched_rules": []}
         model = normalize_concrete_model_id(model_id)
