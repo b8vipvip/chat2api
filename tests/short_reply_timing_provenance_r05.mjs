@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
 
-const root = new URL("..", import.meta.url);
 const policySource = fs.readFileSync(
   new URL("../chrome_extension/short_reply_stability_policy_v1.js", import.meta.url), "utf8",
 );
@@ -30,6 +29,7 @@ assert.equal(policy.isStable({}, 100, 8100), true);
 assert.equal(policy.elapsedMs(500, 499), null);
 assert.equal(policy.isStable({ shortTextVerified: true }, 500, 499), false);
 assert.equal(policy.elapsedMs(Number.NaN, 1000), null);
+assert.equal(policy.elapsedMs(null, 10000), null);
 monotonicNow = 4700;
 assert.equal(policy.now(), 4700);
 
