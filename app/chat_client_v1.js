@@ -116,14 +116,8 @@
       if (!Array.isArray(rows)) return [];
       return rows.filter((row) => row && typeof row === "object" && typeof row.id === "string")
         .slice(0, MAX_CONVERSATIONS)
-        .map((row) => ({
-          id: row.id,
-          title: String(row.title || "新对话").slice(0, 80),
-          model: String(row.model || state.selectedModel).slice(0, 120),
-          apiKeyId: typeof row.apiKeyId === "string" ? row.apiKeyId.slice(0, 120) : "",
-          createdAt: String(row.createdAt || new Date().toISOString()),
-          updatedAt: String(row.updatedAt || row.createdAt || new Date().toISOString()),
-          messages: Array.isArray(row.messages) ? row.messages.slice(-MAX_MESSAGES).map((message) => {
+        .map((row) => {
+          const messages = Array.isArray(row.messages) ? row.messages.slice(-MAX_MESSAGES).map((message) => {
             if (!message || (message.role !== "user" && message.role !== "assistant")) return null;
             const content = normalizeMessageContent(message.content, message.role);
             if (!content || (message.role === "assistant" && !String(content).trim())) return null;
@@ -133,8 +127,18 @@
               content,
               createdAt: String(message.createdAt || ""),
             };
-          }).filter(Boolean) : [],
-        }));
+          }).filter(Boolean) : [];
+          const hasSavedImages = messages.some((message) => messageImageIds(message).length);
+          return {
+            id: row.id,
+            title: String(row.title || "新对话").slice(0, 80),
+            model: String(row.model || state.selectedModel).slice(0, 120),
+            apiKeyId: hasSavedImages && typeof row.apiKeyId === "string" ? row.apiKeyId.slice(0, 120) : "",
+            createdAt: String(row.createdAt || new Date().toISOString()),
+            updatedAt: String(row.updatedAt || row.createdAt || new Date().toISOString()),
+            messages,
+          };
+        });
     } catch {
       toast("本地聊天历史无法读取，已使用空白历史。");
       return [];
