@@ -1083,7 +1083,7 @@
       $("composerArea"),
       document,
       {
-        onFiles: (files) => { void handleImageFiles(files); },
+        onFiles: (files) => handleImageFiles(files),
         onActive: (active) => $("composerArea").classList.toggle("drag-over", active),
       },
     );
