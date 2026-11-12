@@ -163,3 +163,19 @@ def test_preexisting_probe_branch_is_never_modified_or_deleted() -> None:
         run_probe(api, NONCE)
     assert [method for method, _, _ in api.calls] == ["GET", "GET"]
     assert api.branch_exists is True
+
+
+
+def test_ambiguous_create_with_unverifiable_ref_head_never_deletes_it() -> None:
+    class UnknownHeadApi(FakeApi):
+        def request(self, method, path, payload=None):
+            if method == "GET" and "/git/ref/heads/diagnostics/" in path and self.branch_exists:
+                self.calls.append((method, path, payload))
+                return {}
+            return super().request(method, path, payload)
+
+    api = UnknownHeadApi(fail_at="POST", ambiguous_post=True)
+    with pytest.raises(ProbeError, match="head cannot be verified"):
+        run_probe(api, NONCE)
+    assert [method for method, _, _ in api.calls] == ["GET", "GET", "POST", "GET"]
+    assert api.branch_exists is True
