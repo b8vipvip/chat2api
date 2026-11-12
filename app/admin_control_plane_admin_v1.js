@@ -99,6 +99,12 @@
           : "未登录管理会话";
         state.className = adminSession.authenticated ? "ok" : "muted";
       }
+      if (adminSession.authenticated && adminSession.role !== "super_admin") {
+        // Prevent a stale root API key from a previous administrator session
+        // from being reused by the legacy inline admin API helper.
+        try { sessionStorage.removeItem("chat2api_admin_key"); } catch (_) {}
+        if ($("adminKey")) $("adminKey").value = "";
+      }
       applyNavigation();
       window.dispatchEvent(new CustomEvent("chat2api-admin-session-changed", { detail: adminSession }));
       const active = location.hash.replace(/^#/, "");
