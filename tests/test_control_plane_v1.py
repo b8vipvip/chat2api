@@ -81,6 +81,9 @@ def test_role_route_map_is_explicit_and_secret_read_denied_to_key_admin():
     assert permission_for_admin_route("/api/admin/model-entitlements/tenant_role/owner", "PUT") == "models:write"
     assert permission_for_admin_route("/api/admin/quota-reservations", "GET") == "quota:read"
     assert permission_for_admin_route("/api/admin/quota-reservations/reconcile", "POST") == "quota:write"
+    assert permission_for_admin_route("/api/admin/user-payments", "GET") == "billing:read"
+    assert permission_for_admin_route("/api/admin/user-payments", "PUT") == "secrets:write"
+    assert permission_for_admin_route("/api/admin/user-payments/test", "POST") == "billing:write"
     # Request search/detail may include user prompts and remains root-only.
     assert permission_for_admin_route("/api/admin/requests", "GET") is None
     assert permission_for_admin_route("/api/admin/requests/req_123", "GET") is None
