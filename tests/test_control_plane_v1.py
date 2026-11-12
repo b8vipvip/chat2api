@@ -70,6 +70,7 @@ def test_role_route_map_is_explicit_and_secret_read_denied_to_key_admin():
     assert permission_for_admin_route("/api/admin/plugins", "POST") == "plugins:write"
     assert permission_for_admin_route("/api/admin/tenants", "GET") == "tenants:read"
     assert permission_for_admin_route("/api/admin/tenants/ten_123/members/usr_123456", "DELETE") == "tenants:write"
+    assert permission_for_admin_route("/api/admin/tenants/ten_123/keys/key_123456", "PUT") == "tenants:write"
     assert permission_for_admin_route("/api/admin/payment-channels-v106/test", "POST") == "billing:write"
     assert permission_for_admin_route("/api/admin/payment-channels-v106/usdt-orders/o1/confirm", "POST") == "billing:write"
     assert permission_for_admin_route("/api/admin/text-models/gpt-5.6-sol", "PATCH") == "models:write"
