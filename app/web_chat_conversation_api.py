@@ -18,6 +18,11 @@ from .web_chat_conversation_store import (
 
 
 _CONVERSATION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,100}$")
+_PRIVATE_HEADERS = {"Cache-Control": "private, no-store", "Vary": "Cookie"}
+
+
+def _http_error(status_code: int, detail: str) -> None:
+    raise HTTPException(status_code=status_code, detail=detail, headers=_PRIVATE_HEADERS)
 
 
 class MessageSnapshot(BaseModel):
@@ -62,21 +67,21 @@ def install_web_chat_conversations(app: FastAPI) -> FastAPI:
     def principal(request: Request) -> str:
         accounts = getattr(request.app.state, "user_accounts", None)
         if accounts is None:
-            raise HTTPException(status_code=503, detail="user account service is unavailable")
+            _http_error(503, "user account service is unavailable")
         user = accounts.authenticate(request.cookies.get(USER_SESSION_COOKIE))
         if not user:
-            raise HTTPException(status_code=401, detail="user login required")
+            _http_error(401, "user login required")
         return str(user["user_id"])
 
     def mutation_origin(request: Request) -> None:
         # The session is stored in a cookie. A strict Origin check prevents
         # cross-site writes, even if a browser misapplies SameSite policies.
         if not same_origin_admin_request(request):
-            raise HTTPException(status_code=403, detail="same-origin request required")
+            _http_error(403, "same-origin request required")
 
     def valid_id(conversation_id: str) -> str:
         if not _CONVERSATION_ID_RE.fullmatch(conversation_id):
-            raise HTTPException(status_code=422, detail="invalid conversation ID")
+            _http_error(422, "invalid conversation ID")
         return conversation_id
 
     @app.get("/api/user/chat/conversations")
@@ -98,7 +103,7 @@ def install_web_chat_conversations(app: FastAPI) -> FastAPI:
         response.headers["Vary"] = "Cookie"
         row = store.get(principal(request), valid_id(conversation_id))
         if row is None:
-            raise HTTPException(status_code=404, detail="conversation not found")
+            _http_error(404, "conversation not found")
         return row
 
     @app.put("/api/user/chat/conversations/{conversation_id}")
@@ -110,7 +115,7 @@ def install_web_chat_conversations(app: FastAPI) -> FastAPI:
         owner = principal(request)
         mutation_origin(request)
         if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
-            raise HTTPException(status_code=415, detail="application/json required")
+            _http_error(415, "application/json required")
         try:
             return store.put(
                 owner, valid_id(conversation_id),
@@ -119,9 +124,9 @@ def install_web_chat_conversations(app: FastAPI) -> FastAPI:
                 expected_revision=body.expected_revision, mutation_id=body.mutation_id,
             )
         except ConversationConflict as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
+            _http_error(409, str(error))
         except ConversationLimit as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
+            _http_error(409, str(error))
 
     @app.delete("/api/user/chat/conversations/{conversation_id}", status_code=204)
     async def delete_conversation(
@@ -133,9 +138,9 @@ def install_web_chat_conversations(app: FastAPI) -> FastAPI:
         try:
             found = store.delete(owner, valid_id(conversation_id), expected_revision=expected_revision)
         except ConversationConflict as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
+            _http_error(409, str(error))
         if not found:
-            raise HTTPException(status_code=404, detail="conversation not found")
+            _http_error(404, "conversation not found")
         return Response(status_code=204, headers={"Cache-Control": "private, no-store", "Vary": "Cookie"})
 
     return app
