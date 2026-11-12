@@ -101,6 +101,11 @@ def test_admin_login_rate_limiter_limits_identity_and_ip():
     ip_limiter.record_success("first-admin", "203.0.113.11")
     assert ip_limiter.retry_after("third-admin", "203.0.113.11") > 0
 
+    identity_limiter = AdminLoginRateLimiter(per_identity_limit=2, per_ip_limit=10, window_seconds=60)
+    identity_limiter.record_failure("root-admin", "203.0.113.20")
+    identity_limiter.record_failure("root-admin", "203.0.113.21")
+    assert identity_limiter.retry_after("root-admin", "203.0.113.22") > 0
+
 
 def test_admin_login_endpoint_returns_429_after_repeated_failures(tmp_path: Path):
     app = make_app(tmp_path)
