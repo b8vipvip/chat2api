@@ -192,3 +192,19 @@ async def test_apply_failure_rolls_back_files_already_replaced(tmp_path: Path, m
         assert (tmp_path / relative).read_bytes() == content
     manifest = json.loads((tmp_path / "data_keyring_migration.json").read_text(encoding="utf-8"))
     assert manifest["state"] == "rolled_back"
+
+@pytest.mark.asyncio
+async def test_rollback_rejects_tampered_manifest_path(tmp_path: Path, migration_fixture) -> None:
+    await _seed_legacy_files(tmp_path, migration_fixture)
+    service = _service(tmp_path, migration_fixture)
+    await service.apply()
+
+    manifest_path = tmp_path / "data_keyring_migration.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["files"][0]["path"] = "../../outside.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(DataKeyringError, match="unsafe file path"):
+        await service.rollback()
+    assert json.loads(manifest_path.read_text(encoding="utf-8"))["state"] == "completed"
+
