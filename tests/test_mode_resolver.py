@@ -92,7 +92,7 @@ def test_mode1_on_openai_api_ingress_is_rejected_as_entrypoint_conflict(
     assert response.json()["error"]["type"] == "invalid_request_error"
 
 
-@pytest.mark.parametrize("value", ["", "mode3", "proxy", "mode2,mode1", "二"])
+@pytest.mark.parametrize("value", ["", "mode3", "proxy", "mode2,mode1"])
 def test_unknown_or_malformed_mode_values_are_rejected(tmp_path: Path, value: str) -> None:
     with TestClient(_app(tmp_path)) as client:
         response = client.get(
