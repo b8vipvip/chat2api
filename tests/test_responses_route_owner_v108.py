@@ -101,9 +101,18 @@ async def fake_image_tool(app_arg, request, body, principal_arg, prompt):
         "output": [{"type": "image_generation_call", "status": "completed"}],
     })
 
-responses._dispatch = fake_dispatch
-responses._collect = fake_collect
-responses._archive_response_media = fake_archive
+post_route = next(
+    route for route in app.routes
+    if getattr(route, "path", None) == "/v1/responses"
+    and "POST" in (getattr(route, "methods", None) or set())
+)
+assert post_route.endpoint.__module__ == "app.responses_v108_patch"
+route_globals = post_route.endpoint.__globals__
+route_globals["_authenticate"] = fake_authenticate
+route_globals["_dispatch"] = fake_dispatch
+route_globals["_collect"] = fake_collect
+route_globals["_archive_response_media"] = fake_archive
+assert route_globals["_dispatch"] is fake_dispatch
 image_tool.handle_image_tool = fake_image_tool
 
 async def main():
