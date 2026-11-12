@@ -143,6 +143,19 @@ def test_python_sdk_models_and_responses_nonstream(sdk_transport) -> None:
     assert response.object == "response"
     assert response.status == "completed"
     assert "mode2-sdk-fixture-answer" in response.output_text
+
+    response_stream = sdk.responses.create(
+        model="gpt-5.6-sol",
+        input="Stream a Responses event sequence",
+        stream=True,
+    )
+    events = list(response_stream)
+    event_types = [event.type for event in events]
+    assert event_types[0] == "response.created"
+    assert "response.output_text.delta" in event_types
+    assert event_types[-1] == "response.completed"
+    completed = events[-1]
+    assert "mode2-sdk-fixture-answer" in completed.response.output_text
     assert commands[-1]["options"]["response_protocol"] == "responses-v108"
 
 
