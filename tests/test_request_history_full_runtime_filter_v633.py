@@ -12,6 +12,7 @@ import json
 from fastapi.testclient import TestClient
 from app.entry import app
 with TestClient(app) as client:
+    client.headers.update({"Origin":"http://testserver","Sec-Fetch-Site":"same-origin"})
     login=client.post("/api/admin/auth/login", json={"username":"admin","password":"testFilterAdminStrong99!"})
     assert login.status_code==200,login.text
     path="/api/admin/requests?since=2026-11-01T03%3A00%3A38Z&current_version_only=true&limit=100"

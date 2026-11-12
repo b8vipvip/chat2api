@@ -169,6 +169,7 @@ def test_production_admin_session_can_save_mode_intent_without_enabling_proxy(tm
         assert client.get("/api/admin/modes").status_code == 401
         login = client.post(
             "/api/admin/auth/login",
+            headers={"Origin": "http://testserver"},
             json={"username": "mode-owner", "password": "strong-test-password"},
         )
         assert login.status_code == 200

@@ -15,6 +15,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from pydantic import BaseModel, Field
 
 from .admin_auth import SESSION_COOKIE as ADMIN_SESSION_COOKIE
+from .admin_audit import AdminAuditError, AdminAuditStore
 from .api_keys import load_or_create_data_secret, token_hash
 from .user_commerce import (
     BillingStore,
@@ -59,6 +60,19 @@ class PricingBody(BaseModel):
     billing_enabled: bool = False
     usd_cny_rate: float = Field(gt=0, le=100)
     models: list[dict[str, Any]]
+
+
+class AdminUserStatusBody(BaseModel):
+    enabled: bool
+
+
+class AdminUserKeyUpdateBody(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    enabled: bool | None = None
+    token_quota: int | None = Field(default=None, ge=0)
+
+    class Config:
+        extra = "forbid"
 
 
 class PaymentBody(BaseModel):
@@ -156,6 +170,8 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
     telemetry = app.state.telemetry
     admin_sessions = getattr(app.state, "admin_sessions", None)
 
+    admin_audit = AdminAuditStore(data_dir)
+    app.state.admin_audit = admin_audit
     app.state.user_accounts = accounts
     app.state.user_pricing = pricing
     app.state.user_billing = billing
@@ -583,6 +599,245 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
     async def zpay_return() -> RedirectResponse:
         return RedirectResponse("/console#billing", status_code=303)
 
+    @app.get("/api/admin/users")
+    async def admin_users(
+        request: Request,
+        limit: int = Query(default=100, ge=1, le=200),
+        offset: int = Query(default=0, ge=0),
+        q: str = Query(default="", max_length=120),
+    ) -> dict[str, Any]:
+        if not admin_ok(request):
+            raise HTTPException(status_code=401, detail="Administrator login required")
+        rows = accounts.admin_list()
+        query = q.strip().casefold()
+        if query:
+            rows = [
+                row for row in rows
+                if query in str(row.get("email") or "").casefold()
+                or query in str(row.get("display_name") or "").casefold()
+                or query in str(row.get("user_id") or "").casefold()
+            ]
+        total = len(rows)
+        page = rows[offset:offset + limit]
+        for row in page:
+            row["balance_cents"] = billing.balance_cents(str(row["user_id"]))
+        return {"data": page, "total": total, "limit": limit, "offset": offset}
+
+    @app.patch("/api/admin/users/{user_id}")
+    async def admin_update_user(
+        user_id: str, body: AdminUserStatusBody, request: Request
+    ) -> dict[str, Any]:
+        if not admin_ok(request):
+            raise HTTPException(status_code=401, detail="Administrator login required")
+        audit_context = {
+            "actor": settings.admin_username,
+            "action": "user.status_change_requested",
+            "target_type": "user",
+            "target_id": user_id,
+            "request_id": str(request.headers.get("x-request-id") or ""),
+            "details": {"enabled": body.enabled},
+        }
+        mutation_applied = False
+        try:
+            admin_audit.append(**audit_context)
+            user, revoked_sessions = accounts.set_enabled(user_id, body.enabled)
+            mutation_applied = True
+            admin_audit.append(
+                **{
+                    **audit_context,
+                    "action": "user.status_change_completed",
+                    "details": {"enabled": body.enabled, "revoked_sessions": revoked_sessions},
+                }
+            )
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except AdminAuditError as error:
+            detail = (
+                "用户状态已更新，但完成审计事件写入失败；请检查服务端审计日志"
+                if mutation_applied
+                else "审计存储不可用，用户状态未修改"
+            )
+            raise HTTPException(status_code=503, detail=detail) from error
+        return {"user": user, "revoked_sessions": revoked_sessions}
+
+    @app.post("/api/admin/users/{user_id}/sessions/revoke")
+    async def admin_revoke_user_sessions(user_id: str, request: Request) -> dict[str, Any]:
+        if not admin_ok(request):
+            raise HTTPException(status_code=401, detail="Administrator login required")
+        audit_context = {
+            "actor": settings.admin_username,
+            "action": "user.sessions_revoke_requested",
+            "target_type": "user",
+            "target_id": user_id,
+            "request_id": str(request.headers.get("x-request-id") or ""),
+            "details": {},
+        }
+        mutation_applied = False
+        try:
+            admin_audit.append(**audit_context)
+            revoked = accounts.revoke_user_sessions(user_id)
+            mutation_applied = True
+            admin_audit.append(
+                **{
+                    **audit_context,
+                    "action": "user.sessions_revoke_completed",
+                    "details": {"revoked_sessions": revoked},
+                }
+            )
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except AdminAuditError as error:
+            detail = (
+                "会话已撤销，但完成审计事件写入失败；请检查服务端审计日志"
+                if mutation_applied
+                else "审计存储不可用，会话未撤销"
+            )
+            raise HTTPException(status_code=503, detail=detail) from error
+        return {"user_id": user_id, "revoked_sessions": revoked}
+
+    @app.get("/api/admin/users/{user_id}/keys")
+    async def admin_user_keys(user_id: str, request: Request) -> dict[str, Any]:
+        if not admin_ok(request):
+            raise HTTPException(status_code=401, detail="Administrator login required")
+        if not accounts.admin_get(user_id):
+            raise HTTPException(status_code=404, detail="用户不存在")
+        rows = []
+        for key_id in accounts.key_ids(user_id):
+            item = api_keys.get_public(key_id)
+            if item:
+                rows.append(public_key(item))
+        rows.sort(key=lambda row: str(row.get("created_at") or ""), reverse=True)
+        return {"data": rows}
+
+    @app.patch("/api/admin/users/{user_id}/keys/{key_id}")
+    async def admin_update_user_key(
+        user_id: str, key_id: str, body: AdminUserKeyUpdateBody, request: Request
+    ) -> dict[str, Any]:
+        if not admin_ok(request):
+            raise HTTPException(status_code=401, detail="Administrator login required")
+        if not accounts.admin_get(user_id) or not accounts.owns_key(user_id, key_id):
+            raise HTTPException(status_code=404, detail="用户 API Key 不存在")
+
+        fields = set(body.model_fields_set)
+        if not fields:
+            raise HTTPException(status_code=400, detail="至少提供一个需要修改的字段")
+        if "enabled" in fields and body.enabled is None:
+            raise HTTPException(status_code=400, detail="enabled 必须是布尔值")
+        if "name" in fields and (body.name is None or not body.name.strip()):
+            raise HTTPException(status_code=400, detail="Key 名称不能为空")
+
+        current = api_keys.get_public(key_id)
+        if not current:
+            raise HTTPException(status_code=404, detail="用户 API Key 不存在")
+        if current.get("revoked_at"):
+            raise HTTPException(status_code=409, detail="已永久撤销的 API Key 不可修改")
+
+        updates: dict[str, Any] = {}
+        if "name" in fields:
+            updates["name"] = str(body.name).strip()
+        if "enabled" in fields:
+            updates["enabled"] = body.enabled
+        if "token_quota" in fields:
+            updates["token_quota"] = body.token_quota
+
+        effective_quota = updates.get("token_quota", current.get("token_quota"))
+        if updates.get("enabled") is True and (
+            current.get("expired")
+            or (
+                effective_quota is not None
+                and int(current.get("tokens_used") or 0) >= int(effective_quota)
+            )
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="API Key 已过期或 Token 额度已耗尽；请先调整额度或创建新 Key",
+            )
+
+        audit_context = {
+            "actor": settings.admin_username,
+            "action": "api_key.update_requested",
+            "target_type": "api_key",
+            "target_id": key_id,
+            "request_id": str(request.headers.get("x-request-id") or ""),
+            "details": {"user_id": user_id, "fields": sorted(fields), **updates},
+        }
+        mutation_applied = False
+        try:
+            admin_audit.append(**audit_context)
+            item = await api_keys.update(key_id, **updates)
+            mutation_applied = True
+            admin_audit.append(
+                **{
+                    **audit_context,
+                    "action": "api_key.update_completed",
+                    "details": {"user_id": user_id, "fields": sorted(fields)},
+                }
+            )
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="用户 API Key 不存在") from error
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except AdminAuditError as error:
+            detail = (
+                "API Key 已更新，但完成审计事件写入失败；请检查服务端审计日志"
+                if mutation_applied
+                else "审计存储不可用，API Key 未修改"
+            )
+            raise HTTPException(status_code=503, detail=detail) from error
+        return {"key": public_key(item)}
+
+    @app.delete("/api/admin/users/{user_id}/keys/{key_id}")
+    async def admin_revoke_user_key(user_id: str, key_id: str, request: Request) -> dict[str, Any]:
+        if not admin_ok(request):
+            raise HTTPException(status_code=401, detail="Administrator login required")
+        if not accounts.admin_get(user_id) or not accounts.owns_key(user_id, key_id):
+            raise HTTPException(status_code=404, detail="用户 API Key 不存在")
+
+        audit_context = {
+            "actor": settings.admin_username,
+            "action": "api_key.revoke_requested",
+            "target_type": "api_key",
+            "target_id": key_id,
+            "request_id": str(request.headers.get("x-request-id") or ""),
+            "details": {"user_id": user_id},
+        }
+        mutation_applied = False
+        try:
+            admin_audit.append(**audit_context)
+            item = await api_keys.revoke(key_id)
+            mutation_applied = True
+            admin_audit.append(
+                **{
+                    **audit_context,
+                    "action": "api_key.revoke_completed",
+                    "details": {"user_id": user_id},
+                }
+            )
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="用户 API Key 不存在") from error
+        except AdminAuditError as error:
+            detail = (
+                "API Key 已撤销，但完成审计事件写入失败；请检查服务端审计日志"
+                if mutation_applied
+                else "审计存储不可用，API Key 未撤销"
+            )
+            raise HTTPException(status_code=503, detail=detail) from error
+        return {"key": public_key(item)}
+
+    @app.get("/api/admin/audit")
+    async def admin_audit_events(
+        request: Request,
+        limit: int = Query(default=100, ge=1, le=200),
+    ) -> dict[str, Any]:
+        if not admin_ok(request):
+            raise HTTPException(status_code=401, detail="Administrator login required")
+        try:
+            return {"data": admin_audit.recent(limit)}
+        except (AdminAuditError, ValueError) as error:
+            raise HTTPException(status_code=503, detail="Administrator audit log is unavailable") from error
+
     @app.get("/api/admin/user-pricing")
     async def admin_user_pricing(request: Request) -> dict[str, Any]:
         if not admin_ok(request):
@@ -640,19 +895,46 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
 
     @app.middleware("http")
     async def user_console_commerce_boundary(request: Request, call_next):
-        # When billing is explicitly enabled by the administrator, owned API keys
-        # need a positive wallet balance. Legacy/admin-managed keys are untouched.
-        if request.url.path.startswith("/v1/") and bool(pricing.public().get("billing_enabled")):
+        # User-owned keys are disabled at the account boundary when their owner
+        # is suspended, even when wallet billing is off. Legacy/admin keys are
+        # not linked to a user and retain their existing authentication policy.
+        if request.url.path.startswith("/v1/"):
             supplied = str(request.headers.get("x-api-key") or "").strip()
             authorization = str(request.headers.get("authorization") or "").strip()
             if authorization.lower().startswith("bearer "):
                 supplied = authorization[7:].strip()
             if supplied:
                 digest = token_hash(supplied)
-                matched = next((item for item in api_keys.keys.values() if secrets.compare_digest(str(item.token_hash), digest)), None)
+                matched = next(
+                    (
+                        item for item in api_keys.keys.values()
+                        if secrets.compare_digest(str(item.token_hash), digest)
+                    ),
+                    None,
+                )
                 owner = accounts.owner_for_key(str(matched.key_id)) if matched else None
-                if owner and billing.balance_cents(owner) <= 0:
-                    return JSONResponse(status_code=402, content={"error": {"message": "账户余额不足，请先充值", "type": "billing_error", "code": "insufficient_balance"}})
+                if owner and not accounts.is_enabled(owner):
+                    return JSONResponse(
+                        status_code=401,
+                        content={
+                            "error": {
+                                "message": "该用户账户已停用",
+                                "type": "authentication_error",
+                                "code": "user_disabled",
+                            }
+                        },
+                    )
+                if owner and bool(pricing.public().get("billing_enabled")) and billing.balance_cents(owner) <= 0:
+                    return JSONResponse(
+                        status_code=402,
+                        content={
+                            "error": {
+                                "message": "账户余额不足，请先充值",
+                                "type": "billing_error",
+                                "code": "insufficient_balance",
+                            }
+                        },
+                    )
         response = await call_next(request)
         if request.url.path != "/admin" or "text/html" not in response.headers.get("content-type", ""):
             return response

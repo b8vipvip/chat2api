@@ -71,6 +71,7 @@ def app_v17(tmp_path: Path):
 def login(client: TestClient) -> None:
     response = client.post(
         "/api/admin/auth/login",
+        headers={"Origin": "http://testserver"},
         json={"username": "owner", "password": "strong-admin-password"},
     )
     assert response.status_code == 200
@@ -78,14 +79,14 @@ def login(client: TestClient) -> None:
 
 
 def create_business_key(client: TestClient, name: str = "Bot") -> tuple[str, str]:
-    response = client.post("/api/admin/keys", json={"name": name})
+    response = client.post("/api/admin/keys", headers={"Origin": "http://testserver"}, json={"name": name})
     assert response.status_code == 200
     body = response.json()
     return body["key"]["key_id"], body["token"]
 
 
 def create_pairing(client: TestClient, name: str) -> tuple[str, str]:
-    response = client.post("/api/admin/pairing-codes", json={"name": name})
+    response = client.post("/api/admin/pairing-codes", headers={"Origin": "http://testserver"}, json={"name": name})
     assert response.status_code == 200
     body = response.json()
     return body["pairing"]["pairing_id"], body["code"]
@@ -129,7 +130,7 @@ def test_admin_account_session_replaces_master_api_key(tmp_path: Path) -> None:
         unauthenticated = client.get("/api/admin/overview")
         assert unauthenticated.status_code == 401
 
-        wrong = client.post("/api/admin/auth/login", json={"username": "owner", "password": "wrong"})
+        wrong = client.post("/api/admin/auth/login", headers={"Origin": "http://testserver"}, json={"username": "owner", "password": "wrong"})
         assert wrong.status_code == 401
 
         old_master = client.get("/v1/models", headers={"Authorization": "Bearer legacy-master-key"})
@@ -156,7 +157,7 @@ def test_admin_account_session_replaces_master_api_key(tmp_path: Path) -> None:
         assert models.status_code == 200
         assert any(row["id"] == "gpt-5.6-sol" for row in models.json()["data"])
 
-        logout = client.post("/api/admin/auth/logout")
+        logout = client.post("/api/admin/auth/logout", headers={"Origin": "http://testserver"})
         assert logout.status_code == 200
         assert client.get("/api/admin/overview").status_code == 401
 
@@ -191,7 +192,7 @@ def test_pairing_code_binds_one_device_and_admin_can_disable_connection(tmp_path
         assert pairing["bound_device_id"] == "device-office-001"
         assert pairing["connection_status"] == "offline"
 
-        disabled = client.post(f"/api/admin/extensions/{client_id}/disconnect")
+        disabled = client.post(f"/api/admin/extensions/{client_id}/disconnect", headers={"Origin": "http://testserver"})
         assert disabled.status_code == 200
         assert disabled.json()["connection_enabled"] is False
 
@@ -199,7 +200,7 @@ def test_pairing_code_binds_one_device_and_admin_can_disable_connection(tmp_path
             with client.websocket_connect(f"/ws/extensions/{client_id}?token={rotated_token}") as websocket:
                 websocket.receive_json()
 
-        enabled = client.post(f"/api/admin/extensions/{client_id}/enable")
+        enabled = client.post(f"/api/admin/extensions/{client_id}/enable", headers={"Origin": "http://testserver"})
         assert enabled.status_code == 200
         with client.websocket_connect(f"/ws/extensions/{client_id}?token={rotated_token}") as websocket:
             hello = websocket.receive_json()

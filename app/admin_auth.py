@@ -9,6 +9,45 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
+
+
+def same_origin_admin_request(request) -> bool:
+    """Require a browser mutation to originate from this exact admin origin.
+
+    X-Forwarded-Proto is consulted only for the scheme because deployments may
+    terminate TLS at a reverse proxy. The browser-supplied Origin host must still
+    match the request Host exactly; Fetch Metadata, when present, must say
+    same-origin. This helper does not make arbitrary forwarded hosts trusted.
+    """
+    origin = str(request.headers.get("origin") or "").strip()
+    try:
+        parsed = urlsplit(origin)
+    except ValueError:
+        return False
+    request_host = str(request.headers.get("host") or "").strip().lower()
+    forwarded_proto = (
+        str(request.headers.get("x-forwarded-proto") or "")
+        .split(",", 1)[0]
+        .strip()
+        .lower()
+    )
+    expected_scheme = (
+        forwarded_proto
+        if forwarded_proto in {"http", "https"}
+        else str(request.url.scheme or "").lower()
+    )
+    fetch_site = str(request.headers.get("sec-fetch-site") or "").strip().lower()
+    return bool(
+        parsed.scheme.lower() == expected_scheme
+        and parsed.scheme.lower() in {"http", "https"}
+        and parsed.netloc
+        and parsed.netloc.lower() == request_host
+        and parsed.path in {"", "/"}
+        and not parsed.query
+        and not parsed.fragment
+        and fetch_site in {"", "same-origin"}
+    )
 
 
 SESSION_COOKIE = "chat2api_admin_session"
