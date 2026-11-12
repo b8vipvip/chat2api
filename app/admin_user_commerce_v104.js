@@ -98,6 +98,13 @@
         </table></div>
         <p class="muted">此处只显示 Key 元数据，不显示或恢复完整密钥。</p>
       </div>
+      <div class="panel" style="margin-top:14px">
+        <div class="toolbar"><h3 style="margin:0;flex:1">最近管理审计</h3><button class="action" id="adminAuditReload">刷新审计</button></div>
+        <div class="scroll"><table>
+          <thead><tr><th>时间</th><th>操作</th><th>操作者</th><th>目标</th><th>详情</th><th>事件哈希</th></tr></thead>
+          <tbody id="adminAuditBody"><tr><td colspan="6" class="muted">加载用户管理后读取</td></tr></tbody>
+        </table></div>
+      </div>
     </section>\`);
 
   function activate(view) {
@@ -152,6 +159,20 @@
     adminUserRows = payload.data || [];
     renderUsers();
     status.textContent = "共 " + (payload.total || 0) + " 个用户";
+    await loadAudit();
+  }
+  async function loadAudit() {
+    const payload = await adminApi("/api/admin/audit?limit=50");
+    const body = document.getElementById("adminAuditBody");
+    body.innerHTML = (payload.data || []).map((event) => {
+      const target = String(event.target_type || "") + ":" + String(event.target_id || "");
+      return '<tr><td>' + esc(event.timestamp || '-') + '</td>' +
+        '<td>' + esc(event.action || '-') + '</td>' +
+        '<td>' + esc(event.actor || '-') + '</td>' +
+        '<td><code>' + esc(target) + '</code></td>' +
+        '<td>' + esc(JSON.stringify(event.details || {})) + '</td>' +
+        '<td><code>' + esc(String(event.event_hash || "").slice(0, 16)) + '</code></td></tr>';
+    }).join("") || '<tr><td colspan="6" class="muted">暂无审计事件</td></tr>';
   }
   function renderUsers() {
     const body = document.getElementById("adminUsersBody");
@@ -243,6 +264,9 @@
   });
   document.getElementById("adminUserKeysClose").addEventListener("click", () => {
     document.getElementById("adminUserKeysPanel").style.display = "none";
+  });
+  document.getElementById("adminAuditReload").addEventListener("click", () => {
+    loadAudit().catch(showUserError);
   });
 
   async function loadPricing() {
