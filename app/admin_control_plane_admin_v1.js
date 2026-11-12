@@ -9,7 +9,6 @@
     "model-entitlements": ["super_admin", "system_admin", "support"],
     "plugins": ["super_admin", "plugin_admin"],
     "quota-ledger": ["super_admin", "system_admin", "api_key_admin", "billing_admin"],
-    "users": ["super_admin", "system_admin", "user_admin", "support"],
     "api-keys": ["super_admin", "api_key_admin", "support"]
   };
   let adminSession = null;
@@ -81,8 +80,6 @@
     ["cEntSave"].forEach((id) => { if ($(id)) $(id).hidden = !canWriteModels; });
     const canReconcileQuota = adminSession && ["super_admin", "system_admin", "api_key_admin"].includes(adminSession.role);
     if ($("cQuotaReconcile")) $("cQuotaReconcile").hidden = !canReconcileQuota;
-    const canWriteUsers = adminSession && ["super_admin", "user_admin"].includes(adminSession.role);
-    if ($("cUserSearch")) $("cUserSearch").disabled = false;
     const canWriteKeys = adminSession && ["super_admin", "api_key_admin"].includes(adminSession.role);
     ["cKeyName", "cKeyExpiry", "cKeyQuota", "cKeyCreate"].forEach((id) => {
       if ($(id)) $(id).disabled = !canWriteKeys;
@@ -166,7 +163,6 @@
     if (view === "model-entitlements") loadEntitlements();
     if (view === "plugins") loadPlugins();
     if (view === "quota-ledger") loadQuotaReservations();
-    if (view === "users") loadUsers();
     if (view === "api-keys") loadManagedKeys();
   };
 
@@ -451,55 +447,6 @@
     } catch (error) { setStatus("cPluginStatus", error.message, true); }
   });
   $("cPluginReload")?.addEventListener("click", loadPlugins);
-
-  async function loadUsers() {
-    try {
-      const params = new URLSearchParams({ limit: "100", offset: "0" });
-      if ($("cUserSearch").value.trim()) params.set("q", $("cUserSearch").value.trim());
-      const result = await sessionApi("/api/admin/users?" + params.toString());
-      const body = $("cUserRows");
-      body.replaceChildren();
-      const canWrite = adminSession && ["super_admin", "user_admin"].includes(adminSession.role);
-      (result.data || []).forEach((user) => {
-        const row = document.createElement("tr");
-        cell(row, user.user_id);
-        cell(row, user.email);
-        cell(row, user.display_name);
-        cell(row, user.enabled ? "enabled" : "disabled");
-        cell(row, user.balance_cents == null ? "—" : "¥" + (Number(user.balance_cents) / 100).toFixed(2));
-        const actions = document.createElement("td");
-        actions.appendChild(button("查看 Key", "action", async () => {
-          try {
-            const keys = await sessionApi("/api/admin/users/" + encodeURIComponent(user.user_id) + "/keys");
-            $("cUserKeyDetail").textContent = JSON.stringify(keys, null, 2);
-          } catch (error) { setStatus("cUserStatus", error.message, true); }
-        }));
-        if (canWrite) {
-          actions.appendChild(button(user.enabled ? "停用" : "启用", user.enabled ? "action danger" : "action good", async () => {
-            try {
-              await sessionApi("/api/admin/users/" + encodeURIComponent(user.user_id), {
-                method: "PATCH", body: { enabled: !user.enabled }
-              });
-              await loadUsers();
-            } catch (error) { setStatus("cUserStatus", error.message, true); }
-          }));
-          actions.appendChild(button("撤销会话", "action danger", async () => {
-            if (!confirm("确认撤销该用户的所有登录 Session？")) return;
-            try {
-              await sessionApi("/api/admin/users/" + encodeURIComponent(user.user_id) + "/sessions/revoke", {
-                method: "POST", body: {}
-              });
-              setStatus("cUserStatus", "该用户的登录 Session 已撤销");
-            } catch (error) { setStatus("cUserStatus", error.message, true); }
-          }));
-        }
-        row.appendChild(actions);
-        body.appendChild(row);
-      });
-      setStatus("cUserStatus", "已加载 " + (result.total || 0) + " 个用户");
-    } catch (error) { setStatus("cUserStatus", error.message, true); }
-  }
-  $("cUserReload")?.addEventListener("click", loadUsers);
 
   async function loadManagedKeys() {
     try {
