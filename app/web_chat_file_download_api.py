@@ -12,6 +12,11 @@ from .user_commerce import USER_SESSION_COOKIE
 
 _FILE_ID_RE = re.compile(r"^file_[A-Za-z0-9_-]{8,100}$")
 _MIME_RE = re.compile(r"^[A-Za-z0-9.+-]{1,100}/[A-Za-z0-9.+-]{1,100}$")
+_PRIVATE_HEADERS = {"Cache-Control": "private, no-store", "Vary": "Cookie"}
+
+
+def _http_error(status_code: int, detail: str) -> None:
+    raise HTTPException(status_code=status_code, detail=detail, headers=_PRIVATE_HEADERS)
 
 
 def install_web_chat_file_download_api(app: FastAPI) -> FastAPI:
@@ -23,16 +28,16 @@ def install_web_chat_file_download_api(app: FastAPI) -> FastAPI:
     async def download_chat_file(file_id: str, request: Request) -> Response:
         accounts = getattr(request.app.state, "user_accounts", None)
         if accounts is None:
-            raise HTTPException(status_code=503, detail="user account service unavailable")
+            _http_error(503, "user account service unavailable")
         user = accounts.authenticate(request.cookies.get(USER_SESSION_COOKIE))
         if not user:
-            raise HTTPException(status_code=401, detail="user login required")
+            _http_error(401, "user login required")
 
         if not _FILE_ID_RE.fullmatch(file_id):
-            raise HTTPException(status_code=404, detail="file not found")
+            _http_error(404, "file not found")
         file_store = getattr(request.app.state, "file_store", None)
         if file_store is None:
-            raise HTTPException(status_code=503, detail="file service unavailable")
+            _http_error(503, "file service unavailable")
         item = file_store.get(file_id)
         if (
             item is None
@@ -40,12 +45,12 @@ def install_web_chat_file_download_api(app: FastAPI) -> FastAPI:
             or not accounts.owns_key(str(user["user_id"]), str(item.owner_key_id))
         ):
             # Conceal the existence of files belonging to other accounts.
-            raise HTTPException(status_code=404, detail="file not found")
+            _http_error(404, "file not found")
 
         try:
             stored, payload = file_store.read(file_id)
         except (KeyError, FileNotFoundError) as error:
-            raise HTTPException(status_code=404, detail="file content not found") from error
+            _http_error(404, "file content not found")
 
         filename = safe_name(str(stored.filename or "download.bin"))
         ascii_fallback = re.sub(r"[^A-Za-z0-9._-]", "_", filename) or "download.bin"
