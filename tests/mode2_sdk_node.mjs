@@ -82,10 +82,11 @@ assert.equal(responseStreamText, "mode2-node-sdk-answer");
 assert.equal(responseCompleted, true);
 
 const uploaded = await client.files.create({
-  file: new File(["one two three"], "sample.txt", { type: "text/plain" }),
+  file: new File(["one two three"], "测试 sample.txt", { type: "text/plain" }),
   purpose: "assistants",
 });
 assert.equal(uploaded.object, "file");
+assert.equal(uploaded.filename, "测试_sample.txt");
 assert.equal(uploaded.purpose, "assistants");
 assert.equal(uploaded.status, "processed");
 assert.equal(uploaded.bytes, 13);
