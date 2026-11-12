@@ -706,19 +706,46 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
 
     @app.middleware("http")
     async def user_console_commerce_boundary(request: Request, call_next):
-        # When billing is explicitly enabled by the administrator, owned API keys
-        # need a positive wallet balance. Legacy/admin-managed keys are untouched.
-        if request.url.path.startswith("/v1/") and bool(pricing.public().get("billing_enabled")):
+        # User-owned keys are disabled at the account boundary when their owner
+        # is suspended, even when wallet billing is off. Legacy/admin keys are
+        # not linked to a user and retain their existing authentication policy.
+        if request.url.path.startswith("/v1/"):
             supplied = str(request.headers.get("x-api-key") or "").strip()
             authorization = str(request.headers.get("authorization") or "").strip()
             if authorization.lower().startswith("bearer "):
                 supplied = authorization[7:].strip()
             if supplied:
                 digest = token_hash(supplied)
-                matched = next((item for item in api_keys.keys.values() if secrets.compare_digest(str(item.token_hash), digest)), None)
+                matched = next(
+                    (
+                        item for item in api_keys.keys.values()
+                        if secrets.compare_digest(str(item.token_hash), digest)
+                    ),
+                    None,
+                )
                 owner = accounts.owner_for_key(str(matched.key_id)) if matched else None
-                if owner and billing.balance_cents(owner) <= 0:
-                    return JSONResponse(status_code=402, content={"error": {"message": "账户余额不足，请先充值", "type": "billing_error", "code": "insufficient_balance"}})
+                if owner and not accounts.is_enabled(owner):
+                    return JSONResponse(
+                        status_code=401,
+                        content={
+                            "error": {
+                                "message": "该用户账户已停用",
+                                "type": "authentication_error",
+                                "code": "user_disabled",
+                            }
+                        },
+                    )
+                if owner and bool(pricing.public().get("billing_enabled")) and billing.balance_cents(owner) <= 0:
+                    return JSONResponse(
+                        status_code=402,
+                        content={
+                            "error": {
+                                "message": "账户余额不足，请先充值",
+                                "type": "billing_error",
+                                "code": "insufficient_balance",
+                            }
+                        },
+                    )
         response = await call_next(request)
         if request.url.path != "/admin" or "text/html" not in response.headers.get("content-type", ""):
             return response
