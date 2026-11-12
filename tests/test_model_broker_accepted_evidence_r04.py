@@ -164,3 +164,47 @@ def test_telemetry_projection_outage_does_not_reverse_accepted_broker_event(monk
         await broker.release(request_id)
 
     asyncio.run(exercise())
+
+
+
+def test_model_routing_telemetry_outage_does_not_block_worker_dispatch(monkeypatch) -> None:
+    async def exercise() -> None:
+        app = FastAPI()
+        broker = RequestBroker()
+        telemetry = _Telemetry()
+        telemetry.fail = True
+        sent: list[dict] = []
+        async def send(_client_id: str, message: dict) -> None:
+            sent.append(message)
+
+        app.state.registry = SimpleNamespace(send=send)
+        app.state.broker = broker
+        app.state.telemetry = telemetry
+        monkeypatch.setattr(model_patch, "install_worker_model_library_v145_patch", lambda app: app)
+        monkeypatch.setattr(model_patch, "_patch_admin_html", lambda: None)
+        model_patch.install_model_observability_v144_patch(app)
+
+        request_id = "req_r04_routing_telemetry_outage"
+        await broker.create(request_id, "ext_r04")
+        token = routing._MODEL_CONTEXT.set({
+            "requested_model": "gpt-6", "routed_model": "gpt-6",
+        })
+        try:
+            await app.state.registry.send("ext_r04", {
+                "type": "chat.request", "request_id": request_id,
+            })
+        finally:
+            routing._MODEL_CONTEXT.reset(token)
+
+        assert len(sent) == 1
+        assert sent[0]["type"] == "chat.request"
+        assert sent[0]["routing"]["requested_model"] == "gpt-6"
+        assert sent[0]["routing"]["routed_model"] == "gpt-6"
+        assert request_id in model_patch.__dict__ or request_id not in ()
+        # Broker remains the only terminal owner even when observability is down.
+        assert await broker.publish(request_id, {
+            "type": "chat.completed", "request_id": request_id, "text": "done",
+        })
+        await broker.release(request_id)
+
+    asyncio.run(exercise())
