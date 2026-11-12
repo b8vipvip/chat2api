@@ -239,10 +239,26 @@
         div.appendChild(node("span", "", "引用链接（未验证）："));
         appendLink(div, String(part.title || part.url || "查看来源").slice(0, 240), part.url);
         host.appendChild(div);
-      } else if (type === "file" || type === "image") {
-        // A reference alone does not establish authenticated file ownership.
-        host.appendChild(node("div", "rich-attachment-fallback",
-          (type === "image" ? "图片附件" : "文件附件") + "：需授权的文件预览"));
+      } else if (type === "file") {
+        const fileId = String(part.file_id || "");
+        if (/^file_[A-Za-z0-9_-]{8,100}$/.test(fileId)) {
+          // The endpoint independently verifies the session and FileStore owner;
+          // the renderer never trusts a client-provided path or remote URL.
+          const card = node("div", "rich-file-card");
+          const link = node("a", "rich-file-download",
+            String(part.filename || "下载附件").slice(0, 180));
+          link.href = "/api/user/chat/files/" + encodeURIComponent(fileId) + "/download";
+          link.rel = "noopener noreferrer";
+          link.referrerPolicy = "no-referrer";
+          card.appendChild(link);
+          host.appendChild(card);
+        } else {
+          host.appendChild(node("div", "rich-attachment-fallback", "文件附件：缺少有效文件引用"));
+        }
+      } else if (type === "image") {
+        // Image preview remains a placeholder until the W-01 image-content
+        // endpoint and native sidecar owner contract are integrated together.
+        host.appendChild(node("div", "rich-attachment-fallback", "图片附件：需授权的图片预览"));
       } else if (type === "tool") {
         const states = new Set(["pending", "running", "completed", "failed"]);
         const state = states.has(part.status) ? part.status : "unknown";
