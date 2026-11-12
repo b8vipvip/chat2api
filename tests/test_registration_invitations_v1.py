@@ -66,6 +66,16 @@ def test_invitation_store_is_email_bound_single_use_and_hash_only(tmp_path: Path
     assert invitation["status"] == "issued"
 
 
+def test_revocation_does_not_interrupt_a_reserved_registration(tmp_path: Path):
+    store = InvitationStore(tmp_path)
+    created = store.create("alice@example.com", "root")
+    invitation_id = created["invitation"]["invitation_id"]
+    reservation = store.reserve(created["code"], "alice@example.com")
+    assert store.revoke(invitation_id) is False
+    store.consume(reservation)
+    assert store.list_invitations()[0]["status"] == "consumed"
+
+
 def test_invitation_reservation_is_atomic_under_concurrent_use(tmp_path: Path):
     store = InvitationStore(tmp_path)
     code = store.create("alice@example.com", "root")["code"]
