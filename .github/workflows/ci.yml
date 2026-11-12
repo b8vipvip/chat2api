@@ -276,6 +276,8 @@ jobs:
         run: pytest -q tests/test_responses_bridge_regeneration_v154.py --timeout=120
       - name: R06 focused request-socket ownership regressions
         run: pytest -q tests/test_dispatch_stage_timings_r06.py tests/test_transport_origin_socket_v171.py --timeout=30
+      - name: R06 preserves GPT Live voice request socket lifecycle
+        run: pytest -vv --tb=short tests/test_live_voice_browser_error_v184.py tests/test_live_voice_v17.py tests/test_voice_call_multimodal_v195.py tests/test_voice_v6.py --timeout=30
 
       - name: R06 map full-suite collection around prior timeout positions
         run: |
