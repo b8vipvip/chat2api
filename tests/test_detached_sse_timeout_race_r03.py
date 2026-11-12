@@ -89,3 +89,33 @@ def test_rejected_timeout_without_known_worker_terminal_stays_unknown(monkeypatc
         assert "detached_stream_worker_won_timeout_race" not in state.diagnostics
 
     asyncio.run(exercise())
+
+
+
+def test_missing_future_cannot_override_existing_broker_terminal() -> None:
+    async def exercise() -> None:
+        state = SimpleNamespace(
+            request_id="req_r03_missing_future",
+            final_future=None,
+            terminal_event_type="chat.completed",
+            diagnostics={},
+        )
+        finalized = []
+        class Broker:
+            async def publish(self, _request_id, event):
+                assert event["type"] == "chat.error"
+                return False
+        async def finalize(error):
+            finalized.append(error)
+        async def release():
+            return None
+
+        await detached.settle_detached_stream(
+            state=state, broker=Broker(), finalize=finalize,
+            release=release, wait_seconds=1,
+        )
+        assert finalized == [None]
+        assert state.diagnostics["api_stream_detached_worker_terminal"] == "chat.completed"
+        assert state.diagnostics["detached_stream_worker_won_timeout_race"] is True
+
+    asyncio.run(exercise())
