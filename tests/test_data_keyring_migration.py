@@ -127,7 +127,17 @@ async def test_apply_migrates_all_legacy_stores_and_keeps_verified_backups(tmp_p
         checksum = backup.with_name(backup.name + ".sha256")
         assert backup.read_bytes() == content
         assert checksum.exists()
-        assert DataKeyring.looks_like_envelope(path.read_bytes())
+    api_doc = json.loads((tmp_path / "api_keys.json").read_text(encoding="utf-8"))
+    assert all(
+        DataKeyring.looks_like_envelope(row["token_ciphertext"])
+        for row in api_doc["keys"] if row.get("token_ciphertext")
+    )
+    media_value = (tmp_path / "media_archive" / "settings.enc").read_bytes()
+    assert DataKeyring.looks_like_envelope(media_value)
+    payment_doc = json.loads((tmp_path / "user_payment_config.json").read_text(encoding="utf-8"))
+    assert DataKeyring.looks_like_envelope(payment_doc["key_ciphertext"])
+    channels_doc = json.loads((tmp_path / "user_payment_channels_v106.json").read_text(encoding="utf-8"))
+    assert DataKeyring.looks_like_envelope(channels_doc["aggregate"]["zpay"]["key_ciphertext"])
     manifest = json.loads((tmp_path / "data_keyring_migration.json").read_text(encoding="utf-8"))
     assert manifest["state"] == "completed"
     assert manifest["key_id"] == migration_fixture["keyring"].key_id
