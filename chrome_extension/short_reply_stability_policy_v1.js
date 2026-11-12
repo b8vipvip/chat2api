@@ -6,9 +6,10 @@
   const DEFAULT_STABLE_MS = 8000;
 
   function requiredStableMs(rendered) {
-    // Only a positive request-v6 short-text verification may use the shorter
+    // Only a positive plain short-text verification may use the shorter
     // quiet window. Missing, false or malformed evidence stays conservative.
     return rendered?.shortTextVerified === true
+      && rendered?.rolelessRichVerified !== true
       ? SHORT_VERIFIED_STABLE_MS : DEFAULT_STABLE_MS;
   }
 
