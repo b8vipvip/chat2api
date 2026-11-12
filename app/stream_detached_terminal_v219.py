@@ -51,10 +51,16 @@ async def settle_detached_stream(
                 terminal_error = str(exc)[:500]
         else:
             terminal_error = "Detached SSE: request has no Broker terminal future"
-            await broker.publish(state.request_id, {
+            timeout_accepted = await broker.publish(state.request_id, {
                 "type": "chat.error", "request_id": state.request_id,
                 "error": terminal_error,
             })
+            if not timeout_accepted and state.terminal_event_type is not None:
+                # A missing observer Future does not grant this finalizer a
+                # second terminal authority. If Broker already owns a real
+                # terminal, preserve it even on this degraded path.
+                terminal_error = None
+                state.diagnostics["detached_stream_worker_won_timeout_race"] = True
         state.diagnostics["api_stream_detached_worker_terminal"] = state.terminal_event_type or "none"
         state.diagnostics["api_stream_detached_settled"] = True
         await finalize(terminal_error)
