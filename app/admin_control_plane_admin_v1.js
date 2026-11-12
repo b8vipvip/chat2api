@@ -471,6 +471,7 @@
   $("cQuotaReload")?.addEventListener("click", loadQuotaReservations);
   $("cQuotaState")?.addEventListener("change", loadQuotaReservations);
   $("cQuotaReconcile")?.addEventListener("click", async () => {
+    if (!confirm("仅根据 ApiKeyStore 已有 request_id 账本恢复 committing 状态；继续？")) return;
     try {
       const result = await sessionApi("/api/admin/quota-reservations/reconcile", { method: "POST", body: {} });
       setStatus("cQuotaStatus", "恢复完成 · " + result.settled + " 条提交状态已对账");
