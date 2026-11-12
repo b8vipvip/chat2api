@@ -85,6 +85,8 @@ def test_running_request_is_pollable_but_stale_running_state_is_not_replayed(tmp
         assert active.json()["recoverable"] is True
         assert active.json()["active"] is True
         assert active.json()["phase"] == "generating"
+        assert active.json()["response_text"] == ""
+        assert active.json()["response_text_available"] is False
         del app.state.broker.requests[request_id]
 
         stale = client.get(f"/api/user/chat/requests/{request_id}/recovery")
@@ -103,6 +105,8 @@ def test_queued_admission_and_failed_partial_text_are_not_misreported(tmp_path):
         remember(app, queued_id, "key_states", status="queued")
         queued = client.get(f"/api/user/chat/requests/{queued_id}/recovery").json()
         assert queued["recoverable"] is True and queued["phase"] == "admission"
+        assert queued["response_text"] == ""
+        assert queued["response_text_available"] is False
 
         remember(
             app, failed_id, "key_states", status="stalled",
