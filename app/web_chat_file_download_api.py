@@ -49,8 +49,12 @@ def install_web_chat_file_download_api(app: FastAPI) -> FastAPI:
 
         try:
             stored, payload = file_store.read(file_id)
-        except (KeyError, FileNotFoundError) as error:
+        except (KeyError, FileNotFoundError):
             _http_error(404, "file content not found")
+        except OSError:
+            # Do not leak filesystem details; keep even storage failures
+            # private and non-cacheable for this session-scoped resource.
+            _http_error(503, "file content unavailable")
 
         filename = safe_name(str(stored.filename or "download.bin"))
         ascii_fallback = re.sub(r"[^A-Za-z0-9._-]", "_", filename) or "download.bin"
