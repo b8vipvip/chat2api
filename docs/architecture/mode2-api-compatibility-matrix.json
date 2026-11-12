@@ -1,0 +1,173 @@
+{
+  "schema_version": 1,
+  "baseline": "b682e1d445008df57e4de9675e2952ae040b8027",
+  "ingress": {
+    "default": "mode2",
+    "mode_header": "X-Chat2API-Mode",
+    "accepted": [
+      "api",
+      "mode2"
+    ],
+    "forbidden_on_v1": [
+      "chat",
+      "mode1"
+    ],
+    "credentials": [
+      "Authorization: Bearer <api_key>",
+      "X-API-Key: <api_key>"
+    ]
+  },
+  "endpoints": [
+    {
+      "method": "GET",
+      "path": "/v1/models",
+      "owner": "app.main",
+      "status": "compatible_subset",
+      "python_sdk": "client.models.list()",
+      "javascript_sdk": "client.models.list()",
+      "notes": "Only currently online model catalog; requires models scope."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "owner": "app.main",
+      "status": "compatible_subset",
+      "python_sdk": "client.chat.completions.create()",
+      "javascript_sdk": "client.chat.completions.create()",
+      "notes": "Text and supported uploaded image/file references. Default prompt_mode=full preserves the ordered multi-turn transcript. Client extension fields may appear in output."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/responses",
+      "owner": "app.responses_v108_patch",
+      "status": "compatible_subset",
+      "python_sdk": "client.responses.create()",
+      "javascript_sdk": "client.responses.create()",
+      "notes": "Text, native web search, hosted images and selected emulated tools via later patch layers; do not infer complete Responses feature parity."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/responses/{response_id}",
+      "owner": "app.responses_v108_patch",
+      "status": "compatible_subset",
+      "python_sdk": "client.responses.retrieve()",
+      "javascript_sdk": "client.responses.retrieve()",
+      "notes": "Best-effort bounded in-process response store, not durable OpenAI storage semantics."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/images/generations",
+      "owner": "app.main",
+      "status": "compatible_subset",
+      "python_sdk": "client.images.generate()",
+      "javascript_sdk": "client.images.generate()",
+      "notes": "gpt-image only; requires active image-capable Worker and images scope."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/files",
+      "owner": "app.main",
+      "status": "extension_only",
+      "python_sdk": null,
+      "javascript_sdk": null,
+      "notes": "JSON with filename, data_base64, mime_type and purpose; OpenAI SDK multipart files.create is NOT supported by this route."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/files/{file_id}",
+      "owner": "app.main",
+      "status": "compatible_subset",
+      "python_sdk": "client.files.retrieve()",
+      "javascript_sdk": "client.files.retrieve()",
+      "notes": "Metadata is API-key scoped. No standard GET /v1/files list or /v1/files/{id}/content contract."
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/files/{file_id}",
+      "owner": "app.main",
+      "status": "compatible_subset",
+      "python_sdk": "client.files.delete()",
+      "javascript_sdk": "client.files.del()",
+      "notes": "API-key scoped deletion; server reply uses {deleted:true}, not guaranteed full OpenAI deletion schema."
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "chat.non_stream",
+      "status": "supported",
+      "evidence": "Chat completion response with assistant message, stop, estimated usage."
+    },
+    {
+      "id": "chat.stream",
+      "status": "supported_with_extensions",
+      "evidence": "SSE data frames; final stop chunk with usage, then [DONE]; extra status/reasoning deltas may occur."
+    },
+    {
+      "id": "chat.multi_turn",
+      "status": "supported_transcript_bridge",
+      "evidence": "system/developer/user/assistant/tool history converted into ordered prompt blocks; not native token/role handling by the upstream model."
+    },
+    {
+      "id": "chat.tool_calls",
+      "status": "not_guaranteed",
+      "evidence": "Chat Completions tools/tool_choice are not guaranteed to yield OpenAI-native tool_calls; Responses emulation is separate."
+    },
+    {
+      "id": "chat.structured_outputs",
+      "status": "not_guaranteed",
+      "evidence": "Unknown Chat extras are accepted by Pydantic but JSON schema/response_format is not enforced at transport layer."
+    },
+    {
+      "id": "chat.usage",
+      "status": "estimated",
+      "evidence": "token_usage.usage_for estimator, not authoritative upstream OpenAI billing."
+    },
+    {
+      "id": "chat.model_provenance",
+      "status": "requested_only",
+      "evidence": "model in standard envelope is requested model; actual served-model evidence is tracked separately."
+    },
+    {
+      "id": "responses.stream",
+      "status": "supported_with_extensions",
+      "evidence": "Typed response.created/response.completed/response.failed SSE; not Chat Completions [DONE]."
+    },
+    {
+      "id": "responses.tools",
+      "status": "partial",
+      "evidence": "Web search and image_generation with specific emulated function tools; arbitrary hosted tool compatibility not asserted."
+    },
+    {
+      "id": "files.multipart",
+      "status": "unsupported",
+      "evidence": "JSON FileUploadRequest, standard SDK multipart upload receives validation error."
+    },
+    {
+      "id": "errors",
+      "status": "partial",
+      "evidence": "Responses uses {error:{...}}; some base API validation/authentication emits FastAPI {detail:...}."
+    },
+    {
+      "id": "auth.scope",
+      "status": "supported",
+      "evidence": "Managed API-key scopes chat/models/files/images enforced by endpoints."
+    },
+    {
+      "id": "mode2.default",
+      "status": "supported",
+      "evidence": "ModeResolverMiddleware defaults /v1 to mode2; mode1 rejected."
+    }
+  ],
+  "boundary": {
+    "single_broker_owner": "app.broker.RequestBroker",
+    "sse_owner": "existing API adapters",
+    "shared_request_service": "M-02; no duplicate Worker terminal, auth, accounting, or media finality",
+    "out_of_scope": [
+      "G0 DataKeyring migration",
+      "R native fidelity and Worker transport",
+      "W chat session store",
+      "C RBAC",
+      "D/P production rollout"
+    ]
+  }
+}
