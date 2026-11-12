@@ -30,6 +30,52 @@ def test_user_account_ownership_and_session_are_isolated(tmp_path: Path) -> None
     assert store.authenticate(token) is None
 
 
+def test_admin_user_projection_and_disable_revoke_all_sessions(tmp_path: Path) -> None:
+    store = UserAccountStore(tmp_path)
+    user = store.register("admin-view@example.com", "long-enough-password", "Admin View")
+    user_id = user["user_id"]
+    store.attach_key(user_id, "key_owned_by_user")
+    first = store.create_session(user_id)
+    second = store.create_session(user_id)
+
+    rows = store.admin_list()
+    assert len(rows) == 1
+    assert rows[0]["user_id"] == user_id
+    assert rows[0]["key_count"] == 1
+    assert rows[0]["active_sessions"] == 2
+    assert "password_hash" not in rows[0]
+    assert "password_salt" not in rows[0]
+    assert first not in str(rows)
+    assert second not in str(rows)
+
+    disabled, revoked = store.set_enabled(user_id, False)
+    assert disabled["enabled"] is False
+    assert revoked == 2
+    assert store.is_enabled(user_id) is False
+    assert store.authenticate(first) is None
+    assert store.authenticate(second) is None
+    assert store.admin_list()[0]["active_sessions"] == 0
+
+    enabled, revoked_on_enable = store.set_enabled(user_id, True)
+    assert enabled["enabled"] is True
+    assert revoked_on_enable == 0
+    assert store.authenticate(first) is None
+    assert store.authenticate(second) is None
+
+
+def test_admin_user_session_revoke_is_idempotent_and_scoped(tmp_path: Path) -> None:
+    store = UserAccountStore(tmp_path)
+    alice = store.register("alice-sessions@example.com", "long-enough-password")
+    bob = store.register("bob-sessions@example.com", "different-password")
+    alice_session = store.create_session(alice["user_id"])
+    bob_session = store.create_session(bob["user_id"])
+
+    assert store.revoke_user_sessions(alice["user_id"]) == 1
+    assert store.revoke_user_sessions(alice["user_id"]) == 0
+    assert store.authenticate(alice_session) is None
+    assert store.authenticate(bob_session)["user_id"] == bob["user_id"]
+
+
 def test_default_model_prices_follow_current_reference_rate_card(tmp_path: Path) -> None:
     pricing = PricingStore(tmp_path)
     assert pricing.model("gpt-5.6-sol") == {
@@ -131,13 +177,17 @@ def test_user_api_privacy_boundary_does_not_relay_runtime_failure_text() -> None
     assert entry.rstrip().endswith("install_request_history_v94_patch(app)")
 
 
-def test_admin_console_extension_adds_price_and_payment_navigation() -> None:
+def test_admin_console_extension_adds_user_price_payment_and_audit_navigation() -> None:
     js = (ROOT / "app" / "admin_user_commerce_v104.js").read_text(encoding="utf-8")
+    assert "用户管理" in js
     assert "价格配置" in js
     assert "支付配置" in js
+    assert "/api/admin/users" in js
+    assert "/api/admin/audit" in js
     assert "/api/admin/user-pricing" in js
     assert "/api/admin/user-payments" in js
     assert "测试 API 连接" in js
+    assert "不显示或恢复完整密钥" in js
 
 
 def test_user_commerce_runtime_and_production_dependencies_are_published() -> None:
