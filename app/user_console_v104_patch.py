@@ -61,6 +61,10 @@ class PricingBody(BaseModel):
     models: list[dict[str, Any]]
 
 
+class AdminUserStatusBody(BaseModel):
+    enabled: bool
+
+
 class PaymentBody(BaseModel):
     enabled: bool = False
     pid: str = Field(default="", max_length=80)
@@ -582,6 +586,68 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
     @app.get("/api/user/payments/zpay/return", include_in_schema=False)
     async def zpay_return() -> RedirectResponse:
         return RedirectResponse("/console#billing", status_code=303)
+
+    @app.get("/api/admin/users")
+    async def admin_users(
+        request: Request,
+        limit: int = Query(default=100, ge=1, le=200),
+        offset: int = Query(default=0, ge=0),
+        q: str = Query(default="", max_length=120),
+    ) -> dict[str, Any]:
+        if not admin_ok(request):
+            raise HTTPException(status_code=401, detail="Administrator login required")
+        rows = accounts.admin_list()
+        query = q.strip().casefold()
+        if query:
+            rows = [
+                row for row in rows
+                if query in str(row.get("email") or "").casefold()
+                or query in str(row.get("display_name") or "").casefold()
+                or query in str(row.get("user_id") or "").casefold()
+            ]
+        total = len(rows)
+        page = rows[offset:offset + limit]
+        for row in page:
+            row["balance_cents"] = billing.balance_cents(str(row["user_id"]))
+        return {"data": page, "total": total, "limit": limit, "offset": offset}
+
+    @app.patch("/api/admin/users/{user_id}")
+    async def admin_update_user(
+        user_id: str, body: AdminUserStatusBody, request: Request
+    ) -> dict[str, Any]:
+        if not admin_ok(request):
+            raise HTTPException(status_code=401, detail="Administrator login required")
+        try:
+            user, revoked_sessions = accounts.set_enabled(user_id, body.enabled)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return {"user": user, "revoked_sessions": revoked_sessions}
+
+    @app.post("/api/admin/users/{user_id}/sessions/revoke")
+    async def admin_revoke_user_sessions(user_id: str, request: Request) -> dict[str, Any]:
+        if not admin_ok(request):
+            raise HTTPException(status_code=401, detail="Administrator login required")
+        try:
+            revoked = accounts.revoke_user_sessions(user_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return {"user_id": user_id, "revoked_sessions": revoked}
+
+    @app.get("/api/admin/users/{user_id}/keys")
+    async def admin_user_keys(user_id: str, request: Request) -> dict[str, Any]:
+        if not admin_ok(request):
+            raise HTTPException(status_code=401, detail="Administrator login required")
+        if not accounts.admin_get(user_id):
+            raise HTTPException(status_code=404, detail="用户不存在")
+        rows = []
+        for key_id in accounts.key_ids(user_id):
+            item = api_keys.get_public(key_id)
+            if item:
+                rows.append(public_key(item))
+        rows.sort(key=lambda row: str(row.get("created_at") or ""), reverse=True)
+        return {"data": rows}
 
     @app.get("/api/admin/user-pricing")
     async def admin_user_pricing(request: Request) -> dict[str, Any]:
