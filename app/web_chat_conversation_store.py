@@ -97,17 +97,26 @@ class WebChatConversationStore:
             result["messages"] = json.loads(row["messages_json"])
         return result
 
-    def list(self, user_id: str, *, limit: int, offset: int) -> dict[str, Any]:
+    def list(self, user_id: str, *, limit: int, offset: int, query: str = "") -> dict[str, Any]:
+        # Search stays owner-scoped and bounded. instr() avoids LIKE wildcard
+        # interpretation of user-provided '%' and '_' characters.
+        needle = str(query or "").strip()[:120]
+        where = (
+            "user_id=? AND deleted_at IS NULL AND "
+            "(?='' OR instr(lower(title), lower(?))>0 "
+            "OR instr(lower(messages_json), lower(?))>0)"
+        )
+        params = (user_id, needle, needle, needle)
         with self._connect() as db:
             total = db.execute(
-                "SELECT count(*) FROM web_chat_conversations WHERE user_id=? AND deleted_at IS NULL",
-                (user_id,),
+                "SELECT count(*) FROM web_chat_conversations WHERE " + where,
+                params,
             ).fetchone()[0]
             rows = db.execute(
-                """SELECT * FROM web_chat_conversations
-                   WHERE user_id=? AND deleted_at IS NULL
-                   ORDER BY updated_at DESC, conversation_id DESC LIMIT ? OFFSET ?""",
-                (user_id, limit, offset),
+                """SELECT * FROM web_chat_conversations WHERE """
+                + where
+                + " ORDER BY updated_at DESC, conversation_id DESC LIMIT ? OFFSET ?",
+                (*params, limit, offset),
             ).fetchall()
         return {
             "data": [self._public(row, include_messages=False) for row in rows],
