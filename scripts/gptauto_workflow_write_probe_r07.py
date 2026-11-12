@@ -27,7 +27,9 @@ EXPECTED_REPO = "b8vipvip/chat2api"
 
 
 class ProbeError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class GitHubApi:
@@ -55,7 +57,10 @@ class GitHubApi:
         except urllib.error.HTTPError as exc:
             # Never print token values, request headers, response bodies or
             # credentials embedded in providers' generic exception messages.
-            raise ProbeError(f"GitHub {method} rejected with HTTP {exc.code}") from None
+            raise ProbeError(
+                f"GitHub {method} rejected with HTTP {exc.code}",
+                status_code=exc.code,
+            ) from None
         except (urllib.error.URLError, TimeoutError, OSError):
             raise ProbeError(f"GitHub {method} failed to reach API") from None
 
@@ -72,7 +77,40 @@ def run_probe(api: Any, nonce: str) -> dict[str, str]:
     base_sha = upstream.get("object", {}).get("sha") if isinstance(upstream, dict) else None
     if not isinstance(base_sha, str) or not re.fullmatch(r"[a-f0-9]{40}", base_sha):
         raise ProbeError("Cannot resolve immutable main commit")
-    api.request("POST", root + "/git/refs", {"ref": branch_ref, "sha": base_sha})
+    try:
+        api.request("POST", root + "/git/refs", {"ref": branch_ref, "sha": base_sha})
+    except Exception as create_error:
+        # A network timeout can happen after GitHub created the ref but before
+        # the client received its 201 response. Reconcile the exact random ref
+        # before returning so a successful-but-unacknowledged create is not
+        # left behind as an orphaned probe branch.
+        try:
+            existing = api.request("GET", root + "/git/ref/heads/" + branch)
+        except ProbeError as lookup_error:
+            if lookup_error.status_code == 404:
+                raise create_error
+            raise ProbeError(
+                f"Temporary branch creation outcome is unknown: {branch_ref}; "
+                "inspect and clean it manually before rerunning"
+            ) from lookup_error
+        existing_sha = (
+            existing.get("object", {}).get("sha")
+            if isinstance(existing, dict) else None
+        )
+        if existing_sha == base_sha:
+            try:
+                api.request("DELETE", root + "/git/refs/heads/" + branch)
+            except Exception as cleanup_error:
+                raise ProbeError(
+                    f"Temporary branch cleanup failed: {branch_ref}; "
+                    "delete it manually before rerunning"
+                ) from cleanup_error
+        elif existing_sha:
+            raise ProbeError(
+                f"Temporary branch name collision: {branch_ref}; "
+                "ref was not deleted because it does not point at the expected base"
+            ) from create_error
+        raise create_error
     workflow = (
         "name: GPTAuto Workflows permission probe\n"
         "on:\n  workflow_dispatch:\n"
