@@ -79,7 +79,7 @@ class AdminLoginRateLimiter:
         ip = str(remote_addr or "unknown").strip()[:128]
         user = str(username or "").strip().casefold()[:128]
         return (
-            "identity:" + self._digest(ip + "\0" + user),
+            "identity:" + self._digest(user),
             "ip:" + self._digest(ip),
         )
 
