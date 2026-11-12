@@ -82,7 +82,7 @@ def test_failed_cleanup_reports_exact_manual_recovery_branch() -> None:
     api = FakeApi(fail_at="DELETE")
     with pytest.raises(ProbeError, match="manually"):
         run_probe(api, NONCE)
-    assert [method for method, _, _ in api.calls] == ["GET", "GET", "POST", "PUT", "DELETE"]
+    assert [method for method, _, _ in api.calls] == ["GET", "GET", "POST", "PUT", "GET", "DELETE"]
 
 
 def test_no_execute_is_real_dry_run_without_reading_token(monkeypatch, capsys) -> None:
