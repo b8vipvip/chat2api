@@ -269,7 +269,7 @@
         const raw = window.prompt("设置 Token 总额度；留空表示不限额度。", button.dataset.currentQuota || "");
         if (raw === null) return;
         const value = raw.trim();
-        if (value && !/^\\d+$/.test(value)) throw new Error("额度必须是非负整数，或留空表示不限");
+        if (value && !/^\d+$/.test(value)) throw new Error("额度必须是非负整数，或留空表示不限");
         const quota = value ? Number(value) : null;
         if (quota !== null && (!Number.isSafeInteger(quota) || quota < 0)) throw new Error("额度超出安全整数范围");
         await adminApi(url, {method:"PATCH", body:JSON.stringify({token_quota:quota})});
