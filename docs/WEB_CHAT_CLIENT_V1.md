@@ -15,7 +15,7 @@ Status: first interactive browser client; not a complete ChatGPT 1:1 replacement
 2. It lists the signed-in user's own API Keys through `GET /api/user/keys`.
 3. The user selects an enabled, non-expired Key with recoverable secret and `chat` scope.
 4. The page fetches that Key's secret through the existing owner-checked `GET /api/user/keys/{key_id}/secret` endpoint.
-5. The raw Key is held only in page memory and used as a Bearer token for standard `POST /v1/chat/completions` streaming requests. The Key ID preference may be stored locally; the raw Key is never written to localStorage.
+5. The raw Key is held only in page memory and used as a Bearer token for standard `POST /v1/chat/completions` streaming requests. The page revalidates the same user session before each chat request. The Key ID preference may be stored locally; the raw Key is never written to localStorage.
 6. The request does not set a Mode 1 header. It uses the default Mode 2 OpenAI-compatible API ingress.
 
 The page sends the full ordered conversation using only standard Chat Completions fields (`model`, `messages`, `stream`). The server's default full-history behavior preserves multi-turn context; no private `prompt_mode` field is required.
