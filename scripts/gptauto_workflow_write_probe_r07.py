@@ -96,7 +96,12 @@ def run_probe(api: Any, nonce: str) -> dict[str, str]:
     try:
         api.request("POST", root + "/git/refs", {"ref": branch_ref, "sha": base_sha})
     except Exception as create_error:
-        # A network timeout can happen after GitHub created the ref but before
+        # A definitive 4xx (especially 403/409) is not an ambiguous success:
+        # never reconcile/delete a ref that could belong to a concurrent actor.
+        status_code = getattr(create_error, "status_code", None)
+        if status_code is not None and 400 <= status_code < 500:
+            raise
+        # A network timeout or 5xx can happen after GitHub created the ref but before
         # the client received its 201 response. Reconcile the exact random ref
         # before returning so a successful-but-unacknowledged create is not
         # left behind as an orphaned probe branch.
