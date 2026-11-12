@@ -264,7 +264,9 @@ class QuotaReservationStore:
         except (TypeError, ValueError):
             actual = 0
         reservation = self.get(request_id)
-        if reservation and reservation["key_id"] == key_id and reservation["state"] not in {"released", "expired"}:
+        if reservation and reservation["key_id"] != key_id:
+            raise QuotaReservationError("Completion API key does not match the request reservation")
+        if reservation and reservation["state"] not in {"released", "expired"}:
             self.begin_commit(request_id, key_id, actual)
             await api_keys.account_completed_usage(record)
             self.mark_settled(request_id, key_id, actual)
