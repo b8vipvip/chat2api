@@ -1,4 +1,9 @@
 from .main import app
+from .runtime_single_process_guard import install_single_process_runtime_guard
+
+# Broker and Worker socket ownership are process-local. Hold one exclusive
+# lock on the configured data volume before the legacy installer chain runs.
+install_single_process_runtime_guard(app)
 from .voice_patch import install_voice_patch
 from .live_voice_patch import install_live_voice_patch
 from .v7_patch import install_v7_patch
