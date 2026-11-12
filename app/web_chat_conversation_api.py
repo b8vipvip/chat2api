@@ -21,6 +21,45 @@ _CONVERSATION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,100}$")
 _PRIVATE_HEADERS = {"Cache-Control": "private, no-store", "Vary": "Cookie"}
 
 
+class _PrivateConversationCacheHeaders:
+    """Apply private cache policy even to framework-generated validation responses."""
+
+    def __init__(self, app, path_prefix: str) -> None:
+        self.app = app
+        self.path_prefix = path_prefix.rstrip("/")
+
+    async def __call__(self, scope, receive, send) -> None:
+        path = str(scope.get("path") or "")
+        if scope.get("type") != "http" or not (
+            path == self.path_prefix or path.startswith(self.path_prefix + "/")
+        ):
+            await self.app(scope, receive, send)
+            return
+
+        async def private_send(message):
+            if message.get("type") == "http.response.start":
+                original = list(message.get("headers", []))
+                headers = [
+                    (name, value) for name, value in original
+                    if name.lower() not in {b"cache-control", b"vary"}
+                ]
+                vary_tokens = []
+                for name, value in original:
+                    if name.lower() == b"vary":
+                        vary_tokens.extend(
+                            token.strip() for token in value.decode("latin-1").split(",")
+                            if token.strip()
+                        )
+                if not any(token.casefold() == "cookie" for token in vary_tokens):
+                    vary_tokens.append("Cookie")
+                headers.append((b"cache-control", b"private, no-store"))
+                headers.append((b"vary", ", ".join(vary_tokens).encode("latin-1")))
+                message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, private_send)
+
+
 def _http_error(status_code: int, detail: str) -> None:
     raise HTTPException(status_code=status_code, detail=detail, headers=_PRIVATE_HEADERS)
 
@@ -102,6 +141,10 @@ class ConversationPutBody(BaseModel):
 def install_web_chat_conversations(app: FastAPI) -> FastAPI:
     if getattr(app.state, "web_chat_conversations_installed", False):
         return app
+    app.add_middleware(
+        _PrivateConversationCacheHeaders,
+        path_prefix="/api/user/chat/conversations",
+    )
     store = WebChatConversationStore(Path(app.state.settings.data_dir))
     app.state.web_chat_conversations = store
     app.state.web_chat_conversations_installed = True
