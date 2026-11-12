@@ -22,11 +22,11 @@ from typing import Any
 POLICY_VERSION = 1
 ROLES: dict[str, frozenset[str]] = {
     "super_admin": frozenset({"*"}),
-    "system_admin": frozenset({"system:read", "system:write", "clients:read", "clients:write", "models:read", "models:write", "users:read", "diagnostics:read", "tenants:read", "tenants:write"}),
+    "system_admin": frozenset({"system:read", "system:write", "clients:read", "clients:write", "models:read", "models:write", "users:read", "diagnostics:read", "tenants:read", "tenants:write", "quota:read", "quota:write"}),
     "tenant_admin": frozenset({"tenants:read", "tenants:write"}),
     "user_admin": frozenset({"users:read", "users:write"}),
-    "api_key_admin": frozenset({"keys:read", "keys:write"}),
-    "billing_admin": frozenset({"billing:read", "billing:write"}),
+    "api_key_admin": frozenset({"keys:read", "keys:write", "quota:read", "quota:write"}),
+    "billing_admin": frozenset({"billing:read", "billing:write", "quota:read"}),
     "plugin_admin": frozenset({"plugins:read", "plugins:write"}),
     "support": frozenset({"users:read", "keys:read", "models:read", "clients:read", "diagnostics:read"}),
 }
@@ -65,6 +65,10 @@ def permission_for_admin_route(path: str, method: str) -> str | None:
         return "models:" + suffix
     if path == "/api/admin/audit":
         return "audit:read"
+    if path == "/api/admin/quota-reservations":
+        return "quota:read"
+    if path == "/api/admin/quota-reservations/reconcile":
+        return "quota:write"
     if path == "/api/admin/tenants" or re.fullmatch(
         r"/api/admin/tenants/[^/]+/(?:members(?:/[^/]+)?|keys(?:/[^/]+)?)", path
     ):
