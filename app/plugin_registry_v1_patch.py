@@ -22,7 +22,14 @@ def install_plugin_registry(app: FastAPI) -> FastAPI:
             audit = AdminAuditStore(app.state.settings.data_dir)
             app.state.admin_audit = audit
         sessions = getattr(app.state, "admin_sessions", None)
-        username = sessions.identity(request.cookies.get("chat2api_admin_session")) if sessions else None
+        token = request.cookies.get("chat2api_admin_session")
+        if sessions is None or not sessions.authenticate(token):
+            raise HTTPException(status_code=401, detail="Administrator login required")
+        # C-05 branches from main independently of C-01 RBAC. Legacy v17
+        # sessions authenticate the configured root; the new C-01 identity()
+        # method is used only after that parallel PR has been integrated.
+        identity = getattr(sessions, "identity", None)
+        username = identity(token) if callable(identity) else app.state.settings.admin_username
         try:
             audit.append(
                 actor=str(username or app.state.settings.admin_username),
