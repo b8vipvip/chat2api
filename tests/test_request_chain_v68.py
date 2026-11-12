@@ -356,4 +356,4 @@ def test_r05_short_reply_stability_provenance_uses_single_request_v6_policy():
     assert request.count("${abortedReplyStableThreshold(rendered)}ms-stable") == 4
     assert "+8s-stable" not in request
     assert "response_terminal_required_stable_ms: abortedReplyStableThreshold(rendered)" in request
-    assert "response_terminal_stable_ms: Date.now() - abortedRenderedCandidateSince" in request
+    assert "response_terminal_stable_ms: abortedReplyStableElapsedMs(abortedRenderedCandidateSince)" in request
