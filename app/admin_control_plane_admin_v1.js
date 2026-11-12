@@ -322,8 +322,8 @@
       $("cInviteCode").textContent = result.code || "";
       $("cInviteCodePanel").classList.remove("hidden");
       $("cInviteEmail").value = "";
-      setStatus("cInviteStatus", "邀请已创建。请立即复制代码；离开此页面后不会再次显示。");
       await loadInvitations();
+      setStatus("cInviteStatus", "邀请已创建。请立即复制代码；离开此页面后不会再次显示。");
     } catch (error) { setStatus("cInviteStatus", error.message, true); }
   });
   $("cInviteReload")?.addEventListener("click", loadInvitations);
