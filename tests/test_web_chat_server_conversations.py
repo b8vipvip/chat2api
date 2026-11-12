@@ -49,6 +49,8 @@ def test_user_session_csrf_owner_isolation_and_revisions(tmp_path):
         assert alice.put(path, json=snapshot(), headers={"Origin": "https://evil.example"}).status_code == 403
         first = alice.put(path, json=snapshot(), headers=ORIGIN)
         assert first.status_code == 200, first.text
+        assert first.headers["cache-control"] == "private, no-store"
+        assert first.headers["vary"] == "Cookie"
         assert first.json()["revision"] == 1
         assert first.json()["messages"][0]["content"] == "<script>alert(1)</script>"
         # A retried mutation returns the original revision, and reusing the key
