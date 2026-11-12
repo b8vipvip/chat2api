@@ -405,6 +405,13 @@ def native_terminal_view(row: dict[str, Any], broker_state: Any) -> dict[str, An
     terminal = getattr(broker_state, "terminal_event_type", None)
     if terminal not in {"chat.completed", "chat.error", "chat.cancelled"}:
         return row
+    # Matching only Worker identity is insufficient: one Worker may handle
+    # another request immediately after the first, and its late state must
+    # never authorize a different reply's native-finality projection.
+    row_request_id = row.get("request_id")
+    if (not isinstance(row_request_id, str) or not row_request_id
+            or getattr(broker_state, "request_id", None) != row_request_id):
+        return row
     client_id = row.get("client_id")
     if not isinstance(client_id, str) or not client_id:
         return row
