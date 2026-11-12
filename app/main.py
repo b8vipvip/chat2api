@@ -77,6 +77,19 @@ logger = logging.getLogger("chat2api")
 APP_VERSION = "0.5.0"
 
 
+async def _telemetry_upsert_best_effort(
+    telemetry: Any, row: dict[str, Any], *, request_id: str, projection: str,
+) -> None:
+    """Persist an optional telemetry projection without owning request success."""
+    try:
+        await telemetry.upsert(row)
+    except Exception:
+        logger.exception(
+            "Best-effort telemetry projection failed request_id=%s projection=%s",
+            request_id, projection,
+        )
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     config = settings or get_settings()
     registry = ClientRegistry(config.data_dir)
@@ -2585,12 +2598,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     if accepted and message_type == "chat.completed" and active_state:
                         row = telemetry.get(request_id) or {}
                         owner = str(row.get("api_key_id") or "")
-                        # This is the actual disk-persistence proof; the
-                        # earlier per-chunk ACK establishes only validated,
-                        # in-memory publication. Neither result owns terminal.
-                        active_state.diagnostics["native_snapshot_persisted"] = bool(
-                            owner and native_content.persist(request_id, owner)
-                        )
+                        # Disk persistence is a separate delivery projection.
+                        # Its failure must remain visible without reversing an
+                        # already accepted Broker terminal or dropping the socket.
+                        try:
+                            persisted = bool(owner and native_content.persist(request_id, owner))
+                        except Exception:
+                            persisted = False
+                            active_state.diagnostics["native_snapshot_persist_error"] = "persistence-failed"
+                            logger.exception(
+                                "Broker accepted terminal but native snapshot persistence failed request_id=%s",
+                                request_id,
+                            )
+                        active_state.diagnostics["native_snapshot_persisted"] = persisted
                     if terminal_message:
                         if active_state and active_state.client_id == client_id:
                             active_state.diagnostics["terminal_transport_broker_accepted"] = bool(accepted)
@@ -2602,10 +2622,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 "broker-accepted" if accepted else "broker-rejected"
                             )
                             active_state.diagnostics["server_terminal_receipt_type"] = str(message_type)
-                            await telemetry.upsert({
-                                "request_id": request_id,
-                                "diagnostics": dict(active_state.diagnostics),
-                            })
+                            await _telemetry_upsert_best_effort(
+                                telemetry,
+                                {
+                                    "request_id": request_id,
+                                    "diagnostics": dict(active_state.diagnostics),
+                                },
+                                request_id=request_id,
+                                projection="worker-terminal-receipt",
+                            )
                         if not accepted:
                             logger.warning(
                                 "Worker terminal not accepted request=%s type=%s active=%s",
