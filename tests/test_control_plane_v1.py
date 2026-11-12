@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from app.admin_auth import AdminLoginRateLimiter, AdminSessionStore
 from app.config import Settings
-from app.control_plane import ControlPlaneError, ControlPlaneStore, permission_for_admin_route
+from app.control_plane import ControlPlaneError, ControlPlaneStore, ROLES, permission_for_admin_route
 from app.control_plane_v1_patch import install_control_plane_v1
 from app.main import create_app
 from app.user_console_v104_patch import install_user_console_v104_patch
@@ -84,6 +84,7 @@ def test_role_route_map_is_explicit_and_secret_read_denied_to_key_admin():
     assert permission_for_admin_route("/api/admin/user-payments", "GET") == "billing:read"
     assert permission_for_admin_route("/api/admin/user-payments", "PUT") == "secrets:write"
     assert permission_for_admin_route("/api/admin/user-payments/test", "POST") == "billing:write"
+    assert "secrets:write" not in ROLES["billing_admin"]
     # Request search/detail may include user prompts and remains root-only.
     assert permission_for_admin_route("/api/admin/requests", "GET") is None
     assert permission_for_admin_route("/api/admin/requests/req_123", "GET") is None
