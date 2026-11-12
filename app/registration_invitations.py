@@ -254,7 +254,7 @@ class InvitationStore:
                 conn.execute("BEGIN IMMEDIATE")
                 cursor = conn.execute(
                     """UPDATE invitations SET status='revoked',revoked_at=?,reservation_id=NULL
-                       WHERE invitation_id=? AND status IN ('issued','reserved')""",
+                       WHERE invitation_id=? AND status='issued'""",
                     (int(time.time()), str(invitation_id)),
                 )
                 conn.commit()
