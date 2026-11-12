@@ -76,7 +76,9 @@ async def fake_dispatch(app_arg, request, body, principal_arg, prompt, native_to
     assert native_tools == ["web_search"], native_tools
     request_id = "route-owner-" + uuid.uuid4().hex
     client_id = "route-owner-test-client"
-    state = await app_arg.state.broker.create(request_id, client_id)
+    # The collector is faked, so a sentinel state is sufficient; avoid the
+    # production capacity queue, which correctly requires a live Worker.
+    state = object()
     dispatch_calls.append({"request_id": request_id, "native_tools": list(native_tools)})
     return state, request_id, client_id, 30
 
