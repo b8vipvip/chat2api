@@ -86,7 +86,7 @@ def test_guard_rejects_symlinked_lock_file(tmp_path: Path):
     target = tmp_path / "other.lock"
     target.write_text("pid=123\n", encoding="ascii")
     (tmp_path / ".chat2api-runtime.lock").symlink_to(target)
-    with pytest.raises(RuntimeTopologyError, match="Unable to open"):
+    with pytest.raises(RuntimeTopologyError, match="lock path cannot be a symbolic link"):
         SingleProcessRuntimeGuard(tmp_path).acquire()
 
 
