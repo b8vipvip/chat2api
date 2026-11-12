@@ -89,7 +89,7 @@ ADMIN_HTML = r'''<!doctype html>
 </section>
 <section class="view" id="view-client-policy">
   <div class="panel"><h2>客户端动态配置</h2><p class="c-note">注册开关和 Web Chat 开关由服务端强制执行；公告作为纯文本返回，客户端必须使用 textContent 渲染。</p>
-    <div class="c-form"><label>注册策略<select id="cRegistrationMode"><option value="open">开放注册</option><option value="closed">关闭注册</option></select></label><label><span>Web Chat</span><select id="cWebChatEnabled"><option value="true">启用</option><option value="false">停用</option></select></label></div>
+    <div class="c-form"><label>注册策略<select id="cRegistrationMode"><option value="open">开放注册</option><option value="invite_only">邀请注册</option><option value="closed">关闭注册</option></select></label><label><span>Web Chat</span><select id="cWebChatEnabled"><option value="true">启用</option><option value="false">停用</option></select></label></div>
     <label>公告（最多 500 字）<textarea id="cAnnouncement" maxlength="500" style="width:100%;min-height:110px"></textarea></label>
     <div class="c-form"><button class="action good" id="cClientSave">保存配置</button><button class="action" id="cClientReload">重新读取</button><span id="cClientStatus" class="muted"></span></div>
   </div>
