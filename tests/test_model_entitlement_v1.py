@@ -45,6 +45,14 @@ class FakeAccounts:
         return {"user_id": user_id} if user_id == "usr_abcdef123" else None
 
 
+class FakeTenantMemberships:
+    def exists(self, tenant_id):
+        return tenant_id == "ten_abc123"
+
+    def tenant_for_key(self, key_id):
+        return "ten_abc123" if key_id == "key_1" else None
+
+
 class FakeApiKeys:
     def get_public(self, key_id):
         return {"key_id": key_id} if key_id in {"key_1", "key_2"} else None
@@ -55,6 +63,7 @@ def build_app(tmp_path: Path):
     app.state.settings = SimpleNamespace(data_dir=tmp_path, admin_username="owner")
     app.state.registry = FakeRegistry()
     app.state.user_accounts = FakeAccounts()
+    app.state.tenant_memberships = FakeTenantMemberships()
     app.state.api_keys = FakeApiKeys()
     app.state.admin_sessions = AdminSessionStore(
         "owner", "strong-admin-password", storage_path=tmp_path / "admin_sessions.json"
@@ -186,6 +195,18 @@ def test_admin_entitlement_api_requires_session_audits_and_validates_subjects(tm
             json={"effect": "allow", "models": ["default"]},
         )
         assert invalid.status_code == 400
+        tenant_rule = client.put(
+            "/api/admin/model-entitlements/tenant/ten_abc123",
+            headers=headers,
+            json={"effect": "allow", "models": ["gpt-5.5"]},
+        )
+        assert tenant_rule.status_code == 200
+        missing_tenant = client.put(
+            "/api/admin/model-entitlements/tenant/ten_missing",
+            headers=headers,
+            json={"effect": "deny", "models": ["gpt-5.5"]},
+        )
+        assert missing_tenant.status_code == 404
         deleted = client.delete("/api/admin/model-entitlements/key/key_1", headers=headers)
         assert deleted.status_code == 200 and deleted.json()["deleted"] is True
         events = app.state.admin_audit.recent(20)
@@ -204,3 +225,25 @@ def test_user_console_model_catalog_obeys_global_and_user_entitlements(tmp_path:
         )
         assert response.status_code == 200
         assert [row["id"] for row in response.json()["data"]] == ["gpt-5.6-sol"]
+
+
+def test_tenant_allowlist_applies_only_through_explicit_api_key_binding(tmp_path: Path):
+    app, _ = build_app(tmp_path)
+    store = app.state.model_entitlements
+    registry = app.state.registry
+    store.upsert("global", "default", "allow", ["gpt-5.5", "gpt-5.6-sol"])
+    store.upsert("tenant", "ten_abc123", "allow", ["gpt-5.5"])
+
+    registry.routing_key_context.set("key_1")
+    assert [row["id"] for row in registry.model_catalog()] == ["gpt-5.5"]
+    tokens = set_model_context("gpt-5.6-sol")
+    try:
+        with pytest.raises(HTTPException) as denied:
+            registry.resolve_client(None)
+        assert denied.value.status_code == 403
+    finally:
+        reset_model_context(tokens)
+
+    # An unbound key does not inherit another tenant's policy.
+    registry.routing_key_context.set("key_2")
+    assert [row["id"] for row in registry.model_catalog()] == ["gpt-5.5", "gpt-5.6-sol"]
