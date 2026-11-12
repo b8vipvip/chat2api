@@ -261,10 +261,22 @@ def test_structured_image_references_are_owner_scoped_and_round_trip(tmp_path):
                 ],
             }],
         }
-        assert alice.put(
+        remote_rejected = alice.put(
             "/api/user/chat/conversations/conversation_image03",
             json=remote, headers=ORIGIN,
-        ).status_code == 422
+        )
+        assert remote_rejected.status_code == 422
+        assert remote_rejected.headers["cache-control"] == "private, no-store"
+        assert "cookie" in {value.strip().lower() for value in remote_rejected.headers["vary"].split(",")}
+
+        malformed = alice.put(
+            "/api/user/chat/conversations/conversation_malformed",
+            content="{",
+            headers={**ORIGIN, "Content-Type": "application/json"},
+        )
+        assert malformed.status_code == 422
+        assert malformed.headers["cache-control"] == "private, no-store"
+        assert "cookie" in {value.strip().lower() for value in malformed.headers["vary"].split(",")}
 
         wrong_mime_upload = alice.post(
             "/v1/files",
