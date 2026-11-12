@@ -39,7 +39,7 @@ The same PR adds an offline manifest-based verifier:
 
 Creation acquires the runtime data-directory lock, refuses to run while a server owns it, excludes the runtime lock inode, rejects symlinks, and writes a 0600 manifest with relative paths, sizes, SHA256, modes and file types. Verification checks the exact file set, checksums, JSON/JSONL parseability and SQLite integrity. Restore-check writes only to a new target, verifies the restored copy, and never overwrites an existing directory.
 
-**This helper does not encrypt backups.** It requires an explicit plaintext-sensitive-data acknowledgement because G0/DataKeyring remains deferred. Store backups only in access-controlled locations; do not treat the helper as permission to back up production secrets to an untrusted destination.
+**This helper does not encrypt or sign backups.** Its SHA256 manifest detects accidental corruption but is not an authenticity guarantee against an attacker who can modify both files and manifest. It requires an explicit plaintext-sensitive-data acknowledgement because G0/DataKeyring remains deferred. Store backups only in access-controlled locations; do not treat the helper as permission to back up production secrets to an untrusted destination.
 
 ## Explicit limitations
 
