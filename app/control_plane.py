@@ -83,9 +83,16 @@ def permission_for_admin_route(path: str, method: str) -> str | None:
         return "keys:write"
     if path == "/api/admin/keys" or re.fullmatch(r"/api/admin/keys/[^/]+", path):
         return "keys:" + suffix
+    if path == "/api/admin/user-pricing":
+        return "billing:" + suffix
+    if path == "/api/admin/user-payments":
+        # Payment provider private keys remain root-only until G0 DataKeyring
+        # migration and its rotation/rollback evidence are accepted.
+        return "secrets:write" if write else "billing:read"
+    if path == "/api/admin/user-payments/test":
+        return "billing:write"
     if path in {
-        "/api/admin/user-pricing", "/api/admin/user-payments",
-        "/api/admin/user-payments/test", "/api/admin/payment-channels-v106",
+        "/api/admin/payment-channels-v106",
         "/api/admin/payment-channels-v106/usdt-orders",
         "/api/admin/payment-channels-v106/test",
     } or re.fullmatch(r"/api/admin/payment-channels-v106/usdt-orders/[^/]+/(confirm|reject)", path):
