@@ -258,6 +258,16 @@
         emit(safeRecord, result);
         return result;
       }
+      if (payload.status === "finalizing" && payload.already_terminal === true) {
+        const result = {
+          status:"finalizing",
+          active:true,
+          terminal:false,
+          cancel_requested:false,
+        };
+        emit(safeRecord, result);
+        return result;
+      }
       if (payload.cancel_requested !== true) {
         const result = {status:"cancel_unavailable", active:true, terminal:false, cancel_requested:false};
         emit(safeRecord, result);
