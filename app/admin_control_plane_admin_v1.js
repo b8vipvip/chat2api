@@ -1,0 +1,440 @@
+/* C-track management views for the single app/admin.py console owner. */
+(() => {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const C_ROLES = {
+    "control-admins": ["super_admin"],
+    "client-policy": ["super_admin", "system_admin"],
+    "tenants": ["super_admin", "system_admin", "tenant_admin"],
+    "model-entitlements": ["super_admin", "system_admin", "support"],
+    "plugins": ["super_admin", "plugin_admin"]
+  };
+  let adminSession = null;
+  let roleCatalogue = {};
+  let selectedTenantId = "";
+
+  function messageOf(value) {
+    if (typeof value === "string") return value;
+    try { return JSON.stringify(value); } catch (_) { return "Request failed"; }
+  }
+
+  async function sessionApi(path, options = {}) {
+    const headers = { ...(options.headers || {}) };
+    if (options.body !== undefined) headers["Content-Type"] = "application/json";
+    const response = await fetch(path, {
+      method: options.method || "GET",
+      credentials: "same-origin",
+      cache: "no-store",
+      headers,
+      body: options.body === undefined ? undefined : JSON.stringify(options.body)
+    });
+    const raw = await response.text();
+    let data = {};
+    try { data = raw ? JSON.parse(raw) : {}; } catch (_) { data = { detail: raw }; }
+    if (!response.ok) throw new Error(messageOf(data.detail || data));
+    return data;
+  }
+
+  function button(label, className, handler) {
+    const node = document.createElement("button");
+    node.type = "button";
+    node.className = className || "action";
+    node.textContent = label;
+    node.addEventListener("click", handler);
+    return node;
+  }
+
+  function cell(row, value) {
+    const node = document.createElement("td");
+    node.textContent = value == null ? "" : String(value);
+    row.appendChild(node);
+    return node;
+  }
+
+  function setStatus(id, value, bad = false) {
+    const node = $(id);
+    if (node) {
+      node.textContent = value;
+      node.className = bad ? "bad" : "muted";
+    }
+  }
+
+  function roleCan(view) {
+    const allowed = C_ROLES[view] || [];
+    return !!(adminSession && adminSession.authenticated && allowed.includes(adminSession.role));
+  }
+
+  function applyNavigation() {
+    document.querySelectorAll("[data-cview]").forEach((node) => {
+      node.hidden = !roleCan(node.dataset.view);
+    });
+    const root = adminSession && adminSession.authenticated && adminSession.role === "super_admin";
+    document.querySelectorAll(".nav button:not([data-cview])").forEach((node) => {
+      node.hidden = !!(adminSession && adminSession.authenticated && !root);
+    });
+    if ($("adminKey")) $("adminKey").disabled = !!(adminSession && adminSession.authenticated && !root);
+    if ($("connect")) $("connect").hidden = !!(adminSession && adminSession.authenticated && !root);
+    const canWriteModels = adminSession && ["super_admin", "system_admin"].includes(adminSession.role);
+    ["cEntSave"].forEach((id) => { if ($(id)) $(id).hidden = !canWriteModels; });
+    ["cEntSubjectType", "cEntSubjectId", "cEntEffect", "cEntModels"].forEach((id) => {
+      if ($(id)) $(id).disabled = !canWriteModels;
+    });
+  }
+
+  async function refreshSession() {
+    try {
+      adminSession = await sessionApi("/api/admin/auth/session");
+      const state = $("adminSessionState");
+      if (state) {
+        state.textContent = adminSession.authenticated
+          ? "已登录：" + adminSession.username + " · " + (adminSession.role || "unknown")
+          : "未登录管理会话";
+        state.className = adminSession.authenticated ? "ok" : "muted";
+      }
+      applyNavigation();
+      const active = location.hash.replace(/^#/, "");
+      if (C_ROLES[active] && !roleCan(active)) {
+        show("overview");
+      }
+      return adminSession;
+    } catch (error) {
+      adminSession = null;
+      applyNavigation();
+      setStatus("adminSessionState", "会话检查失败：" + error.message, true);
+      return null;
+    }
+  }
+
+  $("adminSessionLogin")?.addEventListener("click", async () => {
+    const username = $("adminSessionUser").value.trim();
+    const password = $("adminSessionPassword").value;
+    if (!username || !password) {
+      setStatus("adminSessionState", "请输入管理员用户名和密码", true);
+      return;
+    }
+    $("adminSessionLogin").disabled = true;
+    try {
+      await sessionApi("/api/admin/auth/login", {
+        method: "POST",
+        body: { username, password }
+      });
+      $("adminSessionPassword").value = "";
+      await refreshSession();
+      if (adminSession && adminSession.authenticated) {
+        if (typeof status === "function") status("管理员 Session 已建立 · " + adminSession.role, "ok");
+      }
+    } catch (error) {
+      setStatus("adminSessionState", "登录失败：" + error.message, true);
+    } finally {
+      $("adminSessionLogin").disabled = false;
+    }
+  });
+
+  $("adminSessionLogout")?.addEventListener("click", async () => {
+    try {
+      await sessionApi("/api/admin/auth/logout", { method: "POST", body: {} });
+      adminSession = null;
+      await refreshSession();
+      if (typeof status === "function") status("管理员 Session 已退出", "ok");
+    } catch (error) {
+      setStatus("adminSessionState", "退出失败：" + error.message, true);
+    }
+  });
+
+  const originalShow = show;
+  show = function(view) {
+    if (C_ROLES[view] && !roleCan(view)) {
+      if (typeof status === "function") status("请先使用有权限的管理员 Session 登录", "bad");
+      return;
+    }
+    originalShow(view);
+    if (view === "control-admins") loadAdmins();
+    if (view === "client-policy") loadClientPolicy();
+    if (view === "tenants") loadTenants();
+    if (view === "model-entitlements") loadEntitlements();
+    if (view === "plugins") loadPlugins();
+  };
+
+  async function loadAdmins() {
+    try {
+      const [roles, admins] = await Promise.all([
+        sessionApi("/api/admin/control/roles"),
+        sessionApi("/api/admin/control/admins")
+      ]);
+      roleCatalogue = roles.roles || {};
+      const selector = $("cAdminRole");
+      selector.replaceChildren();
+      Object.keys(roleCatalogue).forEach((role) => {
+        const option = document.createElement("option");
+        option.value = role;
+        option.textContent = role;
+        selector.appendChild(option);
+      });
+      const body = $("cAdminRows");
+      body.replaceChildren();
+      (admins.data || []).forEach((item) => {
+        const row = document.createElement("tr");
+        cell(row, item.username);
+        cell(row, item.role);
+        cell(row, item.enabled ? "enabled" : "disabled");
+        const actions = document.createElement("td");
+        if (item.source !== "environment") {
+          const select = document.createElement("select");
+          Object.keys(roleCatalogue).forEach((role) => {
+            const option = document.createElement("option");
+            option.value = role;
+            option.textContent = role;
+            option.selected = role === item.role;
+            select.appendChild(option);
+          });
+          actions.appendChild(select);
+          actions.appendChild(button("保存角色", "action", async () => {
+            try {
+              await sessionApi("/api/admin/control/admins/" + encodeURIComponent(item.username), {
+                method: "PATCH", body: { role: select.value }
+              });
+              await loadAdmins();
+            } catch (error) { setStatus("cAdminStatus", error.message, true); }
+          }));
+          actions.appendChild(button(item.enabled ? "停用" : "启用", item.enabled ? "action danger" : "action good", async () => {
+            try {
+              await sessionApi("/api/admin/control/admins/" + encodeURIComponent(item.username), {
+                method: "PATCH", body: { enabled: !item.enabled }
+              });
+              await loadAdmins();
+            } catch (error) { setStatus("cAdminStatus", error.message, true); }
+          }));
+        } else {
+          actions.textContent = "环境配置的 root 管理员";
+        }
+        row.appendChild(actions);
+        body.appendChild(row);
+      });
+      setStatus("cAdminStatus", "已加载 " + (admins.data || []).length + " 个管理员身份");
+    } catch (error) { setStatus("cAdminStatus", error.message, true); }
+  }
+
+  $("cAdminCreate")?.addEventListener("click", async () => {
+    try {
+      await sessionApi("/api/admin/control/admins", {
+        method: "POST",
+        body: {
+          username: $("cAdminName").value.trim(),
+          password: $("cAdminPassword").value,
+          role: $("cAdminRole").value
+        }
+      });
+      $("cAdminPassword").value = "";
+      setStatus("cAdminStatus", "管理员已创建；密码不会再次显示");
+      await loadAdmins();
+    } catch (error) { setStatus("cAdminStatus", error.message, true); }
+  });
+  $("cAdminReload")?.addEventListener("click", loadAdmins);
+
+  async function loadClientPolicy() {
+    try {
+      const data = await sessionApi("/api/admin/control/client");
+      $("cRegistrationMode").value = data.registration_mode;
+      $("cWebChatEnabled").value = String(data.web_chat_enabled);
+      $("cAnnouncement").value = data.announcement || "";
+      setStatus("cClientStatus", "配置已读取 · policy v" + data.policy_version);
+    } catch (error) { setStatus("cClientStatus", error.message, true); }
+  }
+  $("cClientSave")?.addEventListener("click", async () => {
+    try {
+      await sessionApi("/api/admin/control/client", {
+        method: "PUT",
+        body: {
+          registration_mode: $("cRegistrationMode").value,
+          web_chat_enabled: $("cWebChatEnabled").value === "true",
+          announcement: $("cAnnouncement").value
+        }
+      });
+      setStatus("cClientStatus", "保存成功；服务端策略已更新");
+    } catch (error) { setStatus("cClientStatus", error.message, true); }
+  });
+  $("cClientReload")?.addEventListener("click", loadClientPolicy);
+
+  function selectedTenant() {
+    if (!selectedTenantId) throw new Error("请先选择工作区");
+    return encodeURIComponent(selectedTenantId);
+  }
+  async function loadTenants() {
+    try {
+      const result = await sessionApi("/api/admin/tenants");
+      const body = $("cTenantRows");
+      body.replaceChildren();
+      (result.data || []).forEach((tenant) => {
+        const row = document.createElement("tr");
+        cell(row, tenant.display_name + " (" + tenant.slug + ")");
+        cell(row, tenant.tenant_id);
+        const actions = document.createElement("td");
+        actions.appendChild(button("选择", "action", async () => {
+          selectedTenantId = tenant.tenant_id;
+          $("cTenantSelected").textContent = "当前工作区：" + tenant.display_name + " · " + tenant.tenant_id;
+          await loadTenantMembers();
+          await loadTenantKeys();
+        }));
+        row.appendChild(actions);
+        body.appendChild(row);
+      });
+      setStatus("cTenantSelected", selectedTenantId ? "当前工作区：" + selectedTenantId : "请选择工作区");
+    } catch (error) { setStatus("cTenantSelected", error.message, true); }
+  }
+  async function loadTenantMembers() {
+    try {
+      const result = await sessionApi("/api/admin/tenants/" + selectedTenant() + "/members");
+      const body = $("cTenantMemberRows");
+      body.replaceChildren();
+      (result.data || []).forEach((member) => {
+        const row = document.createElement("tr");
+        cell(row, member.user_id);
+        cell(row, member.role);
+        const actions = document.createElement("td");
+        actions.appendChild(button("移除", "action danger", async () => {
+          if (!confirm("确认移除该成员？其已绑定 API Key 必须先解绑。")) return;
+          try {
+            await sessionApi("/api/admin/tenants/" + selectedTenant() + "/members/" + encodeURIComponent(member.user_id), { method: "DELETE" });
+            await loadTenantMembers();
+          } catch (error) { setStatus("cTenantSelected", error.message, true); }
+        }));
+        row.appendChild(actions);
+        body.appendChild(row);
+      });
+    } catch (error) { setStatus("cTenantSelected", error.message, true); }
+  }
+  async function loadTenantKeys() {
+    try {
+      const result = await sessionApi("/api/admin/tenants/" + selectedTenant() + "/keys");
+      const body = $("cTenantKeyRows");
+      body.replaceChildren();
+      (result.data || []).forEach((binding) => {
+        const row = document.createElement("tr");
+        cell(row, binding.key_id);
+        cell(row, binding.user_id);
+        cell(row, binding.created_at);
+        const actions = document.createElement("td");
+        actions.appendChild(button("解绑", "action danger", async () => {
+          if (!confirm("确认解除此 API Key 的工作区绑定？")) return;
+          try {
+            await sessionApi("/api/admin/tenants/" + selectedTenant() + "/keys/" + encodeURIComponent(binding.key_id), { method: "DELETE" });
+            await loadTenantKeys();
+          } catch (error) { setStatus("cTenantSelected", error.message, true); }
+        }));
+        row.appendChild(actions);
+        body.appendChild(row);
+      });
+    } catch (error) { setStatus("cTenantSelected", error.message, true); }
+  }
+  $("cTenantCreate")?.addEventListener("click", async () => {
+    try {
+      const result = await sessionApi("/api/admin/tenants", {
+        method: "POST",
+        body: { slug: $("cTenantSlug").value.trim(), display_name: $("cTenantName").value.trim() }
+      });
+      selectedTenantId = result.tenant.tenant_id;
+      await loadTenants();
+      await loadTenantMembers();
+      await loadTenantKeys();
+    } catch (error) { setStatus("cTenantSelected", error.message, true); }
+  });
+  $("cTenantReload")?.addEventListener("click", loadTenants);
+  $("cTenantAddMember")?.addEventListener("click", async () => {
+    try {
+      await sessionApi("/api/admin/tenants/" + selectedTenant() + "/members", {
+        method: "PUT",
+        body: { user_id: $("cTenantUserId").value.trim(), role: $("cTenantMemberRole").value }
+      });
+      await loadTenantMembers();
+    } catch (error) { setStatus("cTenantSelected", error.message, true); }
+  });
+  $("cTenantBindKey")?.addEventListener("click", async () => {
+    try {
+      await sessionApi("/api/admin/tenants/" + selectedTenant() + "/keys/" + encodeURIComponent($("cTenantKeyId").value.trim()), {
+        method: "PUT",
+        body: { user_id: $("cTenantKeyUser").value.trim() }
+      });
+      await loadTenantKeys();
+    } catch (error) { setStatus("cTenantSelected", error.message, true); }
+  });
+  $("cTenantReloadKeys")?.addEventListener("click", loadTenantKeys);
+
+  async function loadEntitlements() {
+    try {
+      const result = await sessionApi("/api/admin/model-entitlements");
+      const body = $("cEntRows");
+      body.replaceChildren();
+      (result.data || []).forEach((rule) => {
+        const row = document.createElement("tr");
+        cell(row, rule.subject_type + "/" + rule.subject_id);
+        cell(row, rule.effect);
+        cell(row, (rule.models || []).join(", "));
+        cell(row, rule.enabled ? "enabled" : "disabled");
+        cell(row, rule.updated_at);
+        const actions = document.createElement("td");
+        if (adminSession && ["super_admin", "system_admin"].includes(adminSession.role)) {
+          actions.appendChild(button("删除", "action danger", async () => {
+            if (!confirm("确认删除此模型权限规则？")) return;
+            try {
+              await sessionApi("/api/admin/model-entitlements/" + encodeURIComponent(rule.subject_type) + "/" + encodeURIComponent(rule.subject_id), { method: "DELETE" });
+              await loadEntitlements();
+            } catch (error) { setStatus("cEntStatus", error.message, true); }
+          }));
+        }
+        row.appendChild(actions);
+        body.appendChild(row);
+      });
+      setStatus("cEntStatus", "已加载 " + (result.data || []).length + " 条规则");
+    } catch (error) { setStatus("cEntStatus", error.message, true); }
+  }
+  $("cEntSave")?.addEventListener("click", async () => {
+    try {
+      const subjectType = $("cEntSubjectType").value;
+      const subjectId = subjectType === "global" ? "default" : $("cEntSubjectId").value.trim();
+      const models = $("cEntModels").value.split(/[\n,，]+/).map((item) => item.trim()).filter(Boolean);
+      await sessionApi("/api/admin/model-entitlements/" + encodeURIComponent(subjectType) + "/" + encodeURIComponent(subjectId), {
+        method: "PUT",
+        body: { effect: $("cEntEffect").value, models, enabled: true }
+      });
+      await loadEntitlements();
+    } catch (error) { setStatus("cEntStatus", error.message, true); }
+  });
+  $("cEntReload")?.addEventListener("click", loadEntitlements);
+
+  async function loadPlugins() {
+    try {
+      const result = await sessionApi("/api/admin/plugins");
+      const body = $("cPluginRows");
+      body.replaceChildren();
+      (result.data || []).forEach((plugin) => {
+        const row = document.createElement("tr");
+        cell(row, plugin.id);
+        cell(row, plugin.version);
+        cell(row, plugin.sha256);
+        cell(row, plugin.trusted ? "trusted" : "untrusted");
+        cell(row, plugin.execution_enabled ? "enabled" : "disabled");
+        const actionCell = document.createElement("td");
+        actionCell.appendChild(button("详情", "action", async () => {
+          try {
+            const detail = await sessionApi("/api/admin/plugins/" + encodeURIComponent(plugin.id) + "/versions/" + encodeURIComponent(plugin.version));
+            $("cPluginDetail").textContent = JSON.stringify(detail, null, 2);
+          } catch (error) { setStatus("cPluginStatus", error.message, true); }
+        }));
+        row.appendChild(actionCell);
+        body.appendChild(row);
+      });
+      setStatus("cPluginStatus", "插件执行状态固定为关闭");
+    } catch (error) { setStatus("cPluginStatus", error.message, true); }
+  }
+  $("cPluginRegister")?.addEventListener("click", async () => {
+    try {
+      const manifest = JSON.parse($("cPluginManifest").value);
+      const result = await sessionApi("/api/admin/plugins", { method: "POST", body: manifest });
+      $("cPluginDetail").textContent = JSON.stringify(result, null, 2);
+      await loadPlugins();
+    } catch (error) { setStatus("cPluginStatus", error.message, true); }
+  });
+  $("cPluginReload")?.addEventListener("click", loadPlugins);
+
+  refreshSession();
+})();
