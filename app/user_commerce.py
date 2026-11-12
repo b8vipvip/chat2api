@@ -42,18 +42,10 @@ def _now() -> str:
 
 
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{secrets.token_hex(6)}.tmp")
-    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    try:
-        os.chmod(temporary, 0o600)
-    except OSError:
-        pass
-    temporary.replace(path)
-    try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
+    DataKeyring.atomic_write(
+        path,
+        (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8"),
+    )
 
 
 def _token_hash(value: str) -> str:
@@ -514,10 +506,14 @@ class PaymentConfigStore:
             return
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
-            if isinstance(raw, dict):
-                self.payload.update(raw)
-        except (OSError, ValueError, TypeError):
-            pass
+            if not isinstance(raw, dict):
+                raise ValueError("Invalid payment configuration document shape")
+            self.payload.update(raw)
+        except (OSError, ValueError, TypeError) as error:
+            if self.keyring:
+                raise DataKeyringError(
+                    "Stored payment configuration document is unreadable; restore a verified backup"
+                ) from error
         if self.payload.get("key_ciphertext"):
             # Do not let a key mismatch masquerade as an unconfigured provider.
             self.secret_key()
