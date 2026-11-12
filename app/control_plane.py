@@ -23,7 +23,6 @@ POLICY_VERSION = 1
 ROLES: dict[str, frozenset[str]] = {
     "super_admin": frozenset({"*"}),
     "system_admin": frozenset({"system:read", "system:write", "clients:read", "clients:write", "models:read", "models:write", "users:read", "diagnostics:read", "tenants:read", "tenants:write", "quota:read", "quota:write"}),
-    "tenant_admin": frozenset({"tenants:read", "tenants:write"}),
     "user_admin": frozenset({"users:read", "users:write"}),
     "api_key_admin": frozenset({"keys:read", "keys:write", "quota:read", "quota:write"}),
     "billing_admin": frozenset({"billing:read", "billing:write", "quota:read"}),
