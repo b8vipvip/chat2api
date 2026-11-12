@@ -46,25 +46,29 @@ class InvitationStore:
         return conn
 
     def _init_db(self) -> None:
-        with self.lock, self._connect() as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS invitations (
-                    invitation_id TEXT PRIMARY KEY,
-                    email TEXT NOT NULL,
-                    token_hash TEXT NOT NULL UNIQUE,
-                    status TEXT NOT NULL CHECK(status IN
-                        ('issued','reserved','consumed','revoked','expired')),
-                    created_by TEXT NOT NULL,
-                    created_at INTEGER NOT NULL,
-                    expires_at INTEGER NOT NULL,
-                    reservation_id TEXT UNIQUE,
-                    reserved_at INTEGER,
-                    consumed_at INTEGER,
-                    revoked_at INTEGER
-                )
-            """)
-            conn.execute("CREATE INDEX IF NOT EXISTS invitations_created_idx ON invitations(created_at DESC)")
-            conn.execute("CREATE INDEX IF NOT EXISTS invitations_status_idx ON invitations(status, expires_at)")
+        with self.lock:
+            conn = self._connect()
+            try:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS invitations (
+                        invitation_id TEXT PRIMARY KEY,
+                        email TEXT NOT NULL,
+                        token_hash TEXT NOT NULL UNIQUE,
+                        status TEXT NOT NULL CHECK(status IN
+                            ('issued','reserved','consumed','revoked','expired')),
+                        created_by TEXT NOT NULL,
+                        created_at INTEGER NOT NULL,
+                        expires_at INTEGER NOT NULL,
+                        reservation_id TEXT UNIQUE,
+                        reserved_at INTEGER,
+                        consumed_at INTEGER,
+                        revoked_at INTEGER
+                    )
+                """)
+                conn.execute("CREATE INDEX IF NOT EXISTS invitations_created_idx ON invitations(created_at DESC)")
+                conn.execute("CREATE INDEX IF NOT EXISTS invitations_status_idx ON invitations(status, expires_at)")
+            finally:
+                conn.close()
         try:
             os.chmod(self.path, 0o600)
         except OSError:
@@ -149,7 +153,11 @@ class InvitationStore:
         if len(raw) < 32 or len(raw) > 128:
             raise InvitationError("Invitation code is invalid or unavailable")
         normalized_email = self._email(email)
-        digest = hashlib.sha256(raw.encode("ascii", errors="ignore")).hexdigest()
+        try:
+            token_bytes = raw.encode("ascii")
+        except UnicodeEncodeError as exc:
+            raise InvitationError("Invitation code is invalid or unavailable") from exc
+        digest = hashlib.sha256(token_bytes).hexdigest()
         now = int(time.time())
         reservation_id = "invr_" + uuid.uuid4().hex
         with self.lock:
