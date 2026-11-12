@@ -70,6 +70,7 @@ class TenantMembershipStore:
         with self.lock:
             try:
                 with self.db:
+                    self.db.execute("BEGIN IMMEDIATE")
                     self.db.execute(
                         "INSERT INTO tenant_workspaces(id,slug,display_name,created_at) VALUES (?,?,?,?)",
                         (row["tenant_id"],row["slug"],row["display_name"],row["created_at"]),
@@ -98,6 +99,7 @@ class TenantMembershipStore:
             if not self.exists(tenant_id):
                 raise KeyError("Unknown tenant")
             with self.db:
+                self.db.execute("BEGIN IMMEDIATE")
                 # Prevent removal/demotion of the final owner.
                 existing = self.db.execute(
                     "SELECT role FROM tenant_memberships WHERE tenant_id=? AND user_id=?",
@@ -119,6 +121,7 @@ class TenantMembershipStore:
     def remove_member(self, tenant_id: str, user_id: str) -> None:
         with self.lock:
             with self.db:
+                self.db.execute("BEGIN IMMEDIATE")
                 existing = self.db.execute(
                     "SELECT role FROM tenant_memberships WHERE tenant_id=? AND user_id=?",
                     (tenant_id, user_id),
@@ -147,6 +150,19 @@ class TenantMembershipStore:
             ).fetchall()
         return [{"tenant_id": tenant_id, "user_id": uid, "role": role, "created_at": created}
                 for uid,role,created in rows]
+
+    def list_for_user(self, user_id: str) -> list[dict[str, Any]]:
+        """Only return workspaces joined through the authenticated user's identity."""
+        with self.lock:
+            rows = self.db.execute(
+                """SELECT w.id,w.slug,w.display_name,m.role
+                   FROM tenant_workspaces w
+                   JOIN tenant_memberships m ON m.tenant_id=w.id
+                   WHERE m.user_id=? ORDER BY w.slug""",
+                (user_id,),
+            ).fetchall()
+        return [{"tenant_id": tid, "slug": slug, "display_name": name, "role": role}
+                for tid, slug, name, role in rows]
 
     def role_for(self, tenant_id: str, user_id: str) -> str | None:
         """Return membership role for an already authenticated account identity."""
