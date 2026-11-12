@@ -10,12 +10,14 @@ The repository's Docker Compose service currently starts one Uvicorn process and
 
 ## Implemented in this PR
 
-- A startup/shutdown lifecycle guard obtains a non-blocking OS advisory lock at `<data_dir>/.chat2api-runtime.lock`.
-- A second server process using the same data directory fails startup rather than silently running with split in-memory request state.
+- `app.entry` acquires a non-blocking OS advisory lock at `<data_dir>/.chat2api-runtime.lock` **before importing `app.main`**, because `app.main` constructs persistent stores at module import time.
+- The already-acquired guard is held through the existing ASGI lifespan and released at shutdown.
+- A second server process using the same data directory fails before `app.main` can initialize stores.
+- A preloaded Gunicorn-style fork worker detects that the lock descriptor belongs to the parent PID and fails closed instead of inheriting the parent's lock.
 - The lock file is created with mode `0600`, rejects symlinked data directories/lock files, and is retained after shutdown. Retaining the inode is important: unlinking a locked file could let a second process create a new inode and bypass the lock.
 - Known multi-worker environment variables (`WEB_CONCURRENCY`, `UVICORN_WORKERS`, `GUNICORN_WORKERS`) with numeric values greater than one are rejected.
 - The lock is released during ASGI shutdown.
-- Tests cover exclusive ownership, release/reacquire, multi-worker environment rejection, symlink rejection and FastAPI lifespan integration.
+- Tests cover exclusive ownership, release/reacquire, multi-worker environment rejection, symlink rejection, preloaded-fork rejection and FastAPI lifespan integration.
 
 ## Integration boundary
 
@@ -52,6 +54,6 @@ Creation acquires the runtime data-directory lock, refuses to run while a server
 ## Acceptance still required
 
 - Exact-head CI and production image smoke.
-- Verify Docker Compose starts normally and a second process pointed at the same mounted data volume fails startup.
+- Verify Docker Compose starts normally, a second process pointed at the same mounted data volume fails before store initialization, and a preloaded fork worker cannot inherit the parent's lock.
 - Verify graceful shutdown releases the lock and abrupt process death releases the OS lock without deleting the retained lock file.
 - Add a future shared-state architecture only as a separately reviewed P-01 design and migration; do not remove this guard merely to enable replica count.
