@@ -113,10 +113,11 @@ def test_admin_mutations_require_same_origin_for_login_and_all_admin_routes(tmp_
 def test_admin_user_management_lists_keys_disables_user_and_audits_actions(
     tmp_path: Path,
 ) -> None:
-    with TestClient(_production_admin_app(tmp_path)) as client:
+    app = _production_admin_app(tmp_path)
+    with TestClient(app) as client:
         _admin_login(client)
 
-        accounts = client.app.state.user_accounts
+        accounts = app.state.user_accounts
         user = accounts.register("managed-user@example.com", "user-password-long", "Managed User")
         user_id = user["user_id"]
         user_session = accounts.create_session(user_id)
