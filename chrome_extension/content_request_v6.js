@@ -3383,9 +3383,9 @@
           } catch (_) {
             active.abortRecoveryReadOnly = {response_recovery_capture_error:true};
             abortedRenderedCandidate = "";
-            abortedRenderedCandidateSince = 0;
+            abortedRenderedCandidateSince = null;
           }
-        } else if (!rendered) { abortedRenderedCandidate = ""; abortedRenderedCandidateSince = 0; }
+        } else if (!rendered) { abortedRenderedCandidate = ""; abortedRenderedCandidateSince = null; }
         if (!active.abortRecoveryReportedAt || Date.now() - active.abortRecoveryReportedAt >= 20000) {
           active.abortRecoveryReportedAt = Date.now();
           await diagnostic(active, "aborted-sse-dom-recovery", {
@@ -3421,7 +3421,7 @@
         }
       } else {
         abortedRenderedCandidate = "";
-        abortedRenderedCandidateSince = 0;
+        abortedRenderedCandidateSince = null;
       }
 
       // A DOM pause or a missing Stop button cannot override an observed SSE
