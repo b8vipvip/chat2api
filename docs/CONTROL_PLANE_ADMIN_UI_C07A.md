@@ -8,6 +8,10 @@ request-history table owner.
 
 - Administrator RBAC: list/create delegated admins, change roles and enable/
   disable accounts. Password is sent only at creation and never rendered again.
+- User accounts: search/list users, enable/disable and revoke sessions according
+  to role; delegated listings redact wallet balances.
+- API Keys: list/create/update quota/disable/revoke; a newly created token is
+  displayed once and historical secret reveal remains root-only.
 - Client policy: open/closed registration, Web Chat enable flag and plain-text
   announcement.
 - Tenants: create/list workspaces, manage membership roles, bind/unbind
