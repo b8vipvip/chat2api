@@ -101,3 +101,6 @@ All success and application error responses carry `Cache-Control: private, no-st
 
 
 Structured message content is currently limited to user-side text and owner-verified image file references (maximum four image references per message, PNG/JPEG/WebP/GIF MIME allowlist, 10 MiB per image and 20 MiB total per message). This is still a prototype contract; document parsing/attachment execution and browser sync are not implemented.
+
+
+The path-scoped ASGI cache middleware also applies the private/no-store policy to FastAPI-generated request-validation errors, not only explicit route exceptions.
