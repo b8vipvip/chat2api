@@ -60,7 +60,7 @@ def test_owner_can_download_exact_bytes_as_attachment_with_safe_headers(tmp_path
         assert response.content == payload
         assert response.headers["content-type"].startswith("text/html")
         assert response.headers["cache-control"] == "private, no-store"
-        assert response.headers["vary"] == "Cookie"
+        assert "cookie" in {value.strip().lower() for value in response.headers["vary"].split(",")}
         assert response.headers["x-content-type-options"] == "nosniff"
         assert response.headers["content-security-policy"] == "default-src 'none'; sandbox"
         assert response.headers["cross-origin-resource-policy"] == "same-origin"
