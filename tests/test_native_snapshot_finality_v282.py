@@ -103,8 +103,8 @@ def test_admin_marks_stale_revision_forensic_only():
 def test_broker_terminal_while_row_running_blocks_stale_native_revision():
     from types import SimpleNamespace
     from app.native_snapshot_finality_v282 import native_terminal_view
-    row={"status":"running","client_id":"ext_lease_a","diagnostics":{}}
-    broker=SimpleNamespace(terminal_event_type="chat.completed",
+    row={"request_id":RID,"status":"running","client_id":"ext_lease_a","diagnostics":{}}
+    broker=SimpleNamespace(request_id=RID, terminal_event_type="chat.completed",
                            client_id="ext_lease_a", diagnostics=dict(BAD))
     effective=native_terminal_view(row,broker)
     assert effective["status"]=="completed"
@@ -115,8 +115,8 @@ def test_broker_terminal_while_row_running_blocks_stale_native_revision():
 def test_other_worker_terminal_cannot_override_request_row():
     from types import SimpleNamespace
     from app.native_snapshot_finality_v282 import native_terminal_view
-    row={"status":"running","client_id":"ext_lease_a","diagnostics":{}}
-    unrelated=SimpleNamespace(terminal_event_type="chat.completed",
+    row={"request_id":RID,"status":"running","client_id":"ext_lease_a","diagnostics":{}}
+    unrelated=SimpleNamespace(request_id=RID, terminal_event_type="chat.completed",
                               client_id="ext_lease_other",diagnostics=dict(BAD))
     assert native_terminal_view(row,unrelated) is row
     assert native_snapshot_finality(row,SNAP)=="live-provisional"
