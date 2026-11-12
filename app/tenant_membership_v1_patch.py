@@ -23,12 +23,20 @@ class MembershipUpsert(BaseModel):
     role: str
 
 
+class TenantKeyBind(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    user_id: str
+
+
 def install_tenant_memberships(app: FastAPI) -> FastAPI:
     if getattr(app.state, "tenant_memberships_installed", False):
         return app
     accounts = getattr(app.state, "user_accounts", None)
     if accounts is None:
         raise RuntimeError("Tenant memberships require the existing UserAccountStore installer")
+    api_keys = getattr(app.state, "api_keys", None)
+    if api_keys is None:
+        raise RuntimeError("Tenant memberships require the existing ApiKeyStore installer")
     store = TenantMembershipStore(app.state.settings.data_dir)
     app.state.tenant_memberships = store
     app.state.tenant_memberships_installed = True
@@ -102,6 +110,53 @@ def install_tenant_memberships(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         audit_write(request, "tenant.member_remove_completed", "membership", tenant_id, {"user_id": user_id})
         return {"removed": True}
+
+    @app.get("/api/admin/tenants/{tenant_id}/keys")
+    async def admin_tenant_keys(tenant_id: str) -> dict[str, Any]:
+        try:
+            return {"data": store.keys_for_tenant(tenant_id)}
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Unknown tenant") from exc
+
+    @app.put("/api/admin/tenants/{tenant_id}/keys/{key_id}")
+    async def admin_bind_tenant_key(
+        tenant_id: str, key_id: str, body: TenantKeyBind, request: Request
+    ) -> dict[str, Any]:
+        # A key is bound only through its actual UserAccountStore owner and an
+        # existing tenant membership. No caller-supplied tenant header is used.
+        if accounts.admin_get(body.user_id) is None or not accounts.owns_key(body.user_id, key_id):
+            raise HTTPException(status_code=404, detail="User-owned API key not found")
+        if api_keys.get_public(key_id) is None:
+            raise HTTPException(status_code=404, detail="API key not found")
+        audit_write(request, "tenant.api_key_bind_requested", "tenant_api_key", tenant_id, {
+            "user_id": body.user_id, "key_id": key_id,
+        })
+        try:
+            result = store.bind_key(tenant_id, body.user_id, key_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=409, detail="User must be a member of the tenant before binding a key") from exc
+        except TenantMembershipError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        audit_write(request, "tenant.api_key_bind_completed", "tenant_api_key", tenant_id, {
+            "user_id": body.user_id, "key_id": key_id,
+        })
+        return {"binding": result}
+
+    @app.delete("/api/admin/tenants/{tenant_id}/keys/{key_id}")
+    async def admin_unbind_tenant_key(
+        tenant_id: str, key_id: str, request: Request
+    ) -> dict[str, bool]:
+        audit_write(request, "tenant.api_key_unbind_requested", "tenant_api_key", tenant_id, {
+            "key_id": key_id,
+        })
+        try:
+            store.unbind_key(tenant_id, key_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Unknown tenant API key binding") from exc
+        audit_write(request, "tenant.api_key_unbind_completed", "tenant_api_key", tenant_id, {
+            "key_id": key_id,
+        })
+        return {"unbound": True}
 
     @app.get("/api/user/tenants")
     async def own_workspaces(request: Request) -> dict[str, Any]:
