@@ -23,6 +23,8 @@ Supported subjects in this slice:
 - user/{user_id}: policy inherited by every API key owned by that user.
 - tenant/{tenant_id}: policy inherited only by API keys explicitly bound to that
   tenant through TenantMembershipStore.tenant_for_key.
+- tenant_role/{owner|admin|member|viewer}: policy inherited from the actual
+  membership role of the user who owns the explicitly bound API key.
 
 A request is allowed only if:
 1. no matching deny rule contains the normalized requested model; and
@@ -40,7 +42,7 @@ This prevents a broad alias from bypassing a concrete allowlist.
 ## Enforcement
 
 - GET /v1/models: filter the existing live model catalog using the current
-  authenticated API-key context. Global, tenant, user and key policies apply.
+  authenticated API-key context. Global, tenant, tenant-role, user and key policies apply.
   Admin model inventory remains unfiltered.
 - GET /api/user/models: filter the user-console pricing/model list using the
   authenticated user plus global/user policy. A browser user session is not
