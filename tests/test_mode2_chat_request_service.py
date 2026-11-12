@@ -129,3 +129,114 @@ async def test_dispatch_requires_live_matching_nonterminal_broker_lease() -> Non
         )
     assert registry.sent == []
     await broker.release(state.request_id)
+
+
+def test_both_real_mode2_adapters_use_one_shared_service(tmp_path) -> None:
+    from fastapi.testclient import TestClient
+
+    from app.config import Settings
+    from app.main import create_app
+    from app.responses_v108_patch import install_responses_v108_patch
+
+    app = create_app(Settings(
+        CHAT2API_API_KEY="mode2-integration-test-master",
+        CHAT2API_DATA_DIR=str(tmp_path),
+    ))
+    install_responses_v108_patch(app)
+    registry = app.state.registry
+    registry.resolve_client = lambda requested: "ext_mode2_both"
+    service = app.state.chat_request_service
+    original_reserve = service.reserve
+    original_dispatch = service.dispatch
+    admitted: list[str] = []
+    dispatched: list[str] = []
+
+    async def observe_reserve(request_id: str, client_id: str):
+        admitted.append(request_id)
+        return await original_reserve(request_id, client_id)
+
+    async def observe_dispatch(client_id: str, *, request_id: str, prompt: str, attachments, options):
+        dispatched.append(request_id)
+        return await original_dispatch(
+            client_id, request_id=request_id, prompt=prompt,
+            attachments=attachments, options=options,
+        )
+
+    async def fake_worker(client_id: str, payload: dict):
+        if payload.get("type") == "chat.request":
+            await app.state.broker.publish(payload["request_id"], {
+                "type": "chat.completed", "text": "shared-service-fixture",
+            })
+
+    service.reserve = observe_reserve
+    service.dispatch = observe_dispatch
+    registry.send = fake_worker
+    headers = {"Authorization": "Bearer mode2-integration-test-master"}
+
+    with TestClient(app) as client:
+        completion = client.post(
+            "/v1/chat/completions",
+            headers=headers,
+            json={"model": "gpt-5.6-sol", "messages": [{"role": "user", "content": "Hello"}]},
+        )
+        assert completion.status_code == 200, completion.text
+        assert completion.json()["choices"][0]["message"]["content"] == "shared-service-fixture"
+
+        response = client.post(
+            "/v1/responses",
+            headers=headers,
+            json={"model": "gpt-5.6-sol", "input": "Hello Responses"},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["output_text"] == "shared-service-fixture"
+
+    assert len(admitted) == 2
+    assert dispatched == admitted
+    assert admitted[0].startswith("req_")
+    assert admitted[1].startswith("resp_req_")
+    assert admitted[0] != admitted[1]
+    assert app.state.broker.requests == {}
+
+
+
+def test_both_api_adapters_release_the_shared_lease_after_dispatch_failure(tmp_path) -> None:
+    from fastapi.testclient import TestClient
+
+    from app.config import Settings
+    from app.main import create_app
+    from app.responses_v108_patch import install_responses_v108_patch
+
+    app = create_app(Settings(
+        CHAT2API_API_KEY="mode2-dispatch-failure-master",
+        CHAT2API_DATA_DIR=str(tmp_path),
+    ))
+    install_responses_v108_patch(app)
+    app.state.registry.resolve_client = lambda requested: "ext_mode2_send_failure"
+
+    async def fail_worker_send(client_id: str, payload: dict) -> None:
+        if payload.get("type") == "chat.request":
+            raise ConnectionError("worker-send-failed")
+
+    app.state.registry.send = fail_worker_send
+    headers = {"Authorization": "Bearer mode2-dispatch-failure-master"}
+
+    with TestClient(app) as client:
+        chat = client.post(
+            "/v1/chat/completions",
+            headers=headers,
+            json={"model": "gpt-5.6-sol", "messages": [{"role": "user", "content": "Hello"}]},
+        )
+        assert chat.status_code == 503, chat.text
+        assert chat.json()["error"]["type"] == "server_error"
+        assert app.state.broker.requests == {}
+        assert "ext_mode2_send_failure" not in app.state.registry.busy_clients
+
+        responses = client.post(
+            "/v1/responses",
+            headers=headers,
+            json={"model": "gpt-5.6-sol", "input": "Hello Responses"},
+        )
+        assert responses.status_code == 503, responses.text
+        assert responses.json()["error"]["type"] == "server_error"
+        assert app.state.broker.requests == {}
+        assert "ext_mode2_send_failure" not in app.state.registry.busy_clients
