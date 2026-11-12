@@ -112,8 +112,6 @@ jobs:
           node --check chrome_extension/conversation_routing.js
           node --check chrome_extension/conversation_warm_pool_v2.js
           node --check chrome_extension/conversation_workers_v24.js
-      - name: DataKeyring migration CLI help
-        run: python scripts/migrate_data_keyring.py --help
           node --check chrome_extension/conversation_dispatch.js
           node --check chrome_extension/popup.js
           node --check chrome_extension/popup_page_smoke_v22.js
@@ -160,6 +158,8 @@ jobs:
           Path("/tmp/chat2api-admin.js").write_text(match.group(1), encoding="utf-8")
           PY
           node --check /tmp/chat2api-admin.js
+      - name: DataKeyring migration CLI help
+        run: python scripts/migrate_data_keyring.py --help
       - name: Linux worker installer syntax
         run: |
           bash -n scripts/install_linux_worker_autostart.sh
