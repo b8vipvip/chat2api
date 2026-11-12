@@ -434,6 +434,7 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
             media_type=stored.mime_type,
             headers={
                 "Cache-Control": "private, no-store",
+                "Vary": "Cookie",
                 "Content-Disposition": "inline",
                 "X-Content-Type-Options": "nosniff",
                 "Content-Security-Policy": "default-src 'none'; sandbox",
@@ -443,10 +444,17 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
         )
 
     @app.delete("/api/user/files/{file_id}")
-    async def user_delete_image(file_id: str, request: Request) -> dict[str, bool]:
+    async def user_delete_image(
+        file_id: str, request: Request, response: Response
+    ) -> dict[str, bool]:
         """Delete an account-owned vision raster image without requiring a live API Key."""
+        response.headers["Cache-Control"] = "private, no-store"
+        response.headers["Vary"] = "Cookie"
         origin = str(request.headers.get("origin") or "").strip()
-        parsed_origin = urlsplit(origin)
+        try:
+            parsed_origin = urlsplit(origin)
+        except ValueError as error:
+            raise HTTPException(status_code=403, detail="图片删除必须使用同源用户会话请求") from error
         request_host = str(request.headers.get("host") or "").strip().lower()
         forwarded_proto = str(request.headers.get("x-forwarded-proto") or "").split(",", 1)[0].strip().lower()
         expected_scheme = forwarded_proto if forwarded_proto in {"http", "https"} else request.url.scheme.lower()
