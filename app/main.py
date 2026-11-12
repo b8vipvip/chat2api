@@ -810,9 +810,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         origin = str(request.headers.get("origin") or "").strip()
         parsed_origin = urlsplit(origin)
         request_host = str(request.headers.get("host") or "").strip().lower()
+        forwarded_proto = str(request.headers.get("x-forwarded-proto") or "").split(",", 1)[0].strip().lower()
+        expected_scheme = forwarded_proto if forwarded_proto in {"http", "https"} else request.url.scheme.lower()
         fetch_site = str(request.headers.get("sec-fetch-site") or "").strip().lower()
         if (
-            parsed_origin.scheme not in {"http", "https"}
+            parsed_origin.scheme.lower() != expected_scheme
             or not parsed_origin.netloc
             or parsed_origin.netloc.lower() != request_host
             or parsed_origin.path not in {"", "/"}
