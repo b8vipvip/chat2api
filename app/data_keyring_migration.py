@@ -303,11 +303,19 @@ class DataKeyringMigrationService:
             raise DataKeyringError(f"Staged output is not a regular file: {staged.name}")
         self._atomic_write(destination, staged.read_bytes())
 
+    @staticmethod
+    def _safe_manifest_path(value: Any) -> str:
+        relative = str(value or "")
+        if relative not in _DATA_FILES or Path(relative).is_absolute() or ".." in Path(relative).parts:
+            raise DataKeyringError("Migration manifest contains an unsafe file path")
+        return relative
+
     def _rollback_entries(self, entries: list[dict[str, Any]]) -> list[str]:
         errors: list[str] = []
         for item in reversed(entries):
-            path = self.data_dir / str(item["path"])
             try:
+                relative = self._safe_manifest_path(item.get("path"))
+                path = self.data_dir / relative
                 current = _sha256(path)
                 if current == item["pre_sha256"]:
                     continue
@@ -316,7 +324,7 @@ class DataKeyringMigrationService:
                 if not DataKeyring.restore_backup(path):
                     raise DataKeyringError("Verified pre-migration backup is missing")
             except Exception as error:
-                errors.append(f"{item['path']}: {type(error).__name__}")
+                errors.append(f"{item.get('path', 'unknown')}: {type(error).__name__}")
         return errors
 
     async def apply(self) -> dict[str, Any]:
@@ -385,20 +393,23 @@ class DataKeyringMigrationService:
                     }
                 except Exception as error:
                     rollback_errors = self._rollback_entries(manifest["files"])
+                    if not rollback_errors:
+                        try:
+                            await self._verify_directory(self.data_dir, require_envelopes=False)
+                        except Exception as verify_error:
+                            rollback_errors.append(f"readback: {type(verify_error).__name__}")
                     if rollback_errors:
                         manifest["state"] = "rollback_failed"
                         manifest["rollback_errors"] = rollback_errors
-                    else:
-                        manifest["state"] = "rolled_back"
-                        manifest["rolled_back_at"] = _utc_now()
-                    self._write_manifest(manifest)
-                    if rollback_errors:
+                        self._write_manifest(manifest)
                         raise DataKeyringError(
-                            "Migration failed and automatic rollback was incomplete; preserve backups and perform manual recovery"
+                            "Migration failed and automatic rollback/readback was incomplete; preserve backups and perform manual recovery"
                         ) from error
-                    await self._verify_directory(self.data_dir, require_envelopes=False)
+                    manifest["state"] = "rolled_back"
+                    manifest["rolled_back_at"] = _utc_now()
+                    self._write_manifest(manifest)
                     raise DataKeyringError(
-                        f"Migration failed ({type(error).__name__}); original encrypted files were restored"
+                        f"Migration failed ({type(error).__name__}); original encrypted files were restored and verified"
                     ) from error
             finally:
                 shutil.rmtree(stage_dir, ignore_errors=True)
@@ -411,11 +422,12 @@ class DataKeyringMigrationService:
                 manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
             except (OSError, ValueError, TypeError) as error:
                 raise DataKeyringError("The data-keyring migration manifest is unreadable") from error
-            if not isinstance(manifest, dict) or manifest.get("state") not in {
-                "completed",
-                "applying",
-                "rollback_failed",
-            }:
+            if (
+                not isinstance(manifest, dict)
+                or manifest.get("version") != 1
+                or manifest.get("key_id") != self.keyring.key_id
+                or manifest.get("state") not in {"completed", "applying", "rollback_failed"}
+            ):
                 if isinstance(manifest, dict) and manifest.get("state") == "rolled_back":
                     return {"status": "already_rolled_back", "key_id": self.keyring.key_id}
                 raise DataKeyringError("The migration manifest is not in a rollback-eligible state")
@@ -428,11 +440,16 @@ class DataKeyringMigrationService:
             for item in entries:
                 if not isinstance(item, dict):
                     raise DataKeyringError("The migration manifest contains an invalid file entry")
-                path = self.data_dir / str(item.get("path") or "")
+                relative = self._safe_manifest_path(item.get("path"))
+                for digest_name in ("pre_sha256", "post_sha256"):
+                    digest = item.get(digest_name)
+                    if not isinstance(digest, str) or len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
+                        raise DataKeyringError("The migration manifest contains an invalid file digest")
+                path = self.data_dir / relative
                 current = _sha256(path)
                 if current not in {item.get("pre_sha256"), item.get("post_sha256")}:
                     raise DataKeyringError(
-                        f"Refusing rollback because a migrated file changed after apply: {item.get('path')}"
+                        f"Refusing rollback because a migrated file changed after apply: {relative}"
                     )
 
             errors = self._rollback_entries(entries)
@@ -442,8 +459,18 @@ class DataKeyringMigrationService:
                 self._write_manifest(manifest)
                 raise DataKeyringError("Rollback was incomplete; preserve all backups for manual recovery")
 
-            await self._verify_directory(self.data_dir, require_envelopes=False)
+            try:
+                await self._verify_directory(self.data_dir, require_envelopes=False)
+            except Exception as error:
+                manifest["state"] = "rollback_failed"
+                manifest["rollback_errors"] = [f"readback: {type(error).__name__}"]
+                self._write_manifest(manifest)
+                raise DataKeyringError("Rollback restored files but legacy readback verification failed") from error
             manifest["state"] = "rolled_back"
             manifest["rolled_back_at"] = _utc_now()
             self._write_manifest(manifest)
-            return {"status": "rolled_back", "key_id": self.keyring.key_id, "files": [x["path"] for x in entries]}
+            return {
+                "status": "rolled_back",
+                "key_id": self.keyring.key_id,
+                "files": [self._safe_manifest_path(x["path"]) for x in entries],
+            }
