@@ -300,10 +300,21 @@ def test_native_page_probe_vm_syntax_and_no_text_or_media_exfiltration():
     check=subprocess.run(["node","--check"],cwd=ROOT,input=js,
                          capture_output=True,text=True,timeout=10)
     assert check.returncode==0,check.stderr
-    for forbidden in ["document.cookie","localStorage","document.body.innerText",
+    for forbidden in ["document.cookie","localStorage",
                       "document.documentElement.outerHTML","Page.navigate",
                       "Page.captureScreenshot"]:
         assert forbidden not in js
+    # Visible text is measured only as a bounded character count; no text value
+    # or resource URL crosses the CDP/report boundary.
+    assert "String(document.body.innerText||'').length" in js
+    assert "body_visible_text_chars" in js
+    assert "conversation_api_decoded_bytes" in js
+    assert "conversation_api_recent_429" in js
+    assert "fetch_http_recent_429" in js
+    assert "service_worker_controller" in js
+    assert "visibility_state" in js
+    assert "last_finished_age_ms" in js
+    assert "js_exception_count" in js
     assert "verified-roleless-turn" in source
     assert "heading.closest(" in source
     assert "scope='roleless-heading-siblings'" in source
