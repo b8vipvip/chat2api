@@ -172,7 +172,7 @@ def test_worker_content_ack_requires_the_fixed_request_v6_dispatch_source() -> N
     asyncio.run(exercise())
 
 
-def test_registry_send_binds_the_exact_socket_for_chat_and_image_requests(tmp_path) -> None:
+def test_registry_send_binds_the_exact_socket_for_every_broker_request_family(tmp_path) -> None:
     class FakeSocket:
         def __init__(self) -> None:
             self.sent = []
@@ -186,24 +186,23 @@ def test_registry_send_binds_the_exact_socket_for_chat_and_image_requests(tmp_pa
         registry.clients["ext_r06"] = SimpleNamespace(connection_enabled=True)
         registry.sockets["ext_r06"] = socket
         registry.chatgpt_routing_ready = lambda _client_id: True
+        request_types = (
+            "chat.request", "image.request", "voice.request",
+            "voice.live.start", "voice.live.request",
+        )
         states = {
-            "req_r06_chat": SimpleNamespace(dispatch_socket=None),
-            "req_r06_image": SimpleNamespace(dispatch_socket=None),
+            f"req_r06_{index}": SimpleNamespace(dispatch_socket=None)
+            for index, _ in enumerate(request_types)
         }
         registry.request_broker = SimpleNamespace(requests=states)
 
-        await registry.send("ext_r06", {
-            "type": "chat.request", "request_id": "req_r06_chat",
-        })
-        await registry.send("ext_r06", {
-            "type": "image.request", "request_id": "req_r06_image",
-        })
+        for index, request_type in enumerate(request_types):
+            await registry.send("ext_r06", {
+                "type": request_type, "request_id": f"req_r06_{index}",
+            })
 
-        assert states["req_r06_chat"].dispatch_socket is socket
-        assert states["req_r06_image"].dispatch_socket is socket
-        assert [payload["type"] for payload in socket.sent] == [
-            "chat.request", "image.request",
-        ]
+        assert all(state.dispatch_socket is socket for state in states.values())
+        assert [payload["type"] for payload in socket.sent] == list(request_types)
 
     asyncio.run(exercise())
 
