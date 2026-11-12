@@ -176,10 +176,11 @@ def test_python_sdk_models_and_responses_nonstream(sdk_transport) -> None:
 def test_python_sdk_standard_multipart_files_create_retrieve_content_delete(sdk_transport, purpose: str) -> None:
     sdk, commands = sdk_transport
     created = sdk.files.create(
-        file=("sample.txt", io.BytesIO(b"one two three")),
+        file=("测试 sample.txt", io.BytesIO(b"one two three")),
         purpose=purpose,
     )
     assert created.object == "file"
+    assert created.filename == "测试_sample.txt"
     assert created.purpose == purpose
     assert created.status == "processed"
     assert created.bytes == len(b"one two three")
