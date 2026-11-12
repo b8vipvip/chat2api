@@ -13,18 +13,40 @@ PREFIX = "/repos/b8vipvip/chat2api"
 
 
 class FakeApi:
-    def __init__(self, fail_at: str | None = None) -> None:
+    def __init__(
+        self, fail_at: str | None = None, *,
+        existing_branch: bool = False, ambiguous_post: bool = False,
+    ) -> None:
         self.calls = []
         self.fail_at = fail_at
+        self.branch_exists = existing_branch
+        self.ambiguous_post = ambiguous_post
 
     def request(self, method, path, payload=None):
         self.calls.append((method, path, payload))
-        if method == self.fail_at:
-            raise ProbeError(f"simulated {method} denial")
+        is_branch_ref = "/git/ref/heads/diagnostics/" in path
+        if method == "GET" and is_branch_ref:
+            if not self.branch_exists:
+                raise ProbeError("GitHub GET rejected with HTTP 404", status_code=404)
+            return {"object": {"sha": "a" * 40}}
         if method == "GET":
             return {"object": {"sha": "a" * 40}}
+        if method == "POST":
+            if self.fail_at == "POST":
+                if self.ambiguous_post:
+                    self.branch_exists = True
+                raise ProbeError("simulated POST denial")
+            self.branch_exists = True
+            return {}
         if method == "PUT":
+            if self.fail_at == "PUT":
+                raise ProbeError("simulated PUT denial")
             return {"commit": {"sha": "b" * 40}}
+        if method == "DELETE":
+            if self.fail_at == "DELETE":
+                raise ProbeError("simulated DELETE denial")
+            self.branch_exists = False
+            return {}
         return {}
 
 
@@ -32,12 +54,13 @@ def test_disposable_workflow_write_is_removed_without_touching_main() -> None:
     api = FakeApi()
     result = run_probe(api, NONCE)
     methods = [item[0] for item in api.calls]
-    assert methods == ["GET", "POST", "PUT", "DELETE"]
+    assert methods == ["GET", "GET", "POST", "PUT", "DELETE"]
     assert api.calls[0][1] == PREFIX + "/git/ref/heads/main"
-    assert api.calls[1][2]["ref"] == "refs/heads/" + result["branch"]
-    assert api.calls[2][2]["branch"] == result["branch"]
-    assert api.calls[2][1].startswith(PREFIX + "/contents/.github/workflows/")
-    assert api.calls[3][1] == PREFIX + "/git/refs/heads/" + result["branch"]
+    assert api.calls[1][1] == PREFIX + "/git/ref/heads/" + result["branch"]
+    assert api.calls[2][2]["ref"] == "refs/heads/" + result["branch"]
+    assert api.calls[3][2]["branch"] == result["branch"]
+    assert api.calls[3][1].startswith(PREFIX + "/contents/.github/workflows/")
+    assert api.calls[4][1] == PREFIX + "/git/refs/heads/" + result["branch"]
     assert result["result"] == "workflows-write-verified-and-cleaned"
     assert not any(method == "PATCH" or "main" in path and method != "GET"
                    for method, path, _payload in api.calls)
@@ -47,7 +70,7 @@ def test_denied_workflows_write_still_deletes_probe_branch() -> None:
     api = FakeApi(fail_at="PUT")
     with pytest.raises(ProbeError, match="simulated PUT denial"):
         run_probe(api, NONCE)
-    assert [method for method, _, _ in api.calls] == ["GET", "POST", "PUT", "DELETE"]
+    assert [method for method, _, _ in api.calls] == ["GET", "GET", "POST", "PUT", "DELETE"]
 
 
 def test_failed_cleanup_reports_exact_manual_recovery_branch() -> None:
@@ -108,10 +131,10 @@ def test_network_timeout_is_reported_without_raw_transport_exception(monkeypatch
 
 
 def test_ambiguous_branch_create_response_reconciles_and_cleans_created_ref() -> None:
-    api = FakeApi(fail_at="POST")
+    api = FakeApi(fail_at="POST", ambiguous_post=True)
     with pytest.raises(ProbeError, match="simulated POST denial"):
         run_probe(api, NONCE)
-    assert [method for method, _, _ in api.calls] == ["GET", "POST", "GET", "DELETE"]
+    assert [method for method, _, _ in api.calls] == ["GET", "GET", "POST", "GET", "DELETE"]
     assert api.calls[2][1].endswith("/git/ref/heads/diagnostics/gptauto-workflow-write-probe-" + NONCE)
     assert api.calls[3][1].endswith("/git/refs/heads/diagnostics/gptauto-workflow-write-probe-" + NONCE)
 
@@ -130,4 +153,13 @@ def test_rejected_branch_create_with_confirmed_404_does_not_delete_unknown_ref()
     api = NoBranchApi()
     with pytest.raises(ProbeError, match="simulated Contents write denial"):
         run_probe(api, NONCE)
-    assert [method for method, _, _ in api.calls] == ["GET", "POST", "GET"]
+    assert [method for method, _, _ in api.calls] == ["GET", "GET", "POST", "GET"]
+
+
+
+def test_preexisting_probe_branch_is_never_modified_or_deleted() -> None:
+    api = FakeApi(existing_branch=True)
+    with pytest.raises(ProbeError, match="pre-existing branch"):
+        run_probe(api, NONCE)
+    assert [method for method, _, _ in api.calls] == ["GET", "GET"]
+    assert api.branch_exists is True
