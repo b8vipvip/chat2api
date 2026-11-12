@@ -126,6 +126,11 @@ class PaymentChannelsStore:
             for group in ("aggregate", "direct"):
                 if group in raw and not isinstance(raw[group], dict):
                     raise ValueError(f"Invalid payment channel {group} shape")
+                incoming = raw.get(group)
+                if isinstance(incoming, dict):
+                    for provider, values in incoming.items():
+                        if provider in self.payload[group] and not isinstance(values, dict):
+                            raise ValueError(f"Invalid payment channel {group}.{provider} shape")
         except (OSError, ValueError, TypeError) as error:
             if self.keyring:
                 raise DataKeyringError(
