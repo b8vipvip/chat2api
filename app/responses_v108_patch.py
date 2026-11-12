@@ -527,17 +527,41 @@ def install_responses_v108_patch(app: FastAPI) -> FastAPI:
     app.state.responses_v108_installed = True
     app.state.responses_v108_store = OrderedDict()
 
-    # v13 registered a legacy POST /v1/responses handler earlier in the
-    # production installer chain. Starlette uses first-match routing, so merely
-    # registering v108 again would leave native tools and the v108 response
-    # store unreachable. Replace that legacy owner before registering v108.
-    app.router.routes[:] = [
+    # v13 registered one legacy POST /v1/responses handler earlier in the
+    # production installer chain. Starlette uses first-match routing, so v108
+    # must replace that exact owner. Never delete an unknown or ambiguous route:
+    # that would hide a future installer conflict instead of failing closed.
+    legacy_post_routes = [
         route for route in app.router.routes
-        if not (
-            getattr(route, "path", None) == "/v1/responses"
-            and "POST" in (getattr(route, "methods", None) or set())
-        )
+        if getattr(route, "path", None) == "/v1/responses"
+        and "POST" in (getattr(route, "methods", None) or set())
     ]
+    if len(legacy_post_routes) > 1:
+        raise RuntimeError("Multiple POST /v1/responses owners exist before v108 installation")
+    if legacy_post_routes:
+        legacy_route = legacy_post_routes[0]
+        legacy_endpoint = getattr(legacy_route, "endpoint", None)
+        legacy_methods = set(getattr(legacy_route, "methods", None) or set())
+        if (
+            getattr(legacy_endpoint, "__module__", None) != "app.v13_patch"
+            or getattr(legacy_endpoint, "__name__", None) != "responses"
+            or legacy_methods != {"POST"}
+        ):
+            raise RuntimeError(
+                "Refusing to replace an unexpected POST /v1/responses route owner"
+            )
+        app.router.routes.remove(legacy_route)
+
+    existing_retrieve_routes = [
+        route for route in app.router.routes
+        if getattr(route, "path", None) == "/v1/responses/{response_id}"
+        and "GET" in (getattr(route, "methods", None) or set())
+    ]
+    if existing_retrieve_routes:
+        raise RuntimeError(
+            "GET /v1/responses/{response_id} already has an owner before v108 installation"
+        )
+
     app.openapi_schema = None
 
     @app.post("/v1/responses")
