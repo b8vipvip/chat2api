@@ -47,8 +47,8 @@ assert get_routes[0].endpoint.__name__ == "retrieve_response"
 
 def test_production_responses_web_search_and_image_tool_use_v108_owner(tmp_path: Path) -> None:
     # Exercise the actual composed app.entry:app route table while replacing
-    # only the external Worker/image execution boundaries with deterministic
-    # in-process fakes. No upstream account or browser session is used.
+    # authentication and external Worker/image execution boundaries with
+    # deterministic in-process fakes. No upstream account or browser session is used.
     script = r'''
 import uuid
 from fastapi.responses import JSONResponse
