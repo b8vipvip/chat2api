@@ -12,7 +12,7 @@ ADMIN_HTML = r'''<!doctype html>
 @media(max-width:1050px){.shell{grid-template-columns:1fr}.side{border-right:0;border-bottom:1px solid var(--line)}.nav{display:flex;overflow:auto}.nav button{width:auto;white-space:nowrap}.top{position:static}.grid{grid-template-columns:repeat(2,1fr)}.panels,.split{grid-template-columns:1fr}.wide{grid-column:auto}.labConfig{grid-template-columns:1fr}.timelineRow{grid-template-columns:1fr 1fr}.auth{min-width:0}.testKeyBox{grid-template-columns:1fr}}
 </style></head><body><div class="shell">
 <aside class="side"><div class="brand">chat2api<small>Server Console · v0.5</small></div><div class="nav"><button data-view="overview">概览</button><button data-view="modes">模式管理</button><button data-view="keys">API Key</button><button data-view="requests">请求记录</button><button data-view="media-storage">转存管理</button><button data-view="docs">开发文档</button><button data-view="playground">测试场</button><button data-view="control-admins" data-cview>管理员 RBAC</button><button data-view="client-policy" data-cview>客户端配置</button><button data-view="registration-invitations" data-cview>邀请注册</button><button data-view="tenants" data-cview>租户管理</button><button data-view="model-entitlements" data-cview>模型权限</button><button data-view="plugins" data-cview>插件目录</button><button data-view="quota-ledger" data-cview>额度预留</button><button data-view="api-keys" data-cview>API Key 管理</button></div></aside>
-<main class="main"><header class="top"><div><b id="pageTitle">概览</b><div id="status" class="muted">输入管理员主密钥后连接</div></div><div class="auth"><input id="adminKey" type="password" placeholder="CHAT2API_API_KEY 管理员主密钥"><button class="action" id="connect">连接</button><button class="action" id="refresh">刷新</button></div><div class="sessionAuth"><input id="adminSessionUser" autocomplete="username" placeholder="管理员用户名"><input id="adminSessionPassword" type="password" autocomplete="current-password" placeholder="管理员密码"><button class="action good" id="adminSessionLogin">会话登录</button><button class="action" id="adminSessionLogout">退出会话</button><span id="adminSessionState" class="muted">未检查管理会话</span></div></header><div class="content">
+<main class="main"><header class="top"><div><b id="pageTitle">概览</b><div id="status" class="muted">输入管理员主密钥后连接</div></div><div class="auth"><input id="adminKey" type="password" placeholder="CHAT2API_API_KEY 管理员主密钥"><button class="action" id="connect">连接</button><button class="action" id="refresh">刷新</button></div><div class="sessionAuth"><input id="adminSessionUser" autocomplete="username" placeholder="管理员用户名"><input id="adminSessionPassword" type="password" autocomplete="current-password" placeholder="管理员密码"><button class="action good" id="adminSessionLogin">会话登录</button><button class="action" id="adminSessionLogout">退出会话</button><button class="action" id="adminSessionRotatePassword" hidden>修改我的密码</button><span id="adminSessionState" class="muted">未检查管理会话</span></div></header><div class="content">
 <section class="view" id="view-overview"><div class="grid"><div class="card"><div class="muted">在线扩展</div><div class="n" id="sExt">-</div></div><div class="card"><div class="muted">请求记录</div><div class="n" id="sReq">-</div></div><div class="card"><div class="muted">成功率</div><div class="n" id="sSuccess">-</div></div><div class="card"><div class="muted">平均首 Token</div><div class="n" id="sFirst">-</div></div><div class="card"><div class="muted">估算 Token</div><div class="n" id="sToken">-</div></div></div><div class="panels"><div class="panel"><h3>Chrome 扩展</h3><table><thead><tr><th>ID</th><th>名称</th><th>状态</th><th>版本</th><th>能力</th></tr></thead><tbody id="extBody"></tbody></table></div><div class="panel"><h3>模型目录</h3><table><thead><tr><th>ID</th><th>能力</th></tr></thead><tbody id="modelBody"></tbody></table></div><div class="panel wide"><h3>最近请求</h3><div class="scroll"><table><thead><tr><th>时间</th><th>类型</th><th>状态</th><th>Key</th><th>模型</th><th>首包</th><th>总耗时</th><th>Token</th></tr></thead><tbody id="recentBody"></tbody></table></div></div></div></section>
 <section class="view" id="view-modes">
   <div class="panel">
@@ -372,7 +372,19 @@ $('connect').disabled=true;$('refresh').disabled=true;document.querySelectorAll(
   }
   const cTrackAdminScript=document.createElement("script");cTrackAdminScript.src="/assets/chat2api-control-plane-admin-v1.js";cTrackAdminScript.defer=true;document.body.appendChild(cTrackAdminScript);
 })();
-</script></body></html>'''
+</script>
+<dialog id="adminPasswordDialog">
+  <div class="dialogHead"><b>修改管理员密码</b><button class="action" id="adminPasswordClose" type="button">关闭</button></div>
+  <div class="dialogBody">
+    <p class="muted">新密码至少 12 位。保存后当前管理员的所有会话会立即撤销，需要使用新密码重新登录。</p>
+    <label class="field">当前密码<input id="adminPasswordCurrent" type="password" autocomplete="current-password" maxlength="256"></label>
+    <label class="field">新密码<input id="adminPasswordNew" type="password" autocomplete="new-password" minlength="12" maxlength="256"></label>
+    <label class="field">确认新密码<input id="adminPasswordConfirm" type="password" autocomplete="new-password" minlength="12" maxlength="256"></label>
+    <div id="adminPasswordStatus" class="muted"></div>
+  </div>
+  <div class="dialogFoot"><button class="action good" id="adminPasswordSave" type="button">保存并退出会话</button></div>
+</dialog>
+</body></html>'''
 
 
 def admin_response(initial_view: str = "overview") -> HTMLResponse:
