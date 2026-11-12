@@ -36,6 +36,16 @@ duplicate dispatch and avoids showing provisional text as a final answer.
   request or dispatch a second Worker operation.
 - Responses use `Cache-Control: private, no-store` and `Vary: Cookie`.
 
+## Cancellation signal
+
+`POST /api/user/chat/requests/{request_id}/cancel`
+
+- Requires the existing HttpOnly user-session cookie, request ownership, and a same-origin Origin/Fetch Metadata check.
+- Only signals the Worker assigned to an active Broker request; it does not write Telemetry status, resolve the Broker future, or claim a terminal result.
+- The Worker emits the existing `chat.cancelled` event. request-v6/Broker remain the sole terminal authority.
+- Repeated cancel calls are idempotent. Terminal requests return their existing terminal status; queued/stale/unavailable Worker states return a non-terminal conflict.
+- Responses and application errors are private/no-store and vary by Cookie.
+
 ## Client controller
 
 `app/chat_stream_recovery_v1.js` exposes `Chat2APIStreamRecoveryV1`:
@@ -45,10 +55,12 @@ duplicate dispatch and avoids showing provisional text as a final answer.
   default ceiling.
 - Handles auth expiry, missing/non-owned requests, terminal failures, stale
   running state, invalid responses, and user-stopped polling.
+- `cancel(record)` sends a same-request POST to the cancellation endpoint and
+  reports only whether the Worker signal was accepted; it never marks the
+  request terminal. Polling can continue until the Worker terminal is observed.
 - The `assistant_message_id` is carried through callbacks so the later UI
   integration updates the exact message, not a list index.
-- Stopping the poll does not cancel the Worker request. Cancellation remains
-  owned by the existing request control endpoint/flow and is not inferred here.
+- `stop()` stops polling only; it does not imply Worker cancellation.
 
 ## Boundaries and follow-up integration
 
@@ -76,6 +88,8 @@ duplicate dispatch and avoids showing provisional text as a final answer.
 `pytest -q tests/test_web_chat_request_recovery_v1.py`
 
 Covers owner/non-owner boundaries, no-store, queued admission, active Broker
-state, stale running state, failed provisional output suppression, and a Node
-harness asserting the browser controller performs only same-request GET calls
-and never redispatches a POST.
+state, stale running state, failed provisional output suppression, same-origin
+and idempotent Worker cancellation signalling without terminal takeover, and a
+Node harness asserting recovery polls only the same-request GET endpoint while
+cancellation uses only the dedicated same-request cancel POST (never a new
+generation POST).
