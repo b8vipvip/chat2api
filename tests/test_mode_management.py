@@ -100,22 +100,37 @@ def test_admin_modes_api_requires_master_admin_key_and_persists_only_test_intent
         assert client.get("/api/admin/modes").status_code == 401
 
         headers = {"Authorization": "Bearer mode-test-admin-key"}
+        mutation_headers = {**headers, "Origin": "http://testserver"}
         initial = client.get("/api/admin/modes", headers=headers)
         assert initial.status_code == 200
         assert initial.json()["default_mode"] == "mode2"
         assert initial.json()["mode1_cookie_proxy"]["requested_enabled"] is False
         assert initial.json()["mode1_cookie_proxy"]["effective_enabled"] is False
 
-        invalid = client.put(
+        missing_origin = client.put(
             "/api/admin/modes",
             headers=headers,
+            json={"mode1_cookie_proxy_requested": True},
+        )
+        assert missing_origin.status_code == 403
+
+        cross_origin = client.put(
+            "/api/admin/modes",
+            headers={**headers, "Origin": "https://attacker.example"},
+            json={"mode1_cookie_proxy_requested": True},
+        )
+        assert cross_origin.status_code == 403
+
+        invalid = client.put(
+            "/api/admin/modes",
+            headers=mutation_headers,
             json={"mode1_cookie_proxy_requested": True, "effective_enabled": True},
         )
         assert invalid.status_code == 422
 
         saved = client.put(
             "/api/admin/modes",
-            headers=headers,
+            headers=mutation_headers,
             json={"mode1_cookie_proxy_requested": True},
         )
         assert saved.status_code == 200
@@ -158,6 +173,7 @@ def test_production_admin_session_can_save_mode_intent_without_enabling_proxy(tm
 
         saved = client.put(
             "/api/admin/modes",
+            headers={"Origin": "http://testserver"},
             json={"mode1_cookie_proxy_requested": True},
         )
         assert saved.status_code == 200
