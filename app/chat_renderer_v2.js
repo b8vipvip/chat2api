@@ -206,8 +206,10 @@
       const body = [];
       while (i < lines.length && lines[i].trim()) {
         if (body.length && (lines[i].trim().startsWith(FENCE) ||
-            lines[i].trim() === "$$" || /^#{1,4}\s+/.test(lines[i]) ||
+            lines[i].trim() === "$" || /^#{1,4}\s+/.test(lines[i]) ||
             /^>\s?/.test(lines[i]) || /^\s*(?:[-*+] |\d+\. )/.test(lines[i]) ||
+            (lines[i].includes("|") && i + 1 < lines.length &&
+             /^\s*\|?\s*:?-{3,}/.test(lines[i + 1])) ||
             /^\s*([-*_])\1\1+\s*$/.test(lines[i]))) break;
         body.push(lines[i++]);
       }
