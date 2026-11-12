@@ -59,7 +59,7 @@ def test_api_queues_before_capacity_and_only_then_marks_running():
                      source.index('    @app.post("/v1/images/generations")')]
     assert handler.index("await record_request_queued(") < handler.index(
         "client_id = await resolve_client_with_reconnect_grace("
-    ) < handler.index("state = await broker.create(request_id, client_id)") < handler.index(
+    ) < handler.index("state = await chat_request_service.reserve(request_id, client_id)") < handler.index(
         "await record_request_running("
     )
     assert '"status": "queued"' in source
