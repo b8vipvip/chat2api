@@ -72,6 +72,108 @@ def test_completed_snapshot_is_returned_only_to_key_owner_and_never_cached(tmp_p
         assert "cookie" in {value.strip().lower() for value in denied.headers["vary"].split(",")}
 
 
+
+def test_cancel_signal_is_owner_scoped_idempotent_and_not_a_terminal_owner(tmp_path):
+    app = make_app(tmp_path)
+    request_id = "req_cancel123"
+    sent = []
+
+    async def fake_send(client_id, payload):
+        sent.append((client_id, dict(payload)))
+
+    with TestClient(app) as alice, TestClient(app) as bob:
+        alice_id = register(alice, "cancel-alice@example.org")
+        bob_id = register(bob, "cancel-bob@example.org")
+        app.state.user_accounts.attach_key(alice_id, "key_cancel_alice")
+        app.state.user_accounts.attach_key(bob_id, "key_cancel_bob")
+        remember(app, request_id, "key_cancel_alice")
+        state = SimpleNamespace(
+            client_id="ext_worker123",
+            terminal_event_type=None,
+            diagnostics={},
+        )
+        app.state.broker.requests[request_id] = state
+        app.state.registry.send = fake_send
+        path = f"/api/user/chat/requests/{request_id}/cancel"
+
+        missing_origin = alice.post(path)
+        assert missing_origin.status_code == 403
+        assert missing_origin.headers["cache-control"] == "private, no-store"
+
+        denied = bob.post(path, headers={"Origin": "http://testserver"})
+        assert denied.status_code == 404
+        assert denied.headers["cache-control"] == "private, no-store"
+        assert sent == []
+
+        cancelled = alice.post(path, headers={"Origin": "http://testserver"})
+        assert cancelled.status_code == 200, cancelled.text
+        assert cancelled.json()["cancel_requested"] is True
+        assert cancelled.json()["terminal"] is False
+        assert cancelled.json()["active"] is True
+        assert cancelled.headers["cache-control"] == "private, no-store"
+        assert "cookie" in {value.strip().lower() for value in cancelled.headers["vary"].split(",")}
+        assert sent == [("ext_worker123", {"type": "chat.cancel", "request_id": request_id})]
+        assert state.terminal_event_type is None
+
+        repeated = alice.post(path, headers={"Origin": "http://testserver"})
+        assert repeated.status_code == 200
+        assert repeated.json()["already_requested"] is True
+        assert len(sent) == 1
+        assert state.terminal_event_type is None
+
+
+def test_terminal_request_cancel_is_idempotent_and_never_signals_worker(tmp_path):
+    app = make_app(tmp_path)
+    request_id = "req_done1234"
+    with TestClient(app) as client:
+        user_id = register(client, "cancel-terminal@example.org")
+        app.state.user_accounts.attach_key(user_id, "key_cancel_terminal")
+        remember(
+            app, request_id, "key_cancel_terminal", status="completed",
+            response_text="final", response_text_available=True,
+        )
+        sent = []
+
+        async def fake_send(client_id, payload):
+            sent.append((client_id, payload))
+
+        app.state.registry.send = fake_send
+        response = client.post(
+            f"/api/user/chat/requests/{request_id}/cancel",
+            headers={"Origin": "http://testserver"},
+        )
+        assert response.status_code == 200
+        assert response.json()["terminal"] is True
+        assert response.json()["cancel_requested"] is False
+        assert sent == []
+
+
+def test_cancel_delivery_failure_does_not_leave_false_idempotency_marker(tmp_path):
+    app = make_app(tmp_path)
+    request_id = "req_cancelfail"
+    with TestClient(app) as client:
+        user_id = register(client, "cancel-failure@example.org")
+        app.state.user_accounts.attach_key(user_id, "key_cancel_failure")
+        remember(app, request_id, "key_cancel_failure")
+        state = SimpleNamespace(
+            client_id="ext_worker123",
+            terminal_event_type=None,
+            diagnostics={},
+        )
+        app.state.broker.requests[request_id] = state
+
+        async def fail_send(client_id, payload):
+            raise RuntimeError("worker offline")
+
+        app.state.registry.send = fail_send
+        response = client.post(
+            f"/api/user/chat/requests/{request_id}/cancel",
+            headers={"Origin": "http://testserver"},
+        )
+        assert response.status_code == 409
+        assert response.headers["cache-control"] == "private, no-store"
+        assert "web_chat_cancel_requested" not in state.diagnostics
+
 def test_running_request_is_pollable_but_stale_running_state_is_not_replayed(tmp_path):
     app = make_app(tmp_path)
     request_id = "req_abcdefgh"
@@ -211,6 +313,32 @@ assert(/^req_[A-Za-z0-9_-]{8,120}$/.test(api.createRequestId({randomUUID:()=>"12
     })})
   }).resume({request_id:"req_12345678", assistant_message_id:"message_123456"});
   assert.strictEqual(inconsistent.status, "invalid_response");
+
+  const cancelCalls = [];
+  const cancelController = api.create({
+    fetcher:async(url, options)=>{
+      cancelCalls.push({url,method:options.method,credentials:options.credentials});
+      return {status:200,ok:true,json:async()=>({
+        request_id:"req_12345678", status:"cancellation_requested",
+        terminal:false, active:true, cancel_requested:true
+      })};
+    }
+  });
+  const cancelResult = await cancelController.cancel({
+    request_id:"req_12345678", assistant_message_id:"message_123456"
+  });
+  assert.strictEqual(cancelResult.status, "cancellation_requested");
+  assert.strictEqual(cancelResult.cancel_requested, true);
+  assert.strictEqual(cancelCalls.length, 1);
+  assert.strictEqual(cancelCalls[0].method, "POST");
+  assert.strictEqual(cancelCalls[0].credentials, "same-origin");
+  assert.strictEqual(cancelCalls[0].url, "/api/user/chat/requests/req_12345678/cancel");
+  assert(!cancelCalls.some(call=>call.url.includes("/v1/chat/completions")));
+
+  const unavailable = await api.create({
+    fetcher:async()=>({status:409,ok:false})
+  }).cancel({request_id:"req_12345678",assistant_message_id:"message_123456"});
+  assert.strictEqual(unavailable.status, "cancel_unavailable");
   console.log("recovery-harness-passed");
 })().catch(error=>{console.error(error);process.exitCode=1;});
 """
