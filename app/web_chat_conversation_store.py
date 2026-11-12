@@ -10,7 +10,9 @@ import hashlib
 import json
 import sqlite3
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
+from typing import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -62,11 +64,19 @@ class WebChatConversationStore:
                 """
             )
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         db = sqlite3.connect(str(self.path), timeout=10)
-        db.row_factory = sqlite3.Row
-        db.execute("PRAGMA busy_timeout=10000")
-        return db
+        try:
+            db.row_factory = sqlite3.Row
+            db.execute("PRAGMA busy_timeout=10000")
+            yield db
+            db.commit()
+        except BaseException:
+            db.rollback()
+            raise
+        finally:
+            db.close()
 
     @staticmethod
     def _public(row: sqlite3.Row, *, include_messages: bool = True) -> dict[str, Any]:
