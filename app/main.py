@@ -31,6 +31,7 @@ from .archive_write_stop_v280 import ArchiveWriteStop
 from .config import Settings, get_settings
 from .file_store import FileStore
 from .media_archive_v173 import MediaArchive
+from .mode_management import ModeManagementError, ModeManagementStore
 from .generated_files_v196 import GeneratedFileArchive
 from .generated_file_staging_v238 import GeneratedFileStaging
 from .generated_file_deferred_v247 import DeferredGeneratedFiles, FileStillProcessing, FileTransferFailed
@@ -95,6 +96,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     generated_files.staging = generated_staging
     deferred_generated_files = DeferredGeneratedFiles(generated_files)
     test_runs = TestRunStore(config.data_dir)
+    mode_management = ModeManagementStore(config.data_dir)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -132,6 +134,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.generated_staging = generated_staging
     app.state.deferred_generated_files = deferred_generated_files
     app.state.test_runs = test_runs
+    app.state.mode_management = mode_management
     # Keep detached-stream supervisors alive until their Broker terminal is persisted.
     app.state.detached_sse_tasks = set()
     app.add_middleware(
@@ -791,6 +794,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "desktop_agent": False,
             },
         }
+
+    @app.get("/api/admin/modes", dependencies=[Depends(require_admin_key)])
+    async def admin_modes() -> dict[str, object]:
+        try:
+            return mode_management.public_state()
+        except ModeManagementError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+
+    @app.put("/api/admin/modes", dependencies=[Depends(require_admin_key)])
+    async def update_admin_modes(payload: dict[str, Any]) -> dict[str, object]:
+        if set(payload) != {"mode1_cookie_proxy_requested"}:
+            raise HTTPException(
+                status_code=422,
+                detail="Only mode1_cookie_proxy_requested may be updated",
+            )
+        requested = payload.get("mode1_cookie_proxy_requested")
+        if type(requested) is not bool:
+            raise HTTPException(
+                status_code=422,
+                detail="mode1_cookie_proxy_requested must be a boolean",
+            )
+        try:
+            return mode_management.set_mode1_cookie_proxy_requested(requested)
+        except ModeManagementError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
 
     @app.get("/api/admin/keys", dependencies=[Depends(require_admin_key)])
     async def admin_keys() -> dict[str, object]:
