@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+import multiprocessing
 
 import pytest
 from fastapi import FastAPI
@@ -30,6 +31,39 @@ def test_guard_exclusively_owns_shared_data_directory_until_release(tmp_path: Pa
     # The lock file is deliberately retained. Unlinking a locked inode can let
     # a third process create a second inode and bypass the exclusion.
     assert first.lock_path.exists()
+
+
+def _hold_runtime_lock(data_dir: str, acquired, release):
+    guard = SingleProcessRuntimeGuard(data_dir)
+    guard.acquire()
+    acquired.set()
+    release.wait(10)
+    guard.release()
+
+
+def test_os_lock_excludes_another_process_and_recovers_after_abrupt_exit(tmp_path: Path):
+    context = multiprocessing.get_context("spawn")
+    acquired = context.Event()
+    release = context.Event()
+    child = context.Process(
+        target=_hold_runtime_lock,
+        args=(str(tmp_path), acquired, release),
+    )
+    child.start()
+    try:
+        assert acquired.wait(10), "child process did not acquire runtime lock"
+        guard = SingleProcessRuntimeGuard(tmp_path)
+        with pytest.raises(RuntimeTopologyError, match="already owns"):
+            guard.acquire()
+        child.terminate()
+        child.join(10)
+        assert not child.is_alive()
+        guard.acquire()
+        guard.release()
+    finally:
+        if child.is_alive():
+            child.terminate()
+            child.join(10)
 
 
 def test_guard_rejects_known_multi_worker_environment(tmp_path: Path, monkeypatch):
