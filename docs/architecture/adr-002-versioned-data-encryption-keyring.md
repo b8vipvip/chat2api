@@ -286,9 +286,19 @@ The service stages copies of the four encrypted stores (managed API keys, MediaA
 For an approved maintenance window, stop the API process and all Workers before applying:
 
 ```bash
-python scripts/migrate_data_keyring.py --dry-run
-python scripts/migrate_data_keyring.py --apply --confirm-offline
-python scripts/migrate_data_keyring.py --rollback --confirm-offline
+# Build the image containing the maintenance CLI, then stage a read-only preview.
+docker compose build chat2api
+docker compose run --rm --no-deps chat2api python scripts/migrate_data_keyring.py --dry-run
+
+# Apply only after stopping the API and every Worker using this data volume.
+docker compose stop chat2api
+docker compose run --rm --no-deps chat2api python scripts/migrate_data_keyring.py --apply --confirm-offline
+docker compose up -d chat2api
+
+# If rollback is required, stop API/Workers again before restoring.
+docker compose stop chat2api
+docker compose run --rm --no-deps chat2api python scripts/migrate_data_keyring.py --rollback --confirm-offline
+docker compose up -d chat2api
 ```
 
 Apply creates non-overwriting `.pre-keyring.bak` files and SHA-256 sidecars before replacing any source file. A mode-0600 `data_keyring_migration.json` manifest records only file paths, hashes, state and counts; it contains no keys or plaintext. Each replacement is atomic and followed by readback validation. A failed apply attempts to restore all already-replaced files and verifies the legacy state. Explicit rollback refuses to overwrite files whose current hashes no longer match either the recorded pre-migration or post-migration state.
