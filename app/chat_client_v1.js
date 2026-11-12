@@ -627,7 +627,7 @@
       remove.addEventListener("click", async () => {
         const [removed] = state.pendingImages.splice(index, 1);
         if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
-        if (removed?.fileId && state.apiToken) {
+        if (removed?.fileId) {
           try {
             await apiJson("/api/user/files/" + encodeURIComponent(removed.fileId), {
               method: "DELETE",
