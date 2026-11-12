@@ -90,6 +90,7 @@ from .worker_text_model_management_v146_patch import install_worker_text_model_m
 from .worker_model_tasks_v147_patch import install_manual_worker_text_model_tasks_v147_patch
 from .worker_probe_ui_patch import install_worker_probe_ui_v1
 from .native_page_diagnostic_api import install_native_page_diagnostics
+from .plugin_registry_v1_patch import install_plugin_registry
 
 install_voice_patch(app)
 install_live_voice_patch(app)
@@ -265,6 +266,9 @@ install_user_console_v104_patch(app)
 install_payment_channels_v106_patch(app)
 install_payment_channels_v107_safety_patch(app)
 install_user_console_privacy_v105_patch(app)
+# C-05 metadata-only product plugin registry. Kept separate from Worker Tools;
+# no plugin execution/credentials are enabled by this installer.
+install_plugin_registry(app)
 # Responses v108 inherits the same paid/free model routing context as legacy Chat
 # Completions, then owns the new Responses route and native WebSocket tool/final
 # lifecycle without changing /v1/chat/completions behavior.
