@@ -264,6 +264,15 @@ class UserAccountStore:
             rows.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
             return rows
 
+    def admin_get(self, user_id: str) -> dict[str, Any] | None:
+        wanted = str(user_id or "")
+        return next((row for row in self.admin_list() if row["user_id"] == wanted), None)
+
+    def is_enabled(self, user_id: str) -> bool:
+        with self.lock:
+            row = self.users.get(str(user_id or ""))
+            return bool(row and row.get("enabled", True))
+
     def set_enabled(self, user_id: str, enabled: bool) -> tuple[dict[str, Any], int]:
         if type(enabled) is not bool:
             raise ValueError("enabled must be a boolean")
