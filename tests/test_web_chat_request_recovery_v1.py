@@ -66,7 +66,10 @@ def test_completed_snapshot_is_returned_only_to_key_owner_and_never_cached(tmp_p
         assert response.headers["cache-control"] == "private, no-store"
         assert response.headers["vary"] == "Cookie"
 
-        assert bob.get(f"/api/user/chat/requests/{request_id}/recovery").status_code == 404
+        denied = bob.get(f"/api/user/chat/requests/{request_id}/recovery")
+        assert denied.status_code == 404
+        assert denied.headers["cache-control"] == "private, no-store"
+        assert denied.headers["vary"] == "Cookie"
 
 
 def test_running_request_is_pollable_but_stale_running_state_is_not_replayed(tmp_path):
@@ -118,8 +121,16 @@ def test_unknown_and_malformed_ids_are_not_disclosed(tmp_path):
     app = make_app(tmp_path)
     with TestClient(app) as client:
         register(client, "unknown@example.org")
-        assert client.get("/api/user/chat/requests/req_12345678/recovery").status_code == 404
-        assert client.get("/api/user/chat/requests/not-a-request/recovery").status_code == 404
+        unknown = client.get("/api/user/chat/requests/req_12345678/recovery")
+        malformed = client.get("/api/user/chat/requests/not-a-request/recovery")
+        assert unknown.status_code == 404
+        assert malformed.status_code == 404
+        assert unknown.headers["cache-control"] == "private, no-store"
+        assert malformed.headers["cache-control"] == "private, no-store"
+    with TestClient(app) as anonymous:
+        unauthorized = anonymous.get("/api/user/chat/requests/req_12345678/recovery")
+        assert unauthorized.status_code == 401
+        assert unauthorized.headers["cache-control"] == "private, no-store"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is needed for the recovery state-machine harness")
