@@ -133,7 +133,8 @@ def test_admin_modes_api_requires_master_admin_key_and_persists_only_test_intent
         assert state.json()["mode1_cookie_proxy"]["effective_enabled"] is False
 
 
-def test_production_admin_session_can_save_mode_intent_without_enabling_proxy(tmp_path: Path) -> None:
+def test_production_admin_session_can_save_mode_intent_without_enabling_proxy(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("CHAT2API_DATA_DIR", str(tmp_path))
     settings = Settings(
         CHAT2API_ADMIN_USERNAME="mode-owner",
         CHAT2API_ADMIN_PASSWORD="strong-test-password",
