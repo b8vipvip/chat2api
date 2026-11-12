@@ -96,7 +96,7 @@
       <div class="panel" id="adminUserKeysPanel" style="display:none;margin-top:14px">
         <div class="toolbar"><h3 id="adminUserKeysTitle" style="margin:0;flex:1">用户 API Key</h3><button class="action" id="adminUserKeysClose">关闭</button></div>
         <div class="scroll"><table>
-          <thead><tr><th>名称</th><th>前缀</th><th>状态</th><th>权限</th><th>创建时间</th><th>最后使用</th><th>Token 额度</th></tr></thead>
+          <thead><tr><th>名称</th><th>前缀</th><th>状态</th><th>权限</th><th>创建时间</th><th>最后使用</th><th>Token 额度</th><th>管理操作</th></tr></thead>
           <tbody id="adminUserKeysBody"></tbody>
         </table></div>
         <p class="muted">此处只显示 Key 元数据，不显示或恢复完整密钥。</p>
@@ -152,6 +152,7 @@
     });
   }
   let adminUserRows = [];
+  let activeAdminUserId = "";
   let adminUserOffset = 0;
   const adminUserLimit = 100;
   let adminUserTotal = 0;
@@ -219,23 +220,75 @@
     document.getElementById("adminUserStatus").textContent = "错误：" + error.message;
   }
   async function loadUserKeys(userId) {
+    activeAdminUserId = String(userId || "");
     const panel = document.getElementById("adminUserKeysPanel");
-    const user = adminUserRows.find((row) => row.user_id === userId);
-    document.getElementById("adminUserKeysTitle").textContent = "用户 API Key · " + (user?.email || userId);
-    const payload = await adminApi("/api/admin/users/" + encodeURIComponent(userId) + "/keys");
+    const user = adminUserRows.find((row) => row.user_id === activeAdminUserId);
+    document.getElementById("adminUserKeysTitle").textContent = "用户 API Key · " + (user?.email || activeAdminUserId);
+    const payload = await adminApi("/api/admin/users/" + encodeURIComponent(activeAdminUserId) + "/keys");
     const body = document.getElementById("adminUserKeysBody");
     body.innerHTML = (payload.data || []).map((key) => {
-      const state = key.revoked_at ? "已撤销" : key.expired ? "已过期" : key.enabled ? "正常" : "已停用";
+      const configuredEnabled = Boolean(key.configured_enabled);
+      const state = key.revoked_at ? "已永久撤销" : key.expired ? "已过期" : key.quota_exhausted ? "额度耗尽" : key.enabled ? "正常" : "已停用";
+      const cannotEnable = !configuredEnabled && (key.expired || key.quota_exhausted);
+      const actions = key.revoked_at
+        ? '<span class="muted">不可操作</span>'
+        : '<div class="rowactions">' +
+          '<button class="action ' + (configuredEnabled ? 'danger' : 'good') + '" data-admin-key-action="toggle" data-key-id="' + esc(key.key_id) + '" data-enabled="' + (configuredEnabled ? 'false' : 'true') + '"' + (cannotEnable ? ' disabled title="Key 已过期或额度耗尽"' : '') + '>' + (configuredEnabled ? '停用' : '启用') + '</button>' +
+          '<button class="action" data-admin-key-action="quota" data-key-id="' + esc(key.key_id) + '" data-current-quota="' + (key.token_quota == null ? '' : String(Number(key.token_quota))) + '">设置额度</button>' +
+          '<button class="action danger" data-admin-key-action="revoke" data-key-id="' + esc(key.key_id) + '">永久撤销</button>' +
+          '</div>';
       return '<tr><td>' + esc(key.name) + '</td>' +
         '<td><code>' + esc(key.prefix) + '</code></td>' +
         '<td>' + esc(state) + '</td>' +
         '<td>' + esc((key.scopes || []).join(", ")) + '</td>' +
         '<td>' + esc(key.created_at || '-') + '</td>' +
         '<td>' + esc(key.last_used_at || '-') + '</td>' +
-        '<td>' + (key.token_quota == null ? "不限" : Number(key.tokens_used || 0) + " / " + Number(key.token_quota || 0)) + '</td></tr>';
-    }).join("") || '<tr><td colspan="7" class="muted">该用户没有业务 API Key</td></tr>';
+        '<td>' + (key.token_quota == null ? "不限" : Number(key.tokens_used || 0) + " / " + Number(key.token_quota || 0)) + '</td>' +
+        '<td>' + actions + '</td></tr>';
+    }).join("") || '<tr><td colspan="8" class="muted">该用户没有业务 API Key</td></tr>';
     panel.style.display = "block";
   }
+  document.getElementById("adminUserKeysBody").addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-admin-key-action]");
+    if (!button || !activeAdminUserId) return;
+    const action = button.dataset.adminKeyAction;
+    const keyId = button.dataset.keyId;
+    const status = document.getElementById("adminUserStatus");
+    const url = "/api/admin/users/" + encodeURIComponent(activeAdminUserId) + "/keys/" + encodeURIComponent(keyId);
+    button.disabled = true;
+    try {
+      if (action === "toggle") {
+        const enabled = button.dataset.enabled === "true";
+        const message = enabled
+          ? "确定重新启用此 API Key？"
+          : "确定停用此 API Key？正在使用它的客户端将无法继续调用。";
+        if (!window.confirm(message)) return;
+        await adminApi(url, {method:"PATCH", body:JSON.stringify({enabled})});
+        status.textContent = enabled ? "API Key 已启用" : "API Key 已停用";
+      } else if (action === "quota") {
+        const raw = window.prompt("设置 Token 总额度；留空表示不限额度。", button.dataset.currentQuota || "");
+        if (raw === null) return;
+        const value = raw.trim();
+        if (value && !/^\\d+$/.test(value)) throw new Error("额度必须是非负整数，或留空表示不限");
+        const quota = value ? Number(value) : null;
+        if (quota !== null && (!Number.isSafeInteger(quota) || quota < 0)) throw new Error("额度超出安全整数范围");
+        await adminApi(url, {method:"PATCH", body:JSON.stringify({token_quota:quota})});
+        status.textContent = quota === null ? "API Key 已设为不限额度" : "API Key 额度已更新为 " + quota;
+      } else if (action === "revoke") {
+        if (!window.confirm("永久撤销此 API Key？此操作不可恢复，使用该 Key 的客户端将立即失去访问权限。")) return;
+        await adminApi(url, {method:"DELETE"});
+        status.textContent = "API Key 已永久撤销";
+      } else {
+        return;
+      }
+      await loadUserKeys(activeAdminUserId);
+      await loadUsers();
+    } catch (error) {
+      status.textContent = "API Key 操作失败：" + error.message;
+    } finally {
+      button.disabled = false;
+    }
+  });
   document.getElementById("adminUsersBody").addEventListener("click", async (event) => {
     const button = event.target.closest("[data-user-action]");
     if (!button) return;
