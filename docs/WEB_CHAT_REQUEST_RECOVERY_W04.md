@@ -59,6 +59,10 @@ duplicate dispatch and avoids showing provisional text as a final answer.
   Chat Completions POST, persist the pending request/message IDs before dispatch,
   load this controller after the shared-file owners settle, and reconcile only
   the matching assistant message.
+- The existing Telemetry lookup is bounded to its recent in-memory window
+  (up to 500 request rows, including the rows loaded at restart). If the target
+  row is evicted, recovery returns 404; this PR does not create a second
+  persistence/index owner to extend that retention window.
 - Exact SSE event replay, per-event cursor/Last-Event-ID, and partial token
   continuation require a separately designed durable event journal. They are
   not implemented by this snapshot API.
