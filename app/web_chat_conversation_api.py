@@ -129,6 +129,7 @@ def install_web_chat_conversations(app: FastAPI) -> FastAPI:
     def validate_attachment_ownership(owner: str, messages: list[MessageSnapshot]) -> None:
         file_store = getattr(app.state, "file_store", None)
         accounts = getattr(app.state, "user_accounts", None)
+        attachment_key_ids: set[str] = set()
         for message in messages:
             if not isinstance(message.content, list):
                 continue
@@ -145,6 +146,12 @@ def install_web_chat_conversations(app: FastAPI) -> FastAPI:
                     or not accounts.owns_key(owner, str(item.owner_key_id))
                 ):
                     _http_error(404, "attachment not found")
+                attachment_key_ids.add(str(item.owner_key_id))
+        # Mode 2 attachment resolution is API-Key scoped. A single Web Chat
+        # conversation must not accumulate images from multiple owned keys,
+        # or later turns could not resolve the whole history with one key.
+        if len(attachment_key_ids) > 1:
+            _http_error(409, "all image attachments in a conversation must use the same API Key")
 
     @app.get("/api/user/chat/conversations")
     async def list_conversations(
