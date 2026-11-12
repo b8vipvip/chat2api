@@ -537,6 +537,17 @@
       const messages = conversation.messages
         .filter((message) => message.id !== assistant.id)
         .map((message) => ({role:message.role,content:message.content}));
+      try {
+        const session = await apiJson("/api/user/me");
+        if (String(session.user?.user_id || "") !== String(state.user?.user_id || "")) {
+          throw new Error("当前登录账户已变化");
+        }
+      } catch {
+        state.apiToken = "";
+        showOnly("authRequired");
+        setConnection("登录已失效", "error");
+        throw new Error("用户登录状态已失效，请重新登录后再继续聊天");
+      }
       const response = await fetch("/v1/chat/completions", {
         method: "POST",
         credentials: "same-origin",
