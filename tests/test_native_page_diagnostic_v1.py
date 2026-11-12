@@ -27,16 +27,16 @@ def _archive(request_id, worker_id):
     buffer=io.BytesIO()
     with ZipFile(buffer,"w") as archive:
         archive.writestr("assistant_dom.json","{}")
-        archive.writestr("diagnostic.log","tool_version=1.2.2")
+        archive.writestr("diagnostic.log","tool_version=1.3.13")
         archive.writestr("manifest.json",json.dumps({
-            "request_id":request_id,"worker_id":worker_id,"version":"1.2.2",
+            "request_id":request_id,"worker_id":worker_id,"version":"1.3.13",
             "request_binding":"manual-conversation-url-unverified-turn"}))
     return buffer.getvalue()
 
 
 def test_browser_collector_is_versioned_parseable_and_cdp_loopback_only():
     source=(ROOT/"scripts/native_page_diagnostic_v1.py").read_text()
-    assert 'VERSION = "1.2.2"' in source
+    assert 'VERSION = "1.3.13"' in source
     assert 'const forbidden=' in source
     assert 'document.cookie' not in source
     assert "localStorage" not in source
@@ -46,7 +46,7 @@ def test_browser_collector_is_versioned_parseable_and_cdp_loopback_only():
     proc=subprocess.run([sys.executable,"scripts/native_page_diagnostic_v1.py","--version"],
         cwd=ROOT,capture_output=True,text=True,timeout=10)
     assert proc.returncode == 0,proc.stderr
-    assert proc.stdout.strip()=="1.2.2"
+    assert proc.stdout.strip()=="1.3.13"
     match=re.search(r'CAPTURE = r"""(.*?)"""',source,re.S)
     assert match
     js=match.group(1)+"('req_example123456');"
@@ -60,7 +60,7 @@ def test_controller_uses_only_fixed_commands_and_worker_id(monkeypatch,tmp_path)
     monkeypatch.setattr(control,"INSTALLED",tmp_path/"overridden-tool.py")
     worker="wrk_abc123456"
     v=control.execute("native_page_version",{},worker,1,"https://example.test")
-    assert v["ok"] and v["installed"] is True and v["version"]=="1.2.2"
+    assert v["ok"] and v["installed"] is True and v["version"]=="1.3.13"
     assert control.execute("unknown_tool_command",{},worker,1,"https://example.test")["ok"] is False
     assert control.execute("native_page_start",{"job_id":"../../../bad",
         "request_id":"req_abc123456"},worker,1,"https://example.test")["ok"] is False
@@ -110,19 +110,19 @@ def test_admin_jobs_are_request_bound_and_zip_authenticated(tmp_path,monkeypatch
                     z.writestr("assistant_dom.json","{}")
                     z.writestr("manifest.json",json.dumps({
                         "request_id":args["request_id"],"worker_id":worker,
-                        "version":"1.2.2","request_binding":"url-only-unbound"}))
+                        "version":"1.3.13","request_binding":"url-only-unbound"}))
                 raw=buf.getvalue()
-            return {"result":{"ok":True,"tool_version":"1.2.2"}}
+            return {"result":{"ok":True,"tool_version":"1.3.13"}}
         if command=="native_page_status":
             if fail_status["enabled"]:
                 return {"result":{"ok":True,"status":"failed","stage":"page-unavailable",
-                    "percent":100,"tool_version":"1.2.2",
+                    "percent":100,"tool_version":"1.3.13",
                     "error":"history_assistant_boundary_not_found",
                     "page_probe":probe}}
             return {"result":{"ok":True,"status":"completed",
                 "stage":"complete","percent":100,"size":len(raw),
                 "sha256":hashlib.sha256(raw).hexdigest(),
-                "tool_version":"1.2.2","counts":{"tables":3,"images":2}}}
+                "tool_version":"1.3.13","counts":{"tables":3,"images":2}}}
         if command=="native_page_chunk":
             i=args["index"];slice_=raw[i*65536:(i+1)*65536]
             import base64
@@ -156,12 +156,12 @@ def test_admin_jobs_are_request_bound_and_zip_authenticated(tmp_path,monkeypatch
             if result.json()["job"]["status"]=="completed":break
             time.sleep(0.03)
         assert result.json()["job"]["status"]=="completed",result.text
-        assert result.json()["job"]["tool_version"]=="1.2.2"
+        assert result.json()["job"]["tool_version"]=="1.3.13"
         assert client.get("/api/admin/worker-tools/native-page/jobs/"+job+"/download").status_code==401
         download=client.get("/api/admin/worker-tools/native-page/jobs/"+job+"/download",headers=auth)
         assert download.status_code==200
         assert download.content==raw
-        assert "v1.2.2.zip" in download.headers["content-disposition"]
+        assert "v1.3.13.zip" in download.headers["content-disposition"]
         record=client.get("/api/admin/worker-tools/native-page/jobs",headers=auth).json()
         assert record["data"][0]["request_id"]==request_id
         # A standalone valid history URL is diagnosable with only an owner
@@ -376,7 +376,7 @@ def test_url_only_creates_fresh_worker_tab_even_when_old_tab_matches(monkeypatch
     with ZipFile(tmp_path/"new"/"native-page-evidence.zip") as z:
         manifest=json.loads(z.read("manifest.json"))
         assert manifest["request_binding"]=="url-only-unbound"
-        assert manifest["version"]=="1.2.2"
+        assert manifest["version"]=="1.3.13"
 
 
 def test_navigation_failure_reasons_are_distinct_and_safe():
