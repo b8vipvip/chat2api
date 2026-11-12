@@ -657,8 +657,15 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
             ]
         total = len(rows)
         page = rows[offset:offset + limit]
-        for row in page:
-            row["balance_cents"] = billing.balance_cents(str(row["user_id"]))
+        control = getattr(app.state, "control_plane", None)
+        actor = getattr(request.state, "admin_username", None)
+        role = control.role_for(actor) if control is not None else "super_admin"
+        # User/support/system roles may inspect account status but not wallet
+        # balances. Keep financial data restricted to the root administrator
+        # until a reviewed billing-scoped user projection exists.
+        if role == "super_admin":
+            for row in page:
+                row["balance_cents"] = billing.balance_cents(str(row["user_id"]))
         return {"data": page, "total": total, "limit": limit, "offset": offset}
 
     @app.patch("/api/admin/users/{user_id}")
