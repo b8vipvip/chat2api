@@ -52,9 +52,9 @@ def test_admin_console_rejects_unknown_initial_view():
 
 def test_existing_commerce_console_is_the_single_user_and_billing_ui_owner():
     source = (Path(__file__).resolve().parents[1] / "app" / "admin_user_commerce_v104.js").read_text(encoding="utf-8")
-    assert 'currentAdminRole = session.role' in source
+    assert 'session.authenticated ? session.role : null' in source
     assert 'currentAdminRole !== "super_admin"' in source
     assert '["super_admin", "billing_admin"]' in source
     assert '["super_admin", "user_admin", "system_admin", "support"]' in source
     assert 'if (canReadAudit()) await loadAudit()' in source
-    assert 'if (!canWriteUsers())' in source
+    assert '!canWriteUsers()' in source
