@@ -170,3 +170,47 @@ def test_worker_content_ack_requires_the_fixed_request_v6_dispatch_source() -> N
         await broker.release("req_r06_ack_source")
 
     asyncio.run(exercise())
+
+
+def test_registry_send_binds_the_exact_socket_for_chat_and_image_requests(tmp_path) -> None:
+    class FakeSocket:
+        def __init__(self) -> None:
+            self.sent = []
+
+        async def send_json(self, payload) -> None:
+            self.sent.append(payload)
+
+    async def exercise() -> None:
+        registry = ClientRegistry(tmp_path)
+        socket = FakeSocket()
+        registry.clients["ext_r06"] = SimpleNamespace(connection_enabled=True)
+        registry.sockets["ext_r06"] = socket
+        registry.chatgpt_routing_ready = lambda _client_id: True
+        states = {
+            "req_r06_chat": SimpleNamespace(dispatch_socket=None),
+            "req_r06_image": SimpleNamespace(dispatch_socket=None),
+        }
+        registry.request_broker = SimpleNamespace(requests=states)
+
+        await registry.send("ext_r06", {
+            "type": "chat.request", "request_id": "req_r06_chat",
+        })
+        await registry.send("ext_r06", {
+            "type": "image.request", "request_id": "req_r06_image",
+        })
+
+        assert states["req_r06_chat"].dispatch_socket is socket
+        assert states["req_r06_image"].dispatch_socket is socket
+        assert [payload["type"] for payload in socket.sent] == [
+            "chat.request", "image.request",
+        ]
+
+    asyncio.run(exercise())
+
+
+def test_every_request_scoped_worker_sidecar_uses_dispatch_socket_ownership() -> None:
+    source = (ROOT / "app/main.py").read_text(encoding="utf-8")
+    # File chunks, native DOM evidence, native sidecars, probe events and the
+    # ordinary chat/image progress+terminal ingress must share the same
+    # request/client/original-socket/current-socket ownership predicate.
+    assert source.count("owns_dispatch_socket(") == 5
