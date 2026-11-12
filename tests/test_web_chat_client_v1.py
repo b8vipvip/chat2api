@@ -31,6 +31,7 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         assert "/v1/chat/completions" in script.text
         assert "localStorage" in script.text
         assert "state.apiToken" in script.text
+        assert "prompt_mode" not in script.text
 
         stylesheet = client.get("/assets/chat2api-chat-client-v1.css")
         assert stylesheet.status_code == 200
