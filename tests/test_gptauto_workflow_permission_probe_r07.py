@@ -104,3 +104,30 @@ def test_network_timeout_is_reported_without_raw_transport_exception(monkeypatch
     with pytest.raises(ProbeError, match="failed to reach API") as error:
         GitHubApi("token").request("GET", PREFIX + "/git/ref/heads/main")
     assert "secret header" not in str(error.value)
+
+
+
+def test_ambiguous_branch_create_response_reconciles_and_cleans_created_ref() -> None:
+    api = FakeApi(fail_at="POST")
+    with pytest.raises(ProbeError, match="simulated POST denial"):
+        run_probe(api, NONCE)
+    assert [method for method, _, _ in api.calls] == ["GET", "POST", "GET", "DELETE"]
+    assert api.calls[2][1].endswith("/git/ref/heads/diagnostics/gptauto-workflow-write-probe-" + NONCE)
+    assert api.calls[3][1].endswith("/git/refs/heads/diagnostics/gptauto-workflow-write-probe-" + NONCE)
+
+
+def test_rejected_branch_create_with_confirmed_404_does_not_delete_unknown_ref() -> None:
+    class NoBranchApi(FakeApi):
+        def request(self, method, path, payload=None):
+            if method == "POST":
+                self.calls.append((method, path, payload))
+                raise ProbeError("simulated Contents write denial", status_code=403)
+            if method == "GET" and "/git/ref/heads/diagnostics/" in path:
+                self.calls.append((method, path, payload))
+                raise ProbeError("GitHub GET rejected with HTTP 404", status_code=404)
+            return super().request(method, path, payload)
+
+    api = NoBranchApi()
+    with pytest.raises(ProbeError, match="simulated Contents write denial"):
+        run_probe(api, NONCE)
+    assert [method for method, _, _ in api.calls] == ["GET", "POST", "GET"]
