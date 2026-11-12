@@ -44,6 +44,10 @@ class AdminAuditStore:
         if not self.path.is_file():
             raise AdminAuditError("Administrator audit log is not a regular file")
         try:
+            if self.path.stat().st_mode & 0o777 != 0o600:
+                os.chmod(self.path, 0o600)
+                if self.path.stat().st_mode & 0o777 != 0o600:
+                    raise OSError("administrator audit permissions could not be restricted")
             if self.path.stat().st_size > self.MAX_BYTES:
                 raise AdminAuditError("Administrator audit log reached its safety size limit")
             raw_lines = self.path.read_text(encoding="utf-8").splitlines()
