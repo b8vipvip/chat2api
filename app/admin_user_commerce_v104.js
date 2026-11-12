@@ -456,5 +456,13 @@
   document.getElementById("commerceSavePayment").onclick = () => savePayments().catch(showPaymentError);
   document.getElementById("commerceTestPayment").onclick = () => testPayments().catch(showPaymentError);
   window.addEventListener("chat2api-admin-session-changed", refreshAdminRole);
-  refreshAdminRole();
+  refreshAdminRole().then(() => {
+    const initial = location.hash.replace(/^#/, "");
+    const allowed = {
+      "user-pricing": ["super_admin", "billing_admin"],
+      "user-payments": ["super_admin", "billing_admin"],
+      "admin-users": ["super_admin", "user_admin", "system_admin", "support"]
+    };
+    if (allowed[initial] && allowed[initial].includes(currentAdminRole)) activate(initial);
+  });
 })();
