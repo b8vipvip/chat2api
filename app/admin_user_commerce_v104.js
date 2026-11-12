@@ -5,6 +5,9 @@
   if (!nav || !content || document.getElementById("view-user-pricing")) return;
   const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[ch]);
   const keyHeader = () => {
+    // A delegated Session must never inherit a stale root API key left in this
+    // browser's sessionStorage from a previous administrator.
+    if (currentAdminRole && currentAdminRole !== "super_admin") return {};
     const value = String(document.getElementById("adminKey")?.value || "").trim();
     return value ? {"x-api-key": value} : {};
   };
