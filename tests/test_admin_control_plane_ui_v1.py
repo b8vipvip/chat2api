@@ -12,6 +12,8 @@ def test_admin_console_exposes_c_views_and_one_control_plane_asset():
     assert 'data-view="tenants"' in html
     assert 'data-view="model-entitlements"' in html
     assert 'data-view="plugins"' in html
+    assert 'data-view="quota-ledger"' in html
+    assert 'id="view-quota-ledger"' in html
     assert 'id="view-tenants"' in html
     assert 'id="view-model-entitlements"' in html
     assert '/assets/chat2api-control-plane-admin-v1.js' in html
@@ -33,6 +35,8 @@ def test_control_plane_ui_asset_is_served_with_safe_cache_and_content_headers():
         assert "textContent" in response.text
         assert "innerHTML" not in response.text
         assert "adminSessionPassword" in response.text
+        assert "loadQuotaReservations" in response.text
+        assert "runtime_integration_enabled" in response.text
         assert "execute_tool" not in response.text
 
 
