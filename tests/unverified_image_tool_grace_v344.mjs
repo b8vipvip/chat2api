@@ -6,7 +6,7 @@ import {runInNewContext} from "node:vm";
 // It is deliberately pure regarding the error verdict: no synthetic
 // network finish, HTML toolbar, media bytes or Broker terminal is created.
 const s=readFileSync("chrome_extension/content_request_v6.js","utf8");
-const match=s.match(/  function unverifiedNetworkFailureReady\\([\\s\\S]*?\\n  \\}/);
+const match=s.match(/  function unverifiedNetworkFailureReady\([\s\S]*?\n  \}/);
 assert.ok(match,"the production network failure gate must remain independently extractable");
 const fn=runInNewContext("("+match[0].trim()+")",{
   confirmedTransportTerminal:()=>false,
