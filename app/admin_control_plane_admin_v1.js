@@ -8,7 +8,9 @@
     "tenants": ["super_admin", "system_admin", "tenant_admin"],
     "model-entitlements": ["super_admin", "system_admin", "support"],
     "plugins": ["super_admin", "plugin_admin"],
-    "quota-ledger": ["super_admin", "system_admin", "api_key_admin", "billing_admin"]
+    "quota-ledger": ["super_admin", "system_admin", "api_key_admin", "billing_admin"],
+    "users": ["super_admin", "system_admin", "user_admin", "support"],
+    "api-keys": ["super_admin", "api_key_admin", "support"]
   };
   let adminSession = null;
   let roleCatalogue = {};
@@ -79,6 +81,12 @@
     ["cEntSave"].forEach((id) => { if ($(id)) $(id).hidden = !canWriteModels; });
     const canReconcileQuota = adminSession && ["super_admin", "system_admin", "api_key_admin"].includes(adminSession.role);
     if ($("cQuotaReconcile")) $("cQuotaReconcile").hidden = !canReconcileQuota;
+    const canWriteUsers = adminSession && ["super_admin", "user_admin"].includes(adminSession.role);
+    if ($("cUserSearch")) $("cUserSearch").disabled = false;
+    const canWriteKeys = adminSession && ["super_admin", "api_key_admin"].includes(adminSession.role);
+    ["cKeyName", "cKeyExpiry", "cKeyQuota", "cKeyCreate"].forEach((id) => {
+      if ($(id)) $(id).disabled = !canWriteKeys;
+    });
     ["cEntSubjectType", "cEntSubjectId", "cEntEffect", "cEntModels"].forEach((id) => {
       if ($(id)) $(id).disabled = !canWriteModels;
     });
@@ -158,6 +166,8 @@
     if (view === "model-entitlements") loadEntitlements();
     if (view === "plugins") loadPlugins();
     if (view === "quota-ledger") loadQuotaReservations();
+    if (view === "users") loadUsers();
+    if (view === "api-keys") loadManagedKeys();
   };
 
   async function loadAdmins() {
@@ -441,6 +451,130 @@
     } catch (error) { setStatus("cPluginStatus", error.message, true); }
   });
   $("cPluginReload")?.addEventListener("click", loadPlugins);
+
+  async function loadUsers() {
+    try {
+      const params = new URLSearchParams({ limit: "100", offset: "0" });
+      if ($("cUserSearch").value.trim()) params.set("q", $("cUserSearch").value.trim());
+      const result = await sessionApi("/api/admin/users?" + params.toString());
+      const body = $("cUserRows");
+      body.replaceChildren();
+      const canWrite = adminSession && ["super_admin", "user_admin"].includes(adminSession.role);
+      (result.data || []).forEach((user) => {
+        const row = document.createElement("tr");
+        cell(row, user.user_id);
+        cell(row, user.email);
+        cell(row, user.display_name);
+        cell(row, user.enabled ? "enabled" : "disabled");
+        cell(row, "¥" + (Number(user.balance_cents || 0) / 100).toFixed(2));
+        const actions = document.createElement("td");
+        actions.appendChild(button("查看 Key", "action", async () => {
+          try {
+            const keys = await sessionApi("/api/admin/users/" + encodeURIComponent(user.user_id) + "/keys");
+            $("cUserKeyDetail").textContent = JSON.stringify(keys, null, 2);
+          } catch (error) { setStatus("cUserStatus", error.message, true); }
+        }));
+        if (canWrite) {
+          actions.appendChild(button(user.enabled ? "停用" : "启用", user.enabled ? "action danger" : "action good", async () => {
+            try {
+              await sessionApi("/api/admin/users/" + encodeURIComponent(user.user_id), {
+                method: "PATCH", body: { enabled: !user.enabled }
+              });
+              await loadUsers();
+            } catch (error) { setStatus("cUserStatus", error.message, true); }
+          }));
+          actions.appendChild(button("撤销会话", "action danger", async () => {
+            if (!confirm("确认撤销该用户的所有登录 Session？")) return;
+            try {
+              await sessionApi("/api/admin/users/" + encodeURIComponent(user.user_id) + "/sessions/revoke", {
+                method: "POST", body: {}
+              });
+              setStatus("cUserStatus", "该用户的登录 Session 已撤销");
+            } catch (error) { setStatus("cUserStatus", error.message, true); }
+          }));
+        }
+        row.appendChild(actions);
+        body.appendChild(row);
+      });
+      setStatus("cUserStatus", "已加载 " + (result.total || 0) + " 个用户");
+    } catch (error) { setStatus("cUserStatus", error.message, true); }
+  }
+  $("cUserReload")?.addEventListener("click", loadUsers);
+
+  async function loadManagedKeys() {
+    try {
+      const result = await sessionApi("/api/admin/keys");
+      const body = $("cKeyRows");
+      body.replaceChildren();
+      const canWrite = adminSession && ["super_admin", "api_key_admin"].includes(adminSession.role);
+      (result.data || []).forEach((item) => {
+        const row = document.createElement("tr");
+        cell(row, item.key_id);
+        cell(row, item.name);
+        cell(row, item.enabled ? "enabled" : (item.revoked_at ? "revoked" : "disabled"));
+        cell(row, item.tokens_used == null ? "-" : item.tokens_used);
+        cell(row, item.token_quota == null ? "unlimited" : item.token_quota);
+        const actions = document.createElement("td");
+        if (canWrite && !item.revoked_at && item.key_id !== "master") {
+          actions.appendChild(button(item.enabled ? "停用" : "启用", item.enabled ? "action danger" : "action good", async () => {
+            try {
+              await sessionApi("/api/admin/keys/" + encodeURIComponent(item.key_id), {
+                method: "PATCH", body: { enabled: !item.enabled }
+              });
+              await loadManagedKeys();
+            } catch (error) { setStatus("cKeyStatus", error.message, true); }
+          }));
+          actions.appendChild(button("调整额度", "action", async () => {
+            const value = prompt("输入新的 Token 额度；留空表示不限", item.token_quota == null ? "" : String(item.token_quota));
+            if (value === null) return;
+            const quota = value.trim() === "" ? null : Number(value);
+            if (quota !== null && (!Number.isSafeInteger(quota) || quota < 0)) {
+              setStatus("cKeyStatus", "Token 额度必须是非负整数", true);
+              return;
+            }
+            try {
+              await sessionApi("/api/admin/keys/" + encodeURIComponent(item.key_id), {
+                method: "PATCH", body: { token_quota: quota }
+              });
+              await loadManagedKeys();
+            } catch (error) { setStatus("cKeyStatus", error.message, true); }
+          }));
+          actions.appendChild(button("永久撤销", "action danger", async () => {
+            if (!confirm("永久撤销此 API Key？此操作不可恢复。")) return;
+            try {
+              await sessionApi("/api/admin/keys/" + encodeURIComponent(item.key_id), { method: "DELETE" });
+              await loadManagedKeys();
+            } catch (error) { setStatus("cKeyStatus", error.message, true); }
+          }));
+        } else if (!canWrite) {
+          actions.textContent = "只读";
+        }
+        row.appendChild(actions);
+        body.appendChild(row);
+      });
+      setStatus("cKeyStatus", "已加载 " + (result.data || []).length + " 个 API Key；历史 Token 不可读取");
+    } catch (error) { setStatus("cKeyStatus", error.message, true); }
+  }
+  $("cKeyReload")?.addEventListener("click", loadManagedKeys);
+  $("cKeyCreate")?.addEventListener("click", async () => {
+    try {
+      const name = $("cKeyName").value.trim();
+      const expiryText = $("cKeyExpiry").value.trim();
+      const quotaText = $("cKeyQuota").value.trim();
+      const result = await sessionApi("/api/admin/keys", {
+        method: "POST",
+        body: {
+          name,
+          expires_in_days: expiryText ? Number(expiryText) : null,
+          token_quota: quotaText ? Number(quotaText) : null
+        }
+      });
+      $("cKeySecret").textContent = "完整 Token（仅此次创建响应可见，请立即保存）：\n" + result.token;
+      $("cKeySecret").classList.remove("hidden");
+      setStatus("cKeyStatus", "Key 已创建；完整 Token 不会再次显示");
+      await loadManagedKeys();
+    } catch (error) { setStatus("cKeyStatus", error.message, true); }
+  });
 
   async function loadQuotaReservations() {
     try {
