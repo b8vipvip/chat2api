@@ -106,7 +106,7 @@ for(const [answer,network] of [
  assert.equal(f.ctx.candidate(f.active),null);
 }
 assert.match(source,/rendered\.shortTextVerified\s*\?/);
-assert.match(source,/abortedRenderedCandidateSince >= abortedReplyStableThreshold\(rendered\)/);
+assert.match(source,/abortedReplyStableSince\(abortedRenderedCandidateSince, rendered\)/);
 assert.match(source,/return rendered\?\.shortTextVerified \? 4500 : 8000/);
 assert.match(source,/fresh-roleless-compact-div-v248/);
 assert.match(source,/type: "chat.completed", request_id: active.requestId/);
