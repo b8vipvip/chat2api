@@ -54,17 +54,19 @@ async def test_chat_and_responses_share_exactly_one_worker_command_shape() -> No
 
 
 @pytest.mark.asyncio
-async def test_command_is_not_affected_by_adapter_mutation() -> None:
-    attachments = [{"file_id": "file_one"}]
-    options = {"model": "gpt-5.6"}
+async def test_command_is_not_affected_by_nested_adapter_or_wire_mutation() -> None:
+    attachments = [{"file_id": "file_one", "metadata": {"labels": ["original"]}}]
+    options = {"model": "gpt-5.6", "tool": {"arguments": {"mode": "safe"}}}
     command = ChatDispatch.build("req_no_aliasing", "hi", attachments, options)
-    attachments[0]["file_id"] = "file_two"
-    options["model"] = "unexpected"
+    attachments[0]["metadata"]["labels"].append("adapter-mutated")
+    options["tool"]["arguments"]["mode"] = "unexpected"
     wire = command.worker_message()
-    assert wire["attachments"] == [{"file_id": "file_one"}]
-    assert wire["options"] == {"model": "gpt-5.6"}
-    wire["attachments"][0]["file_id"] = "file_modified"
-    assert command.worker_message()["attachments"] == [{"file_id": "file_one"}]
+    assert wire["attachments"][0]["metadata"]["labels"] == ["original"]
+    assert wire["options"]["tool"]["arguments"]["mode"] == "safe"
+    wire["attachments"][0]["metadata"]["labels"].append("wire-mutated")
+    wire["options"]["tool"]["arguments"]["mode"] = "wire-mutated"
+    assert command.worker_message()["attachments"][0]["metadata"]["labels"] == ["original"]
+    assert command.worker_message()["options"]["tool"]["arguments"]["mode"] == "safe"
 
 
 @pytest.mark.asyncio
@@ -96,4 +98,34 @@ async def test_failed_dispatch_does_not_forge_or_release_broker_terminal() -> No
     assert state.terminal_event_type is None
     assert not state.final_future.done()
     # Adapter's existing failure path (not this service) owns lease cleanup.
+    await broker.release(state.request_id)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_requires_live_matching_nonterminal_broker_lease() -> None:
+    registry = FakeRegistry()
+    broker = RequestBroker()
+    service = ChatRequestService(registry, broker)
+
+    with pytest.raises(RuntimeError, match="reserved before Worker dispatch"):
+        await service.dispatch(
+            "ext_expected", request_id="req_unreserved", prompt="hi",
+            attachments=[], options={},
+        )
+
+    state = await service.reserve("req_owned", "ext_owner")
+    with pytest.raises(RuntimeError, match="different Worker"):
+        await service.dispatch(
+            "ext_other", request_id=state.request_id, prompt="hi",
+            attachments=[], options={},
+        )
+    assert registry.sent == []
+
+    await broker.publish(state.request_id, {"type": "chat.completed", "text": "already done"})
+    with pytest.raises(RuntimeError, match="already terminal"):
+        await service.dispatch(
+            "ext_owner", request_id=state.request_id, prompt="replay",
+            attachments=[], options={},
+        )
+    assert registry.sent == []
     await broker.release(state.request_id)
