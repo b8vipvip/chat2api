@@ -154,7 +154,9 @@ def install_single_process_runtime_guard(
         guard = SingleProcessRuntimeGuard(data_dir)
     elif Path(guard.data_dir) != Path(data_dir):
         raise RuntimeTopologyError("Pre-acquired runtime guard does not match the configured data directory")
-    guard.acquire()
+    # Do not acquire a normal installer-created guard here: ordinary test apps
+    # and embedded ASGI apps acquire it at lifespan startup. A production entry
+    # may pass an already-acquired guard obtained before importing app.main.
     app.state.single_process_runtime_guard = guard
 
     # The production FastAPI app already supplies a lifespan context manager
