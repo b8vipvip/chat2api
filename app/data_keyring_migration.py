@@ -105,9 +105,11 @@ class DataKeyringMigrationService:
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
         fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+        open_fd = fd
         try:
-            os.fchmod(fd, mode)
-            with os.fdopen(fd, "wb") as stream:
+            os.fchmod(open_fd, mode)
+            with os.fdopen(open_fd, "wb") as stream:
+                open_fd = -1
                 stream.write(payload)
                 stream.flush()
                 os.fsync(stream.fileno())
@@ -121,6 +123,8 @@ class DataKeyringMigrationService:
             finally:
                 os.close(directory_fd)
         finally:
+            if open_fd >= 0:
+                os.close(open_fd)
             temporary.unlink(missing_ok=True)
 
     def _write_manifest(self, manifest: dict[str, Any]) -> None:
