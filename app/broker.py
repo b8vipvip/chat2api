@@ -336,7 +336,9 @@ class RequestBroker:
             if isinstance(diagnostics, dict):
                 state.diagnostics.update(diagnostics)
                 if (event_type == "chat.diagnostics"
-                        and diagnostics.get("worker_content_dispatch_ack_v1") is True):
+                        and diagnostics.get("worker_content_dispatch_ack_v1") is True
+                        and diagnostics.get("worker_content_dispatch_ack_source")
+                        == "background-tabs-sendMessage-request-v6"):
                     state.worker_content_ack_mono = state.worker_content_ack_mono or now
                     state.diagnostics["worker_content_dispatch_ack_received"] = True
         elif event_type in {"chat.started", "image.started"}:
