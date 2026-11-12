@@ -322,7 +322,8 @@ $('mediaSaveSettings').onclick=async()=>{
   }catch(e){$('mediaStorageStatus').textContent='保存失败：'+e.message;}
 };
 const start=(location.hash||'#'+INITIAL_VIEW).slice(1);show(titles[start]?start:'overview');
-</script><script src="/assets/chat2api-control-plane-admin-v1.js"></script></body></html>'''
+const cTrackAdminScript=document.createElement("script");cTrackAdminScript.src="/assets/chat2api-control-plane-admin-v1.js";cTrackAdminScript.defer=true;document.body.appendChild(cTrackAdminScript);
+</script></body></html>'''
 
 
 def admin_response(initial_view: str = "overview") -> HTMLResponse:
