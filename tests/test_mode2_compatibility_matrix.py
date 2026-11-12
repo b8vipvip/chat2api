@@ -37,7 +37,7 @@ def test_mode2_matrix_is_machine_readable_and_non_overclaiming() -> None:
     assert capabilities["chat.structured_outputs"] == "not_guaranteed"
 
 
-def test_mode2_matrix_routes_are_registered_in_real_production_entry(tmp_path: Path) -> None:
+def test_mode2_matrix_covers_every_production_v1_route_and_openapi_operation(tmp_path: Path) -> None:
     # Compose the entire production patch chain in a fresh process; the default
     # module import creates filesystem state and must not pollute other tests.
     script = r'''
@@ -45,10 +45,23 @@ import json
 from app.entry import app
 entries = []
 for route in app.routes:
-    for method in getattr(route, "methods", ()) or ():
-        if method in {"POST", "GET", "DELETE", "PATCH", "PUT"}:
-            entries.append((method, getattr(route, "path", ""), route.endpoint.__module__))
-print(json.dumps(entries, separators=(",", ":")))
+    path = str(getattr(route, "path", "") or "")
+    if not path.startswith("/v1/"):
+        continue
+    methods = getattr(route, "methods", None) or ()
+    if methods:
+        for method in methods:
+            entries.append((method, path, route.endpoint.__module__, "http"))
+    elif "WebSocket" in type(route).__name__:
+        entries.append(("WEBSOCKET", path, route.endpoint.__module__, "websocket"))
+openapi = app.openapi()
+schema = []
+for path, operations in openapi.get("paths", {}).items():
+    if path.startswith("/v1/"):
+        for method in operations:
+            if method.lower() in {"get", "post", "put", "patch", "delete", "head", "options"}:
+                schema.append((method.upper(), path))
+print(json.dumps({"routes": entries, "openapi": schema}, separators=(",", ":")))
 '''
     env = dict(os.environ)
     env["CHAT2API_DATA_DIR"] = str(tmp_path / "isolated")
@@ -58,15 +71,30 @@ print(json.dumps(entries, separators=(",", ":")))
         check=False, capture_output=True, text=True, timeout=75,
     )
     assert result.returncode == 0, result.stderr[-3000:]
-    routes = json.loads(result.stdout.strip().splitlines()[-1])
+    runtime = json.loads(result.stdout.strip().splitlines()[-1])
+    routes = runtime["routes"]
+    schema = set(tuple(row) for row in runtime["openapi"])
     matrix = _matrix()
-    for spec in matrix["endpoints"]:
+    specs = matrix["endpoints"]
+    expected = {(row["method"], row["path"], row["protocol"]) for row in specs}
+    actual = {(method, path, protocol) for method, path, _, protocol in routes}
+    assert actual == expected, {
+        "missing_from_matrix": sorted(actual - expected),
+        "stale_matrix_entries": sorted(expected - actual),
+    }
+    for spec in specs:
         matches = [
             item for item in routes
             if item[0] == spec["method"] and item[1] == spec["path"]
         ]
         assert len(matches) == 1, (spec["method"], spec["path"], matches)
         assert matches[0][2] == spec["owner"], matches
+        if spec["protocol"] == "http":
+            assert spec["openapi"] is True
+            assert (spec["method"], spec["path"]) in schema
+        else:
+            assert spec["protocol"] == "websocket"
+            assert spec["openapi"] is False
 
 
 def test_standard_sdk_message_shape_keeps_roles_and_transcript_order() -> None:
