@@ -15,8 +15,11 @@ from app import model_capability_routing_patch as routing
 class _Telemetry:
     def __init__(self) -> None:
         self.rows: list[dict] = []
+        self.fail = False
 
     async def upsert(self, row: dict) -> None:
+        if self.fail:
+            raise RuntimeError("simulated telemetry outage")
         self.rows.append(dict(row))
 
 
@@ -111,3 +114,53 @@ def test_model_projection_keeps_source_unknown_without_served_evidence() -> None
     assert trace["served_model"] is None
     assert trace["model_verified"] is False
     assert trace["model_verification_level"] == "profile-default"
+
+
+
+def test_telemetry_projection_outage_does_not_reverse_accepted_broker_event(monkeypatch) -> None:
+    async def exercise() -> None:
+        app = FastAPI()
+        broker = RequestBroker()
+        telemetry = _Telemetry()
+        async def send(_client_id: str, _message: dict) -> None:
+            return None
+
+        app.state.registry = SimpleNamespace(send=send)
+        app.state.broker = broker
+        app.state.telemetry = telemetry
+        monkeypatch.setattr(model_patch, "install_worker_model_library_v145_patch", lambda app: app)
+        monkeypatch.setattr(model_patch, "_patch_admin_html", lambda: None)
+        model_patch.install_model_observability_v144_patch(app)
+
+        request_id = "req_r04_telemetry_outage"
+        state = await broker.create(request_id, "ext_r04")
+        token = routing._MODEL_CONTEXT.set({
+            "requested_model": "gpt-6", "routed_model": "gpt-6",
+        })
+        try:
+            await app.state.registry.send("ext_r04", {
+                "type": "chat.request", "request_id": request_id,
+            })
+        finally:
+            routing._MODEL_CONTEXT.reset(token)
+
+        telemetry.fail = True
+        accepted = await broker.publish(request_id, {
+            "type": "chat.diagnostics", "request_id": request_id,
+            "diagnostics": {"model_evidence_v144": {
+                "served_model": "gpt-6",
+                "evidence_source": "network_response_metadata",
+            }},
+        })
+        assert accepted is True
+        assert state.diagnostics["served_model"] == "gpt-6"
+        assert state.diagnostics["model_verified"] is True
+
+        terminal = await broker.publish(request_id, {
+            "type": "chat.completed", "request_id": request_id, "text": "done",
+        })
+        assert terminal is True
+        assert state.terminal_event_type == "chat.completed"
+        await broker.release(request_id)
+
+    asyncio.run(exercise())
