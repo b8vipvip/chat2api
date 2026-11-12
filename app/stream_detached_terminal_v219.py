@@ -25,12 +25,28 @@ async def settle_detached_stream(
             try:
                 await asyncio.wait_for(asyncio.shield(future), timeout=max(1.0, float(wait_seconds)))
             except asyncio.TimeoutError:
-                terminal_error = "Detached SSE: Worker did not reach a terminal within its request lease"
-                state.diagnostics["detached_stream_terminal_wait_timeout"] = True
-                await broker.publish(state.request_id, {
+                # The Worker can publish its real terminal in the tiny gap
+                # between wait_for timing out and our lease-expiry publish.
+                # Only a Broker-accepted timeout is an actual timeout. A
+                # rejected synthetic error must not claim to have won.
+                timeout_error = "Detached SSE: Worker did not reach a terminal within its request lease"
+                timeout_accepted = await broker.publish(state.request_id, {
                     "type": "chat.error", "request_id": state.request_id,
-                    "error": terminal_error,
+                    "error": timeout_error,
                 })
+                if timeout_accepted:
+                    terminal_error = timeout_error
+                    state.diagnostics["detached_stream_terminal_wait_timeout"] = True
+                elif state.terminal_event_type is not None:
+                    # The actual Worker/Broker terminal won the race, whether
+                    # completed, error or cancelled; finalization reads that
+                    # terminal instead of fabricating an independent result.
+                    terminal_error = None
+                    state.diagnostics["detached_stream_worker_won_timeout_race"] = True
+                else:
+                    # No accepted timeout and no proven Worker terminal: keep
+                    # the transport outcome unknown rather than false success.
+                    terminal_error = timeout_error
             except Exception as exc:
                 terminal_error = str(exc)[:500]
         else:
