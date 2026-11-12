@@ -16,6 +16,7 @@ vm.runInNewContext(source.slice(helperStart,helperEnd)+
   "\nthis.stableSince=abortedReplyStableSince;",context);
 const threshold=context.threshold;
 assert.equal(threshold({shortTextVerified:true}),4500);
+assert.equal(threshold({shortTextVerified:true,rolelessRichVerified:true}),8000);
 assert.equal(threshold({shortTextVerified:false,rolelessRichVerified:true}),8000);
 assert.equal(threshold({}),8000);
 assert.equal(threshold(null),8000);
