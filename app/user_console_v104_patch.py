@@ -7,7 +7,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -436,6 +436,22 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
     @app.delete("/api/user/files/{file_id}")
     async def user_delete_image(file_id: str, request: Request) -> dict[str, bool]:
         """Delete an account-owned vision raster image without requiring a live API Key."""
+        origin = str(request.headers.get("origin") or "").strip()
+        parsed_origin = urlsplit(origin)
+        request_host = str(request.headers.get("host") or "").strip().lower()
+        forwarded_proto = str(request.headers.get("x-forwarded-proto") or "").split(",", 1)[0].strip().lower()
+        expected_scheme = forwarded_proto if forwarded_proto in {"http", "https"} else request.url.scheme.lower()
+        fetch_site = str(request.headers.get("sec-fetch-site") or "").strip().lower()
+        if (
+            parsed_origin.scheme.lower() != expected_scheme
+            or not parsed_origin.netloc
+            or parsed_origin.netloc.lower() != request_host
+            or parsed_origin.path not in {"", "/"}
+            or parsed_origin.query
+            or parsed_origin.fragment
+            or fetch_site not in {"", "same-origin"}
+        ):
+            raise HTTPException(status_code=403, detail="图片删除必须使用同源用户会话请求")
         user = current_user(request)
         file_store = app.state.file_store
         item = file_store.get(file_id)
