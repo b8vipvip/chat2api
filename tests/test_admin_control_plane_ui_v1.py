@@ -13,6 +13,10 @@ def test_admin_console_exposes_c_views_and_one_control_plane_asset():
     assert 'data-view="model-entitlements"' in html
     assert 'data-view="plugins"' in html
     assert 'data-view="quota-ledger"' in html
+    assert 'data-view="users"' in html
+    assert 'data-view="api-keys"' in html
+    assert 'id="view-users"' in html
+    assert 'id="view-api-keys"' in html
     assert 'id="view-quota-ledger"' in html
     assert 'id="view-tenants"' in html
     assert 'id="view-model-entitlements"' in html
