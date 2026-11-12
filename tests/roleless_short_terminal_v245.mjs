@@ -145,7 +145,7 @@ for(const [answer,observed] of [
   assert.equal(f.ctx.findCandidate(f.active),null);
 }
 // Terminal owner remains request-v6 and retains evidence-dependent stability / working guard.
-assert.match(source,/abortedRenderedCandidateSince >= abortedReplyStableThreshold\(rendered\)/);
+assert.match(source,/abortedReplyStableSince\(abortedRenderedCandidateSince, rendered\)/);
 assert.match(source,/return rendered\?\.shortTextVerified \? 4500 : 8000/);
 assert.match(source,/rendered\.rolelessHeaderVerified \? 3 : 8/);
 assert.match(source,/response_terminal_stable_ms:/);
