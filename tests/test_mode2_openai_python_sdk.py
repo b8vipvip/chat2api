@@ -157,6 +157,10 @@ def test_python_sdk_models_and_responses_nonstream(sdk_transport) -> None:
     assert response.status == "completed"
     assert "mode2-sdk-fixture-answer" in response.output_text
 
+    retrieved = sdk.responses.retrieve(response.id)
+    assert retrieved.id == response.id
+    assert retrieved.output_text == response.output_text
+
     response_stream = sdk.responses.create(
         model="gpt-5.6-sol",
         input="Stream a Responses event sequence",
@@ -251,3 +255,67 @@ def test_python_sdk_image_generation_uses_real_mode2_route(sdk_transport) -> Non
     assert result.data and result.data[0].b64_json
     assert len(base64.b64decode(result.data[0].b64_json, validate=True)) > 32
     assert commands == []
+
+
+def test_python_sdk_model_alias_and_accepted_ignored_chat_parameters(sdk_transport) -> None:
+    sdk, commands = sdk_transport
+    result = sdk.chat.completions.create(
+        model="gpt-5-6-thinking",
+        messages=[{"role": "user", "content": "Check alias and parameter contract"}],
+        temperature=0.2,
+        top_p=0.7,
+        max_tokens=24,
+        max_completion_tokens=24,
+        n=1,
+        stop=["STOP"],
+        frequency_penalty=0.1,
+        presence_penalty=0.1,
+        seed=7,
+        response_format={"type": "json_object"},
+        tools=[{
+            "type": "function",
+            "function": {"name": "noop", "parameters": {"type": "object"}},
+        }],
+        tool_choice="auto",
+        stream_options={"include_usage": True},
+    )
+    assert result.model == "gpt-5-6-thinking"
+    options = commands[-1]["options"]
+    assert options["model"] == "gpt-5.6-sol"
+    ignored = {
+        "temperature", "top_p", "max_tokens", "max_completion_tokens", "n",
+        "stop", "frequency_penalty", "presence_penalty", "seed",
+        "response_format", "tools", "tool_choice", "stream_options",
+    }
+    assert ignored.isdisjoint(options)
+
+
+def test_python_sdk_responses_echo_only_parameters_are_not_worker_controls(sdk_transport) -> None:
+    sdk, commands = sdk_transport
+    response = sdk.responses.create(
+        model="gpt-5-6-thinking",
+        input="Check Responses parameter boundary",
+        max_output_tokens=48,
+        temperature=0.25,
+        top_p=0.75,
+        previous_response_id="resp_previous_not_loaded",
+        parallel_tool_calls=False,
+        text={"format": {"type": "json_object"}},
+        truncation="auto",
+        metadata={"contract": "mode2"},
+    )
+    assert response.model == "gpt-5-6-thinking"
+    assert response.max_output_tokens == 48
+    assert response.temperature == 0.25
+    assert response.top_p == 0.75
+    assert response.previous_response_id == "resp_previous_not_loaded"
+    assert response.parallel_tool_calls is False
+    assert response.text.format.type == "json_object"
+    assert response.truncation == "auto"
+    assert response.metadata == {"contract": "mode2"}
+    options = commands[-1]["options"]
+    assert options["model"] == "gpt-5.6-sol"
+    assert not {
+        "max_output_tokens", "temperature", "top_p", "previous_response_id",
+        "parallel_tool_calls", "text", "truncation", "metadata",
+    }.intersection(options)
