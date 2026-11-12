@@ -87,9 +87,15 @@ def test_admin_login_rate_limiter_limits_identity_and_ip():
     assert limiter.retry_after("root", "203.0.113.10") == 0
     limiter.record_failure("root", "203.0.113.10")
     assert limiter.retry_after("root", "203.0.113.10") > 0
-    # A successful login clears both the account/IP windows.
+    # A successful login clears the identity bucket, not the source-IP budget.
     limiter.record_success("root", "203.0.113.10")
     assert limiter.retry_after("root", "203.0.113.10") == 0
+
+    ip_limiter = AdminLoginRateLimiter(per_identity_limit=5, per_ip_limit=2, window_seconds=60)
+    ip_limiter.record_failure("first-admin", "203.0.113.11")
+    ip_limiter.record_failure("second-admin", "203.0.113.11")
+    ip_limiter.record_success("first-admin", "203.0.113.11")
+    assert ip_limiter.retry_after("third-admin", "203.0.113.11") > 0
 
 
 def test_admin_login_endpoint_returns_429_after_repeated_failures(tmp_path: Path):
