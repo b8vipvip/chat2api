@@ -185,6 +185,9 @@
     const body = document.getElementById("adminUsersBody");
     if (!adminUserRows.length) {
       body.innerHTML = '<tr><td colspan="9" class="muted">暂无匹配用户</td></tr>';
+      document.getElementById("adminUserPage").textContent = "0-0 / " + adminUserTotal;
+      document.getElementById("adminUserPrev").disabled = true;
+      document.getElementById("adminUserNext").disabled = true;
       return;
     }
     body.innerHTML = adminUserRows.map((user) => {
