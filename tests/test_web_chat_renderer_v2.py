@@ -74,20 +74,23 @@ const rich = new Element("root");
 renderer.renderRichBlocks(rich, [
   {type:"tool", status:"<script>"},
   {type:"citation", title:"not safe", url:"javascript:alert(1)"},
-  {type:"image", file_id:"file_unsafe"},
+  {type:"image", file_id:"file_87654321", alt:"chart"},
+  {type:"image", file_id:"../../etc/passwd"},
   {type:"file", file_id:"file_12345678", filename:"report.pdf"},
   {type:"file", file_id:"../../etc/passwd", filename:"bad.html"},
   {type:"unknown"},
   {type:"math", tex:"\\frac{1}{2}"},
 ]);
 const rnodes = all(rich);
-assert(!rnodes.some(x => ["script", "iframe", "img"].includes(x.tag)));
+assert(!rnodes.some(x => ["script", "iframe"].includes(x.tag)));
+assert(rnodes.some(x => x.tag === "img" && x.src === "/api/user/files/file_87654321/content"));
+assert(!rnodes.some(x => x.tag === "img" && x.src.includes("../")));
 assert(rnodes.some(x => x.tag === "a" && x.href === "/api/user/chat/files/file_12345678/download"));
 assert(!rnodes.some(x => x.tag === "a" && x.href.includes("../")));
 assert(rich.textContent.includes("report.pdf"));
 assert(rich.textContent.includes("unknown"));
 assert(rich.textContent.includes("文件附件：缺少有效文件引用"));
-assert(rich.textContent.includes("需授权的图片预览"));
+assert(rich.textContent.includes("图片附件：缺少有效文件引用"));
 assert(rich.textContent.includes("此内容暂不支持安全预览"));
 const empty = new Element("root");
 renderer.renderMarkdown(empty, "");
