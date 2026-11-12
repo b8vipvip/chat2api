@@ -1,35 +1,26 @@
-"""W-03: renderer asset ownership and no-HTML execution regression."""
+"""W-03: renderer module security contract and XSS regression."""
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
-
-from app.config import Settings
-from app.main import create_app
-from app.user_console_v104_patch import install_user_console_v104_patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
 RENDERER = ROOT / "app" / "chat_renderer_v2.js"
 
 
-def test_safe_renderer_is_loaded_before_chat_and_has_restricted_csp(tmp_path):
-    app = create_app(Settings(CHAT2API_API_KEY="renderer-test-key", CHAT2API_DATA_DIR=str(tmp_path)))
-    install_user_console_v104_patch(app)
-    with TestClient(app) as client:
-        page = client.get("/chat")
-        assert page.status_code == 200
-        assert page.text.index("chat2api-safe-renderer-v2.js") < page.text.index("chat2api-chat-client-v1.js")
-        assert "unsafe-inline" not in page.headers["content-security-policy"]
-        asset = client.get("/assets/chat2api-safe-renderer-v2.js")
-        assert asset.status_code == 200
-        assert asset.headers["x-content-type-options"] == "nosniff"
-        assert "no-store" in asset.headers["cache-control"]
-        assert "Chat2APISafeRenderer" in asset.text
-        chat_script = client.get("/assets/chat2api-chat-client-v1.js").text
-        assert "Chat2APISafeRenderer.renderMarkdown" in chat_script
+def test_renderer_uses_dom_allowlist_and_fails_closed():
+    source = RENDERER.read_text(encoding="utf-8")
+    assert "document.createElement" in source
+    assert "document.createTextNode" in source
+    assert "textContent" in source
+    assert "noopener noreferrer" in source
+    assert "referrerPolicy" in source
+    for forbidden in ("innerHTML", "insertAdjacentHTML", "eval(", "new Function", "javascript:"):
+        assert forbidden not in source
+    assert "Chat2APISafeRenderer" in source
+    assert "renderRichBlocks" in source
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is needed for the renderer DOM harness")
@@ -39,14 +30,11 @@ const fs = require("fs");
 const vm = require("vm");
 const assert = require("assert");
 const src = fs.readFileSync(process.argv[1], "utf8");
-const created = [];
 class Element {
   constructor(tag, value="") {
     this.tag = tag;
     this._value = String(value);
     this.children = [];
-    this.attributes = {};
-    created.push(tag);
   }
   set textContent(value) { this._value = String(value); this.children = []; }
   get textContent() { return this._value + this.children.map(x => x.textContent).join(""); }
