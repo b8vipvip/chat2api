@@ -101,6 +101,8 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                 "recoverable": True,
                 "active": True,
                 "phase": "admission",
+                "response_text": "",
+                "response_text_available": False,
                 "retry_after_ms": 1000,
                 "updated_at": updated_at,
             }
@@ -114,6 +116,8 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                 "recoverable": True,
                 "active": True,
                 "phase": "finalizing" if terminal_seen else "generating",
+                "response_text": "",
+                "response_text_available": False,
                 "retry_after_ms": 1000,
                 "updated_at": updated_at,
             }
@@ -127,6 +131,8 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
             "recoverable": False,
             "active": False,
             "error_code": "active_request_state_unavailable",
+            "response_text": "",
+            "response_text_available": False,
             "updated_at": updated_at,
         }
 
