@@ -79,15 +79,23 @@ def test_other_account_unknown_and_missing_file_content_are_hidden(tmp_path):
         file_id = upload(client, owner_token, "notes.txt", "text/plain", b"private")
         client.post("/api/user/logout")
         register_and_create_key(client, "other-owner@example.org")
-        assert client.get(f"/api/user/chat/files/{file_id}/download").status_code == 404
-        assert client.get("/api/user/chat/files/file_notreal123/download").status_code == 404
-        assert client.get("/api/user/chat/files/not-a-file/download").status_code == 404
+        denied = client.get(f"/api/user/chat/files/{file_id}/download")
+        unknown = client.get("/api/user/chat/files/file_notreal123/download")
+        malformed = client.get("/api/user/chat/files/not-a-file/download")
+        assert denied.status_code == 404
+        assert unknown.status_code == 404
+        assert malformed.status_code == 404
+        assert denied.headers["cache-control"] == "private, no-store"
+        assert unknown.headers["cache-control"] == "private, no-store"
+        assert malformed.headers["cache-control"] == "private, no-store"
 
 
 def test_download_requires_user_session_and_missing_disk_bytes_are_404(tmp_path):
     app = make_app(tmp_path)
     with TestClient(app) as client:
-        assert client.get("/api/user/chat/files/file_notreal123/download").status_code == 401
+        unauthorized = client.get("/api/user/chat/files/file_notreal123/download")
+        assert unauthorized.status_code == 401
+        assert unauthorized.headers["cache-control"] == "private, no-store"
         token = register_and_create_key(client, "missing-bytes@example.org")
         file_id = upload(client, token, "notes.txt", "text/plain", b"private")
         stored = app.state.file_store.get(file_id)
