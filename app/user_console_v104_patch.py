@@ -28,6 +28,8 @@ from .user_commerce import (
 PATCH_REVISION = 104
 USER_JS_ASSET = "/assets/chat2api-user-console-v104.js"
 ADMIN_JS_ASSET = "/assets/chat2api-admin-commerce-v104.js"
+CHAT_CLIENT_JS_ASSET = "/assets/chat2api-chat-client-v1.js"
+CHAT_CLIENT_CSS_ASSET = "/assets/chat2api-chat-client-v1.css"
 
 
 class RegisterBody(BaseModel):
@@ -258,6 +260,35 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
     async def user_console() -> HTMLResponse:
         template = Path(__file__).with_name("user_console_v104.html").read_text(encoding="utf-8")
         return HTMLResponse(template, headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
+
+    @app.get("/chat", include_in_schema=False)
+    async def chat_client() -> HTMLResponse:
+        template = Path(__file__).with_name("chat_client_v1.html").read_text(encoding="utf-8")
+        return HTMLResponse(
+            template,
+            headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate",
+                "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+                "X-Content-Type-Options": "nosniff",
+                "Referrer-Policy": "no-referrer",
+            },
+        )
+
+    @app.get(CHAT_CLIENT_JS_ASSET, include_in_schema=False)
+    async def chat_client_js() -> Response:
+        return Response(
+            Path(__file__).with_name("chat_client_v1.js").read_text(encoding="utf-8"),
+            media_type="application/javascript",
+            headers={"Cache-Control": "no-store, no-cache, must-revalidate", "X-Content-Type-Options": "nosniff"},
+        )
+
+    @app.get(CHAT_CLIENT_CSS_ASSET, include_in_schema=False)
+    async def chat_client_css() -> Response:
+        return Response(
+            Path(__file__).with_name("chat_client_v1.css").read_text(encoding="utf-8"),
+            media_type="text/css",
+            headers={"Cache-Control": "no-store, no-cache, must-revalidate", "X-Content-Type-Options": "nosniff"},
+        )
 
     @app.get(USER_JS_ASSET, include_in_schema=False)
     async def user_console_js() -> Response:
