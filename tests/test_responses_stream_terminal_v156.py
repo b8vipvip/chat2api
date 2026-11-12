@@ -236,8 +236,19 @@ def test_dispatch_correlates_worker_and_protocol_repair_attempts() -> None:
         headers={"x-chat2api-request-id": "resp_req_original"},
         scope={"chat2api.responses_trace": trace},
     )
+    requests = {}
+
     async def create(request_id, client_id):
-        return SimpleNamespace(request_id=request_id)
+        state = SimpleNamespace(
+            request_id=request_id,
+            client_id=client_id,
+            final_future=asyncio.get_running_loop().create_future(),
+        )
+        requests[request_id] = state
+        return state
+
+    async def release(request_id):
+        requests.pop(request_id, None)
 
     async def send(client_id, message):
         return None
@@ -248,7 +259,7 @@ def test_dispatch_correlates_worker_and_protocol_repair_attempts() -> None:
         busy_clients=set(),
         send=send,
     )
-    broker = SimpleNamespace(create=create)
+    broker = SimpleNamespace(create=create, release=release, requests=requests)
     app = SimpleNamespace(state=SimpleNamespace(
         registry=registry, broker=broker,
         chat_request_service=ChatRequestService(registry, broker),
