@@ -120,6 +120,37 @@ def test_user_image_content_rejects_non_vision_and_non_image_files(tmp_path: Pat
         assert client.get(f"/api/user/files/{mislabeled.json()['id']}/content").status_code == 404
 
 
+def test_user_can_delete_owned_vision_image_with_session_only(tmp_path: Path) -> None:
+    settings = Settings(
+        CHAT2API_API_KEY="web-chat-image-master-key",
+        CHAT2API_DATA_DIR=str(tmp_path),
+    )
+    app = create_app(settings)
+    install_user_console_v104_patch(app)
+    payload = _png_bytes()
+
+    with TestClient(app) as client:
+        token = _register_and_create_key(client, "image-delete@example.com")
+        uploaded = client.post(
+            "/v1/files",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "filename": "delete-me.png",
+                "mime_type": "image/png",
+                "data_base64": base64.b64encode(payload).decode("ascii"),
+                "purpose": "vision",
+            },
+        )
+        assert uploaded.status_code == 200, uploaded.text
+        file_id = uploaded.json()["id"]
+
+        deleted = client.delete(f"/api/user/files/{file_id}")
+        assert deleted.status_code == 200
+        assert deleted.json() == {"deleted": True}
+        assert client.get(f"/api/user/files/{file_id}/content").status_code == 404
+        assert client.delete(f"/api/user/files/{file_id}").status_code == 404
+
+
 def test_web_chat_image_picker_and_client_javascript_are_wired(tmp_path: Path) -> None:
     settings = Settings(
         CHAT2API_API_KEY="web-chat-image-master-key",
@@ -142,6 +173,7 @@ def test_web_chat_image_picker_and_client_javascript_are_wired(tmp_path: Path) -
         assert 'purpose: "vision"' in script.text
         assert 'type: "image_url"' in script.text
         assert "/api/user/files/" in script.text
+        assert 'method: "DELETE"' in script.text
         assert "MAX_IMAGES_PER_MESSAGE = 4" in script.text
         assert "MAX_IMAGE_BYTES = 10 * 1024 * 1024" in script.text
         assert "apiKeyId" in script.text
