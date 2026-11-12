@@ -172,7 +172,8 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
     telemetry = app.state.telemetry
     admin_sessions = getattr(app.state, "admin_sessions", None)
 
-    admin_audit = AdminAuditStore(data_dir)
+    # Reuse one hash-chain writer/lock across administrator modules.
+    admin_audit = getattr(app.state, "admin_audit", None) or AdminAuditStore(data_dir)
     app.state.admin_audit = admin_audit
     app.state.user_accounts = accounts
     app.state.user_pricing = pricing
