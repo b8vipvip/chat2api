@@ -135,8 +135,10 @@ def test_ambiguous_branch_create_response_reconciles_and_cleans_created_ref() ->
     with pytest.raises(ProbeError, match="simulated POST denial"):
         run_probe(api, NONCE)
     assert [method for method, _, _ in api.calls] == ["GET", "GET", "POST", "GET", "DELETE"]
-    assert api.calls[2][1].endswith("/git/ref/heads/diagnostics/gptauto-workflow-write-probe-" + NONCE)
-    assert api.calls[3][1].endswith("/git/refs/heads/diagnostics/gptauto-workflow-write-probe-" + NONCE)
+    assert api.calls[2][1] == PREFIX + "/git/refs"
+    assert api.calls[2][2]["ref"] == "refs/heads/diagnostics/gptauto-workflow-write-probe-" + NONCE
+    assert api.calls[3][1] == PREFIX + "/git/ref/heads/diagnostics/gptauto-workflow-write-probe-" + NONCE
+    assert api.calls[4][1] == PREFIX + "/git/refs/heads/diagnostics/gptauto-workflow-write-probe-" + NONCE
 
 
 def test_rejected_branch_create_with_confirmed_404_does_not_delete_unknown_ref() -> None:
