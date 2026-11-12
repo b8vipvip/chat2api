@@ -92,7 +92,7 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
                 raise KeyError("Unknown tenant")
         if subject_type == "tenant_role":
             if subject_id not in {"owner", "admin", "member", "viewer"}:
-                raise ValueError("Unknown tenant membership role")
+                raise ModelEntitlementError("Unknown tenant membership role")
             return
 
     def _identity(key_id: str | None) -> str | None:
@@ -228,6 +228,12 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
     @app.delete("/api/admin/model-entitlements/{subject_type}/{subject_id}")
     async def delete_model_entitlement(subject_type: str, subject_id: str, request: Request) -> dict[str, bool]:
         actor = admin_actor(request)
+        try:
+            _validate_subject(subject_type, subject_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ModelEntitlementError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         audit_event(actor, "model.entitlement_delete_requested", subject_type, subject_id, {})
         try:
             deleted = store.delete(subject_type, subject_id)
