@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import shutil
+import subprocess
 from pathlib import Path
 
 from app.runtime_contract import SERVER_RUNTIME_VERSION, version_contract_payload
@@ -188,6 +190,16 @@ def test_admin_console_extension_adds_user_price_payment_and_audit_navigation() 
     assert "/api/admin/user-payments" in js
     assert "测试 API 连接" in js
     assert "不显示或恢复完整密钥" in js
+    node = shutil.which("node")
+    if node:
+        checked = subprocess.run(
+            [node, "--check", str(ROOT / "app" / "admin_user_commerce_v104.js")],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=10,
+        )
+        assert checked.returncode == 0, checked.stdout + checked.stderr
 
 
 def test_user_commerce_runtime_and_production_dependencies_are_published() -> None:
