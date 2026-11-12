@@ -218,185 +218,7 @@
     });
   }
 
-  function addInline(parent, text) {
-    const pattern = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|https?:\/\/[^\s<]+)/g;
-    let last = 0;
-    let match;
-    while ((match = pattern.exec(text)) !== null) {
-      if (match.index > last) parent.appendChild(document.createTextNode(text.slice(last, match.index)));
-      const token = match[0];
-      if (token.startsWith("`")) {
-        const code = document.createElement("code");
-        code.textContent = token.slice(1, -1);
-        parent.appendChild(code);
-      } else if (token.startsWith("**")) {
-        const strong = document.createElement("strong");
-        strong.textContent = token.slice(2, -2);
-        parent.appendChild(strong);
-      } else if (token.startsWith("*")) {
-        const emphasis = document.createElement("em");
-        emphasis.textContent = token.slice(1, -1);
-        parent.appendChild(emphasis);
-      } else {
-        let safe = false;
-        try { safe = ["http:", "https:"].includes(new URL(token).protocol); } catch {}
-        if (safe) {
-          const link = document.createElement("a");
-          link.href = token;
-          link.target = "_blank";
-          link.rel = "noopener noreferrer";
-          link.textContent = token;
-          parent.appendChild(link);
-        } else {
-          parent.appendChild(document.createTextNode(token));
-        }
-      }
-      last = pattern.lastIndex;
-    }
-    if (last < text.length) parent.appendChild(document.createTextNode(text.slice(last)));
-  }
-
-  function addParagraph(parent, lines) {
-    const paragraph = document.createElement("p");
-    lines.forEach((line, index) => {
-      if (index) paragraph.appendChild(document.createElement("br"));
-      addInline(paragraph, line);
-    });
-    parent.appendChild(paragraph);
-  }
-
-  function tableCells(line) {
-    return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
-  }
-
-  function renderMarkdown(container, source) {
-    const lines = String(source || "").replace(/\r\n/g, "\n").split("\n");
-    let i = 0;
-    while (i < lines.length) {
-      const line = lines[i];
-      if (!line.trim()) { i += 1; continue; }
-
-      if (line.trim().startsWith("```")) {
-        const language = line.trim().slice(3).trim() || "code";
-        const codeLines = [];
-        i += 1;
-        while (i < lines.length && !lines[i].trim().startsWith("```")) {
-          codeLines.push(lines[i]);
-          i += 1;
-        }
-        if (i < lines.length) i += 1;
-        const wrapper = document.createElement("div");
-        wrapper.className = "code-block";
-        const toolbar = document.createElement("div");
-        toolbar.className = "code-toolbar";
-        const label = document.createElement("span");
-        label.textContent = language;
-        const copy = document.createElement("button");
-        copy.type = "button";
-        copy.textContent = "复制代码";
-        copy.addEventListener("click", async () => {
-          try { await navigator.clipboard.writeText(codeLines.join("\n")); toast("代码已复制"); }
-          catch { toast("无法访问剪贴板"); }
-        });
-        toolbar.append(label, copy);
-        const pre = document.createElement("pre");
-        const code = document.createElement("code");
-        code.textContent = codeLines.join("\n");
-        pre.appendChild(code);
-        wrapper.append(toolbar, pre);
-        container.appendChild(wrapper);
-        continue;
-      }
-
-      const heading = line.match(/^(#{1,4})\s+(.+)$/);
-      if (heading) {
-        const node = document.createElement("h" + heading[1].length);
-        addInline(node, heading[2]);
-        container.appendChild(node);
-        i += 1;
-        continue;
-      }
-
-      if (/^\s*([-*_])\1\1+\s*$/.test(line)) {
-        container.appendChild(document.createElement("hr"));
-        i += 1;
-        continue;
-      }
-
-      if (/^>\s?/.test(line)) {
-        const quoteLines = [];
-        while (i < lines.length && /^>\s?/.test(lines[i])) {
-          quoteLines.push(lines[i].replace(/^>\s?/, ""));
-          i += 1;
-        }
-        const quote = document.createElement("blockquote");
-        addParagraph(quote, quoteLines);
-        container.appendChild(quote);
-        continue;
-      }
-
-      const listMatch = line.match(/^\s*([-*+] |\d+\. )/);
-      if (listMatch) {
-        const ordered = /^\s*\d+\. /.test(line);
-        const list = document.createElement(ordered ? "ol" : "ul");
-        while (i < lines.length) {
-          const match = lines[i].match(/^\s*(?:[-*+] |\d+\. )(.*)$/);
-          if (!match) break;
-          const item = document.createElement("li");
-          addInline(item, match[1]);
-          list.appendChild(item);
-          i += 1;
-        }
-        container.appendChild(list);
-        continue;
-      }
-
-      if (line.includes("|") && i + 1 < lines.length && /^\s*\|?\s*:?-{3,}/.test(lines[i + 1])) {
-        const headers = tableCells(line);
-        i += 2;
-        const table = document.createElement("table");
-        const thead = document.createElement("thead");
-        const headRow = document.createElement("tr");
-        headers.forEach((cell) => {
-          const th = document.createElement("th");
-          addInline(th, cell);
-          headRow.appendChild(th);
-        });
-        thead.appendChild(headRow);
-        table.appendChild(thead);
-        const tbody = document.createElement("tbody");
-        while (i < lines.length && lines[i].includes("|") && lines[i].trim()) {
-          const cells = tableCells(lines[i]);
-          const row = document.createElement("tr");
-          headers.forEach((_, index) => {
-            const td = document.createElement("td");
-            addInline(td, cells[index] || "");
-            row.appendChild(td);
-          });
-          tbody.appendChild(row);
-          i += 1;
-        }
-        table.appendChild(tbody);
-        container.appendChild(table);
-        continue;
-      }
-
-      const paragraphLines = [];
-      while (i < lines.length && lines[i].trim()) {
-        if (paragraphLines.length && (
-          lines[i].trim().startsWith("```") ||
-          /^#{1,4}\s+/.test(lines[i]) ||
-          /^>\s?/.test(lines[i]) ||
-          /^\s*([-*+] |\d+\. )/.test(lines[i]) ||
-          /^\s*([-*_])\1\1+\s*$/.test(lines[i])
-        )) break;
-        paragraphLines.push(lines[i]);
-        i += 1;
-      }
-      if (paragraphLines.length) addParagraph(container, paragraphLines);
-      else i += 1;
-    }
-  }
+  // W-03: the allowlisted renderer owns all assistant Markdown output.
 
   function renderMessages() {
     const root = $("messages");
@@ -428,7 +250,12 @@
       if (message.role === "user") {
         body.textContent = message.content;
       } else {
-        renderMarkdown(body, message.content);
+        if (window.Chat2APISafeRenderer) {
+          window.Chat2APISafeRenderer.renderMarkdown(body, message.content);
+        } else {
+          // Fail closed if the independently served renderer did not load.
+          body.textContent = String(message.content || "");
+        }
       }
       if (state.streaming && message.id === state.streamingMessageId) {
         const caret = document.createElement("span");
