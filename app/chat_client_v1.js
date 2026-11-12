@@ -223,13 +223,28 @@
       toast("请先移除待发送图片，再删除对话。");
       return;
     }
-    if (!window.confirm("删除这段本地对话？此操作不可撤销。")) return;
+    if (!window.confirm("删除这段本地对话？本地记录会删除，且仅清理未被其他本地对话引用的图片附件。")) return;
+    const remainingFileIds = new Set(
+      state.conversations
+        .filter((row) => row.id !== conversationId)
+        .flatMap((row) => row.messages.flatMap(messageImageIds))
+    );
+    const orphanedFileIds = [...new Set(conversation.messages.flatMap(messageImageIds))]
+      .filter((fileId) => !remainingFileIds.has(fileId));
     state.conversations = state.conversations.filter((row) => row.id !== conversationId);
     if (state.activeConversationId === conversationId) {
       state.activeConversationId = state.conversations[0]?.id || "";
     }
     saveHistory();
     renderAll();
+    if (orphanedFileIds.length) {
+      Promise.allSettled(orphanedFileIds.map((fileId) =>
+        apiJson("/api/user/files/" + encodeURIComponent(fileId), {method:"DELETE"})
+      )).then((results) => {
+        const failed = results.filter((result) => result.status === "rejected").length;
+        if (failed) toast("本地对话已删除；" + failed + " 个图片文件未能自动清理。");
+      });
+    }
   }
 
   function renameConversation(conversationId) {
@@ -614,9 +629,8 @@
         if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
         if (removed?.fileId && state.apiToken) {
           try {
-            await apiJson("/v1/files/" + encodeURIComponent(removed.fileId), {
+            await apiJson("/api/user/files/" + encodeURIComponent(removed.fileId), {
               method: "DELETE",
-              headers: {"Authorization":"Bearer " + state.apiToken},
             });
           } catch {
             toast("图片已移出待发送列表，但服务器临时文件未能自动清理。");
