@@ -66,6 +66,40 @@ def test_os_lock_excludes_another_process_and_recovers_after_abrupt_exit(tmp_pat
             child.join(10)
 
 
+def _try_acquire_inherited_guard(guard, result_queue):
+    try:
+        guard.acquire()
+    except RuntimeTopologyError as exc:
+        result_queue.put(("rejected", str(exc)))
+    else:
+        result_queue.put(("acquired", ""))
+        guard.release()
+
+
+@pytest.mark.skipif("fork" not in multiprocessing.get_all_start_methods(), reason="fork is unavailable")
+def test_preloaded_fork_worker_cannot_reuse_parent_runtime_lock(tmp_path: Path):
+    guard = SingleProcessRuntimeGuard(tmp_path)
+    guard.acquire()
+    context = multiprocessing.get_context("fork")
+    result_queue = context.Queue()
+    child = context.Process(target=_try_acquire_inherited_guard, args=(guard, result_queue))
+    try:
+        child.start()
+        child.join(10)
+        assert not child.is_alive()
+        status, message = result_queue.get(timeout=2)
+        assert status == "rejected"
+        assert "inherited across fork" in message
+        second = SingleProcessRuntimeGuard(tmp_path)
+        with pytest.raises(RuntimeTopologyError, match="already owns"):
+            second.acquire()
+    finally:
+        if child.is_alive():
+            child.terminate()
+            child.join(10)
+        guard.release()
+
+
 def test_guard_rejects_known_multi_worker_environment(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("WEB_CONCURRENCY", "2")
     with pytest.raises(RuntimeTopologyError, match="requires one server process"):
