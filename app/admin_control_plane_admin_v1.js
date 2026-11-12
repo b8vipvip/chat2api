@@ -400,6 +400,16 @@
       setStatus("cEntStatus", "已加载 " + (result.data || []).length + " 条规则");
     } catch (error) { setStatus("cEntStatus", error.message, true); }
   }
+  $("cEntSubjectType")?.addEventListener("change", () => {
+    const placeholders = {
+      global: "global 使用 default",
+      tenant: "ten_...",
+      tenant_role: "owner / admin / member / viewer",
+      user: "usr_...",
+      key: "key_..."
+    };
+    $("cEntSubjectId").placeholder = placeholders[$("cEntSubjectType").value] || "";
+  });
   $("cEntSave")?.addEventListener("click", async () => {
     try {
       const subjectType = $("cEntSubjectType").value;
