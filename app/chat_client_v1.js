@@ -605,10 +605,27 @@
       remove.className = "attachment-remove";
       remove.textContent = "×";
       remove.setAttribute("aria-label", "移除图片 " + image.filename);
-      remove.addEventListener("click", () => {
+      remove.addEventListener("click", async () => {
         const [removed] = state.pendingImages.splice(index, 1);
         if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
-        if (!state.pendingImages.length) state.pendingImagesConversationId = "";
+        if (removed?.fileId && state.apiToken) {
+          try {
+            await apiJson("/v1/files/" + encodeURIComponent(removed.fileId), {
+              method: "DELETE",
+              headers: {"Authorization":"Bearer " + state.apiToken},
+            });
+          } catch {
+            toast("图片已移出待发送列表，但服务器临时文件未能自动清理。");
+          }
+        }
+        if (!state.pendingImages.length) {
+          state.pendingImagesConversationId = "";
+          const conversation = currentConversation();
+          if (conversation && !conversation.messages.some((message) => messageImageIds(message).length)) {
+            conversation.apiKeyId = "";
+            saveHistory();
+          }
+        }
         renderPendingImages();
         resizeComposer();
       });
@@ -783,8 +800,9 @@
       }
 
       if (pending.length) {
-        await uploadPendingImages();
         conversation.apiKeyId = keyId;
+        saveHistory();
+        await uploadPendingImages();
       }
       const imageParts = pending.map((image) => ({
         type: "image_url",
@@ -1044,7 +1062,15 @@
 
   $("newChatButton").addEventListener("click", createConversation);
   $("conversationSearch").addEventListener("input", renderSidebar);
-  $("apiKeySelect").addEventListener("change", (event) => selectApiKey(event.target.value));
+  $("apiKeySelect").addEventListener("change", (event) => {
+    const conversation = currentConversation();
+    if (state.pendingImages.length && conversation?.apiKeyId && conversation.apiKeyId !== event.target.value) {
+      event.target.value = conversation.apiKeyId;
+      toast("待发送图片已绑定当前 API Key；请先移除图片再切换 Key。");
+      return;
+    }
+    selectApiKey(event.target.value);
+  });
   $("modelSelect").addEventListener("change", (event) => {
     state.selectedModel = event.target.value;
     const conversation = currentConversation();
