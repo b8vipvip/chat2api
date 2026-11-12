@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app.admin_auth import AdminSessionStore
+from app.admin_auth import AdminLoginRateLimiter, AdminSessionStore
 from app.config import Settings
 from app.control_plane import ControlPlaneError, ControlPlaneStore, permission_for_admin_route
 from app.control_plane_v1_patch import install_control_plane_v1
@@ -68,6 +68,38 @@ def test_role_route_map_is_explicit_and_secret_read_denied_to_key_admin():
     assert permission_for_admin_route("/api/admin/users/u1/secret", "GET") is None
     assert permission_for_admin_route("/api/admin/requests/req1", "GET") is None
     assert permission_for_admin_route("/api/admin/plugins", "POST") == "plugins:write"
+    assert permission_for_admin_route("/api/admin/tenants", "GET") == "tenants:read"
+    assert permission_for_admin_route("/api/admin/tenants/ten_123/members/usr_123456", "DELETE") == "tenants:write"
+    assert permission_for_admin_route("/api/admin/payment-channels-v106/test", "POST") == "billing:write"
+    assert permission_for_admin_route("/api/admin/payment-channels-v106/usdt-orders/o1/confirm", "POST") == "billing:write"
+    assert permission_for_admin_route("/api/admin/text-models/gpt-5.6-sol", "PATCH") == "models:write"
+    # Request search/detail may include user prompts and remains root-only.
+    assert permission_for_admin_route("/api/admin/requests", "GET") is None
+    assert permission_for_admin_route("/api/admin/requests/req_123", "GET") is None
+
+
+def test_admin_login_rate_limiter_limits_identity_and_ip():
+    limiter = AdminLoginRateLimiter(per_identity_limit=2, per_ip_limit=3, window_seconds=60)
+    assert limiter.retry_after("root", "203.0.113.10") == 0
+    limiter.record_failure("root", "203.0.113.10")
+    assert limiter.retry_after("root", "203.0.113.10") == 0
+    limiter.record_failure("root", "203.0.113.10")
+    assert limiter.retry_after("root", "203.0.113.10") > 0
+    # A successful login clears both the account/IP windows.
+    limiter.record_success("root", "203.0.113.10")
+    assert limiter.retry_after("root", "203.0.113.10") == 0
+
+
+def test_admin_login_endpoint_returns_429_after_repeated_failures(tmp_path: Path):
+    app = make_app(tmp_path)
+    with TestClient(app) as client:
+        for _ in range(5):
+            response = login(client, "owner", "incorrect-password")
+            assert response.status_code == 401
+        limited = login(client, "owner", "strong-root-password")
+        assert limited.status_code == 429
+        assert int(limited.headers["Retry-After"]) > 0
+        assert limited.headers["Cache-Control"] == "no-store"
 
 
 def test_delegated_admin_session_permissions_and_disable_revoke(tmp_path: Path):
