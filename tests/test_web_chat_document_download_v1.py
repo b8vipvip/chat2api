@@ -100,4 +100,14 @@ def test_download_requires_user_session_and_missing_disk_bytes_are_404(tmp_path)
         file_id = upload(client, token, "notes.txt", "text/plain", b"private")
         stored = app.state.file_store.get(file_id)
         (app.state.file_store.root / stored.path).unlink()
-        assert client.get(f"/api/user/chat/files/{file_id}/download").status_code == 404
+        missing = client.get(f"/api/user/chat/files/{file_id}/download")
+        assert missing.status_code == 404
+        assert missing.headers["cache-control"] == "private, no-store"
+
+        original_read = app.state.file_store.read
+        app.state.file_store.read = lambda _: (_ for _ in ()).throw(PermissionError("private path"))
+        unavailable = client.get(f"/api/user/chat/files/{file_id}/download")
+        app.state.file_store.read = original_read
+        assert unavailable.status_code == 503
+        assert unavailable.headers["cache-control"] == "private, no-store"
+        assert "cookie" in {value.strip().lower() for value in unavailable.headers["vary"].split(",")}
