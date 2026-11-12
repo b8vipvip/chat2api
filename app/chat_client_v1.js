@@ -549,7 +549,6 @@
           model: state.selectedModel,
           messages,
           stream: true,
-          prompt_mode: "full",
         }),
         signal: state.abortController.signal,
       });
