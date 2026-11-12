@@ -466,7 +466,7 @@
         cell(row, user.email);
         cell(row, user.display_name);
         cell(row, user.enabled ? "enabled" : "disabled");
-        cell(row, "¥" + (Number(user.balance_cents || 0) / 100).toFixed(2));
+        cell(row, user.balance_cents == null ? "—" : "¥" + (Number(user.balance_cents) / 100).toFixed(2));
         const actions = document.createElement("td");
         actions.appendChild(button("查看 Key", "action", async () => {
           try {
