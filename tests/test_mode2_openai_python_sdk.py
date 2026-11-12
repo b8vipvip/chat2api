@@ -14,6 +14,7 @@ from pathlib import Path
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from app.config import Settings
 from app.main import create_app
@@ -35,6 +36,9 @@ def sdk_app(tmp_path: Path):
     install_v13_patch(app)
     install_responses_v108_patch(app)
     commands: list[dict] = []
+    image_buffer = io.BytesIO()
+    Image.new("RGB", (8, 8), (30, 60, 90)).save(image_buffer, format="PNG")
+    app.state.mode2_test_image_b64 = base64.b64encode(image_buffer.getvalue()).decode("ascii")
     app.state.registry.model_catalog = lambda online_only=True: [{
         "id": "gpt-5.6-sol", "object": "model", "created": 0, "owned_by": "chat2api",
     }]
@@ -49,6 +53,15 @@ def sdk_app(tmp_path: Path):
                 "text": "mode2-sdk-fixture-answer",
             })
             assert published
+        elif payload.get("type") == "image.request":
+            state = app.state.broker.requests[payload["request_id"]]
+            await state.queue.put({
+                "type": "image.completed",
+                "images": [{
+                    "b64_json": app.state.mode2_test_image_b64,
+                    "mime_type": "image/png",
+                }],
+            })
 
     app.state.registry.send = fake_worker_send
     return app, commands
@@ -224,3 +237,16 @@ def test_python_sdk_rejects_unsupported_standard_file_purpose(sdk_transport) -> 
         )
     assert error.value.status_code == 400
     assert error.value.body["type"] == "invalid_request_error"
+
+
+def test_python_sdk_image_generation_uses_real_mode2_route(sdk_transport) -> None:
+    sdk, commands = sdk_transport
+    result = sdk.images.generate(
+        model="gpt-image",
+        prompt="Generate a small test image",
+        response_format="b64_json",
+    )
+    assert result.model == "gpt-image"
+    assert result.data and result.data[0].b64_json
+    assert len(base64.b64decode(result.data[0].b64_json, validate=True)) > 32
+    assert commands == []
