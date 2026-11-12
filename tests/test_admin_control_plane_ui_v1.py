@@ -43,6 +43,7 @@ def test_control_plane_ui_asset_is_served_with_safe_cache_and_content_headers():
         assert "innerHTML" not in response.text
         assert "adminSessionPassword" in response.text
         assert "loadQuotaReservations" in response.text
+        assert "/settings" in response.text
         assert "runtime_integration_enabled" in response.text
         assert "execute_tool" not in response.text
 
