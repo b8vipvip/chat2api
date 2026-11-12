@@ -77,14 +77,13 @@ def permission_for_admin_route(path: str, method: str) -> str | None:
         "/api/admin/user-pricing", "/api/admin/user-payments",
         "/api/admin/user-payments/test", "/api/admin/payment-channels-v106",
         "/api/admin/payment-channels-v106/usdt-orders",
-    } or re.fullmatch(r"/api/admin/payment-channels-v106/usdt-orders/[^/]+/(approve|reject)", path):
+        "/api/admin/payment-channels-v106/test",
+    } or re.fullmatch(r"/api/admin/payment-channels-v106/usdt-orders/[^/]+/(confirm|reject)", path):
         return "billing:" + suffix
     if path in {"/api/admin/models", "/api/admin/text-models", "/api/admin/text-model-minimum"} or re.fullmatch(
         r"/api/admin/text-models/[^/]+", path
     ):
         return "models:" + suffix
-    if path == "/api/admin/requests":
-        return "diagnostics:read" if not write else None
     # Raw request detail and media can contain user content or credentials.
     # Do not grant delegated support access until a redacted projection exists.
     if path == "/api/admin/worker-tools/catalog":
