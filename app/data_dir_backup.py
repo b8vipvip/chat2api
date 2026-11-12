@@ -136,10 +136,10 @@ def _validate_manifest(value: Any) -> list[dict[str, Any]]:
         if not isinstance(entry, dict) or set(entry) != {"path", "size", "sha256", "mode", "kind"}:
             raise BackupError("Invalid backup manifest entry")
         name = entry["path"]
-        if not isinstance(name, str):
+        if not isinstance(name, str) or "\\" in name or ":" in name or "\x00" in name:
             raise BackupError("Invalid backup path")
         relative = PurePosixPath(name)
-        if relative.is_absolute() or not relative.parts or any(part in {"", ".", ".."} for part in relative.parts):
+        if relative.is_absolute() or relative.as_posix() != name or not relative.parts or any(part in {"", ".", ".."} for part in relative.parts):
             raise BackupError("Unsafe backup path")
         if name in {LOCK_NAME, MANIFEST_NAME} or name in seen:
             raise BackupError("Duplicate or reserved backup path")
@@ -184,9 +184,13 @@ def create_backup(
 ) -> dict[str, Any]:
     if not acknowledge_plaintext_sensitive_data:
         raise BackupError("Explicit plaintext-sensitive-data acknowledgement is required")
-    src = Path(source).resolve()
-    dest = Path(destination).resolve()
-    if not src.is_dir() or src.is_symlink():
+    source_path = Path(source)
+    destination_path = Path(destination)
+    if source_path.is_symlink() or destination_path.is_symlink():
+        raise BackupError("Source and destination paths cannot be symbolic links")
+    src = source_path.resolve()
+    dest = destination_path.resolve()
+    if not src.is_dir():
         raise BackupError("Source data directory is unavailable")
     if dest == src or src in dest.parents or dest in src.parents:
         raise BackupError("Backup destination must be separate from the source data directory")
@@ -246,8 +250,12 @@ def restore_backup(
 ) -> dict[str, Any]:
     if not acknowledge_plaintext_sensitive_data:
         raise BackupError("Explicit plaintext-sensitive-data acknowledgement is required")
-    source = Path(backup).resolve()
-    dest = Path(target).resolve()
+    backup_path = Path(backup)
+    target_path = Path(target)
+    if backup_path.is_symlink() or target_path.is_symlink():
+        raise BackupError("Backup and restore paths cannot be symbolic links")
+    source = backup_path.resolve()
+    dest = target_path.resolve()
     if dest == source or source in dest.parents or dest in source.parents:
         raise BackupError("Restore target must be separate from the backup")
     verify_backup(source)
@@ -258,6 +266,7 @@ def restore_backup(
         guard.acquire()
     except RuntimeTopologyError as exc:
         raise BackupError("Restore target is already owned by another process") from exc
+    succeeded = False
     try:
         manifest = json.loads((source / MANIFEST_NAME).read_text(encoding="utf-8"))
         entries = _validate_manifest(manifest)
@@ -268,12 +277,15 @@ def restore_backup(
             target_file.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source_file, target_file, follow_symlinks=False)
         result = _verify_entries(dest, entries)
+        succeeded = True
         return {**result, "restored": True}
-    except Exception:
-        shutil.rmtree(dest, ignore_errors=True)
-        raise
     finally:
+        # Release the target lock before removing a failed restore directory;
+        # otherwise a new process could create a replacement lock inode while
+        # this process still holds the unlinked original inode.
         guard.release()
+        if not succeeded:
+            shutil.rmtree(dest, ignore_errors=True)
 
 
 def main(argv: list[str] | None = None) -> int:
