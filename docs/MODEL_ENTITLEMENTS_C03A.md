@@ -21,6 +21,8 @@ Supported subjects in this slice:
 - global/default: global model allowlist or denylist.
 - key/{key_id}: API-key-specific policy.
 - user/{user_id}: policy inherited by every API key owned by that user.
+- tenant/{tenant_id}: policy inherited only by API keys explicitly bound to that
+  tenant through TenantMembershipStore.tenant_for_key.
 
 A request is allowed only if:
 1. no matching deny rule contains the normalized requested model; and
@@ -38,7 +40,11 @@ This prevents a broad alias from bypassing a concrete allowlist.
 ## Enforcement
 
 - GET /v1/models: filter the existing live model catalog using the current
-  authenticated API-key context. Admin model inventory remains unfiltered.
+  authenticated API-key context. Global, tenant, user and key policies apply.
+  Admin model inventory remains unfiltered.
+- GET /api/user/models: filter the user-console pricing/model list using the
+  authenticated user plus global/user policy. A browser user session is not
+  enough to infer one tenant when the user belongs to multiple workspaces.
 - Existing registry.resolve_client boundary: reject unauthorized model
   requests with HTTP 403 before invoking the existing Worker resolver.
 - Master server API key remains unrestricted for compatibility.
@@ -52,9 +58,11 @@ API:
 
 ## Explicit gaps
 
-- Tenant, user-role, subscription-plan and Mode 1/Mode 2 policy dimensions are
-  not implemented here. Tenant policy must wait for explicit API-key-to-tenant
-  binding; membership count or browser-provided tenant headers are not identity.
+- Tenant policy is now supported only through an explicit server-side
+  API-key-to-tenant binding. The binding API is delivered independently in
+  C-02a PR #815. Role, subscription-plan and Mode 1/Mode 2 policy dimensions
+  are not implemented here; membership count or browser-provided tenant headers
+  are never used as identity.
 - No editable model metadata, aliases or fallback-routing configuration is added.
 - This does not prove the model actually served; only existing Worker and
   telemetry evidence can do that.
