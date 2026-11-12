@@ -95,3 +95,6 @@ After #793's attachment branch lands, W-02 client integration should:
 Also required before merge/release: `app.entry:app` route uniqueness and full
 CI, a real browser two-device E2E, privacy/backup retention decision, G0 data
 migration gate, and a release/rollback plan. No production deploy is requested.
+
+
+All success and application error responses carry `Cache-Control: private, no-store` and `Vary: Cookie` (merged with other middleware variance), including authentication, CSRF, ownership, revision-conflict and malformed-ID errors.
