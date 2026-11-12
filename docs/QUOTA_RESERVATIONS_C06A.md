@@ -35,6 +35,13 @@ No second completed-usage counter or second wallet balance is introduced.
   final accounting, preventing a concurrent request from using the same
   capacity during the commit window.
 
+Admin inspection API:
+- GET /api/admin/quota-reservations: bounded, filterable read-only reservation
+  journal view; returns whether request lifecycle hooks are actually integrated.
+- POST /api/admin/quota-reservations/reconcile: audited recovery of interrupted
+  commits, only when ApiKeyStore.charged_requests proves the charge.
+
+
 ## Integration contract (not yet installed)
 
 A future single C integration owner must:
