@@ -26,13 +26,17 @@ def test_mode2_matrix_is_machine_readable_and_non_overclaiming() -> None:
     records = data["endpoints"]
     keys = [(r["method"], r["path"]) for r in records]
     assert len(keys) == len(set(keys))
-    assert len(records) >= 8
+    assert len(records) == 20
+    assert sum(row["protocol"] == "http" for row in records) == 19
+    assert sum(row["protocol"] == "websocket" for row in records) == 1
     assert all(r["status"] in {"compatible_subset", "extension_only"} for r in records)
     assert next(r for r in records if r["path"] == "/v1/files" and r["method"] == "POST")["status"] == "extension_only"
     capabilities = {row["id"]: row["status"] for row in data["capabilities"]}
     assert capabilities["chat.usage"] == "estimated"
     assert capabilities["chat.model_provenance"] == "requested_only"
-    assert capabilities["files.multipart"] == "unsupported"
+    assert capabilities["files.multipart"] == "supported_subset"
+    assert capabilities["files.content"] == "supported_subset"
+    assert capabilities["files.list"] == "unsupported"
     assert capabilities["chat.tool_calls"] == "not_guaranteed"
     assert capabilities["chat.structured_outputs"] == "not_guaranteed"
 
