@@ -47,6 +47,12 @@ class RequestState:
                 and self.dispatch_send_completed_mono is not None
                 and self.dispatch_send_completed_mono >= self.dispatch_send_started_mono else None
             ),
+            "server_send_start_to_worker_content_ack_ms": (
+                round((self.worker_content_ack_mono - self.dispatch_send_started_mono) * 1000, 1)
+                if self.worker_content_ack_mono is not None
+                and self.dispatch_send_started_mono is not None
+                and self.worker_content_ack_mono >= self.dispatch_send_started_mono else None
+            ),
             "server_send_to_worker_content_ack_ms": (
                 round((self.worker_content_ack_mono - self.dispatch_send_completed_mono) * 1000, 1)
                 if self.worker_content_ack_mono is not None
