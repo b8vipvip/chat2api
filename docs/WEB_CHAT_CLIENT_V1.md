@@ -36,7 +36,7 @@ The page sends the full ordered conversation using only standard Chat Completion
 
 - Conversation history is browser-local only; it does not sync across devices or persist on the server.
 - Local history is capped at 15 conversations, 30 messages per conversation and 8,000 text characters per message. Image bytes remain in the existing server FileStore; browser history stores only validated file IDs and metadata.
-- The existing FileStore persists file bytes on disk without application-level encryption at rest. This PR does not add an image retention/cleanup policy; deleting local chat history does not automatically erase already-sent server files. Do not treat this feature as encrypted archival storage for highly sensitive images.
+- The existing FileStore persists file bytes on disk without application-level encryption at rest. Deleting an individual conversation makes a best-effort session-authenticated deletion of image files no longer referenced by other local conversations. Clearing browser storage, losing browser state or local-history eviction cannot guarantee server cleanup; no server-side retention policy is added. Do not treat this feature as encrypted archival storage for highly sensitive images.
 - Image attachments are tied to the API Key that uploaded them. A conversation containing images must continue using that same Key for subsequent multimodal requests; another Key may view the conversation but cannot submit it.
 - No generic document/file attachments (PDF, Office documents, etc.), generated-image cards, audio/voice, citations/reference cards, tool/function calling UI, native sidecar blocks, KaTeX/MathML rendering or complete ChatGPT component parity.
 - No stream resume/reconnect after a lost connection. The UI warns when it does not receive the terminal `[DONE]` marker.
@@ -51,4 +51,5 @@ The page sends the full ordered conversation using only standard Chat Completion
 - API Key plaintext is not stored in localStorage, sessionStorage, conversation history or exported Markdown.
 - User session and Key ownership are enforced by existing server endpoints; the page is not an authorization boundary.
 - Image preview uses `GET /api/user/files/{file_id}/content`, which requires the HttpOnly user session, checks that the file's owner API Key belongs to the current account, and serves only `vision` PNG/JPEG/WebP/GIF bytes with `nosniff`, sandbox CSP, same-origin resource policy and `private, no-store` caching.
+- `DELETE /api/user/files/{file_id}` applies the same account/owner/purpose/MIME checks and permits cleanup with the user session even if the uploading API Key has since been disabled.
 - Image file IDs are validated before being restored from localStorage. The client never persists raw image bytes or API Key plaintext.
