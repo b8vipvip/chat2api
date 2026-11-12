@@ -5,7 +5,7 @@
   const C_ROLES = {
     "control-admins": ["super_admin"],
     "client-policy": ["super_admin", "system_admin"],
-    "tenants": ["super_admin", "system_admin", "tenant_admin"],
+    "tenants": ["super_admin", "system_admin"],
     "model-entitlements": ["super_admin", "system_admin", "support"],
     "plugins": ["super_admin", "plugin_admin"],
     "quota-ledger": ["super_admin", "system_admin", "api_key_admin", "billing_admin"],
