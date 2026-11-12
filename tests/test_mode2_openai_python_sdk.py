@@ -174,8 +174,14 @@ def test_python_sdk_standard_multipart_files_create_retrieve_content_delete(sdk_
 
 def test_python_sdk_error_statuses_and_openai_error_envelope(sdk_transport) -> None:
     sdk, _ = sdk_transport
+    invalid_sdk = openai.OpenAI(
+        api_key="invalid-mode2-key",
+        base_url="http://testserver/v1",
+        max_retries=0,
+        http_client=sdk._client,
+    )
     with pytest.raises(openai.AuthenticationError) as unauthorized:
-        sdk.with_options(api_key="invalid-mode2-key").models.list()
+        invalid_sdk.models.list()
     assert unauthorized.value.status_code == 401
 
     with pytest.raises(openai.APIStatusError) as invalid:
