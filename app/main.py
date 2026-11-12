@@ -2593,7 +2593,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             request_id, client_id, message_type,
                         )
                         continue
-                    if terminal_message:
+                    if terminal_message and active_state and active_state.client_id == client_id:
                         active_state.diagnostics["terminal_transport_server_seen"] = True
                         active_state.diagnostics["terminal_transport_server_received_at"] = time.time()
                         active_state.diagnostics["terminal_transport_payload_chars"] = len(str(message.get("text") or ""))
