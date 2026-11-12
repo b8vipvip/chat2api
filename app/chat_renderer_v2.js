@@ -256,9 +256,20 @@
           host.appendChild(node("div", "rich-attachment-fallback", "文件附件：缺少有效文件引用"));
         }
       } else if (type === "image") {
-        // Image preview remains a placeholder until the W-01 image-content
-        // endpoint and native sidecar owner contract are integrated together.
-        host.appendChild(node("div", "rich-attachment-fallback", "图片附件：需授权的图片预览"));
+        const fileId = String(part.file_id || "");
+        if (/^file_[A-Za-z0-9_-]{8,100}$/.test(fileId)) {
+          // W-01's endpoint rechecks the session, owner key and raster MIME
+          // allowlist. Never accept a remote/data URL from the rich block.
+          const image = node("img", "rich-image-preview");
+          image.src = "/api/user/files/" + encodeURIComponent(fileId) + "/content";
+          image.alt = String(part.alt || "图片附件").slice(0, 200);
+          image.loading = "lazy";
+          image.decoding = "async";
+          image.referrerPolicy = "no-referrer";
+          host.appendChild(image);
+        } else {
+          host.appendChild(node("div", "rich-attachment-fallback", "图片附件：缺少有效文件引用"));
+        }
       } else if (type === "tool") {
         const states = new Set(["pending", "running", "completed", "failed"]);
         const state = states.has(part.status) ? part.status : "unknown";
