@@ -81,6 +81,11 @@ def test_user_image_content_is_session_authenticated_and_account_owned(tmp_path:
         _register_and_create_key(client, "different-user@example.com")
         denied = client.get(f"/api/user/files/{file_id}/content")
         assert denied.status_code == 404
+        denied_delete = client.delete(
+            f"/api/user/files/{file_id}",
+            headers={"Origin": "http://testserver"},
+        )
+        assert denied_delete.status_code == 404
 
 
 def test_user_image_content_rejects_non_vision_and_non_image_files(tmp_path: Path) -> None:
@@ -188,6 +193,8 @@ def test_web_chat_image_picker_and_client_javascript_are_wired(tmp_path: Path) -
         assert "MAX_IMAGES_PER_MESSAGE = 4" in script.text
         assert "MAX_IMAGE_BYTES = 10 * 1024 * 1024" in script.text
         assert "apiKeyId" in script.text
+        assert "orphanedFileIds" in script.text
+        assert "remainingFileIds" in script.text
 
         node = shutil.which("node")
         if node:
