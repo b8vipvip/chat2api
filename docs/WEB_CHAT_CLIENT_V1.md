@@ -51,5 +51,5 @@ The page sends the full ordered conversation using only standard Chat Completion
 - API Key plaintext is not stored in localStorage, sessionStorage, conversation history or exported Markdown.
 - User session and Key ownership are enforced by existing server endpoints; the page is not an authorization boundary.
 - Image preview uses `GET /api/user/files/{file_id}/content`, which requires the HttpOnly user session, checks that the file's owner API Key belongs to the current account, and serves only `vision` PNG/JPEG/WebP/GIF bytes with `nosniff`, sandbox CSP, same-origin resource policy and `private, no-store` caching.
-- `DELETE /api/user/files/{file_id}` applies the same account/owner/purpose/MIME checks and permits cleanup with the user session even if the uploading API Key has since been disabled.
+- `DELETE /api/user/files/{file_id}` applies the same account/owner/purpose/MIME checks, requires same-origin Origin/Fetch Metadata, and permits cleanup with the user session even if the uploading API Key has since been disabled.
 - Image file IDs are validated before being restored from localStorage. The client never persists raw image bytes or API Key plaintext.
