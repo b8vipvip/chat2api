@@ -21,7 +21,7 @@ request-history table owner.
 - Tenants: create/list workspaces, manage membership roles, bind/unbind
   user-owned API keys. Key binding requires an existing UserAccountStore owner
   and an existing membership.
-- Model entitlements: global, tenant, user and API-key allow/deny policies.
+- Model entitlements: global, tenant, tenant membership role (owner/admin/member/viewer), user and API-key allow/deny policies.
 - Product plugin registry: manifest registration and read-only metadata
   inspection. UI always shows untrusted / execution disabled.
 - Quota reservation journal: bounded read-only reservation list and confirmed,
