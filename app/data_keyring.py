@@ -191,6 +191,35 @@ class DataKeyring:
             os.close(fd)
 
     @staticmethod
+    def atomic_write(path: Path, payload: bytes, *, mode: int = 0o600) -> None:
+        """Atomically write a private file with restrictive permissions before data is written."""
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fd, name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
+        temporary = Path(name)
+        open_fd = fd
+        try:
+            os.fchmod(open_fd, mode)
+            with os.fdopen(open_fd, "wb") as stream:
+                open_fd = -1
+                stream.write(bytes(payload))
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, target)
+            try:
+                directory_fd = os.open(target.parent, os.O_RDONLY)
+            except OSError:
+                return
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        finally:
+            if open_fd >= 0:
+                os.close(open_fd)
+            temporary.unlink(missing_ok=True)
+
+    @staticmethod
     def backup_file(path: Path) -> Path | None:
         """Create a verified, restrictive, non-overwriting per-file migration backup."""
         source = Path(path)
@@ -204,10 +233,13 @@ class DataKeyring:
         checksum_path = backup.with_name(backup.name + ".sha256")
         if backup.exists() or backup.is_symlink() or checksum_path.exists() or checksum_path.is_symlink():
             raise DataKeyringError("A pre-keyring backup already exists; verify or restore it before retrying")
+        created_backup = False
+        created_checksum = False
         try:
             payload = source.read_bytes()
             digest = hashlib.sha256(payload).hexdigest()
             fd = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            created_backup = True
             with os.fdopen(fd, "wb") as stream:
                 stream.write(payload)
                 stream.flush()
@@ -216,13 +248,18 @@ class DataKeyring:
             if hashlib.sha256(backup.read_bytes()).hexdigest() != digest:
                 raise DataKeyringError("Encrypted data backup verification failed")
             checksum_fd = os.open(checksum_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            created_checksum = True
             with os.fdopen(checksum_fd, "w", encoding="ascii") as stream:
                 stream.write(digest + "\n")
                 stream.flush()
                 os.fsync(stream.fileno())
         except Exception:
-            backup.unlink(missing_ok=True)
-            checksum_path.unlink(missing_ok=True)
+            # Only remove artifacts created by this invocation. Never unlink a
+            # checksum sidecar won by another process after the initial preflight.
+            if created_backup:
+                backup.unlink(missing_ok=True)
+            if created_checksum:
+                checksum_path.unlink(missing_ok=True)
             raise
         return backup
 
