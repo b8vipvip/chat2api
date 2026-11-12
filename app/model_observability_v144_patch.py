@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Awaitable, Callable
 
 from fastapi import FastAPI
@@ -8,6 +9,8 @@ from . import admin as admin_module
 from . import model_capability_routing_patch as model_routing
 from .model_catalog import model_transport_id, normalize_concrete_model_id, normalize_model_id, normalize_reasoning_level
 from .worker_model_library_v145_patch import install_worker_model_library_v145_patch
+
+logger = logging.getLogger(__name__)
 
 PATCH_ID = "final-model-authority-v144"
 PATCH_REVISION = 144
@@ -197,15 +200,25 @@ def install_model_observability_v144_patch(app: FastAPI) -> FastAPI:
         # decision maker or a reason to fail a client-facing request.
         published = await base_publish(request_id, event)
         if published:
-            evidence = _evidence_from_event(event)
-            if evidence:
-                authority = authorities.get(str(request_id))
-                trace = _trace(authority, evidence)
-                state = broker.requests.get(str(request_id))
-                if state is not None:
-                    state.diagnostics.update(trace)
-                    state.diagnostics["model_evidence_v144"] = evidence
-                await telemetry.upsert({"request_id": str(request_id), **trace})
+            try:
+                evidence = _evidence_from_event(event)
+                if evidence:
+                    authority = authorities.get(str(request_id))
+                    trace = _trace(authority, evidence)
+                    state = broker.requests.get(str(request_id))
+                    if state is not None:
+                        state.diagnostics.update(trace)
+                        state.diagnostics["model_evidence_v144"] = evidence
+                    # Telemetry is a best-effort projection. Once Broker has
+                    # accepted an event, an observability-store outage must not
+                    # turn that accepted event into an apparent Worker failure
+                    # or cause a duplicate terminal retry.
+                    await telemetry.upsert({"request_id": str(request_id), **trace})
+            except Exception:
+                logger.exception(
+                    "Accepted Broker event but failed to project model evidence request_id=%s",
+                    request_id,
+                )
         if str(event.get("type") or "") in {"chat.completed", "chat.error", "chat.cancelled"}:
             authorities.pop(str(request_id), None)
         return published
