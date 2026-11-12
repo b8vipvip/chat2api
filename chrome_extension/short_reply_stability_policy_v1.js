@@ -17,6 +17,10 @@
   }
 
   function elapsedMs(startedAt, currentAt = now()) {
+    if (startedAt === null || startedAt === undefined || startedAt === ""
+        || currentAt === null || currentAt === undefined || currentAt === "") {
+      return null;
+    }
     const start = Number(startedAt);
     const current = Number(currentAt);
     if (!Number.isFinite(start) || !Number.isFinite(current) || current < start) {
