@@ -98,3 +98,6 @@ migration gate, and a release/rollback plan. No production deploy is requested.
 
 
 All success and application error responses carry `Cache-Control: private, no-store` and `Vary: Cookie` (merged with other middleware variance), including authentication, CSRF, ownership, revision-conflict and malformed-ID errors.
+
+
+Structured message content is currently limited to user-side text and owner-verified image file references (maximum four image references per message). This is still a prototype contract; document parsing/attachment execution and browser sync are not implemented.
