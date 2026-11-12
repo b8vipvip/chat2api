@@ -50,6 +50,7 @@ def test_production_responses_web_search_and_image_tool_use_v108_owner(tmp_path:
     # only the external Worker/image execution boundaries with deterministic
     # in-process fakes. No upstream account or browser session is used.
     script = r'''
+import asyncio
 import uuid
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
@@ -57,6 +58,11 @@ from app.entry import app
 import app.responses_v108_patch as responses
 import app.responses_image_tool_v182 as image_tool
 
+async def create_test_key():
+    _, token = await app.state.api_keys.create("responses-route-owner-e2e")
+    return token
+
+test_key = asyncio.run(create_test_key())
 dispatch_calls = []
 image_calls = []
 
@@ -93,7 +99,7 @@ responses._collect = fake_collect
 responses._archive_response_media = fake_archive
 image_tool.handle_image_tool = fake_image_tool
 
-headers = {"Authorization": "Bearer responses-route-owner-e2e-key"}
+headers = {"Authorization": "Bearer " + test_key}
 with TestClient(app) as client:
     web = client.post("/v1/responses", headers=headers, json={
         "model": "gpt-5.6",
