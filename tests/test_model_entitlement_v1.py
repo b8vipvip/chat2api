@@ -38,6 +38,9 @@ class FakeAccounts:
     def owner_for_key(self, key_id):
         return {"key_1": "usr_abcdef123"}.get(key_id)
 
+    def authenticate(self, token):
+        return {"user_id": "usr_abcdef123"} if token == "valid-user-session" else None
+
     def admin_get(self, user_id):
         return {"user_id": user_id} if user_id == "usr_abcdef123" else None
 
@@ -57,6 +60,15 @@ def build_app(tmp_path: Path):
         "owner", "strong-admin-password", storage_path=tmp_path / "admin_sessions.json"
     )
     token = app.state.admin_sessions.create()
+
+    @app.get("/api/user/models")
+    async def user_models():
+        return {"data": [
+            {"id": "gpt-5.5", "enabled": True},
+            {"id": "gpt-5.6-sol", "enabled": True},
+            {"id": "default", "enabled": True},
+        ]}
+
     install_model_entitlements(app)
     return app, token
 
@@ -178,3 +190,17 @@ def test_admin_entitlement_api_requires_session_audits_and_validates_subjects(tm
         assert deleted.status_code == 200 and deleted.json()["deleted"] is True
         events = app.state.admin_audit.recent(20)
         assert any(row["action"] == "model.entitlement_completed" for row in events)
+
+
+def test_user_console_model_catalog_obeys_global_and_user_entitlements(tmp_path: Path):
+    app, _ = build_app(tmp_path)
+    store = app.state.model_entitlements
+    store.upsert("global", "default", "allow", ["gpt-5.5", "gpt-5.6-sol"])
+    store.upsert("user", "usr_abcdef123", "deny", ["gpt-5.5"])
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/user/models",
+            cookies={"chat2api_user_session": "valid-user-session"},
+        )
+        assert response.status_code == 200
+        assert [row["id"] for row in response.json()["data"]] == ["gpt-5.6-sol"]
