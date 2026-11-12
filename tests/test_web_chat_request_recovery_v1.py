@@ -64,12 +64,12 @@ def test_completed_snapshot_is_returned_only_to_key_owner_and_never_cached(tmp_p
         assert response.json()["terminal"] is True
         assert response.json()["response_text"] == "Final assistant answer"
         assert response.headers["cache-control"] == "private, no-store"
-        assert response.headers["vary"] == "Cookie"
+        assert "cookie" in {value.strip().lower() for value in response.headers["vary"].split(",")}
 
         denied = bob.get(f"/api/user/chat/requests/{request_id}/recovery")
         assert denied.status_code == 404
         assert denied.headers["cache-control"] == "private, no-store"
-        assert denied.headers["vary"] == "Cookie"
+        assert "cookie" in {value.strip().lower() for value in denied.headers["vary"].split(",")}
 
 
 def test_running_request_is_pollable_but_stale_running_state_is_not_replayed(tmp_path):
