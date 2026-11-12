@@ -323,6 +323,16 @@
       "id": "images.generation",
       "status": "supported_subset",
       "evidence": "Official Python and Node SDKs exercise POST /v1/images/generations against the real ASGI route with deterministic image.completed Worker output; real Chrome image generation remains an external release gate."
+    },
+    {
+      "id": "model.aliases",
+      "status": "supported_subset",
+      "evidence": "Model catalog aliases are normalized by app/model_catalog.py and applied to Worker dispatch; Python and Node SDK regression uses gpt-5-6-thinking -> gpt-5.6-sol."
+    },
+    {
+      "id": "responses.retrieve",
+      "status": "supported_subset",
+      "evidence": "Official Python and Node SDK retrieve a just-created stored Response; store is bounded in-process (256 records), not durable."
     }
   ],
   "boundary": {
@@ -335,6 +345,271 @@
       "W chat session store",
       "C RBAC",
       "D/P production rollout"
+    ]
+  },
+  "request_parameters": {
+    "POST /v1/chat/completions": [
+      {
+        "name": "model",
+        "status": "supported_with_aliases",
+        "evidence": "Canonical model IDs and app/model_catalog.py aliases are normalized before Worker dispatch; the response retains the requested model ID."
+      },
+      {
+        "name": "messages",
+        "status": "supported_subset",
+        "evidence": "Ordered role/content transcript bridge; text and supported uploaded image/file references are converted to the browser prompt."
+      },
+      {
+        "name": "stream",
+        "status": "supported",
+        "evidence": "Chat Completions SSE chunks, finish_reason and [DONE]; optional Chat2API status/reasoning extensions may also appear."
+      },
+      {
+        "name": "reasoning_effort",
+        "status": "chat2api_extension",
+        "evidence": "v13 normalizes low/medium/high and documented aliases and adds the Worker reasoning options."
+      },
+      {
+        "name": "reasoning.effort",
+        "status": "chat2api_extension",
+        "evidence": "v13 accepts the nested effort form and rejects conflicting direct/nested values."
+      },
+      {
+        "name": "timeout",
+        "status": "chat2api_extension",
+        "evidence": "Chat2API request deadline extension, not an OpenAI standard parameter."
+      },
+      {
+        "name": "client_id",
+        "status": "chat2api_extension",
+        "evidence": "Optional explicit Worker selection, subject to Registry routing and API-key binding."
+      },
+      {
+        "name": "prompt_mode",
+        "status": "chat2api_extension",
+        "evidence": "Controls full transcript versus last-user prompt bridge."
+      },
+      {
+        "name": "attachments",
+        "status": "chat2api_extension",
+        "evidence": "Owner-scoped Chat2API FileStore references."
+      },
+      {
+        "name": "max_tokens",
+        "status": "accepted_but_ignored",
+        "evidence": "Pydantic accepts the field (declared or extra), but the Chat Completions Worker options builder does not forward or enforce it; do not rely on its OpenAI semantics."
+      },
+      {
+        "name": "max_completion_tokens",
+        "status": "accepted_but_ignored",
+        "evidence": "Pydantic accepts the field (declared or extra), but the Chat Completions Worker options builder does not forward or enforce it; do not rely on its OpenAI semantics."
+      },
+      {
+        "name": "temperature",
+        "status": "accepted_but_ignored",
+        "evidence": "Pydantic accepts the field (declared or extra), but the Chat Completions Worker options builder does not forward or enforce it; do not rely on its OpenAI semantics."
+      },
+      {
+        "name": "top_p",
+        "status": "accepted_but_ignored",
+        "evidence": "Pydantic accepts the field (declared or extra), but the Chat Completions Worker options builder does not forward or enforce it; do not rely on its OpenAI semantics."
+      },
+      {
+        "name": "n",
+        "status": "accepted_but_ignored",
+        "evidence": "Pydantic accepts the field (declared or extra), but the Chat Completions Worker options builder does not forward or enforce it; do not rely on its OpenAI semantics."
+      },
+      {
+        "name": "stop",
+        "status": "accepted_but_ignored",
+        "evidence": "Pydantic accepts the field (declared or extra), but the Chat Completions Worker options builder does not forward or enforce it; do not rely on its OpenAI semantics."
+      },
+      {
+        "name": "frequency_penalty",
+        "status": "accepted_but_ignored",
+        "evidence": "Pydantic accepts the field (declared or extra), but the Chat Completions Worker options builder does not forward or enforce it; do not rely on its OpenAI semantics."
+      },
+      {
+        "name": "presence_penalty",
+        "status": "accepted_but_ignored",
+        "evidence": "Pydantic accepts the field (declared or extra), but the Chat Completions Worker options builder does not forward or enforce it; do not rely on its OpenAI semantics."
+      },
+      {
+        "name": "logit_bias",
+        "status": "accepted_but_ignored",
+        "evidence": "Pydantic accepts the field (declared or extra), but the Chat Completions Worker options builder does not forward or enforce it; do not rely on its OpenAI semantics."
+      },
+      {
+        "name": "seed",
+        "status": "accepted_but_ignored",
+        "evidence": "Pydantic accepts the field (declared or extra), but the Chat Completions Worker options builder does not forward or enforce it; do not rely on its OpenAI semantics."
+      },
+      {
+        "name": "response_format",
+        "status": "accepted_but_ignored",
+        "evidence": "Pydantic accepts the field (declared or extra), but the Chat Completions Worker options builder does not forward or enforce it; do not rely on its OpenAI semantics."
+      },
+      {
+        "name": "tools",
+        "status": "accepted_but_ignored",
+        "evidence": "Pydantic accepts the field (declared or extra), but the Chat Completions Worker options builder does not forward or enforce it; do not rely on its OpenAI semantics."
+      },
+      {
+        "name": "tool_choice",
+        "status": "accepted_but_ignored",
+        "evidence": "Pydantic accepts the field (declared or extra), but the Chat Completions Worker options builder does not forward or enforce it; do not rely on its OpenAI semantics."
+      },
+      {
+        "name": "stream_options",
+        "status": "accepted_but_ignored",
+        "evidence": "Pydantic accepts the field (declared or extra), but the Chat Completions Worker options builder does not forward or enforce it; do not rely on its OpenAI semantics."
+      },
+      {
+        "name": "user",
+        "status": "accepted_but_ignored",
+        "evidence": "Pydantic accepts the field (declared or extra), but the Chat Completions Worker options builder does not forward or enforce it; do not rely on its OpenAI semantics."
+      }
+    ],
+    "POST /v1/responses": [
+      {
+        "name": "model",
+        "status": "supported_with_aliases",
+        "evidence": "v13 model alias normalization is applied to Worker dispatch; response model reports the requested ID."
+      },
+      {
+        "name": "input",
+        "status": "supported_subset",
+        "evidence": "String and selected input item/message forms are converted to an ordered Chat transcript; unsupported item shapes are rejected or ignored according to the parser."
+      },
+      {
+        "name": "instructions",
+        "status": "supported_subset",
+        "evidence": "String/list instructions are converted to a developer prompt section."
+      },
+      {
+        "name": "stream",
+        "status": "supported",
+        "evidence": "Typed response.* SSE lifecycle events including response.created, output deltas and response.completed/failed."
+      },
+      {
+        "name": "tools",
+        "status": "supported_subset",
+        "evidence": "Native web_search/web_search_preview and the explicitly implemented image_generation tool path; unsupported tool types are rejected."
+      },
+      {
+        "name": "tool_choice",
+        "status": "supported_subset",
+        "evidence": "Only supported native tool selection/force behavior; arbitrary hosted tool choice is not guaranteed."
+      },
+      {
+        "name": "include",
+        "status": "supported_subset",
+        "evidence": "web_search_call.action.sources controls source inclusion; other include values are not guaranteed."
+      },
+      {
+        "name": "store",
+        "status": "supported_subset",
+        "evidence": "Controls a bounded in-process response store (maximum 256 records); not durable OpenAI storage."
+      },
+      {
+        "name": "timeout",
+        "status": "chat2api_extension",
+        "evidence": "Chat2API request deadline extension."
+      },
+      {
+        "name": "client_id",
+        "status": "chat2api_extension",
+        "evidence": "Optional explicit Worker selection, subject to Registry routing and API-key binding."
+      },
+      {
+        "name": "max_output_tokens",
+        "status": "echo_only",
+        "evidence": "Returned in the Response object but not enforced as a Worker output-token limit."
+      },
+      {
+        "name": "temperature",
+        "status": "echo_only",
+        "evidence": "Returned in the Response object but not forwarded as a Worker generation control."
+      },
+      {
+        "name": "top_p",
+        "status": "echo_only",
+        "evidence": "Returned in the Response object but not forwarded as a Worker generation control."
+      },
+      {
+        "name": "previous_response_id",
+        "status": "echo_only",
+        "evidence": "Returned in the Response object but does not load or append a previous response to the prompt."
+      },
+      {
+        "name": "parallel_tool_calls",
+        "status": "echo_only",
+        "evidence": "Returned in the Response object but does not enable parallel hosted tool execution."
+      },
+      {
+        "name": "text",
+        "status": "echo_only",
+        "evidence": "Returned in the Response object; JSON schema/format enforcement is not implemented by the browser bridge."
+      },
+      {
+        "name": "truncation",
+        "status": "echo_only",
+        "evidence": "Returned in the Response object but does not control transcript truncation."
+      },
+      {
+        "name": "metadata",
+        "status": "echo_only",
+        "evidence": "Returned in the Response object; not a durable metadata store or execution control."
+      }
+    ],
+    "POST /v1/images/generations": [
+      {
+        "name": "model",
+        "status": "fixed_to_gpt_image",
+        "evidence": "The route only admits gpt-image."
+      },
+      {
+        "name": "prompt",
+        "status": "supported",
+        "evidence": "Prompt is dispatched to an image-capable Worker."
+      },
+      {
+        "name": "n",
+        "status": "fixed_to_one",
+        "evidence": "Schema accepts only n=1."
+      },
+      {
+        "name": "size",
+        "status": "worker_dependent",
+        "evidence": "Passed through to Worker options; actual size support depends on the connected Worker."
+      },
+      {
+        "name": "response_format",
+        "status": "supported_subset",
+        "evidence": "url and b64_json are accepted; URL mode uses Chat2API-owned media URLs."
+      },
+      {
+        "name": "timeout",
+        "status": "chat2api_extension",
+        "evidence": "Chat2API image request deadline."
+      },
+      {
+        "name": "attachments",
+        "status": "chat2api_extension",
+        "evidence": "Owner-scoped FileStore references used as image context."
+      }
+    ],
+    "POST /v1/files": [
+      {
+        "name": "file",
+        "status": "supported_subset",
+        "evidence": "Standard multipart upload; metadata/content/delete are owner-scoped."
+      },
+      {
+        "name": "purpose",
+        "status": "supported_subset",
+        "evidence": "Standard multipart purposes assistants, vision and user_data; batch/fine-tune/evals are rejected."
+      }
     ]
   }
 }
