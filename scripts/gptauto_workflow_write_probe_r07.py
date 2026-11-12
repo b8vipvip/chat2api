@@ -77,6 +77,22 @@ def run_probe(api: Any, nonce: str) -> dict[str, str]:
     base_sha = upstream.get("object", {}).get("sha") if isinstance(upstream, dict) else None
     if not isinstance(base_sha, str) or not re.fullmatch(r"[a-f0-9]{40}", base_sha):
         raise ProbeError("Cannot resolve immutable main commit")
+    # A random ref is still not proof of ownership. Refuse to touch any
+    # pre-existing branch before attempting creation; only reconcile an
+    # ambiguous POST after a confirmed-absent preflight.
+    try:
+        api.request("GET", root + "/git/ref/heads/" + branch)
+    except ProbeError as lookup_error:
+        if lookup_error.status_code != 404:
+            raise ProbeError(
+                f"Cannot confirm temporary branch is absent: {branch_ref}; "
+                "inspect it manually before rerunning"
+            ) from lookup_error
+    else:
+        raise ProbeError(
+            f"Temporary branch already exists: {branch_ref}; "
+            "refused to modify or delete a pre-existing branch"
+        )
     try:
         api.request("POST", root + "/git/refs", {"ref": branch_ref, "sha": base_sha})
     except Exception as create_error:
