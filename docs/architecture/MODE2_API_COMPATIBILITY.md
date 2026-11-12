@@ -84,6 +84,26 @@ The suite asserts positive interoperability for Chat Completions JSON/SSE, legac
 change, update the SDK lane with a pinned compatible range and review any
 serialization differences before broadening claims.
 
+## Request-parameter compatibility
+
+The JSON matrix includes a `request_parameters` inventory for Chat
+Completions, Responses, Images and Files. It distinguishes:
+- **supported / supported_subset**: behavior is implemented and regression-tested;
+- **chat2api_extension**: non-standard controls such as `timeout`,
+  `client_id`, `prompt_mode` and `attachments`;
+- **accepted_but_ignored**: Chat fields accepted by Pydantic but not forwarded
+  to Worker controls, including `max_tokens`, `max_completion_tokens`,
+  `temperature`, `top_p`, `tools` and `response_format`;
+- **echo_only**: Responses fields returned in the Response object but not
+  applied to generation, including `max_output_tokens`, `temperature`,
+  `top_p` and `previous_response_id`.
+
+Model aliases such as `gpt-5-6-thinking` are normalized to canonical
+Worker model IDs; the API response still identifies the requested model.
+Responses `store` is only a bounded in-process store (256 records), and
+`previous_response_id` does not reconstruct a prior conversation. Do not
+treat echoed fields as proof of execution semantics.
+
 ## Ownership and release
 
 M-01 owns this matrix, the SDK fixture tests and their CI job. M-02 owns the
