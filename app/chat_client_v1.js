@@ -14,11 +14,18 @@
     streaming: false,
     streamingMessageId: "",
     abortController: null,
+    pendingImages: [],
+    pendingImagesConversationId: "",
     toastTimer: null,
   };
   const MAX_CONVERSATIONS = 15;
   const MAX_MESSAGES = 30;
   const MAX_MESSAGE_CHARS = 8000;
+  const MAX_IMAGES_PER_MESSAGE = 4;
+  const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+  const MAX_TOTAL_IMAGE_BYTES = 20 * 1024 * 1024;
+  const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+  const FILE_ID_PATTERN = /^file_[A-Za-z0-9]{8,64}$/;
 
   function id() {
     if (window.crypto && typeof window.crypto.randomUUID === "function") return window.crypto.randomUUID();
@@ -64,6 +71,44 @@
     return "chat2api.webchat.v1." + String(userId || "unknown");
   }
 
+  function imageFileId(part) {
+    const value = typeof part?.image_url === "string" ? part.image_url : part?.image_url?.url;
+    return typeof value === "string" && FILE_ID_PATTERN.test(value) ? value : "";
+  }
+
+  function normalizeMessageContent(content, role) {
+    if (typeof content === "string") return content.slice(0, MAX_MESSAGE_CHARS);
+    if (role !== "user" || !Array.isArray(content)) return "";
+    const parts = [];
+    let imageCount = 0;
+    for (const part of content) {
+      if (part?.type === "text" && typeof part.text === "string") {
+        parts.push({type:"text",text:part.text.slice(0,MAX_MESSAGE_CHARS)});
+      } else if (part?.type === "image_url" && imageCount < MAX_IMAGES_PER_MESSAGE) {
+        const fileId = imageFileId(part);
+        if (fileId) {
+          parts.push({type:"image_url",image_url:{url:fileId}});
+          imageCount += 1;
+        }
+      }
+    }
+    return parts.length ? parts : "";
+  }
+
+  function messageText(message) {
+    if (typeof message?.content === "string") return message.content;
+    if (!Array.isArray(message?.content)) return "";
+    return message.content
+      .filter((part) => part?.type === "text" && typeof part.text === "string")
+      .map((part) => part.text)
+      .join("\n");
+  }
+
+  function messageImageIds(message) {
+    if (!Array.isArray(message?.content)) return [];
+    return message.content.map(imageFileId).filter(Boolean).slice(0, MAX_IMAGES_PER_MESSAGE);
+  }
+
   function loadHistory() {
     try {
       const raw = localStorage.getItem(state.storageKey);
@@ -75,17 +120,20 @@
           id: row.id,
           title: String(row.title || "新对话").slice(0, 80),
           model: String(row.model || state.selectedModel).slice(0, 120),
+          apiKeyId: typeof row.apiKeyId === "string" ? row.apiKeyId.slice(0, 120) : "",
           createdAt: String(row.createdAt || new Date().toISOString()),
           updatedAt: String(row.updatedAt || row.createdAt || new Date().toISOString()),
-          messages: Array.isArray(row.messages) ? row.messages.slice(-MAX_MESSAGES).filter((message) =>
-            message && (message.role === "user" || message.role === "assistant") &&
-            typeof message.content === "string" && (message.role === "user" || message.content.trim())
-          ).map((message) => ({
-            id: String(message.id || id()),
-            role: message.role,
-            content: message.content.slice(0, MAX_MESSAGE_CHARS),
-            createdAt: String(message.createdAt || ""),
-          })) : [],
+          messages: Array.isArray(row.messages) ? row.messages.slice(-MAX_MESSAGES).map((message) => {
+            if (!message || (message.role !== "user" && message.role !== "assistant")) return null;
+            const content = normalizeMessageContent(message.content, message.role);
+            if (!content || (message.role === "assistant" && !String(content).trim())) return null;
+            return {
+              id: String(message.id || id()),
+              role: message.role,
+              content,
+              createdAt: String(message.createdAt || ""),
+            };
+          }).filter(Boolean) : [],
         }));
     } catch {
       toast("本地聊天历史无法读取，已使用空白历史。");
@@ -101,7 +149,7 @@
       ...conversation,
       messages: (conversation.messages || []).slice(-MAX_MESSAGES).map((message) => ({
         ...message,
-        content: String(message.content || "").slice(0, MAX_MESSAGE_CHARS),
+        content: normalizeMessageContent(message.content, message.role),
       })),
     }));
     try {
@@ -121,10 +169,15 @@
       return currentConversation();
     }
     const now = new Date().toISOString();
+    if (state.pendingImages.length) {
+      toast("请先发送或移除待发送图片，再新建对话。");
+      return currentConversation();
+    }
     const conversation = {
       id: id(),
       title: "新对话",
       model: state.selectedModel,
+      apiKeyId: "",
       createdAt: now,
       updatedAt: now,
       messages: [],
@@ -143,6 +196,10 @@
       toast("当前回复仍在生成；请先停止生成再切换对话。");
       return;
     }
+    if (state.pendingImages.length && state.pendingImagesConversationId !== conversationId) {
+      toast("请先发送或移除待发送图片，再切换对话。");
+      return;
+    }
     state.activeConversationId = conversationId;
     const conversation = currentConversation();
     if (conversation) state.selectedModel = conversation.model || state.selectedModel;
@@ -156,6 +213,10 @@
     if (!conversation) return;
     if (state.streaming && conversationId === state.activeConversationId) {
       toast("当前对话正在生成；请先停止生成再删除。");
+      return;
+    }
+    if (state.pendingImages.length && state.pendingImagesConversationId === conversationId) {
+      toast("请先移除待发送图片，再删除对话。");
       return;
     }
     if (!window.confirm("删除这段本地对话？此操作不可撤销。")) return;
@@ -187,7 +248,7 @@
     const rows = state.conversations.filter((conversation) => {
       if (!query) return true;
       return conversation.title.toLocaleLowerCase().includes(query) ||
-        conversation.messages.some((message) => message.content.toLocaleLowerCase().includes(query));
+        conversation.messages.some((message) => messageText(message).toLocaleLowerCase().includes(query));
     });
     if (!rows.length) {
       const empty = document.createElement("div");
@@ -426,7 +487,40 @@
       const body = document.createElement("div");
       body.className = "message-body";
       if (message.role === "user") {
-        body.textContent = message.content;
+        const text = messageText(message);
+        if (text) {
+          const textNode = document.createElement("div");
+          textNode.className = "message-user-text";
+          textNode.textContent = text;
+          body.appendChild(textNode);
+        }
+        const imageIds = messageImageIds(message);
+        if (imageIds.length) {
+          const grid = document.createElement("div");
+          grid.className = "message-image-grid";
+          imageIds.forEach((fileId) => {
+            const path = "/api/user/files/" + encodeURIComponent(fileId) + "/content";
+            const link = document.createElement("a");
+            link.className = "message-image-link";
+            link.href = path;
+            link.target = "_blank";
+            link.rel = "noopener noreferrer";
+            const image = document.createElement("img");
+            image.className = "message-image";
+            image.src = path;
+            image.alt = "用户上传的图片";
+            image.loading = "lazy";
+            image.addEventListener("error", () => {
+              const fallback = document.createElement("span");
+              fallback.className = "message-image-missing";
+              fallback.textContent = "图片不可用或当前账户无权访问";
+              link.replaceWith(fallback);
+            }, {once:true});
+            link.appendChild(image);
+            grid.appendChild(link);
+          });
+          body.appendChild(grid);
+        }
       } else {
         renderMarkdown(body, message.content);
       }
@@ -442,7 +536,11 @@
       copy.type = "button";
       copy.textContent = "复制";
       copy.addEventListener("click", async () => {
-        try { await navigator.clipboard.writeText(message.content); toast("消息已复制"); }
+        try {
+          const copied = [messageText(message), ...messageImageIds(message).map(() => "[图片附件]")].filter(Boolean).join("\n");
+          await navigator.clipboard.writeText(copied);
+          toast("消息已复制");
+        }
         catch { toast("无法访问剪贴板"); }
       });
       actions.appendChild(copy);
@@ -465,14 +563,146 @@
   function autoTitle(conversation) {
     if (!conversation || conversation.title !== "新对话") return;
     const first = conversation.messages.find((message) => message.role === "user");
-    if (first) conversation.title = first.content.replace(/\s+/g, " ").trim().slice(0, 32) || "新对话";
+    if (first) conversation.title = messageText(first).replace(/\s+/g, " ").trim().slice(0, 32) || (messageImageIds(first).length ? "图片附件" : "新对话");
+  }
+
+  function selectedKeyId() {
+    return String($("apiKeySelect")?.value || "");
+  }
+
+  function selectedKeyHasScope(scope) {
+    const key = state.keys.find((row) => row.key_id === selectedKeyId());
+    return Boolean(key && (!Array.isArray(key.scopes) || key.scopes.includes(scope)));
   }
 
   function resizeComposer() {
     const input = $("messageInput");
     input.style.height = "auto";
     input.style.height = Math.min(input.scrollHeight, 220) + "px";
-    $("sendButton").disabled = state.streaming || !input.value.trim() || !state.apiToken;
+    const conversation = currentConversation();
+    const pendingForConversation = state.pendingImages.length > 0 &&
+      state.pendingImagesConversationId === conversation?.id;
+    const keyMatchesConversation = !conversation?.apiKeyId || conversation.apiKeyId === selectedKeyId();
+    $("sendButton").disabled = state.streaming || (!input.value.trim() && !pendingForConversation) ||
+      !state.apiToken || !keyMatchesConversation;
+    $("attachButton").disabled = state.streaming || !state.apiToken || !selectedKeyHasScope("files");
+  }
+
+  function renderPendingImages() {
+    const root = $("pendingImages");
+    root.replaceChildren();
+    state.pendingImages.forEach((image, index) => {
+      const chip = document.createElement("div");
+      chip.className = "attachment-chip";
+      const preview = document.createElement("img");
+      preview.src = image.previewUrl;
+      preview.alt = image.filename;
+      const name = document.createElement("span");
+      name.className = "attachment-name";
+      name.textContent = image.filename;
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "attachment-remove";
+      remove.textContent = "×";
+      remove.setAttribute("aria-label", "移除图片 " + image.filename);
+      remove.addEventListener("click", () => {
+        const [removed] = state.pendingImages.splice(index, 1);
+        if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
+        if (!state.pendingImages.length) state.pendingImagesConversationId = "";
+        renderPendingImages();
+        resizeComposer();
+      });
+      chip.append(preview, name, remove);
+      root.appendChild(chip);
+    });
+    root.classList.toggle("hidden", state.pendingImages.length === 0);
+  }
+
+  function readImageAsDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error("读取图片失败"));
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function uploadPendingImages() {
+    for (const image of state.pendingImages) {
+      if (image.fileId) continue;
+      const dataUrl = await readImageAsDataUrl(image.file);
+      const comma = dataUrl.indexOf(",");
+      if (comma < 0) throw new Error("图片编码失败");
+      const payload = await apiJson("/v1/files", {
+        method: "POST",
+        headers: {
+          "Authorization": "Bearer " + state.apiToken,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          filename: image.filename,
+          mime_type: image.mimeType,
+          data_base64: dataUrl.slice(comma + 1),
+          purpose: "vision",
+        }),
+      });
+      const fileId = String(payload.id || "");
+      if (!FILE_ID_PATTERN.test(fileId)) throw new Error("服务器没有返回有效的图片文件 ID");
+      image.fileId = fileId;
+      image.file = null;
+    }
+  }
+
+  async function handleImageFiles(fileList) {
+    if (state.streaming) return;
+    if (!state.apiToken) {
+      toast("请先登录并选择 API Key。");
+      return;
+    }
+    if (!selectedKeyHasScope("files")) {
+      toast("当前 API Key 没有 files 权限，请更换 Key 或在控制台调整权限。");
+      return;
+    }
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    const conversation = currentConversation() || createConversation();
+    if (!conversation) return;
+    if (conversation.apiKeyId && conversation.apiKeyId !== selectedKeyId()) {
+      toast("该对话已有图片附件，请切换回上传图片时使用的 API Key。");
+      return;
+    }
+    if (state.pendingImages.length && state.pendingImagesConversationId !== conversation.id) {
+      toast("请先发送或移除其他对话的待发送图片。");
+      return;
+    }
+    let totalBytes = state.pendingImages.reduce((sum, image) => sum + image.size, 0);
+    for (const file of files) {
+      if (state.pendingImages.length >= MAX_IMAGES_PER_MESSAGE) {
+        toast("每条消息最多添加 " + MAX_IMAGES_PER_MESSAGE + " 张图片。");
+        break;
+      }
+      if (!ALLOWED_IMAGE_TYPES.has(file.type)) {
+        toast("暂不支持 " + (file.type || "未知格式") + "；仅支持 PNG、JPEG、WebP 和 GIF。");
+        continue;
+      }
+      if (!file.size || file.size > MAX_IMAGE_BYTES || totalBytes + file.size > MAX_TOTAL_IMAGE_BYTES) {
+        toast("单张图片上限 10 MiB，单条消息图片总量上限 20 MiB。");
+        continue;
+      }
+      state.pendingImages.push({
+        file,
+        fileId: "",
+        filename: String(file.name || "image").slice(0, 180),
+        mimeType: file.type,
+        size: file.size,
+        previewUrl: URL.createObjectURL(file),
+      });
+      state.pendingImagesConversationId = conversation.id;
+      totalBytes += file.size;
+    }
+    renderPendingImages();
+    resizeComposer();
+    $("messageInput").focus();
   }
 
   function appendDelta(assistant, delta) {
@@ -506,37 +736,39 @@
 
   async function sendMessage(text) {
     const clean = String(text || "").trim();
-    if (!clean || state.streaming) return;
+    if (state.streaming) return;
+    const conversation = currentConversation() || createConversation();
+    const pending = state.pendingImagesConversationId === conversation?.id ? state.pendingImages : [];
+    if (!clean && !pending.length) return;
     if (!state.apiToken) {
       toast("请先选择一个可用的 API Key。");
       showOnly("keyRequired");
       return;
     }
-    const conversation = currentConversation() || createConversation();
+    const keyId = selectedKeyId();
+    if (conversation.apiKeyId && conversation.apiKeyId !== keyId) {
+      toast("该对话包含由其他 API Key 上传的图片，请切换回原 API Key。");
+      resizeComposer();
+      return;
+    }
+    if (pending.length && !selectedKeyHasScope("files")) {
+      toast("当前 API Key 没有 files 权限，无法发送图片。");
+      return;
+    }
     conversation.model = state.selectedModel;
-    const userMessage = {id:id(),role:"user",content:clean,createdAt:new Date().toISOString()};
-    conversation.messages.push(userMessage);
-    autoTitle(conversation);
-    const assistant = {id:id(),role:"assistant",content:"",createdAt:new Date().toISOString()};
-    conversation.messages.push(assistant);
-    conversation.updatedAt = new Date().toISOString();
-    saveHistory();
     state.streaming = true;
-    state.streamingMessageId = assistant.id;
     state.abortController = new AbortController();
-    $("messageInput").value = "";
-    resizeComposer();
-    $("stopButton").classList.remove("hidden");
     $("sendButton").disabled = true;
+    $("attachButton").disabled = true;
     $("newChatButton").disabled = true;
     $("apiKeySelect").disabled = true;
     $("modelSelect").disabled = true;
-    renderAll();
+    $("messageInput").disabled = true;
+    setConnection(pending.length ? "正在上传图片…" : "正在连接…");
 
+    let userMessage = null;
+    let assistant = null;
     try {
-      const messages = conversation.messages
-        .filter((message) => message.id !== assistant.id)
-        .map((message) => ({role:message.role,content:message.content}));
       try {
         const session = await apiJson("/api/user/me");
         if (String(session.user?.user_id || "") !== String(state.user?.user_id || "")) {
@@ -549,6 +781,41 @@
         setConnection("登录已失效", "error");
         throw new Error("用户登录状态已失效，请重新登录后再继续聊天");
       }
+
+      if (pending.length) {
+        await uploadPendingImages();
+        conversation.apiKeyId = keyId;
+      }
+      const imageParts = pending.map((image) => ({
+        type: "image_url",
+        image_url: {url:image.fileId},
+      }));
+      const userContent = imageParts.length
+        ? [...(clean ? [{type:"text",text:clean}] : []), ...imageParts]
+        : clean;
+      userMessage = {id:id(),role:"user",content:userContent,createdAt:new Date().toISOString()};
+      conversation.messages.push(userMessage);
+      autoTitle(conversation);
+      assistant = {id:id(),role:"assistant",content:"",createdAt:new Date().toISOString()};
+      conversation.messages.push(assistant);
+      conversation.updatedAt = new Date().toISOString();
+      saveHistory();
+      state.pendingImages.forEach((image) => {
+        if (image.previewUrl) URL.revokeObjectURL(image.previewUrl);
+      });
+      state.pendingImages = [];
+      state.pendingImagesConversationId = "";
+      $("messageInput").value = "";
+      renderPendingImages();
+      state.streamingMessageId = assistant.id;
+      $("stopButton").classList.remove("hidden");
+      setConnection("已连接", "ready");
+      resizeComposer();
+      renderAll();
+
+      const messages = conversation.messages
+        .filter((message) => message.id !== assistant.id)
+        .map((message) => ({role:message.role,content:message.content}));
       const response = await fetch("/v1/chat/completions", {
         method: "POST",
         credentials: "same-origin",
@@ -585,9 +852,9 @@
         const part = await reader.read();
         if (part.done) break;
         buffer += decoder.decode(part.value, {stream:true});
-        buffer = buffer.replace(/\r\n/g, "\n");
+        buffer = buffer.replace(/\\r\\n/g, "\\n");
         let boundary;
-        while ((boundary = buffer.indexOf("\n\n")) >= 0) {
+        while ((boundary = buffer.indexOf("\\n\\n")) >= 0) {
           const frame = buffer.slice(0, boundary);
           buffer = buffer.slice(boundary + 2);
           if (consumeSseFrame(frame, assistant)) {
@@ -612,11 +879,12 @@
         toast("连接已结束，但未收到流结束标记；请检查请求记录确认是否完整。");
       }
     } catch (error) {
+      if (assistant && !assistant.content.trim()) {
+        conversation.messages = conversation.messages.filter((message) => message.id !== assistant.id);
+      }
       if (error.name === "AbortError") {
-        toast(assistant.content ? "已停止生成，已保留当前回复。" : "已停止生成。");
-        if (!assistant.content) conversation.messages = conversation.messages.filter((message) => message.id !== assistant.id);
+        toast(assistant?.content ? "已停止生成，已保留当前回复。" : "已停止生成。");
       } else {
-        if (!assistant.content) conversation.messages = conversation.messages.filter((message) => message.id !== assistant.id);
         toast("请求失败：" + error.message);
       }
     } finally {
@@ -631,6 +899,8 @@
       $("newChatButton").disabled = false;
       $("apiKeySelect").disabled = false;
       $("modelSelect").disabled = false;
+      $("messageInput").disabled = false;
+      renderPendingImages();
       resizeComposer();
       $("messageInput").focus();
     }
@@ -651,7 +921,12 @@
       state.apiToken = String(payload.token || "");
       if (!state.apiToken) throw new Error("API Key 密钥为空");
       try { localStorage.setItem("chat2api.webchat.key." + state.user.user_id, keyId); } catch {}
-      setConnection("已连接", "ready");
+      const conversation = currentConversation();
+      if (conversation?.apiKeyId && conversation.apiKeyId !== keyId) {
+        setConnection("此对话需要原 API Key", "error");
+      } else {
+        setConnection("已连接", "ready");
+      }
       resizeComposer();
       await loadModels();
       renderAll();
@@ -689,7 +964,9 @@
     });
     let preferred = "";
     try { preferred = localStorage.getItem("chat2api.webchat.key." + state.user.user_id) || ""; } catch {}
-    const selected = usable.find((key) => key.key_id === preferred) || usable[0];
+    const conversationKeyId = currentConversation()?.apiKeyId || "";
+    const selected = usable.find((key) => key.key_id === conversationKeyId) ||
+      usable.find((key) => key.key_id === preferred) || usable[0];
     select.value = selected.key_id;
     return selectApiKey(selected.key_id);
   }
@@ -727,7 +1004,10 @@
     if (!conversation || !conversation.messages.length) return;
     const lines = ["# " + (conversation.title || "Chat2API 对话"), "", "模型：" + conversation.model, ""];
     conversation.messages.forEach((message) => {
-      lines.push(message.role === "user" ? "## 用户" : "## Chat2API", "", message.content, "");
+      lines.push(message.role === "user" ? "## 用户" : "## Chat2API", "");
+      const text = messageText(message);
+      if (text) lines.push(text, "");
+      messageImageIds(message).forEach((fileId) => lines.push("[图片附件: " + fileId + "]", ""));
     });
     const blob = new Blob([lines.join("\n")], {type:"text/markdown;charset=utf-8"});
     const url = URL.createObjectURL(blob);
@@ -775,10 +1055,25 @@
     }
   });
   $("sendButton").addEventListener("click", () => sendMessage($("messageInput").value));
+  $("attachButton").addEventListener("click", () => $("imageInput").click());
+  $("imageInput").addEventListener("change", async (event) => {
+    await handleImageFiles(event.target.files);
+    event.target.value = "";
+  });
   $("stopButton").addEventListener("click", () => {
     if (state.abortController) state.abortController.abort();
   });
   $("messageInput").addEventListener("input", resizeComposer);
+  $("messageInput").addEventListener("paste", (event) => {
+    const images = Array.from(event.clipboardData?.items || [])
+      .filter((item) => item.kind === "file" && ALLOWED_IMAGE_TYPES.has(item.type))
+      .map((item) => item.getAsFile())
+      .filter(Boolean);
+    if (images.length) {
+      event.preventDefault();
+      handleImageFiles(images);
+    }
+  });
   $("messageInput").addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
@@ -809,6 +1104,12 @@
     const theme = localStorage.getItem("chat2api.webchat.theme");
     if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
   } catch {}
+  window.addEventListener("beforeunload", () => {
+    state.pendingImages.forEach((image) => {
+      if (image.previewUrl) URL.revokeObjectURL(image.previewUrl);
+    });
+  });
+  renderPendingImages();
   resizeComposer();
   bootstrap().catch((error) => {
     setConnection("初始化失败", "error");
