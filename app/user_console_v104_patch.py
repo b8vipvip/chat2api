@@ -347,16 +347,25 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
                 reservation_id = invitations.reserve(body.invite_code, body.email)
             except ValueError as error:
                 raise HTTPException(status_code=403, detail="Invitation code is invalid or unavailable") from error
+        def release_invitation_after_failure() -> None:
+            if not reservation_id:
+                return
+            try:
+                invitations.release(reservation_id)
+            except Exception:
+                import logging
+                logging.getLogger(__name__).exception(
+                    "Invitation reservation release failed after registration error"
+                )
+
         try:
             user = accounts.register(body.email, body.password, body.display_name)
             token = accounts.create_session(str(user["user_id"]))
         except ValueError as error:
-            if reservation_id:
-                invitations.release(reservation_id)
+            release_invitation_after_failure()
             raise HTTPException(status_code=409, detail=str(error)) from error
         except Exception:
-            if reservation_id:
-                invitations.release(reservation_id)
+            release_invitation_after_failure()
             raise
 
         if reservation_id:
