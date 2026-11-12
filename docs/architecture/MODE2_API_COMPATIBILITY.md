@@ -9,7 +9,7 @@ is explicitly marked `compatible_subset` or `extension_only`.
 
 ## Supported entrypoints
 
-The machine-readable matrix enumerates **all 20 production `/v1/*` routes**
+The machine-readable matrix enumerates **all 19 production `/v1/*` routes**
 (19 HTTP operations plus one WebSocket), not just the primary chat routes.
 A runtime test compares the matrix against every registered production route
 and the generated OpenAPI document, failing on either an omitted route or a
@@ -30,7 +30,6 @@ stale/duplicate owner.
 | `DELETE /v1/files/{file_id}` | Compatible subset | `client.files.delete()`; standard FileDeleted envelope |
 | `POST /v1/audio/speech` | Chat2API extension | JSON/base64 GPT-Live speech result, not standard binary audio |
 | `POST /v1/audio/conversations` | Chat2API extension | Owner-scoped uploaded audio reference and JSON result |
-| `POST /v1/audio/transcriptions` | Chat2API extension | Uses `audio_file_id`, not standard multipart transcription |
 | `POST /v1/audio/realtime/sessions` | Chat2API extension | One-time session token; not OpenAI client-secrets route |
 | `WEBSOCKET /v1/audio/realtime` | Chat2API extension | Custom `chat2api-live-v1` PCM wire protocol |
 | `GET /v1/media/{media_id}` | Chat2API extension | Owner-scoped metadata and signed media URL |
@@ -41,7 +40,9 @@ stale/duplicate owner.
 Standard multipart upload does not imply support for batch, fine-tune or evals
 file purposes. The standard `GET /v1/files` list endpoint is not implemented.
 The audio and realtime endpoints are explicitly classified as extensions rather
-than being presented as standard OpenAI audio/realtime compatibility.
+than being presented as standard OpenAI audio/realtime compatibility. The
+legacy dictation/transcription handler is removed from the composed production
+route chain and is therefore not counted as a live API endpoint.
 
 ## Behavioral contract
 
