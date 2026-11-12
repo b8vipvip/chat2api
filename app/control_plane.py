@@ -79,6 +79,8 @@ def permission_for_admin_route(path: str, method: str) -> str | None:
         return "users:" + suffix
     if re.fullmatch(r"/api/admin/keys/[^/]+/secret", path):
         return "secrets:read"
+    if re.fullmatch(r"/api/admin/keys/[^/]+/settings", path):
+        return "keys:write"
     if path == "/api/admin/keys" or re.fullmatch(r"/api/admin/keys/[^/]+", path):
         return "keys:" + suffix
     if path in {
