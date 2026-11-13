@@ -343,7 +343,7 @@ $('mediaSaveSettings').onclick=async()=>{
     $('mediaStorageStatus').textContent='已保存配置';await loadMediaStorage();
   }catch(e){$('mediaStorageStatus').textContent='保存失败：'+e.message;}
 };
-$('connect').disabled=true;$('refresh').disabled=true;document.querySelectorAll('.nav button').forEach(button=>button.disabled=true);
+if($('connect'))$('connect').disabled=true;if($('refresh'))$('refresh').disabled=true;document.querySelectorAll('.nav button').forEach(button=>button.disabled=true);
 (async()=>{
   let session=null,sessionCheckSucceeded=false;
   try{
@@ -353,19 +353,19 @@ $('connect').disabled=true;$('refresh').disabled=true;document.querySelectorAll(
   }catch(_){}
   if(sessionCheckSucceeded&&session&&session.authenticated&&session.role!=='super_admin'){
     try{sessionStorage.removeItem('chat2api_admin_key')}catch(_){}
-    $('adminKey').value='';$('adminKey').disabled=true;$('connect').hidden=true;$('refresh').hidden=true;
+    if($('adminKey')){$('adminKey').value='';$('adminKey').disabled=true;}if($('connect'))$('connect').hidden=true;if($('refresh'))$('refresh').hidden=true;
     document.querySelectorAll('.nav button:not([data-cview])').forEach(button=>{button.hidden=true;button.disabled=true});
     document.querySelectorAll('.nav button[data-cview]').forEach(button=>{button.disabled=false});
     const defaults={system_admin:'client-policy',api_key_admin:'api-keys',plugin_admin:'plugins',support:'model-entitlements',billing_admin:'user-pricing',user_admin:'admin-users'};
     if(defaults[session.role])location.hash=defaults[session.role];
     status('已识别委派管理员 Session：'+session.username+' · '+session.role,'ok');
   }else if(sessionCheckSucceeded){
-    $('connect').disabled=false;$('refresh').disabled=false;
+    if($('connect'))$('connect').disabled=false;if($('refresh'))$('refresh').disabled=false;
     document.querySelectorAll('.nav button').forEach(button=>button.disabled=false);
     const start=(location.hash||'#'+INITIAL_VIEW).slice(1);show(titles[start]?start:'overview');
   }else{
     try{sessionStorage.removeItem('chat2api_admin_key')}catch(_){}
-    $('adminKey').value='';$('connect').disabled=false;$('refresh').disabled=true;
+    if($('adminKey'))$('adminKey').value='';if($('connect'))$('connect').disabled=false;if($('refresh'))$('refresh').disabled=true;
     document.querySelectorAll('.nav button:not([data-cview])').forEach(button=>button.disabled=true);
     document.querySelectorAll('.nav button[data-cview]').forEach(button=>{button.disabled=false});
     $('view-overview').classList.add('active');
