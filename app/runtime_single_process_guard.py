@@ -82,6 +82,12 @@ class SingleProcessRuntimeGuard:
                 metadata = os.fstat(fd)
                 if not stat.S_ISREG(metadata.st_mode):
                     raise RuntimeTopologyError("Runtime lock path must be a regular file")
+                # A hard-linked lock path could make fchmod() change the mode
+                # of another data file and would let the runtime lock contend
+                # on an unrelated inode. The lock file is dedicated state and
+                # must have exactly one directory entry.
+                if getattr(metadata, "st_nlink", 1) != 1:
+                    raise RuntimeTopologyError("Runtime lock path cannot be hard-linked")
                 if hasattr(os, "fchmod"):
                     os.fchmod(fd, 0o600)
                 else:
