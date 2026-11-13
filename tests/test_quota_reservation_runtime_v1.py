@@ -187,6 +187,50 @@ async def test_startup_recovery_replays_completed_telemetry_after_pre_charge_cra
 
 
 @pytest.mark.asyncio
+async def test_startup_recovery_replays_terminal_before_expiring_reserved_hold(tmp_path: Path) -> None:
+    from app.telemetry import TelemetryStore
+
+    app, store, api_keys = _runtime(tmp_path)
+    request_id = "req_replay_before_begin_commit_0001"
+    reservation = reserve_request_quota(
+        app, request_id, SimpleNamespace(key_id="key-1"), "prompt", 4096,
+    )
+    telemetry = TelemetryStore(tmp_path)
+    await telemetry.upsert({
+        "request_id": request_id, "api_key_id": "key-1", "status": "completed",
+        "usage": {"total_tokens": 17},
+    })
+    # Simulate a crash after the durable telemetry append but before the
+    # accounting callback can move the reservation from reserved to committing.
+    telemetry.items.clear()
+
+    replayed = await store.recover_committing(telemetry, api_keys)
+    assert replayed == 1
+    assert api_keys.keys["key-1"].tokens_used == 17
+    assert api_keys.charged_requests[request_id] == 17
+    assert store.get(request_id)["state"] == "settled"
+    assert store.expire_reservations(now=reservation["expires_at"] + 1) == 0
+    assert await store.recover_committing(telemetry, api_keys) == 0
+    store.close()
+
+
+def test_reconcile_accepts_store_level_idempotency_ledger_adapter(tmp_path: Path) -> None:
+    app, store, api_keys = _runtime(tmp_path)
+    request_id = "req_reconcile_store_ledger_0001"
+    reserve_request_quota(
+        app, request_id, SimpleNamespace(key_id="key-1"), "prompt", 4096,
+    )
+    store.begin_commit(request_id, "key-1", 17)
+    # This adapter deliberately exposes the same durable request ledger at
+    # store level rather than on each key object.
+    api_keys.charged_requests[request_id] = 17
+
+    assert store.reconcile(api_keys) == 1
+    assert store.get(request_id)["state"] == "settled"
+    assert store.active_reserved_tokens("key-1") == 0
+    store.close()
+
+@pytest.mark.asyncio
 async def test_completed_usage_commits_once_and_terminal_failure_releases(tmp_path: Path) -> None:
     app, store, api_keys = _runtime(tmp_path)
     callback = app.state.telemetry.usage_accounting
