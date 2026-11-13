@@ -315,13 +315,48 @@ async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], princi
             "diagnostics": {"internal_protocol_attempt": True,
                             "parent_request_id": str(body.get("_chat2api_parent_request_id") or "")},
         })
+    scoped_attachments = [
+        {**item, "request_id": request_id}
+        for item in (attachments or [])
+    ]
+    if not (request_id_override and request_id.startswith("resp_repair_")):
+        # Responses owns its Worker request ID too. Persist the exact owner,
+        # assigned Worker and attachment set before dispatch so the extension
+        # download endpoint can enforce the same request-scoped file grant as
+        # Chat Completions and Images.
+        if app.state.telemetry.get(request_id):
+            await broker.release(request_id)
+            raise HTTPException(status_code=409, detail="Duplicate request_id")
+        await app.state.telemetry.upsert({
+            "request_id": request_id,
+            "client_id": client_id,
+            "api_key_id": principal.key_id,
+            "api_key_name": principal.name,
+            "auth_kind": principal.kind,
+            "requested_model": str(body.get("model") or "gpt-5.6-sol"),
+            "request_type": "responses",
+            "attachments_count": len(scoped_attachments),
+            "input_file_ids": list(dict.fromkeys(
+                str(item.get("file_id") or "") for item in scoped_attachments
+                if item.get("file_id")
+            )),
+            "stream": bool(body.get("stream", False)),
+            "prompt_mode": "responses",
+            "prompt_chars": len(prompt),
+            "completion_chars": 0,
+            "status": "running",
+            "usage": {},
+            "timings": state.timings(),
+            "diagnostics": {"responses_v108_dispatch": True},
+            "error": None,
+        })
     registry.busy_clients.add(client_id)
     try:
         await registry.send(client_id, {
             "type": "chat.request",
             "request_id": request_id,
             "prompt": prompt,
-            "attachments": attachments or [],
+            "attachments": scoped_attachments,
             "options": {
                 "auto_switch_text": True,
                 "timeout_seconds": timeout,
