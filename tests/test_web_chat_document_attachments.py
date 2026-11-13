@@ -96,6 +96,16 @@ def test_chat_completion_file_content_part_is_forwarded_to_worker(tmp_path: Path
                 assert message["attachments"][0]["filename"] == "quarterly-summary.txt"
                 assert message["attachments"][0]["mime_type"] == "text/plain"
                 assert message["attachments"][0]["size"] == len(payload)
+                # The paired Worker fetches the bytes through its authenticated
+                # extension endpoint after receiving the scoped attachment spec.
+                downloaded = client.get(
+                    f"/api/extensions/files/{document['id']}",
+                    params={"client_id": client_id, "token": token},
+                )
+                assert downloaded.status_code == 200, downloaded.text
+                assert downloaded.content == payload
+                assert downloaded.headers["x-chat2api-filename"] == "quarterly-summary.txt"
+                assert downloaded.headers["content-type"].startswith("text/plain")
                 websocket.send_json({
                     "type": "chat.completed",
                     "request_id": message["request_id"],
