@@ -508,7 +508,8 @@
       const time = document.createElement("span");
       time.className = "message-time";
       time.textContent = message.createdAt ? new Date(message.createdAt).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}) : "";
-      header.append(name, time);      if (message.role === "assistant" && message.recoveryStatus &&
+      header.append(name, time);
+      if (message.role === "assistant" && message.recoveryStatus &&
           (message.pending || message.recoveryStatus !== "completed")) {
         const status = document.createElement("span");
         status.className = "recovery-status";
@@ -879,7 +880,7 @@
         if (message.role === "assistant" && message.pending === true && message.requestId) pending.push({conversation,message});
       });
     });
-    pending.slice(0, 5).forEach(({conversation,message}) => { void recoverPendingMessage(conversation,message); });
+    pending.forEach(({conversation,message}) => { void recoverPendingMessage(conversation,message); });
   }
   async function sendMessage(text) {
     const clean = String(text || "").trim();
