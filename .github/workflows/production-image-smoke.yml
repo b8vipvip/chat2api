@@ -347,9 +347,12 @@ jobs:
           set -euo pipefail
           data_dir="$(mktemp -d)"
           first="chat2api-p01-first-${GITHUB_RUN_ID}"
+          graceful="chat2api-p01-graceful-${GITHUB_RUN_ID}"
+          backup_dir="$(mktemp -d)"
+          restore_dir="$(mktemp -d)"
           cleanup() {
-            docker rm -f "$first" >/dev/null 2>&1 || true
-            sudo rm -rf "$data_dir"
+            docker rm -f "$first" "$graceful" >/dev/null 2>&1 || true
+            sudo rm -rf "$data_dir" "$backup_dir" "$restore_dir"
           }
           trap cleanup EXIT
 
@@ -406,3 +409,85 @@ jobs:
           ' 2>&1)"
           echo "$third_output"
           echo "$third_output" | grep -q "reacquired-after-abrupt-exit"
+
+          # Verify SIGTERM runs the ASGI lifespan shutdown and releases the lock.
+          docker run -d --name "$graceful" \
+            -v "$data_dir:/app/data" \
+            -e CHAT2API_DATA_DIR=/app/data \
+            -e CHAT2API_API_KEY=p01-docker-shared-volume-test-key \
+            chat2api-production-smoke >/dev/null
+
+          blocked=0
+          for _ in $(seq 1 30); do
+            probe_output="$(docker run --rm \
+              -v "$data_dir:/app/data" \
+              -e CHAT2API_DATA_DIR=/app/data \
+              -e CHAT2API_API_KEY=p01-docker-shared-volume-test-key \
+              --entrypoint python chat2api-production-smoke -c '
+          import sys
+          from app.runtime_single_process_guard import RuntimeTopologyError
+          try:
+              import app.entry
+          except RuntimeTopologyError as exc:
+              assert "already owns" in str(exc)
+              assert "app.main" not in sys.modules
+              print("blocked-before-main")
+          else:
+              print("not-yet-owned")
+          ' 2>&1)"
+            if echo "$probe_output" | grep -q "blocked-before-main"; then
+              blocked=1
+              break
+            fi
+            sleep 1
+          done
+          [ "$blocked" -eq 1 ] || { docker logs "$graceful"; echo "graceful-shutdown test server never acquired the shared-volume lock" >&2; exit 1; }
+
+          docker stop --time 30 "$graceful" >/dev/null
+          graceful_logs="$(docker logs "$graceful" 2>&1)"
+          echo "$graceful_logs"
+          echo "$graceful_logs" | grep -q "Application shutdown complete"
+          docker rm "$graceful" >/dev/null
+
+          graceful_output="$(docker run --rm \
+            -v "$data_dir:/app/data" \
+            -e CHAT2API_DATA_DIR=/app/data \
+            -e CHAT2API_API_KEY=p01-docker-shared-volume-test-key \
+            --entrypoint python chat2api-production-smoke -c '
+          import app.entry
+          print("reacquired-after-graceful-shutdown")
+          ' 2>&1)"
+          echo "$graceful_output"
+          echo "$graceful_output" | grep -q "reacquired-after-graceful-shutdown"
+
+          # Exercise the packaged backup/verify/restore-check commands against
+          # an isolated production-image data directory, without touching host data.
+          printf '{"p01":"backup-restore-smoke"}\\n' > "$data_dir/p01-backup-smoke.json"
+          docker run --rm \
+            -v "$data_dir:/app/data" \
+            -v "$backup_dir:/backups" \
+            -v "$restore_dir:/restore" \
+            --entrypoint python chat2api-production-smoke -m app.data_dir_backup create \
+            --source /app/data --destination /backups/p01-backup \
+            --acknowledge-plaintext-sensitive-data
+          docker run --rm \
+            -v "$data_dir:/app/data" \
+            -v "$backup_dir:/backups" \
+            -v "$restore_dir:/restore" \
+            --entrypoint python chat2api-production-smoke -m app.data_dir_backup verify \
+            --backup /backups/p01-backup
+          docker run --rm \
+            -v "$data_dir:/app/data" \
+            -v "$backup_dir:/backups" \
+            -v "$restore_dir:/restore" \
+            --entrypoint python chat2api-production-smoke -m app.data_dir_backup restore-check \
+            --backup /backups/p01-backup --target /restore/restore-check \
+            --acknowledge-plaintext-sensitive-data
+          docker run --rm \
+            -v "$restore_dir:/restore" \
+            --entrypoint python chat2api-production-smoke -c '
+          from pathlib import Path
+          restored = Path("/restore/restore-check/p01-backup-smoke.json")
+          assert restored.read_text(encoding="utf-8") == "{\\"p01\\":\\"backup-restore-smoke\\"}\\n"
+          print("production-image-backup-restore-verified")
+          '
