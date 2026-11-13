@@ -50,7 +50,10 @@ def _upload_document(client: TestClient, filename: str, mime_type: str, payload:
         },
     )
     assert response.status_code == 200, response.text
-    return response.json()
+    result = response.json()
+    assert result["purpose"] == "assistants"
+    assert result["mime_type"] == mime_type
+    return result
 
 
 def test_chat_completion_file_content_part_is_forwarded_to_worker(tmp_path: Path) -> None:
@@ -120,3 +123,55 @@ def test_chat_message_file_part_contributes_to_file_id_resolution() -> None:
         }],
     })
     assert body.all_file_ids() == ["file_abcdefgh1234"]
+
+
+def test_document_content_part_rejects_non_assistants_and_unsupported_mime_files(tmp_path: Path) -> None:
+    with TestClient(create_app(_settings(tmp_path))) as client:
+        image = client.post(
+            "/v1/files", headers=_admin_headers(),
+            json={
+                "filename": "vision.png", "mime_type": "image/png",
+                "data_base64": base64.b64encode(b"not-a-real-image").decode("ascii"),
+                "purpose": "vision",
+            },
+        )
+        assert image.status_code == 200, image.text
+        unsupported = _upload_document(client, "unsafe.html", "text/html", b"<script>unsafe()</script>")
+        for file_id in (image.json()["id"], unsupported["id"]):
+            response = client.post(
+                "/v1/chat/completions", headers=_admin_headers(),
+                json={
+                    "model": "default",
+                    "messages": [{
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Please inspect this file."},
+                            {"type": "file", "file_id": file_id},
+                        ],
+                    }],
+                },
+            )
+            assert response.status_code == 400, response.text
+            assert "assistants document" in response.json()["detail"]
+
+
+def test_document_content_part_rejects_corrupt_size_metadata(tmp_path: Path) -> None:
+    with TestClient(create_app(_settings(tmp_path))) as client:
+        document = _upload_document(client, "notes.txt", "text/plain", b"valid bytes")
+        item = client.app.state.file_store.get(document["id"])
+        item.size += 1
+        response = client.post(
+            "/v1/chat/completions", headers=_admin_headers(),
+            json={
+                "model": "default",
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Summarize this."},
+                        {"type": "file", "file_id": document["id"]},
+                    ],
+                }],
+            },
+        )
+        assert response.status_code == 400, response.text
+        assert "byte count" in response.json()["detail"]
