@@ -1141,6 +1141,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         if len(existing_file_ids) + inline_data_count > 4:
             raise HTTPException(status_code=400, detail="At most four image/file inputs are supported per request")
+        existing_specs = attachment_specs(file_store, existing_file_ids, principal) if existing_file_ids else []
+        total_bytes = sum(int(item.get("size") or 0) for item in existing_specs)
+        if total_bytes > 20 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="Combined image/file inputs may not exceed 20 MiB")
         seen_file_ids = set(existing_file_ids)
         result: list[str] = []
         sequence = 0
@@ -1173,6 +1177,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 try:
                     image_bytes, image_mime = file_store._decode(value, None)
                     verify_raster_image(image_bytes, image_mime)
+                    if len(image_bytes) > 10 * 1024 * 1024:
+                        raise ValueError("input_image exceeds the 10 MiB per-image limit")
+                    if total_bytes + len(image_bytes) > 20 * 1024 * 1024:
+                        raise ValueError("Combined image/file inputs may not exceed 20 MiB")
                     item = await file_store.create(
                         filename=f"inline-image-{sequence}.{image_mime.split('/', 1)[-1]}",
                         data_base64=base64.b64encode(image_bytes).decode("ascii"),
@@ -1184,6 +1192,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     raise HTTPException(status_code=400, detail=str(error)) from error
                 result.append(item.file_id)
                 seen_file_ids.add(item.file_id)
+                total_bytes += len(image_bytes)
         return result
 
     def chat2api_meta(state: RequestState, token_meta: dict[str, object], principal: ApiPrincipal) -> dict[str, object]:
@@ -1886,6 +1895,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     raise HTTPException(status_code=400, detail=str(error)) from error
         file_ids = list(dict.fromkeys(body.all_file_ids() + inline_ids))
         attachments = attachment_specs(file_ids, principal)
+        if len(attachments) > 4:
+            raise HTTPException(status_code=400, detail="At most four image/file inputs are supported per request")
+        if sum(int(item.get("size") or 0) for item in attachments) > 20 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="Combined image/file inputs may not exceed 20 MiB")
+        if any(str(item.get("mime_type") or "").startswith("image/") and int(item.get("size") or 0) > 10 * 1024 * 1024 for item in attachments):
+            raise HTTPException(status_code=400, detail="input_image exceeds the 10 MiB per-image limit")
         request_id = accepted_request_id(x_chat2api_request_id, "req_")
         response_id = completion_id()
         request_started = time.perf_counter()
