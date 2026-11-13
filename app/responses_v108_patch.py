@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import secrets
 import time
 import uuid
@@ -275,7 +276,7 @@ async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], princi
     except (KeyError, ConnectionError) as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     raw_id = str(request_id_override or request.headers.get("x-chat2api-request-id") or "").strip()
-    request_id = raw_id if raw_id and len(raw_id) <= 128 else "resp_req_" + uuid.uuid4().hex
+    request_id = raw_id if re.fullmatch(r"[A-Za-z0-9_-]{6,120}", raw_id) else "resp_req_" + uuid.uuid4().hex
     try:
         state = await broker.create(request_id, client_id)
     except RuntimeError as error:
