@@ -49,6 +49,17 @@ def install_web_chat_features_v1(app: Any) -> Any:
             methods=["GET"], include_in_schema=False,
         )
 
+    @app.middleware("http")
+    async def web_chat_private_cache_boundary(request, call_next):
+        response = await call_next(request)
+        path = request.url.path
+        if path.startswith(("/api/user/chat/requests/", "/api/user/chat/files/", "/api/user/files/")):
+            response.headers["Cache-Control"] = "private, no-store"
+            vary_values = [value.strip() for value in response.headers.get("Vary", "").split(",") if value.strip()]
+            if not any(value.lower() == "cookie" for value in vary_values):
+                vary_values.append("Cookie")
+            response.headers["Vary"] = ", ".join(vary_values)
+        return response
     app.state.web_chat_features_v1_installed = True
     app.state.web_chat_integration_version = 1
     return app
