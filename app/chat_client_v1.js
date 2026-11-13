@@ -807,7 +807,7 @@
   async function uploadPendingFiles() {
     for (const file of state.pendingFiles) {
       if (file.fileId) continue;
-      const dataUrl = await readImageAsDataUrl(file.file);
+      const dataUrl = await readFileAsDataUrl(file.file);
       const comma = dataUrl.indexOf(",");
       if (comma < 0) throw new Error("文件编码失败");
       const payload = await apiJson("/v1/files", {
@@ -877,10 +877,10 @@
   }
 
 
-  function readImageAsDataUrl(file) {
+  function readFileAsDataUrl(file) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
-      reader.onerror = () => reject(new Error("读取图片失败"));
+      reader.onerror = () => reject(new Error("读取文件失败"));
       reader.onload = () => resolve(String(reader.result || ""));
       reader.readAsDataURL(file);
     });
@@ -889,7 +889,7 @@
   async function uploadPendingImages() {
     for (const image of state.pendingImages) {
       if (image.fileId) continue;
-      const dataUrl = await readImageAsDataUrl(image.file);
+      const dataUrl = await readFileAsDataUrl(image.file);
       const comma = dataUrl.indexOf(",");
       if (comma < 0) throw new Error("图片编码失败");
       const payload = await apiJson("/v1/files", {
@@ -1113,7 +1113,7 @@
       return;
     }
     if ((pending.length || pendingFiles.length) && !selectedKeyHasScope("files")) {
-      toast("当前 API Key 没有 files 权限，无法发送图片。");
+      toast("当前 API Key 没有 files 权限，无法发送附件。");
       return;
     }
     conversation.model = state.selectedModel;
