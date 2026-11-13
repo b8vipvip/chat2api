@@ -222,6 +222,7 @@ def test_gpt_image_route_round_trip(tmp_path: Path) -> None:
                 message = websocket.receive_json()
                 assert message["type"] == "image.request"
                 assert message["attachments"][0]["file_id"] == reference["id"]
+                assert message["attachments"][0]["request_id"] == message["request_id"]
                 websocket.send_json(
                     {
                         "type": "image.diagnostics",
@@ -247,6 +248,7 @@ def test_gpt_image_route_round_trip(tmp_path: Path) -> None:
         records = client.get("/api/admin/requests?model=gpt-image", headers=admin_headers()).json()["data"]
         assert records[0]["request_type"] == "image_generation"
         assert records[0]["attachments_count"] == 1
+        assert records[0]["input_file_ids"] == [reference["id"]]
 
 
 def test_test_report_is_persisted_and_readable(tmp_path: Path) -> None:
