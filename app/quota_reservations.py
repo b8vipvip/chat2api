@@ -355,7 +355,12 @@ class QuotaReservationStore:
             # key or interrupted/no-op charge must remain recoverable.
             item = getattr(api_keys, "keys", {}).get(key_id)
             ledger = getattr(item, "charged_requests", None) if item else None
-            raw_charged = (ledger or {}).get(request_id, 0)
+            if not isinstance(ledger, dict):
+                # Production ApiKeyStore persists the ledger on ManagedApiKey;
+                # lightweight accounting adapters may expose the same
+                # idempotency ledger directly on the store.
+                ledger = getattr(api_keys, "charged_requests", None)
+            raw_charged = (ledger or {}).get(request_id, 0) if isinstance(ledger, dict) else 0
             charged = raw_charged if type(raw_charged) is int and raw_charged > 0 else 0
             if charged < actual:
                 return "charge_pending"
