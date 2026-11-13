@@ -280,7 +280,7 @@
     if (!Array.isArray(specs) || !specs.length) return { attachments_count: 0, attachment_prepare_ms: 0 };
     if (specs.length > 4) throw new Error("A maximum of 4 attachments is supported per request");
     const requestId = String(options.request_id || specs[0]?.request_id || "");
-    if (!/^(?:req|resp|imgreq)_[a-zA-Z0-9_-]{6,100}$/.test(requestId)) {
+    if (!/^[A-Za-z0-9_-]{6,120}$/.test(requestId)) {
       throw new Error("Attachment preparation requires its original request ID");
     }
 
