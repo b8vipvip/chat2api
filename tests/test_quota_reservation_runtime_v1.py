@@ -58,6 +58,17 @@ def test_runtime_reserves_prompt_plus_conservative_output_floor(tmp_path: Path) 
     store.close()
 
 
+def test_runtime_leaves_master_key_on_unmetered_path(tmp_path: Path) -> None:
+    app, store, api_keys = _runtime(tmp_path)
+    reservation = reserve_request_quota(
+        app, "req_master_unmetered_0001",
+        SimpleNamespace(key_id="master", kind="master"), "hello world", 4096,
+    )
+    assert reservation is None
+    assert store.get("req_master_unmetered_0001") is None
+    store.close()
+
+
 def test_runtime_denies_reservation_when_completed_plus_inflight_exceeds_quota(tmp_path: Path) -> None:
     app, store, api_keys = _runtime(tmp_path, token_quota=100)
     with pytest.raises(HTTPException) as error:
