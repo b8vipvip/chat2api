@@ -77,7 +77,7 @@ from .playground_truth_v170 import (reconcile_playground_runs, reconcile_playgro
 from .playground_stream_contract_v293 import playground_stream_attribution
 from .playground_request_evidence_v207 import request_test_index, playground_link
 from .token_usage import usage_for
-from .quota_reservation_runtime_v1 import reserve_request_quota
+from .quota_reservation_runtime_v1 import reserve_image_generation_quota, reserve_request_quota
 
 logger = logging.getLogger("chat2api")
 APP_VERSION = "0.5.0"
@@ -2391,6 +2391,54 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             state = await broker.create(request_id, client_id)
         except RuntimeError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+
+        quota_reservation = None
+        try:
+            quota_reservation = reserve_image_generation_quota(
+                app, request_id, principal, body.prompt, body.n,
+            )
+        except HTTPException as quota_error:
+            state.completed_mono = time.perf_counter()
+            try:
+                await telemetry.upsert({
+                    "request_id": request_id, "response_id": response_id, "client_id": client_id,
+                    "api_key_id": principal.key_id, "api_key_name": principal.name, "auth_kind": principal.kind,
+                    "requested_model": "gpt-image", "request_type": "image_generation",
+                    "attachments_count": len(attachments), "stream": False, "prompt_mode": "image",
+                    "prompt_chars": len(body.prompt), "completion_chars": 0, "status": "error",
+                    "usage": {}, "timings": state.timings(),
+                    "diagnostics": {"quota_reservation_v1": {
+                        "state": "rejected", "http_status": quota_error.status_code,
+                        "estimate_policy": "prompt_tokens_plus_4096_per_image_admission_floor_v1",
+                    }},
+                    "error": str(quota_error.detail),
+                })
+            except Exception as telemetry_error:
+                logger.warning(
+                    "Image quota rejection could not be persisted request_id=%s error_type=%s",
+                    request_id, type(telemetry_error).__name__,
+                )
+            try:
+                await broker.release(request_id)
+            except Exception as release_error:
+                logger.warning(
+                    "Image quota rejection broker release failed request_id=%s error_type=%s",
+                    request_id, type(release_error).__name__,
+                )
+            raise
+
+        quota_diagnostics = {}
+        if quota_reservation:
+            quota_diagnostics = {"quota_reservation_v1": {
+                "state": "reserved",
+                "reserved_tokens": int(quota_reservation.get("reserved_tokens") or 0),
+                "estimate_policy": "prompt_tokens_plus_4096_per_image_admission_floor_v1",
+                "provider_usage_verified": False,
+            }}
+
+        def image_diagnostics() -> dict[str, Any]:
+            return {**dict(state.diagnostics), **quota_diagnostics}
+
         registry.busy_clients.add(client_id)
         state.probe_policy = probe_policy(client_id)
         timeout_seconds = body.timeout or max(config.request_timeout_seconds, 300)
@@ -2402,7 +2450,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "requested_model": "gpt-image", "request_type": "image_generation",
                     "attachments_count": len(attachments), "stream": False, "prompt_mode": "image",
                     "prompt_chars": len(body.prompt), "completion_chars": 0, "status": "running",
-                    "usage": {}, "timings": state.timings(), "diagnostics": dict(state.diagnostics), "error": None,
+                    "usage": {}, "timings": state.timings(), "diagnostics": image_diagnostics(), "error": None,
                 }
             )
             await registry.send(
@@ -2574,8 +2622,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                  "usage": {}, "timings": state.timings(), "diagnostics": state.diagnostics, "error": str(error)}
             )
             raise HTTPException(status_code=502, detail=str(error)) from error
+        except Exception as error:
+            current = telemetry.get(request_id)
+            current_status = str((current or {}).get("status") or "")
+            if current_status not in {"completed", "error", "cancelled", "stalled", "failed", "timeout"}:
+                state.completed_mono = state.completed_mono or time.perf_counter()
+                try:
+                    await telemetry.upsert({
+                        "request_id": request_id, "response_id": response_id, "client_id": client_id,
+                        "api_key_id": principal.key_id, "api_key_name": principal.name, "auth_kind": principal.kind,
+                        "requested_model": "gpt-image", "request_type": "image_generation",
+                        "attachments_count": len(attachments), "stream": False, "prompt_mode": "image",
+                        "prompt_chars": len(body.prompt), "completion_chars": 0, "status": "error",
+                        "usage": {}, "timings": state.timings(), "diagnostics": image_diagnostics(),
+                        "error": type(error).__name__,
+                    })
+                except Exception as telemetry_error:
+                    logger.warning(
+                        "Image request failure telemetry could not be persisted request_id=%s error_type=%s",
+                        request_id, type(telemetry_error).__name__,
+                    )
+            raise
         finally:
             registry.busy_clients.discard(client_id)
+            if quota_reservation:
+                current = telemetry.get(request_id)
+                if str((current or {}).get("status") or "") != "completed":
+                    try:
+                        app.state.quota_reservations.release(request_id, principal.key_id)
+                    except Exception as release_error:
+                        logger.warning(
+                            "Image quota reservation cleanup deferred request_id=%s error_type=%s",
+                            request_id, type(release_error).__name__,
+                        )
             await broker.release(request_id)
 
     # Both Images and Responses image_generation use this exact Worker/Broker
