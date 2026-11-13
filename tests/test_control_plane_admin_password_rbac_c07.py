@@ -48,7 +48,8 @@ def test_delegated_user_admin_cannot_reset_peer_but_can_rotate_own_password(tmp_
                 headers=ORIGIN,
             )
             assert peer_reset.status_code == 403
-            assert _login(TestClient(app), "support_operator", "strong-initial-password").status_code == 200
+            with TestClient(app) as support:
+                assert _login(support, "support_operator", "strong-initial-password").status_code == 200
 
             own_reset = delegated.post(
                 "/api/admin/control/self/password",
