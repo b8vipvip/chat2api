@@ -174,6 +174,46 @@ def test_api_key_and_owner_policies_filter_catalog_and_gate_dispatch(tmp_path: P
         reset_model_context(tokens)
 
 
+def test_identity_and_tenant_lookup_failures_fail_closed(tmp_path: Path):
+    app, _ = build_app(tmp_path)
+    registry = app.state.registry
+    registry.routing_key_context.set("key_1")
+    tokens = set_model_context("gpt-5.5")
+
+    original_owner_lookup = app.state.user_accounts.owner_for_key
+    original_tenant_lookup = app.state.tenant_memberships.tenant_for_key
+    original_user_lookup = app.state.tenant_memberships.user_for_key
+
+    def unavailable(_key_id):
+        raise RuntimeError("simulated identity store outage")
+
+    try:
+        app.state.user_accounts.owner_for_key = unavailable
+        with pytest.raises(HTTPException) as identity_error:
+            registry.resolve_client(None)
+        assert identity_error.value.status_code == 503
+        assert identity_error.value.detail["code"] == "model_entitlement_identity_unavailable"
+
+        app.state.user_accounts.owner_for_key = original_owner_lookup
+        app.state.tenant_memberships.tenant_for_key = unavailable
+        with pytest.raises(HTTPException) as tenant_error:
+            registry.resolve_client(None)
+        assert tenant_error.value.status_code == 503
+        assert tenant_error.value.detail["code"] == "model_entitlement_tenant_context_unavailable"
+
+        app.state.tenant_memberships.tenant_for_key = original_tenant_lookup
+        app.state.tenant_memberships.user_for_key = lambda _key_id: None
+        with pytest.raises(HTTPException) as orphan_error:
+            registry.resolve_client(None)
+        assert orphan_error.value.status_code == 503
+        assert orphan_error.value.detail["code"] == "model_entitlement_tenant_context_unavailable"
+    finally:
+        app.state.user_accounts.owner_for_key = original_owner_lookup
+        app.state.tenant_memberships.tenant_for_key = original_tenant_lookup
+        app.state.tenant_memberships.user_for_key = original_user_lookup
+        reset_model_context(tokens)
+
+
 def test_admin_entitlement_api_requires_session_audits_and_validates_subjects(tmp_path: Path):
     app, token = build_app(tmp_path)
     with TestClient(app) as client:
