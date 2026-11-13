@@ -83,6 +83,35 @@ def validate_image_file(file_store: FileStore, file_id: str, principal: ApiPrinc
     _verify_raster(payload, stored.mime_type)
     return stored, payload
 
+_DOCUMENT_MIME_TYPES = {
+    "application/pdf",
+    "text/plain",
+    "text/markdown",
+    "text/csv",
+    "application/json",
+    "application/rtf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+}
+
+
+def validate_document_file(file_store: FileStore, file_id: str, principal: ApiPrincipal) -> tuple[Any, bytes]:
+    """Resolve one owner-scoped Web Chat document and verify its stored bytes."""
+    attachment_specs(file_store, [file_id], principal)
+    item = file_store.get(file_id)
+    if item is None or item.purpose != "assistants" or item.mime_type not in _DOCUMENT_MIME_TYPES:
+        raise ValueError("file content part must reference an assistants document with a supported MIME type")
+    try:
+        stored, payload = file_store.read(file_id)
+    except (KeyError, FileNotFoundError, OSError) as error:
+        raise ValueError("file content part document bytes are unavailable") from error
+    if not payload or stored.size != len(payload):
+        raise ValueError("file content part document byte count does not match its metadata")
+    if len(payload) > file_store.max_file_bytes:
+        raise ValueError("file content part document exceeds the configured file size limit")
+    return stored, payload
+
 def _verify_raster(data: bytes, mime: str) -> None:
     if mime not in _IMAGE_MIME:
         raise ValueError("input_image supports PNG, JPEG, WebP or GIF")
