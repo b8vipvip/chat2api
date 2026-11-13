@@ -152,3 +152,59 @@ async def test_completed_usage_commits_once_and_terminal_failure_releases(tmp_pa
     assert store.get("req_runtime_0005")["state"] == "released"
     assert api_keys.keys["key-1"].tokens_used == 12
     store.close()
+
+def test_responses_api_reserves_and_settles_managed_key_usage(tmp_path: Path) -> None:
+    import asyncio
+
+    from fastapi.testclient import TestClient
+
+    from app.config import Settings
+    from app.main import create_app
+    from app.responses_model_routing_v108_patch import install_responses_model_routing_v108_patch
+    from app.responses_v108_patch import install_responses_v108_patch
+
+    app = create_app(Settings(
+        CHAT2API_API_KEY="responses-quota-master",
+        CHAT2API_DATA_DIR=str(tmp_path),
+    ))
+    public, token = asyncio.run(app.state.api_keys.create("responses-quota"))
+    asyncio.run(app.state.api_keys.update(public["key_id"], token_quota=10000))
+
+    app.state.registry.resolve_client = lambda requested: "ext_responses_quota"
+
+    async def fake_worker_send(client_id: str, payload: dict) -> None:
+        if payload.get("type") == "chat.request":
+            await app.state.broker.publish(payload["request_id"], {
+                "type": "chat.completed",
+                "text": "Responses quota settlement fixture",
+            })
+
+    app.state.registry.send = fake_worker_send
+    install_responses_model_routing_v108_patch(app)
+    install_responses_v108_patch(app)
+    install_quota_reservation_runtime_v1(app)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/responses",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "model": "gpt-5.6-sol",
+                "input": "Hello Responses",
+                "max_output_tokens": 64,
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    record = next(
+        item for item in app.state.telemetry.recent(10)
+        if item.get("request_type") == "responses"
+    )
+    request_id = record["request_id"]
+    reservation = app.state.quota_reservations.get(request_id)
+    assert reservation is not None
+    assert reservation["state"] == "settled"
+    assert record["status"] == "completed"
+    assert record["usage"]["total_tokens"] > 0
+    assert app.state.api_keys.keys[public["key_id"]].tokens_used == record["usage"]["total_tokens"]
+    app.state.quota_reservations.close()
