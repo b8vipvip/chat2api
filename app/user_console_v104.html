@@ -15,6 +15,8 @@
   <div class="authCard">
     <div class="brand">chat2api<small>API 用户控制台</small></div>
     <div class="tabs"><button id="loginTab" class="active">登录</button><button id="registerTab">注册</button></div>
+    <div id="registrationNotice" class="muted" aria-live="polite"></div>
+    <div id="publicAnnouncement" class="muted" aria-live="polite"></div>
     <form id="loginForm" class="form">
       <label class="field">邮箱<input id="loginEmail" type="email" autocomplete="email" required></label>
       <label class="field">密码<input id="loginPassword" type="password" autocomplete="current-password" required></label>
@@ -24,6 +26,7 @@
       <label class="field">昵称<input id="registerName" maxlength="80"></label>
       <label class="field">邮箱<input id="registerEmail" type="email" autocomplete="email" required></label>
       <label class="field">密码<input id="registerPassword" type="password" autocomplete="new-password" minlength="8" required></label>
+      <label id="registerInviteField" class="field hidden">邀请代码<input id="registerInviteCode" type="text" autocomplete="one-time-code" maxlength="128"></label>
       <button class="action primary" type="submit">创建账户</button>
     </form>
     <div id="authError" class="error"></div>

@@ -149,6 +149,7 @@ jobs:
           node --check chrome_extension/content_probe_supervisor_v1.js
           node --check app/admin_extension_columns.js
           node --check app/admin_linux_workers.js
+          node --check app/admin_control_plane_admin_v1.js
           python - <<'PY'
           import re
           from pathlib import Path
