@@ -1141,7 +1141,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         if len(existing_file_ids) + inline_data_count > 4:
             raise HTTPException(status_code=400, detail="At most four image/file inputs are supported per request")
-        existing_specs = attachment_specs(file_store, existing_file_ids, principal) if existing_file_ids else []
+        existing_specs = attachment_specs(existing_file_ids, principal) if existing_file_ids else []
         total_bytes = sum(int(item.get("size") or 0) for item in existing_specs)
         if total_bytes > 20 * 1024 * 1024:
             raise HTTPException(status_code=400, detail="Combined image/file inputs may not exceed 20 MiB")
