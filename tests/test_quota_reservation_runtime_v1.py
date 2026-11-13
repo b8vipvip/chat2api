@@ -54,7 +54,7 @@ def test_runtime_reserves_prompt_plus_conservative_output_floor(tmp_path: Path) 
     assert reservation["state"] == "reserved"
     assert reservation["reserved_tokens"] >= 4097
     assert app.state.quota_reservation_runtime_enabled is True
-    assert app.state.quota_reservation_runtime_coverage == ["/v1/chat/completions"]
+    assert app.state.quota_reservation_runtime_coverage == ["/v1/chat/completions", "/v1/responses"]
     store.close()
 
 
