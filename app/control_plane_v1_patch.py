@@ -25,6 +25,12 @@ class AdminUpdate(BaseModel):
     enabled: bool | None = None
 
 
+class AdminPasswordUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    current_password: str | None = Field(default=None, max_length=256)
+    new_password: str = Field(min_length=12, max_length=256)
+
+
 class ClientPolicyUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     registration_mode: str | None = None
@@ -91,6 +97,69 @@ def install_control_plane_v1(app: FastAPI) -> FastAPI:
             if sessions is not None:
                 revoked = sessions.revoke_username(username)
         audit_event(request, "admin.update_completed", "admin", username, {**changes, "revoked_sessions": revoked})
+        return {"admin": admin, "revoked_sessions": revoked}
+
+    @app.post("/api/admin/control/admins/{username}/password")
+    async def rotate_admin_password(
+        username: str, body: AdminPasswordUpdate, request: Request
+    ) -> dict:
+        actor = str(getattr(request.state, "admin_username", "") or "")
+        if username.casefold() == app.state.settings.admin_username.casefold():
+            raise HTTPException(
+                status_code=409,
+                detail="The root administrator password is environment-managed",
+            )
+        actor_role = store.role_for(actor)
+        if actor.casefold() != username.casefold():
+            if actor_role != "super_admin":
+                raise HTTPException(status_code=403, detail="Only the target administrator or root may rotate this password")
+        elif not body.current_password or not store.verify_admin(username, body.current_password):
+            raise HTTPException(status_code=403, detail="Current administrator password is incorrect")
+
+        audit_event(
+            request, "admin.password_rotation_requested", "admin", username,
+            {"actor": actor, "self_service": actor.casefold() == username.casefold()},
+        )
+        try:
+            admin = store.set_admin_password(username, body.new_password)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Unknown administrator") from exc
+        except ControlPlaneError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        sessions = getattr(app.state, "admin_sessions", None)
+        revoked = sessions.revoke_username(username) if sessions is not None else 0
+        audit_event(
+            request, "admin.password_rotation_completed", "admin", username,
+            {"revoked_sessions": revoked},
+        )
+        return {"admin": admin, "revoked_sessions": revoked}
+
+    @app.post("/api/admin/control/self/password")
+    async def rotate_own_admin_password(body: AdminPasswordUpdate, request: Request) -> dict:
+        actor = str(getattr(request.state, "admin_username", "") or "")
+        if not actor or actor.casefold() == app.state.settings.admin_username.casefold():
+            raise HTTPException(
+                status_code=409,
+                detail="The environment-managed root password must be rotated through deployment configuration",
+            )
+        if not body.current_password or not store.verify_admin(actor, body.current_password):
+            raise HTTPException(status_code=403, detail="Current administrator password is incorrect")
+        audit_event(
+            request, "admin.self_password_rotation_requested", "admin", actor,
+            {"self_service": True},
+        )
+        try:
+            admin = store.set_admin_password(actor, body.new_password)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Unknown administrator") from exc
+        except ControlPlaneError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        sessions = getattr(app.state, "admin_sessions", None)
+        revoked = sessions.revoke_username(actor) if sessions is not None else 0
+        audit_event(
+            request, "admin.self_password_rotation_completed", "admin", actor,
+            {"revoked_sessions": revoked},
+        )
         return {"admin": admin, "revoked_sessions": revoked}
 
     @app.get("/api/admin/control/client")
