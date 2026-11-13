@@ -349,7 +349,7 @@ jobs:
           first="chat2api-p01-first-${GITHUB_RUN_ID}"
           cleanup() {
             docker rm -f "$first" >/dev/null 2>&1 || true
-            rm -rf "$data_dir"
+            sudo rm -rf "$data_dir"
           }
           trap cleanup EXIT
 
