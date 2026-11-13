@@ -432,7 +432,7 @@ async function fetchAttachment(fileId, requestId) {
   const settings = await config();
   if (!settings.clientId || !settings.clientToken) throw new Error("Extension is not paired");
   const request = String(requestId || "");
-  if (!/^(?:req|resp|imgreq)_[a-zA-Z0-9_-]{6,100}$/.test(request)) {
+  if (!/^[A-Za-z0-9_-]{6,120}$/.test(request)) {
     throw new Error("Attachment download requires its original request ID");
   }
   const url = `${String(settings.serverUrl).replace(/\/$/, "")}/api/extensions/files/${encodeURIComponent(fileId)}?request_id=${encodeURIComponent(request)}&client_id=${encodeURIComponent(settings.clientId)}&token=${encodeURIComponent(settings.clientToken)}`;
