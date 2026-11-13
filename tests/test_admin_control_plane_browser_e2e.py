@@ -34,6 +34,8 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
     root_password = "c-track-root-password-2026"
     support_username = "support_agent"
     support_password = "support-agent-password-2026"
+    billing_username = "billing_agent"
+    billing_password = "billing-agent-password-2026"
 
     env = os.environ.copy()
     env["CHAT2API_DATA_DIR"] = str(tmp_path / "isolated-control-plane-data")
@@ -148,6 +150,16 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                 )
                 assert support_password not in page.locator("#cAdminRows").inner_text()
 
+                page.locator("#cAdminName").fill(billing_username)
+                page.locator("#cAdminPassword").fill(billing_password)
+                page.locator("#cAdminRole").select_option("billing_admin")
+                page.locator("#cAdminCreate").click()
+                page.wait_for_function(
+                    "() => document.getElementById('cAdminStatus')?.textContent.includes('管理员已创建')",
+                    timeout=10000,
+                )
+                assert billing_password not in page.locator("#cAdminRows").inner_text()
+
                 page.locator("#adminLogout").click()
                 page.wait_for_function(
                     "() => document.getElementById('adminLoginGate')?.style.display === 'flex'",
@@ -186,6 +198,21 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                 assert page.locator('[data-view="plugins"]').is_hidden()
                 assert page.locator('[data-view="tenants"]').is_hidden()
                 assert page.locator('[data-view="overview"]').is_hidden()
+                # Existing Commerce views must remain available according to
+                # their role rather than being treated as legacy root-only nav.
+                assert page.locator('[data-view="admin-users"]').is_visible()
+                assert page.locator('[data-view="user-pricing"]').is_hidden()
+                assert page.locator('[data-view="user-payments"]').is_hidden()
+                page.locator('[data-view="admin-users"]').click()
+                page.wait_for_function(
+                    "() => document.getElementById('view-admin-users')?.classList.contains('active')",
+                    timeout=5000,
+                )
+                page.wait_for_function(
+                    "() => document.getElementById('adminUserStatus')?.textContent.includes('共')",
+                    timeout=10000,
+                )
+                assert page.locator("#adminAuditPanel").is_hidden()
                 # The legacy gate replaces the master-key controls with
                 # session identity controls; delegated login must also purge
                 # the stale persisted credential.
@@ -212,6 +239,8 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                       })).status;
                       return {
                         modelsRead: await read("/api/admin/model-entitlements"),
+                        usersRead: await read("/api/admin/users"),
+                        billingRead: await read("/api/admin/user-pricing"),
                         keysSecret: await read("/api/admin/keys/missing/secret"),
                         adminsRead: await read("/api/admin/control/admins"),
                         pluginsRead: await read("/api/admin/plugins"),
@@ -223,10 +252,71 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                 )
                 assert statuses == {
                     "modelsRead": 200,
+                    "usersRead": 200,
+                    "billingRead": 403,
                     "keysSecret": 403,
                     "adminsRead": 403,
                     "pluginsRead": 403,
                     "clientPolicyWrite": 403,
+                }
+
+                page.locator("#adminLogout").click()
+                page.wait_for_function(
+                    "() => document.getElementById('adminLoginGate')?.style.display === 'flex'",
+                    timeout=10000,
+                )
+                page.wait_for_function(
+                    "() => document.getElementById('adminSessionState')?.textContent.includes('未登录')",
+                    timeout=10000,
+                )
+                page.locator("#adminUsername").fill(billing_username)
+                page.locator("#adminPassword").fill(billing_password)
+                page.locator("#adminLoginButton").click()
+                page.wait_for_function(
+                    "() => document.getElementById('adminSessionState')?.textContent.includes('billing_admin')",
+                    timeout=10000,
+                )
+                page.wait_for_function(
+                    "() => document.querySelector('[data-view=user-pricing]')?.disabled === false",
+                    timeout=5000,
+                )
+                assert page.locator('[data-view="user-pricing"]').is_visible()
+                assert page.locator('[data-view="user-payments"]').is_visible()
+                assert page.locator('[data-view="admin-users"]').is_hidden()
+                assert page.locator('[data-view="model-entitlements"]').is_hidden()
+                page.locator('[data-view="user-pricing"]').click()
+                page.wait_for_function(
+                    "() => document.getElementById('view-user-pricing')?.classList.contains('active')",
+                    timeout=5000,
+                )
+                page.locator('[data-view="user-payments"]').click()
+                page.wait_for_function(
+                    "() => document.getElementById('view-user-payments')?.classList.contains('active')",
+                    timeout=5000,
+                )
+                assert page.locator("#commercePayKey").is_disabled()
+                billing_statuses = page.evaluate(
+                    """async () => {
+                      const read = async (url) => (await fetch(url, {credentials: "same-origin"})).status;
+                      const write = async (url, body) => (await fetch(url, {
+                        method: "PUT",
+                        credentials: "same-origin",
+                        headers: {"Content-Type": "application/json"},
+                        body: JSON.stringify(body),
+                      })).status;
+                      return {
+                        pricingRead: await read("/api/admin/user-pricing"),
+                        paymentsRead: await read("/api/admin/user-payments"),
+                        paymentSecretsWrite: await write("/api/admin/user-payments", {}),
+                        usersRead: await read("/api/admin/users"),
+                      };
+                    }"""
+                )
+                assert billing_statuses == {
+                    "pricingRead": 200,
+                    "paymentsRead": 200,
+                    "paymentSecretsWrite": 403,
+                    "usersRead": 403,
                 }
             finally:
                 context.close()
