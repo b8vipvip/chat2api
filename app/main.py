@@ -1043,9 +1043,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"deleted": True}
 
     @app.get("/api/extensions/files/{file_id}")
-    async def extension_file(file_id: str, client_id: str = Query(...), token: str = Query(...)) -> Response:
+    async def extension_file(
+        file_id: str, request_id: str = Query(..., min_length=10, max_length=120),
+        client_id: str = Query(...), token: str = Query(...),
+    ) -> Response:
         if not await registry.authenticate(client_id, token):
             raise HTTPException(status_code=401, detail="Invalid extension token")
+        row = telemetry.get(request_id)
+        item = file_store.get(file_id)
+        allowed_ids = row.get("input_file_ids") if isinstance(row, dict) else None
+        if (
+            not isinstance(row, dict)
+            or str(row.get("status") or "") != "running"
+            or str(row.get("client_id") or "") != client_id
+            or not item
+            or str(row.get("api_key_id") or "") != str(item.owner_key_id or "")
+            or not isinstance(allowed_ids, list)
+            or file_id not in {str(value) for value in allowed_ids}
+        ):
+            raise HTTPException(status_code=404, detail="Unknown attachment")
         try:
             item, payload = file_store.read(file_id)
         except KeyError as error:
