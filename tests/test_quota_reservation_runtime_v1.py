@@ -158,6 +158,8 @@ async def test_completed_usage_requires_durable_api_key_ledger_proof_before_sett
 
 @pytest.mark.asyncio
 async def test_startup_recovery_replays_completed_telemetry_after_pre_charge_crash(tmp_path: Path) -> None:
+    from app.telemetry import TelemetryStore
+
     app, store, api_keys = _runtime(tmp_path)
     request_id = "req_replay_completed_terminal_0001"
     reserve_request_quota(app, request_id, SimpleNamespace(key_id="key-1"), "prompt", 4096)
@@ -168,7 +170,11 @@ async def test_startup_recovery_replays_completed_telemetry_after_pre_charge_cra
         "request_id": request_id, "api_key_id": "key-1", "status": "completed",
         "usage": {"total_tokens": 17},
     }
-    telemetry = SimpleNamespace(get=lambda candidate: terminal if candidate == request_id else None)
+    telemetry = TelemetryStore(tmp_path)
+    await telemetry.upsert(terminal)
+    # Simulate a committing request that fell outside TelemetryStore's
+    # in-memory window; recovery must find the persisted JSONL terminal.
+    telemetry.items.clear()
 
     replayed = await store.recover_committing(telemetry, api_keys)
     assert replayed == 1
