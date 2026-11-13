@@ -52,7 +52,7 @@ def install_attachment_download_v82_patch(app: FastAPI) -> FastAPI:
     @app.get(_EXTENSION_FILE_PATH, include_in_schema=False)
     async def extension_file_v82(
         file_id: str,
-        request_id: str = Query(..., min_length=10, max_length=120),
+        request_id: str = Query(..., min_length=6, max_length=120),
         client_id: str = Query(...),
         token: str = Query(...),
     ) -> Response:
