@@ -14,7 +14,9 @@ Status: **Draft / partial**. This is a server-side invitation service stacked on
   - `POST /api/admin/control/invitations/{id}/revoke` revokes an unreserved, unconsumed invitation.
 - Admin mutations require same-origin and are audited before the state change. C-01 route permissions map invitation read/write to `users:read` / `users:write`.
 - Public registration policy now supports `open`, `closed`, and `invite_only`. The existing `/api/user/register` endpoint remains the single registration owner.
-- User Console registration reads the public policy and displays the invite-code field only for invite-only mode. The server remains authoritative if the public config cannot load.
+- User Console registration reads the public policy and displays the invite-code field only for invite-only mode. The server remains authoritative if the public config cannot load; the one-time code is cleared from the DOM after successful authentication and on logout/session expiry.
+- Correct email whitespace validation and deterministic newest-first ordering for records created in the same second.
+- Admin invitation responses and successful registration/session responses carry `Cache-Control: no-store`.
 - Public announcement text is rendered through DOM `textContent`, not HTML injection.
 - Every delegated administrator role has an explicit self-password permission and a current-password-verified rotation endpoint. Passwords are PBKDF2-rehashed and all existing sessions for that administrator are immediately revoked. Root password remains environment-managed; root can reset delegated administrator passwords through the admin API.
 
@@ -30,6 +32,6 @@ Status: **Draft / partial**. This is a server-side invitation service stacked on
 ## Not yet complete
 
 - This PR is stacked on #801 and is not production-wired until the central C composition-root PR installs the invitation service.
-- C-07 admin UI needs invitation issue/list/revoke controls and an `invite_only` registration selector.
+- C-07 invitation issue/list/revoke controls and the `invite_only` selector are implemented on separate Draft PR #820. They are not yet wired to this service because both PRs await the central C composition-root integration.
 - Root administrator password remains environment-managed; delegated admin password rotation and MFA are separate pending controls.
 - Real browser/mobile E2E, production data backup/restore and multi-instance database support remain release gates.
