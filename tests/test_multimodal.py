@@ -306,7 +306,7 @@ def test_chat_image_url_rejects_non_vision_and_invalid_raster_files(tmp_path: Pa
         response = client.post(
             "/v1/chat/completions",
             headers=admin_headers(),
-            json={"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":non_vision["id"]}}]}]},
+            json={"messages":[{"role":"user","content":[{"type":"text","text":"Please inspect this image."},{"type":"image_url","image_url":{"url":non_vision["id"]}}]}]},
         )
         assert response.status_code == 400
         assert "vision image attachment" in _error_message(response)
@@ -315,7 +315,7 @@ def test_chat_image_url_rejects_non_vision_and_invalid_raster_files(tmp_path: Pa
         response = client.post(
             "/v1/chat/completions",
             headers=admin_headers(),
-            json={"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":invalid_raster["id"]}}]}]},
+            json={"messages":[{"role":"user","content":[{"type":"text","text":"Please inspect this image."},{"type":"image_url","image_url":{"url":invalid_raster["id"]}}]}]},
         )
         assert response.status_code == 400
         assert "valid raster image" in _error_message(response)
@@ -327,7 +327,7 @@ def test_chat_inline_data_url_rejects_invalid_raster_bytes(tmp_path: Path) -> No
         response = client.post(
             "/v1/chat/completions",
             headers=admin_headers(),
-            json={"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":invalid}}]}]},
+            json={"messages":[{"role":"user","content":[{"type":"text","text":"Please inspect this image."},{"type":"image_url","image_url":{"url":invalid}}]}]},
         )
     assert response.status_code == 400
     assert "valid raster image" in response.json()["detail"]
