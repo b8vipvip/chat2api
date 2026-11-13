@@ -102,6 +102,37 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                     "() => document.querySelector('[data-view=control-admins]')?.disabled === false",
                     timeout=5000,
                 )
+                # Exercise the real tenant-list DOM sink with hostile API text.
+                # The C-track UI must render it as text, never as executable markup.
+                page.evaluate(
+                    """() => {
+                      window.__c07_xss_fired = false;
+                      window.__c07_original_fetch = window.fetch.bind(window);
+                      window.fetch = async (input, init = {}) => {
+                        const url = typeof input === "string" ? input : input?.url || "";
+                        const method = String(init.method || "GET").toUpperCase();
+                        if (url === "/api/admin/tenants" && method === "GET") {
+                          return new Response(JSON.stringify({data: [{
+                            tenant_id: "ten_xss_123456",
+                            slug: "xss-fixture",
+                            display_name: '<img src=x onerror="window.__c07_xss_fired=true">'
+                          }]}), {status: 200, headers: {"Content-Type": "application/json"}});
+                        }
+                        return window.__c07_original_fetch(input, init);
+                      };
+                    }"""
+                )
+                page.locator('[data-view="tenants"]').click()
+                page.wait_for_function(
+                    "() => document.getElementById('cTenantRows')?.textContent.includes('<img src=x')",
+                    timeout=5000,
+                )
+                assert page.locator("#cTenantRows img").count() == 0
+                assert page.evaluate("window.__c07_xss_fired === false")
+                page.evaluate(
+                    "() => { window.fetch = window.__c07_original_fetch; delete window.__c07_original_fetch; }"
+                )
+
                 page.locator('[data-view="control-admins"]').click()
                 page.wait_for_function(
                     "() => document.querySelectorAll('#cAdminRole option').length > 0",
