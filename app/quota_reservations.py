@@ -287,9 +287,15 @@ class QuotaReservationStore:
         key_id = str(record.get("api_key_id") or "")
         if not request_id or not key_id:
             return "ignored"
-        if record.get("status") != "completed":
+        status = str(record.get("status") or "").lower()
+        if status in {"error", "cancelled", "stalled", "failed", "timeout"}:
             self.release(request_id, key_id)
             return "released"
+        if status != "completed":
+            # TelemetryStore calls the accounting hook for queued/running as
+            # well as terminal snapshots. Nonterminal updates must never
+            # release a live reservation.
+            return "pending"
         usage = record.get("usage") if isinstance(record.get("usage"), dict) else {}
         try:
             actual = max(0, int(usage.get("total_tokens") or 0))

@@ -80,3 +80,25 @@ ApiKeyStore, quota checks including outstanding reservations, concurrent
 oversubscription rejection, failed release, non-expiring commit state, crash
 reconciliation and private persistence. Full CI and production image smoke
 remain required.
+
+## 2026-11-13 runtime integration status
+
+The first runtime slice is installed for `POST /v1/chat/completions` only.
+It reserves prompt-token estimate plus a conservative 4096-token output floor
+before Worker admission. Explicit max_tokens/max_completion_tokens values
+above that floor increase the reservation; they do not lower the floor because
+the compatibility matrix does not treat those fields as a guaranteed upstream
+generation cap.
+
+TelemetryStore invokes its usage-accounting callback on queued/running updates
+as well as terminal updates. The reservation adapter therefore keeps
+queued/running reservations pending, commits only `completed`, and releases
+only terminal error/cancelled/stalled/failed/timeout states. Startup performs
+expiry and committing-state reconciliation against the existing ApiKeyStore
+charged-request ledger.
+
+Runtime coverage is explicitly reported as `/v1/chat/completions`. Responses,
+image generation and other usage-bearing routes are not yet reservation-gated;
+do not treat C-06 as complete. Wallet-cents reservation/refund and multi-process
+ledger transactions also remain outside this slice. The existing ApiKeyStore
+and BillingStore remain the only actual charge authorities.

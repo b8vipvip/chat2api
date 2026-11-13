@@ -77,6 +77,7 @@ from .playground_truth_v170 import (reconcile_playground_runs, reconcile_playgro
 from .playground_stream_contract_v293 import playground_stream_attribution
 from .playground_request_evidence_v207 import request_test_index, playground_link
 from .token_usage import usage_for
+from .quota_reservation_runtime_v1 import reserve_request_quota
 
 logger = logging.getLogger("chat2api")
 APP_VERSION = "0.5.0"
@@ -111,6 +112,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await registry.load()
         await telemetry.load()
         await api_keys.load()
+        quota_store = getattr(app.state, "quota_reservations", None)
+        if quota_store is not None and getattr(app.state, "quota_reservation_runtime_enabled", False):
+            expired_reservations = quota_store.expire_reservations()
+            reconciled_reservations = quota_store.reconcile(api_keys)
+            if expired_reservations or reconciled_reservations:
+                logger.info(
+                    "Quota reservation startup recovery expired=%s reconciled=%s",
+                    expired_reservations, reconciled_reservations,
+                )
         await file_store.load()
         await test_runs.load()
         recovered_runs = await test_runs.recover_interrupted()
@@ -2034,6 +2044,40 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             request_id=request_id, stream=body.stream,
             headers=request.headers, test_runs=test_runs,
         )
+        requested_output_limits = [
+            getattr(body, "max_tokens", None),
+            getattr(body, "max_completion_tokens", None),
+        ]
+        output_budget = max([
+            4096,
+            *(value for value in requested_output_limits if isinstance(value, int) and not isinstance(value, bool) and value > 0),
+        ])
+        try:
+            quota_reservation = reserve_request_quota(
+                app, request_id, principal, prompt, output_budget,
+            )
+        except HTTPException as quota_error:
+            await record_early_error(
+                request_id=request_id, response_id=response_id, requested_model=body.model,
+                prompt=prompt, principal=principal, stream=body.stream, prompt_mode=body.prompt_mode,
+                started_mono=request_started, error=str(quota_error.detail), request_type=request_type,
+                attachments_count=len(attachments),
+            )
+            raise
+        if quota_reservation:
+            try:
+                await telemetry.merge_diagnostics(request_id, {
+                    "quota_reservation_v1": {
+                        "state": "reserved",
+                        "reserved_tokens": int(quota_reservation.get("reserved_tokens") or 0),
+                        "estimate_policy": "prompt_tokens_plus_conservative_4096_output_floor_v1",
+                    },
+                })
+            except Exception as quota_diagnostic_error:
+                logger.warning(
+                    "Quota reservation diagnostic persistence failed request_id=%s error_type=%s",
+                    request_id, type(quota_diagnostic_error).__name__,
+                )
         if origin_evidence:
             try:
                 await telemetry.merge_diagnostics(

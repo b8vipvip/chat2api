@@ -71,6 +71,7 @@ def install_quota_reservation_admin_v1(app: FastAPI) -> FastAPI:
             "data": rows,
             "active_reserved_tokens_in_result": active,
             "runtime_integration_enabled": bool(app.state.quota_reservation_runtime_enabled),
+            "runtime_coverage": list(getattr(app.state, "quota_reservation_runtime_coverage", [])),
             "accounting_owner": "ApiKeyStore.account_completed_usage",
         }
 
