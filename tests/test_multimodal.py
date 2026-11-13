@@ -26,6 +26,13 @@ def _png_bytes() -> bytes:
     Image.new("RGB", (2, 2), (30, 120, 90)).save(output, format="PNG")
     return output.getvalue()
 
+def _error_message(response) -> str:
+    payload = response.json()
+    error = payload.get("error") if isinstance(payload, dict) else None
+    if isinstance(error, dict) and error.get("message"):
+        return str(error["message"])
+    return str(payload.get("detail") or "")
+
 def admin_headers() -> dict[str, str]:
     return {"Authorization": "Bearer master-key"}
 
@@ -302,7 +309,7 @@ def test_chat_image_url_rejects_non_vision_and_invalid_raster_files(tmp_path: Pa
             json={"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":non_vision["id"]}}]}]},
         )
         assert response.status_code == 400
-        assert "vision image attachment" in response.json()["detail"]
+        assert "vision image attachment" in _error_message(response)
 
         invalid_raster = upload(client, "invalid.png", "image/png", b"not a raster image", "vision")
         response = client.post(
@@ -311,7 +318,7 @@ def test_chat_image_url_rejects_non_vision_and_invalid_raster_files(tmp_path: Pa
             json={"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":invalid_raster["id"]}}]}]},
         )
         assert response.status_code == 400
-        assert "valid raster image" in response.json()["detail"]
+        assert "valid raster image" in _error_message(response)
 
 
 def test_chat_inline_data_url_rejects_invalid_raster_bytes(tmp_path: Path) -> None:
