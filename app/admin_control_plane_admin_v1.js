@@ -310,8 +310,8 @@
         }
       });
       $("cAdminPassword").value = "";
-      setStatus("cAdminStatus", "管理员已创建；密码不会再次显示");
       await loadAdmins();
+      setStatus("cAdminStatus", "管理员已创建；密码不会再次显示");
     } catch (error) { setStatus("cAdminStatus", error.message, true); }
   });
   $("cAdminReload")?.addEventListener("click", loadAdmins);
