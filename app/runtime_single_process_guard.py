@@ -72,6 +72,9 @@ class SingleProcessRuntimeGuard:
                 raise RuntimeTopologyError("Runtime lock path cannot be a symbolic link")
 
             flags = os.O_CREAT | os.O_RDWR
+            # os.open defaults to text mode on Windows; O_BINARY keeps the
+            # fixed 32-byte owner marker byte-for-byte stable across platforms.
+            flags |= getattr(os, "O_BINARY", 0)
             flags |= getattr(os, "O_NOFOLLOW", 0)
             try:
                 fd = os.open(self.lock_path, flags, 0o600)
