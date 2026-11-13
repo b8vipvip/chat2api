@@ -639,6 +639,10 @@
       return;
     }
     const conversation = currentConversation() || createConversation();
+    if (conversation.messages.some((message) => message.role === "assistant" && message.pending === true)) {
+      toast("上一条回复仍在恢复；请先完成恢复后再发送。");
+      return;
+    }
     const recoveryApi = window.Chat2APIStreamRecoveryV1;
     if (!recoveryApi || typeof recoveryApi.createRequestId !== "function") {
       toast("请求恢复模块尚未加载，请刷新页面后重试。");
