@@ -4,10 +4,18 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request
+from pydantic import BaseModel, Field
 
+from .user_commerce import WalletReservationError
 from .admin_audit import AdminAuditError, AdminAuditStore
 from .admin_auth import SESSION_COOKIE
 from .quota_reservations import QuotaReservationError, QuotaReservationStore
+
+
+class WalletRefundRequest(BaseModel):
+    refund_id: str = Field(pattern=r"^rf_[A-Za-z0-9_-]{8,100}$")
+    amount_cents: int = Field(gt=0, le=10_000_000)
+    reason: str = Field(min_length=5, max_length=500)
 
 
 def install_quota_reservation_admin_v1(app: FastAPI) -> FastAPI:
@@ -89,6 +97,50 @@ def install_quota_reservation_admin_v1(app: FastAPI) -> FastAPI:
             "settled": count, "replayed_from_telemetry": replayed, "reconciled_from_api_key_ledger": reconciled,
         })
         return {"settled": count}
+
+    @app.post("/api/admin/billing/charges/{request_id}/refund")
+    async def refund_internal_wallet_charge(
+        request_id: str, body: WalletRefundRequest, request: Request,
+    ) -> dict[str, Any]:
+        actor = admin_actor(request, write=True)
+        # Only the server-owned BillingStore ledger may credit a wallet.
+        # Never accept user_id or a new balance from the caller.
+        billing = getattr(app.state, "user_billing", None)
+        if billing is None:
+            raise HTTPException(status_code=503, detail="Billing ledger is unavailable")
+        try:
+            audit.append(
+                actor=actor, action="billing.wallet_refund_requested",
+                target_type="billing_charge", target_id=request_id,
+                request_id=str(request.headers.get("x-request-id") or ""),
+                details={"refund_id": body.refund_id, "amount_cents": body.amount_cents},
+            )
+        except AdminAuditError as exc:
+            raise HTTPException(status_code=503, detail="Administrator audit unavailable; refund denied") from exc
+        try:
+            refund = billing.refund_charge(
+                request_id, body.refund_id, body.amount_cents, body.reason,
+            )
+        except WalletReservationError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except OSError as exc:
+            raise HTTPException(status_code=503, detail="Wallet refund storage is unavailable") from exc
+        try:
+            audit.append(
+                actor=actor, action="billing.wallet_refund_completed",
+                target_type="billing_charge", target_id=request_id,
+                request_id=str(request.headers.get("x-request-id") or ""),
+                details={
+                    "refund_id": body.refund_id,
+                    "user_id": refund["user_id"],
+                    "amount_cents": refund["amount_cents"],
+                },
+            )
+        except AdminAuditError as exc:
+            # The refund is already durable. The caller must retry the exact
+            # same refund_id, never generate a new idempotency key.
+            raise HTTPException(status_code=503, detail="Refund persisted but completion audit is unavailable; retry the same refund_id") from exc
+        return {"ok": True, "refund": refund}
 
     app.state.quota_reservation_admin_v1_installed = True
     return app
