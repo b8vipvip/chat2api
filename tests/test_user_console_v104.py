@@ -270,6 +270,12 @@ def test_wallet_reservation_settles_actual_charge_once_and_persists(tmp_path: Pa
         input_tokens=1000, output_tokens=4096,
         price_snapshot=price, usd_cny_rate=7.0,
     )
+    changed_models = [
+        {**row, "output_usd_per_million": 999.0}
+        if row["model_id"] == "gpt-5.6-sol" else row
+        for row in payload["models"]
+    ]
+    pricing.update(billing_enabled=True, usd_cny_rate=9.0, models=changed_models)
     request = {
         "request_id": "req_wallet_settle",
         "status": "completed",
@@ -540,3 +546,45 @@ def test_wallet_telemetry_settles_success_and_releases_failed_request(tmp_path: 
     assert billing.reserved_cents(user["user_id"]) == 0
     assert billing.balance_cents(user["user_id"]) == 1000 - success_charge["cost_cny_cents"]
     app.state.quota_reservations.close()
+
+
+
+def test_wallet_actual_overrun_posts_debt_and_blocks_new_reservations(tmp_path: Path) -> None:
+    pricing = PricingStore(tmp_path)
+    payload = pricing.public()
+    pricing.update(billing_enabled=True, usd_cny_rate=7.0, models=payload["models"])
+    price = pricing.model("gpt-5.6-sol")
+    billing = BillingStore(tmp_path)
+    billing.credit("usr_wallet", 100)
+    billing.reserve_for_request(
+        "usr_wallet", "req_wallet_overrun",
+        model_id="gpt-5.6-sol", estimated_cny_cents=50,
+        input_tokens=100, output_tokens=4096,
+        price_snapshot=price, usd_cny_rate=7.0,
+    )
+    charge = billing.record_charge(
+        "usr_wallet",
+        {
+            "request_id": "req_wallet_overrun",
+            "status": "completed",
+            "requested_model": "gpt-5.6-sol",
+            "usage": {
+                "prompt_tokens": 1_000_000,
+                "completion_tokens": 1_000_000,
+                "total_tokens": 2_000_000,
+                "estimated": True,
+            },
+            "diagnostics": {},
+        },
+        pricing,
+    )
+    assert charge is not None and charge["cost_cny_cents"] > 100
+    assert billing.balance_cents("usr_wallet") < 0
+    assert billing.available_balance_cents("usr_wallet") < 0
+    with pytest.raises(InsufficientWalletBalance):
+        billing.reserve_for_request(
+            "usr_wallet", "req_wallet_after_debt",
+            model_id="gpt-5.6-sol", estimated_cny_cents=1,
+            input_tokens=1, output_tokens=1,
+            price_snapshot=price, usd_cny_rate=7.0,
+        )
