@@ -125,11 +125,23 @@ def install_voice_test_runtime(app):
     app.state.settings.request_timeout_seconds = 30
     app.state.broker = StopBeforeWorkerDispatchBroker()
     app.state.telemetry = SimpleNamespace()
-    app.state.file_store = SimpleNamespace()
+    app.state.file_store = SimpleNamespace(get=lambda _file_id: SimpleNamespace(
+        file_id="file_audio", filename="audio.wav", mime_type="audio/wav",
+        size=10, owner_key_id="key_1",
+    ))
 
 
 @pytest.mark.parametrize("model_id", ["gpt-live", "gpt-live-mini"])
-def test_voice_speech_entitlement_uses_the_requested_model(tmp_path: Path, model_id: str):
+@pytest.mark.parametrize(
+    ("path", "payload"),
+    [
+        ("/v1/audio/speech", {"input": "hello"}),
+        ("/v1/audio/conversations", {"audio_file_id": "file_audio", "instruction": "hello"}),
+    ],
+)
+def test_voice_endpoints_entitlement_uses_the_requested_model(
+    tmp_path: Path, model_id: str, path: str, payload: dict,
+):
     app, _ = build_app(tmp_path)
     install_voice_test_runtime(app)
     install_voice_patch(app)
@@ -137,9 +149,9 @@ def test_voice_speech_entitlement_uses_the_requested_model(tmp_path: Path, model
 
     with TestClient(app) as client:
         response = client.post(
-            "/v1/audio/speech",
+            path,
             headers={"Authorization": "Bearer voice-token"},
-            json={"model": model_id, "input": "hello"},
+            json={"model": model_id, **payload},
         )
 
     # 409 is the deliberate broker fixture stop; 403 would mean the model
