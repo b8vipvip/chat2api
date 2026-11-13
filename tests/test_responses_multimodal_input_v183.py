@@ -67,7 +67,7 @@ def test_file_id_and_file_data_use_same_owner_boundary(tmp_path: Path):
     files, archive = _stores(tmp_path)
     existing = asyncio.run(files.create(
         filename="photo.png", data_base64=base64.b64encode(_png()).decode(),
-        mime_type="image/png", owner_key_id="key-a",
+        mime_type="image/png", owner_key_id="key-a", purpose="vision",
     ))
     data = base64.b64encode(b"%PDF-1.4\nhello").decode()
     body = {"input": [{"role": "user", "content": [
