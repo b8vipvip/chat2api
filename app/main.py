@@ -2416,16 +2416,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             isinstance(item, dict) and item.get("file_id") == file_id for item in media
         ):
             raise HTTPException(status_code=404, detail="No archived image for this request")
-        try:
-            item, payload = file_store.read(file_id)
-        except (KeyError, FileNotFoundError) as error:
-            raise HTTPException(status_code=404, detail="Archived image is no longer available") from error
-        if str(item.owner_key_id) != str(row.get("api_key_id") or ""):
+        item = file_store.get(file_id)
+        if not item or str(item.owner_key_id) != str(row.get("api_key_id") or ""):
             raise HTTPException(status_code=404, detail="Archived image is no longer available")
         if item.purpose != "generated-output" or item.mime_type not in {
             "image/png", "image/jpeg", "image/webp", "image/gif"
         }:
             raise HTTPException(status_code=404, detail="Invalid request media")
+        try:
+            item, payload = file_store.read(file_id)
+        except (KeyError, FileNotFoundError) as error:
+            raise HTTPException(status_code=404, detail="Archived image is no longer available") from error
         return Response(
             content=payload, media_type=item.mime_type,
             headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
