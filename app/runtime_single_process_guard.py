@@ -109,10 +109,18 @@ class SingleProcessRuntimeGuard:
                             ) from exc
                         raise
 
-                payload = f"pid={os.getpid()}\n"
-                os.ftruncate(fd, 0)
+                # Keep the locked byte range present on Windows. Truncating
+                # the file after msvcrt.locking can make byte-range lock
+                # semantics filesystem-dependent; the marker is diagnostic
+                # only, so overwrite a fixed-size record without truncation.
+                payload = f"pid={os.getpid()}\\n".encode("ascii").ljust(32, b" ")
                 os.lseek(fd, 0, os.SEEK_SET)
-                os.write(fd, payload.encode("ascii"))
+                view = memoryview(payload)
+                while view:
+                    written = os.write(fd, view)
+                    if written <= 0:
+                        raise OSError("Unable to write runtime lock owner marker")
+                    view = view[written:]
                 os.fsync(fd)
                 self._fd = fd
                 self._owner_pid = os.getpid()
