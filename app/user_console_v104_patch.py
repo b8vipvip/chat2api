@@ -463,11 +463,21 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
         file_store = app.state.file_store
         item = file_store.get(file_id)
         allowed_image_types = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+        allowed_document_types = {
+            "application/pdf", "text/plain", "text/markdown", "text/csv", "application/json", "application/rtf",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        }
+        allowed_attachment = bool(item) and (
+            (item.purpose == "vision" and item.mime_type in allowed_image_types)
+            or (item.purpose == "assistants" and item.mime_type in allowed_document_types)
+        )
         if (
-            not item or item.purpose != "vision" or item.mime_type not in allowed_image_types
+            not allowed_attachment
             or not accounts.owns_key(str(user["user_id"]), str(item.owner_key_id or ""))
         ):
-            raise HTTPException(status_code=404, detail="图片附件不存在")
+            raise HTTPException(status_code=404, detail="附件不存在")
         try:
             stored, payload = file_store.read(file_id)
         except (KeyError, FileNotFoundError) as error:
