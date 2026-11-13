@@ -153,6 +153,54 @@ def test_user_image_preview_rejects_invalid_raster_bytes(tmp_path: Path) -> None
         assert preview.status_code == 415
         assert preview.headers["cache-control"] == "private, no-store"
 
+def test_legacy_file_index_backfills_sha256_on_first_read(tmp_path: Path) -> None:
+    import asyncio
+    import hashlib
+    import json
+
+    settings = Settings(
+        CHAT2API_API_KEY="web-chat-image-master-key",
+        CHAT2API_DATA_DIR=str(tmp_path),
+    )
+    app = create_app(settings)
+    install_user_console_v104_patch(app)
+    payload = _png_bytes()
+
+    with TestClient(app) as client:
+        token = _register_and_create_key(client, "legacy-image-index@example.com")
+        uploaded = client.post(
+            "/v1/files",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "filename": "legacy.png",
+                "mime_type": "image/png",
+                "data_base64": base64.b64encode(payload).decode("ascii"),
+                "purpose": "vision",
+            },
+        )
+        assert uploaded.status_code == 200, uploaded.text
+        file_id = uploaded.json()["id"]
+
+        index_path = app.state.file_store.index_path
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+        for row in index["files"]:
+            if row["file_id"] == file_id:
+                row.pop("sha256", None)
+        index_path.write_text(json.dumps(index), encoding="utf-8")
+        asyncio.run(app.state.file_store.load())
+        legacy_item = app.state.file_store.get(file_id)
+        assert legacy_item is not None and legacy_item.sha256 == ""
+
+        preview = client.get(f"/api/user/files/{file_id}/content")
+        assert preview.status_code == 200
+        digest = hashlib.sha256(payload).hexdigest()
+        assert preview.headers["x-chat2api-content-sha256"] == digest
+        assert legacy_item.sha256 == digest
+        persisted = json.loads(index_path.read_text(encoding="utf-8"))
+        stored_row = next(row for row in persisted["files"] if row["file_id"] == file_id)
+        assert stored_row["sha256"] == digest
+
+
 def test_user_image_preview_rejects_same_length_at_rest_corruption(tmp_path: Path) -> None:
     settings = Settings(
         CHAT2API_API_KEY="web-chat-image-master-key",
