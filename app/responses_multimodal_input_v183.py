@@ -80,6 +80,8 @@ def validate_image_file(file_store: FileStore, file_id: str, principal: ApiPrinc
         raise ValueError("input_image file content is unavailable") from error
     if stored.size != len(payload):
         raise ValueError("input_image stored byte count does not match its metadata")
+    if len(payload) > 10 * 1024 * 1024:
+        raise ValueError("input_image exceeds the 10 MiB per-image limit")
     _verify_raster(payload, stored.mime_type)
     return stored, payload
 
