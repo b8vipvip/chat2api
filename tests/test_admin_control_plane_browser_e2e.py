@@ -98,6 +98,10 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                     "() => document.getElementById('adminSessionState')?.textContent.includes('super_admin')",
                     timeout=10000,
                 )
+                page.wait_for_function(
+                    "() => document.querySelector('[data-view=control-admins]')?.disabled === false",
+                    timeout=5000,
+                )
                 page.locator('[data-view="control-admins"]').click()
                 page.wait_for_function(
                     "() => document.querySelectorAll('#cAdminRole option').length > 0",
