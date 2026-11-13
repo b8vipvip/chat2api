@@ -31,6 +31,10 @@
   const canWriteUsers = () => ["super_admin", "user_admin"].includes(currentAdminRole);
   const canReadAudit = () => currentAdminRole === "super_admin";
   function applyAdminRole() {
+    // Expose the resolved, non-secret role for diagnostics and deterministic
+    // UI readiness checks; server middleware remains the authorization gate.
+    document.documentElement.dataset.adminCommerceRole = currentAdminRole || "";
+    document.documentElement.dataset.adminCommerceSessionReady = adminRoleResolved ? "true" : "false";
     pricingButton.hidden = !["super_admin", "billing_admin"].includes(currentAdminRole);
     paymentButton.hidden = !["super_admin", "billing_admin"].includes(currentAdminRole);
     usersButton.hidden = !["super_admin", "user_admin", "system_admin", "support"].includes(currentAdminRole);
