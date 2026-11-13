@@ -2318,7 +2318,10 @@
         send_prompt_match_source: ready.promptMatchSource,
         send_attempts: attempts,
         submit_wait_ms: Math.round((performance.now() - readyStarted) * 10) / 10,
-        request_v6_dispatch_submit_click_elapsed_ms: dispatchElapsedMs(active),
+        request_v6_dispatch_submit_click_elapsed_ms:
+          Number.isFinite(Number(active.dispatchTimingStartedAt))
+            ? Math.max(0, Math.round((performance.now() - Number(active.dispatchTimingStartedAt)) * 10) / 10)
+            : null,
         hydration_safe_baseline: true,
         historical_assistant_count: active.baselineCount,
       });
@@ -3714,7 +3717,9 @@
           ? () => interruption.resolveBlockingInterruption({force:true,phase:"before-request"})
           : null,
       );
-      await runDispatchStage(active, "write_prompt", () => writePrompt(active, prompt));
+      await runDispatchStage(active, "write_prompt", async () => {
+        await writePrompt(active, prompt);
+      });
       await runDispatchStage(active, "submit_and_confirm", () => submitAndConfirm(active));
       await monitor(active);
     } catch (error) {
