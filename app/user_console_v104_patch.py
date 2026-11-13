@@ -479,6 +479,7 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
                 "Cache-Control": "private, no-store",
                 "Vary": "Cookie",
                 "Content-Disposition": "inline",
+                "Content-Security-Policy": "default-src 'none'; sandbox",
                 "X-Content-Type-Options": "nosniff",
                 "Cross-Origin-Resource-Policy": "same-origin",
                 "Referrer-Policy": "no-referrer",
