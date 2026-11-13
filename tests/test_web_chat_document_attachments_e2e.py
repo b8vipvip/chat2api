@@ -90,17 +90,17 @@ def test_web_chat_document_attachment_upload_send_and_download_in_chromium(tmp_p
                     {
                         "name": "quarterly-summary.txt",
                         "mimeType": "text/plain",
-                        "buffer": b"Browser E2E document payload\\nRevenue increased by 12 percent.\\n",
+                        "buffer": b"Browser E2E document payload\nRevenue increased by 12 percent.\n",
                     },
                     {
                         "name": "metrics.csv",
                         "mimeType": "text/csv",
-                        "buffer": b"quarter,revenue\\nQ1,120\\nQ2,135\\n",
+                        "buffer": b"quarter,revenue\nQ1,120\nQ2,135\n",
                     },
                     {
                         "name": "reference.pdf",
                         "mimeType": "application/pdf",
-                        "buffer": b"%PDF-1.4\\n% browser E2E fixture\\n%%EOF\\n",
+                        "buffer": b"%PDF-1.4\n% browser E2E fixture\n%%EOF\n",
                     },
                 ]
                 page.locator("#fileInput").set_input_files(documents)
