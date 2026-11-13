@@ -66,7 +66,7 @@ def test_file_id_and_file_data_use_same_owner_boundary(tmp_path: Path):
     files, archive = _stores(tmp_path)
     existing = asyncio.run(files.create(
         filename="photo.png", data_base64=base64.b64encode(_png()).decode(),
-        mime_type="image/png", owner_key_id="key-a",
+        mime_type="image/png", owner_key_id="key-a", purpose="vision",
     ))
     data = base64.b64encode(b"%PDF-1.4\nhello").decode()
     body = {"input": [{"role": "user", "content": [
@@ -123,7 +123,7 @@ def test_responses_dispatch_transfers_canonical_attachments_to_one_worker(tmp_pa
     files, archive = _stores(tmp_path)
     stored = asyncio.run(files.create(filename="image.png",
         data_base64=base64.b64encode(_png()).decode(), mime_type="image/png",
-        owner_key_id="key-a"))
+        owner_key_id="key-a", purpose="vision"))
     specs = attachment_specs(files, [stored.file_id], _key())
     events = []
     registry = SimpleNamespace(
@@ -173,3 +173,19 @@ def test_image_generation_tool_passes_image_reference_into_same_existing_executo
     references = records[0]["body"].attachments
     assert len(references) == 1
     assert files.read(references[0].file_id)[1] == _png()
+
+
+def test_image_file_id_requires_vision_purpose_and_valid_raster_bytes(tmp_path: Path):
+    files, archive = _stores(tmp_path)
+    invalid = asyncio.run(files.create(
+        filename="invalid.png", data_base64=base64.b64encode(b"not a raster").decode(),
+        mime_type="image/png", owner_key_id="key-a", purpose="vision",
+    ))
+    non_vision = asyncio.run(files.create(
+        filename="not-vision.png", data_base64=base64.b64encode(_png()).decode(),
+        mime_type="image/png", owner_key_id="key-a", purpose="chat2api",
+    ))
+    for file_id in (invalid.file_id, non_vision.file_id):
+        body = {"input":[{"role":"user","content":[{"type":"input_image","file_id":file_id}]}]}
+        with pytest.raises(ValueError):
+            asyncio.run(resolve_responses_attachments(body, _request(), files, archive, _key()))
