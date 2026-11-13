@@ -29,6 +29,8 @@ ROUTE_MATRIX = (
     ("/api/admin/users", "GET", "users:read"),
     ("/api/admin/users/usr_123456", "PATCH", "users:write"),
     ("/api/admin/users/usr_123456/sessions/revoke", "POST", "users:write"),
+    ("/api/admin/users/usr_123456/keys", "GET", "keys:read"),
+    ("/api/admin/users/usr_123456/keys/key_123456", "PATCH", "keys:write"),
     ("/api/admin/keys", "GET", "keys:read"),
     ("/api/admin/keys/key_123456", "PATCH", "keys:write"),
     ("/api/admin/keys/key_123456/settings", "PATCH", "keys:write"),
