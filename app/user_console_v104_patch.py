@@ -597,8 +597,11 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
         user_id = str(user["user_id"])
         sync_user_charges(user_id)
         charge_rows = billing.charges_for_user(user_id)
+        refund_rows = billing.refunds_for_user(user_id)
         order_rows = billing.orders_for_user(user_id)
         payload = pricing.public()
+        debited_cents = sum(int(row.get("cost_cny_cents") or 0) for row in charge_rows if row.get("debited"))
+        refunded_cents = sum(int(row.get("amount_cents") or 0) for row in refund_rows)
         return {
             "balance_cents": billing.balance_cents(user_id),
             "reserved_cents": billing.reserved_cents(user_id),
@@ -606,8 +609,11 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
             "billing_enabled": bool(payload.get("billing_enabled")),
             "usd_cny_rate": float(payload.get("usd_cny_rate") or 0),
             "estimated_spend_cents": sum(int(row.get("cost_cny_cents") or 0) for row in charge_rows),
-            "debited_spend_cents": sum(int(row.get("cost_cny_cents") or 0) for row in charge_rows if row.get("debited")),
+            "debited_spend_cents": debited_cents,
+            "refunded_cents": refunded_cents,
+            "net_debited_spend_cents": max(0, debited_cents - refunded_cents),
             "charges": charge_rows[:100],
+            "refunds": refund_rows[:100],
             "orders": order_rows[:50],
             "payment": {
                 "enabled": bool(payments.public().get("enabled") and payments.public().get("configured")),
