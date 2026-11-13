@@ -61,8 +61,9 @@ assert app.state.quota_reservation_runtime_coverage == [
     "/v1/images/generations",
     "/v1/responses#image_generation (delegated to Images executor)",
     "/v1/audio/speech",
+    "/v1/audio/conversations",
 ]
-for path in ("/v1/images/generations", "/v1/audio/speech"):
+for path in ("/v1/images/generations", "/v1/audio/speech", "/v1/audio/conversations"):
     assert len([
         route for route in app.routes
         if getattr(route, "path", None) == path
