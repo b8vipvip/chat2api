@@ -519,6 +519,65 @@ def test_wallet_reservation_rejects_user_request_before_worker_dispatch(tmp_path
 
 
 
+
+def test_wallet_storage_outage_rejects_dispatch_and_releases_token_hold(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+    from fastapi.testclient import TestClient
+
+    from app.config import Settings
+    from app.main import create_app
+    from app.quota_reservations import QuotaReservationStore
+    from app.quota_reservation_runtime_v1 import install_quota_reservation_runtime_v1
+    from app.user_console_v104_patch import install_user_console_v104_patch
+
+    app = create_app(Settings(
+        CHAT2API_API_KEY="wallet-disk-master-key",
+        CHAT2API_DATA_DIR=str(tmp_path),
+    ))
+    install_user_console_v104_patch(app)
+    user = app.state.user_accounts.register("wallet-io@example.com", "long-enough-password")
+    public, token = asyncio.run(app.state.api_keys.create("wallet-io"))
+    app.state.user_accounts.attach_key(user["user_id"], public["key_id"])
+    pricing = app.state.user_pricing
+    config = pricing.public()
+    pricing.update(billing_enabled=True, usd_cny_rate=7.0, models=config["models"])
+    app.state.user_billing.credit(user["user_id"], 1000)
+    app.state.quota_reservations = QuotaReservationStore(tmp_path)
+    install_quota_reservation_runtime_v1(app)
+    app.state.registry.resolve_client = lambda requested: "ext_wallet_io_test"
+    sent: list[dict] = []
+
+    async def fake_worker_send(client_id: str, payload: dict) -> None:
+        sent.append(payload)
+
+    app.state.registry.send = fake_worker_send
+
+    def fail_save() -> None:
+        raise OSError("simulated billing file unavailable")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(app.state.user_billing, "_save", fail_save)
+        with TestClient(app) as client:
+            response = client.post(
+                "/v1/chat/completions",
+                headers={"Authorization": f"Bearer {token}"},
+                json={
+                    "model": "gpt-5.6-sol",
+                    "messages": [{"role": "user", "content": "Wallet disk failure"}],
+                    "max_tokens": 64,
+                },
+            )
+
+    assert response.status_code == 503, response.text
+    assert sent == []
+    assert app.state.user_billing.available_balance_cents(user["user_id"]) == 1000
+    assert app.state.user_billing.reserved_cents(user["user_id"]) == 0
+    rows = app.state.quota_reservations.list_reservations(key_id=public["key_id"])
+    assert rows and all(row["state"] == "released" for row in rows)
+    app.state.quota_reservations.close()
+
 def test_wallet_admission_is_reserved_before_chat_worker_and_settled_after_success(tmp_path: Path) -> None:
     import asyncio
 
