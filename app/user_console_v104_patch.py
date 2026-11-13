@@ -477,7 +477,10 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
         try:
             verify_raster_image(payload, stored.mime_type)
         except ValueError as error:
-            raise HTTPException(status_code=415, detail="图片附件内容无效") from error
+            raise HTTPException(
+                status_code=415, detail="图片附件内容无效",
+                headers={"Cache-Control": "private, no-store", "Vary": "Cookie"},
+            ) from error
         return Response(
             payload,
             media_type=stored.mime_type,
