@@ -310,6 +310,51 @@ def test_wallet_reservation_storage_failures_preserve_available_balance(
     assert billing.available_balance_cents("usr_durable") == 700
     assert BillingStore(tmp_path).reservations["req_release_failure"]["state"] == "reserved"
 
+
+def test_wallet_failed_terminal_ledger_write_never_retains_phantom_debit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pricing = PricingStore(tmp_path)
+    config = pricing.public()
+    pricing.update(billing_enabled=True, usd_cny_rate=7.0, models=config["models"])
+    billing = BillingStore(tmp_path)
+    billing.credit("usr_durable", 1000)
+    billing.reserve_for_request(
+        "usr_durable", "req_durable_charge",
+        model_id="gpt-5.6-sol", estimated_cny_cents=100,
+        input_tokens=100, output_tokens=4096,
+        price_snapshot=pricing.model("gpt-5.6-sol"), usd_cny_rate=7.0,
+    )
+    request = {
+        "request_id": "req_durable_charge",
+        "status": "completed",
+        "requested_model": "gpt-5.6-sol",
+        "usage": {
+            "prompt_tokens": 1000, "completion_tokens": 500,
+            "total_tokens": 1500, "estimated": True,
+        },
+    }
+
+    def fail_save() -> None:
+        raise OSError("simulated write interruption")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(billing, "_save", fail_save)
+        with pytest.raises(OSError, match="write interruption"):
+            billing.record_charge("usr_durable", request, pricing)
+    assert billing.balance_cents("usr_durable") == 1000
+    assert billing.reservations["req_durable_charge"]["state"] == "reserved"
+    assert billing.charge_for_request("req_durable_charge") is None
+    reopened = BillingStore(tmp_path)
+    assert reopened.balance_cents("usr_durable") == 1000
+    assert reopened.reservations["req_durable_charge"]["state"] == "reserved"
+    assert reopened.charge_for_request("req_durable_charge") is None
+
+    charge = billing.record_charge("usr_durable", request, pricing)
+    assert charge is not None and charge["cost_cny_cents"] == 10
+    assert billing.balance_cents("usr_durable") == 990
+    assert billing.reservations["req_durable_charge"]["state"] == "settled"
+
 def test_wallet_reservation_settles_actual_charge_once_and_persists(tmp_path: Path) -> None:
     pricing = PricingStore(tmp_path)
     payload = pricing.public()
