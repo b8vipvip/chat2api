@@ -593,6 +593,8 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
         payload = pricing.public()
         return {
             "balance_cents": billing.balance_cents(user_id),
+            "reserved_cents": billing.reserved_cents(user_id),
+            "available_balance_cents": billing.available_balance_cents(user_id),
             "billing_enabled": bool(payload.get("billing_enabled")),
             "usd_cny_rate": float(payload.get("usd_cny_rate") or 0),
             "estimated_spend_cents": sum(int(row.get("cost_cny_cents") or 0) for row in charge_rows),
@@ -643,6 +645,8 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
             "estimated_tokens": total_tokens,
             "estimated_spend_cents": sum(int(row.get("cost_cny_cents") or 0) for row in charges),
             "balance_cents": billing.balance_cents(user_id),
+            "reserved_cents": billing.reserved_cents(user_id),
+            "available_balance_cents": billing.available_balance_cents(user_id),
             "avg_latency_ms": round(sum(latencies) / len(latencies), 1) if latencies else None,
             "by_model": [{"model": key, "requests": value} for key, value in by_model.most_common()],
             "by_status": [{"status": key, "requests": value} for key, value in by_status.items()],
@@ -788,7 +792,10 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
         # until a reviewed billing-scoped user projection exists.
         if role == "super_admin":
             for row in page:
-                row["balance_cents"] = billing.balance_cents(str(row["user_id"]))
+                user_id = str(row["user_id"])
+                row["balance_cents"] = billing.balance_cents(user_id)
+                row["reserved_cents"] = billing.reserved_cents(user_id)
+                row["available_balance_cents"] = billing.available_balance_cents(user_id)
         return {"data": page, "total": total, "limit": limit, "offset": offset}
 
     @app.patch("/api/admin/users/{user_id}")
@@ -1092,7 +1099,7 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
                             }
                         },
                     )
-                if owner and bool(pricing.public().get("billing_enabled")) and billing.balance_cents(owner) <= 0:
+                if owner and bool(pricing.public().get("billing_enabled")) and billing.available_balance_cents(owner) <= 0:
                     return JSONResponse(
                         status_code=402,
                         content={
