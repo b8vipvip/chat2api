@@ -188,45 +188,46 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=409, detail=str(error)) from error
 
         quota_reservation = None
-        try:
-            quota_reservation = reserve_audio_request_quota(
-                app, request_id, principal, prompt,
-            )
-        except HTTPException as quota_error:
-            state.completed_mono = time.perf_counter()
-            state.diagnostics["quota_reservation_v1"] = {
-                "state": "rejected",
-                "http_status": quota_error.status_code,
-                "estimate_policy": "prompt_tokens_plus_4096_audio_admission_floor_v1",
-            }
+        if request_type == "voice_generation":
             try:
-                await record_voice(
-                    request_id=request_id, response_id=response_id, client_id=selected_client,
-                    principal=principal, model=model, request_type=request_type, prompt=prompt,
-                    transcript="", state=state, status_value="error",
-                    error=str(quota_error.detail),
+                quota_reservation = reserve_audio_request_quota(
+                    app, request_id, principal, prompt,
                 )
-            except Exception as telemetry_error:
-                logger.warning(
-                    "Voice quota rejection could not be persisted request_id=%s error_type=%s",
-                    request_id, type(telemetry_error).__name__,
-                )
-            try:
-                await broker.release(request_id)
-            except Exception as release_error:
-                logger.warning(
-                    "Voice quota rejection broker release failed request_id=%s error_type=%s",
-                    request_id, type(release_error).__name__,
-                )
-            raise
+            except HTTPException as quota_error:
+                state.completed_mono = time.perf_counter()
+                state.diagnostics["quota_reservation_v1"] = {
+                    "state": "rejected",
+                    "http_status": quota_error.status_code,
+                    "estimate_policy": "prompt_tokens_plus_4096_audio_admission_floor_v1",
+                }
+                try:
+                    await record_voice(
+                        request_id=request_id, response_id=response_id, client_id=selected_client,
+                        principal=principal, model=model, request_type=request_type, prompt=prompt,
+                        transcript="", state=state, status_value="error",
+                        error=str(quota_error.detail),
+                    )
+                except Exception as telemetry_error:
+                    logger.warning(
+                        "Voice quota rejection could not be persisted request_id=%s error_type=%s",
+                        request_id, type(telemetry_error).__name__,
+                    )
+                try:
+                    await broker.release(request_id)
+                except Exception as release_error:
+                    logger.warning(
+                        "Voice quota rejection broker release failed request_id=%s error_type=%s",
+                        request_id, type(release_error).__name__,
+                    )
+                raise
 
-        if quota_reservation:
-            state.diagnostics["quota_reservation_v1"] = {
-                "state": "reserved",
-                "reserved_tokens": int(quota_reservation.get("reserved_tokens") or 0),
-                "estimate_policy": "prompt_tokens_plus_4096_audio_admission_floor_v1",
-                "provider_usage_verified": False,
-            }
+            if quota_reservation:
+                state.diagnostics["quota_reservation_v1"] = {
+                    "state": "reserved",
+                    "reserved_tokens": int(quota_reservation.get("reserved_tokens") or 0),
+                    "estimate_policy": "prompt_tokens_plus_4096_audio_admission_floor_v1",
+                    "provider_usage_verified": False,
+                }
         registry.busy_clients.add(selected_client)
         if prompt_policy:
             state.diagnostics.update(prompt_policy)
