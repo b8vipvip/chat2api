@@ -110,13 +110,13 @@
     for (const part of content) {
       if (part?.type === "text" && typeof part.text === "string") {
         parts.push({type:"text",text:part.text.slice(0,MAX_MESSAGE_CHARS)});
-      } else if (part?.type === "image_url" && imageCount < MAX_IMAGES_PER_MESSAGE) {
+      } else if (part?.type === "image_url" && imageCount + fileCount < MAX_FILES_PER_MESSAGE) {
         const fileId = imageFileId(part);
         if (fileId) {
           parts.push({type:"image_url",image_url:{url:fileId}});
           imageCount += 1;
         }
-      } else if (part?.type === "file" && fileCount < MAX_FILES_PER_MESSAGE) {
+      } else if (part?.type === "file" && imageCount + fileCount < MAX_FILES_PER_MESSAGE) {
         const normalized = normalizedDocumentPart(part);
         if (normalized) { parts.push(normalized); fileCount += 1; }
       }
