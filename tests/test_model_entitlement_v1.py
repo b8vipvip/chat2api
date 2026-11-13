@@ -35,8 +35,9 @@ class FakeRegistry:
         return list(self.catalog)
 
     def resolve_client(self, requested):
-        self.resolve_calls.append(requested)
-        return requested or "worker_1"
+        selected = requested or "worker_1"
+        self.resolve_calls.append(selected)
+        return selected
 
     def set_routing_key(self, key_id):
         self.routing_key_context.set(key_id)
