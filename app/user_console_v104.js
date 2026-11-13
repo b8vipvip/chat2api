@@ -25,11 +25,18 @@
   }
 
   function showAuth(message = "") {
+    // Invitation codes are one-time credentials; never retain them across
+    // logout, session expiry or a return to the unauthenticated view.
+    const inviteInput = $("registerInviteCode");
+    if (inviteInput) inviteInput.value = "";
     $("authShell").classList.remove("hidden");
     $("appShell").classList.add("hidden");
     $("authError").textContent = message;
   }
   function showApp(user) {
+    // Successful registration/login must clear the one-time code from the DOM.
+    const inviteInput = $("registerInviteCode");
+    if (inviteInput) inviteInput.value = "";
     state.user = user;
     $("authShell").classList.add("hidden");
     $("appShell").classList.remove("hidden");
