@@ -506,7 +506,13 @@ class BillingStore:
                 "updated_at": now,
             }
             self.reservations[request_id] = row
-            self._save()
+            try:
+                self._save()
+            except OSError:
+                # Admission must not expose a non-durable hold as successful
+                # and must not strand the in-memory available balance.
+                self.reservations.pop(request_id, None)
+                raise
             return dict(row)
 
     def release_reservation(self, request_id: str, user_id: str, reason: str = "request_not_completed") -> bool:
@@ -518,12 +524,17 @@ class BillingStore:
                 raise WalletReservationError("Request wallet reservation belongs to another user")
             if row.get("state") != "reserved":
                 return False
+            previous = dict(row)
             row.update({
                 "state": "released",
                 "release_reason": str(reason or "request_not_completed")[:120],
                 "updated_at": _now(),
             })
-            self._save()
+            try:
+                self._save()
+            except OSError:
+                self.reservations[str(request_id)] = previous
+                raise
             return True
 
     def credit(self, user_id: str, amount_cents: int) -> int:
