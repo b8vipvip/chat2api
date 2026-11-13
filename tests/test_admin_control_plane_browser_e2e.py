@@ -36,6 +36,8 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
     support_password = "support-agent-password-2026"
     billing_username = "billing_agent"
     billing_password = "billing-agent-password-2026"
+    user_username = "user_operator"
+    user_password = "user-operator-password-2026"
 
     env = os.environ.copy()
     env["CHAT2API_DATA_DIR"] = str(tmp_path / "isolated-control-plane-data")
@@ -162,6 +164,16 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                 )
                 assert billing_password not in page.locator("#cAdminRows").inner_text()
 
+                page.locator("#cAdminName").fill(user_username)
+                page.locator("#cAdminPassword").fill(user_password)
+                page.locator("#cAdminRole").select_option("user_admin")
+                page.locator("#cAdminCreate").click()
+                page.wait_for_function(
+                    "() => document.getElementById('cAdminStatus')?.textContent.includes('管理员已创建')",
+                    timeout=10000,
+                )
+                assert user_password not in page.locator("#cAdminRows").inner_text()
+
                 page.locator("#adminLogout").click()
                 page.wait_for_function(
                     "() => document.getElementById('adminLoginGate')?.style.display === 'flex'",
@@ -209,16 +221,42 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                 assert page.locator('[data-view="admin-users"]').is_visible()
                 assert page.locator('[data-view="user-pricing"]').is_hidden()
                 assert page.locator('[data-view="user-payments"]').is_hidden()
+                page.evaluate(
+                    """() => {
+                      window.__c07_users_fetch = window.fetch.bind(window);
+                      window.fetch = async (input, init = {}) => {
+                        const url = typeof input === "string" ? input : input?.url || "";
+                        const method = String(init.method || "GET").toUpperCase();
+                        if (url.startsWith("/api/admin/users?") && method === "GET") {
+                          return new Response(JSON.stringify({data: [{
+                            user_id: "usr_fixture_123456",
+                            email: "fixture@example.test",
+                            display_name: "Fixture User",
+                            enabled: true,
+                            created_at: "2026-11-13",
+                            key_count: 1,
+                            active_sessions: 0,
+                            balance_cents: 0
+                          }], total: 1}), {status: 200, headers: {"Content-Type": "application/json"}});
+                        }
+                        return window.__c07_users_fetch(input, init);
+                      };
+                    }"""
+                )
                 page.locator('[data-view="admin-users"]').click()
                 page.wait_for_function(
                     "() => document.getElementById('view-admin-users')?.classList.contains('active')",
                     timeout=5000,
                 )
                 page.wait_for_function(
-                    "() => document.getElementById('adminUserStatus')?.textContent.includes('共')",
+                    "() => document.getElementById('adminUserStatus')?.textContent.includes('共 1 个用户')",
                     timeout=10000,
                 )
+                assert page.locator('#adminUsersBody button[data-user-action="keys"]').count() == 1
                 assert page.locator("#adminAuditPanel").is_hidden()
+                page.evaluate(
+                    "() => { window.fetch = window.__c07_users_fetch; delete window.__c07_users_fetch; }"
+                )
                 # The legacy gate replaces the master-key controls with
                 # session identity controls; delegated login must also purge
                 # the stale persisted credential.
@@ -340,6 +378,70 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                     "paymentSecretsWrite": 403,
                     "usersRead": 403,
                 }
+                assert not page_errors, "Unexpected browser exceptions: " + repr(page_errors)
+
+                page.locator("#adminLogout").click()
+                page.wait_for_function(
+                    "() => document.getElementById('adminLoginGate')?.style.display === 'flex'",
+                    timeout=10000,
+                )
+                page.wait_for_function(
+                    "() => document.getElementById('adminSessionState')?.textContent.includes('未登录')",
+                    timeout=10000,
+                )
+                page.locator("#adminUsername").fill(user_username)
+                page.locator("#adminPassword").fill(user_password)
+                page.locator("#adminLoginButton").click()
+                page.wait_for_function(
+                    "() => document.getElementById('adminSessionState')?.textContent.includes('user_operator')",
+                    timeout=10000,
+                )
+                page.wait_for_function(
+                    "() => document.documentElement.dataset.adminCommerceRole === 'user_admin' && document.documentElement.dataset.adminCommerceSessionReady === 'true'",
+                    timeout=10000,
+                )
+                assert page.locator('[data-view="admin-users"]').is_visible()
+                assert page.locator('[data-view="registration-invitations"]').is_visible()
+                assert page.locator('[data-view="user-pricing"]').is_hidden()
+                assert page.locator('[data-view="user-payments"]').is_hidden()
+                page.evaluate(
+                    """() => {
+                      window.__c07_users_fetch = window.fetch.bind(window);
+                      window.fetch = async (input, init = {}) => {
+                        const url = typeof input === "string" ? input : input?.url || "";
+                        const method = String(init.method || "GET").toUpperCase();
+                        if (url.startsWith("/api/admin/users?") && method === "GET") {
+                          return new Response(JSON.stringify({data: [{
+                            user_id: "usr_fixture_123456",
+                            email: "fixture@example.test",
+                            display_name: "Fixture User",
+                            enabled: true,
+                            created_at: "2026-11-13",
+                            key_count: 1,
+                            active_sessions: 0,
+                            balance_cents: 0
+                          }], total: 1}), {status: 200, headers: {"Content-Type": "application/json"}});
+                        }
+                        return window.__c07_users_fetch(input, init);
+                      };
+                    }"""
+                )
+                page.locator('[data-view="admin-users"]').click()
+                page.wait_for_function(
+                    "() => document.getElementById('view-admin-users')?.classList.contains('active')",
+                    timeout=5000,
+                )
+                page.wait_for_function(
+                    "() => document.getElementById('adminUserStatus')?.textContent.includes('共 1 个用户')",
+                    timeout=10000,
+                )
+                assert page.locator('#adminUsersBody button[data-user-action="keys"]').count() == 0
+                assert page.locator('#adminUsersBody button[data-user-action="toggle"]').count() == 1
+                assert page.locator('#adminUsersBody button[data-user-action="revoke"]').count() == 1
+                assert page.locator("#adminAuditPanel").is_hidden()
+                page.evaluate(
+                    "() => { window.fetch = window.__c07_users_fetch; delete window.__c07_users_fetch; }"
+                )
                 assert not page_errors, "Unexpected browser exceptions: " + repr(page_errors)
                 assert not page_errors, "unexpected admin browser JavaScript errors: " + repr(page_errors)
             finally:
