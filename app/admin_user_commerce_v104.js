@@ -29,22 +29,7 @@
   let sessionAuthenticated = false;
   const canWriteUsers = () => ["super_admin", "user_admin"].includes(currentAdminRole);
   const canReadAudit = () => currentAdminRole === "super_admin";
-  async function refreshAdminRole() {
-    let sessionCheckSucceeded = false;
-    try {
-      const response = await fetch("/api/admin/auth/session", {credentials:"same-origin", cache:"no-store"});
-      if (!response.ok) throw new Error("Admin session lookup failed");
-      const session = await response.json();
-      sessionAuthenticated = !!session.authenticated;
-      currentAdminRole = sessionAuthenticated ? (session.role || "unknown") : null;
-      sessionCheckSucceeded = true;
-    } catch (_) {
-      currentAdminRole = null;
-    }
-    if (sessionCheckSucceeded && !sessionAuthenticated && !currentAdminRole && String(document.getElementById("adminKey")?.value || "").trim()) {
-      currentAdminRole = "super_admin";
-    }
-    adminRoleResolved = sessionCheckSucceeded;
+  function applyAdminRole() {
     pricingButton.hidden = !["super_admin", "billing_admin"].includes(currentAdminRole);
     paymentButton.hidden = !["super_admin", "billing_admin"].includes(currentAdminRole);
     usersButton.hidden = !["super_admin", "user_admin", "system_admin", "support"].includes(currentAdminRole);
@@ -58,6 +43,26 @@
       const node = document.getElementById(id);
       if (node) node.disabled = !canWritePaymentSecrets;
     });
+  }
+
+  async function refreshAdminRole() {
+    let sessionCheckSucceeded = false;
+    try {
+      const response = await fetch("/api/admin/auth/session", {credentials:"same-origin", cache:"no-store"});
+      if (!response.ok) throw new Error("Admin session lookup failed");
+      const session = await response.json();
+      sessionAuthenticated = !!session.authenticated;
+      currentAdminRole = sessionAuthenticated ? (session.role || "unknown") : null;
+      sessionCheckSucceeded = true;
+    } catch (_) {
+      sessionAuthenticated = false;
+      currentAdminRole = null;
+    }
+    if (sessionCheckSucceeded && !sessionAuthenticated && !currentAdminRole && String(document.getElementById("adminKey")?.value || "").trim()) {
+      currentAdminRole = "super_admin";
+    }
+    adminRoleResolved = sessionCheckSucceeded;
+    applyAdminRole();
   }
 
   const pricingButton = document.createElement("button");
@@ -482,8 +487,14 @@
       activate("user-pricing");
     }
   }
-  window.addEventListener("chat2api-admin-session-changed", async () => {
-    await refreshAdminRole();
+  // The C-track session is authoritative. Consume its event detail instead
+  // of issuing a second racing session request with potentially stale role data.
+  window.addEventListener("chat2api-admin-session-changed", (event) => {
+    const session = event.detail || {};
+    sessionAuthenticated = !!session.authenticated;
+    currentAdminRole = sessionAuthenticated ? (session.role || "unknown") : null;
+    adminRoleResolved = true;
+    applyAdminRole();
     activateRoleDefault();
   });
   refreshAdminRole().then(activateRoleDefault);
