@@ -93,7 +93,9 @@ async def test_nonterminal_telemetry_updates_do_not_release_reservation(tmp_path
 
 @pytest.mark.asyncio
 async def test_completed_usage_without_positive_total_keeps_reservation_until_ledger_proof(tmp_path: Path) -> None:
-    app, store, api_keys = _runtime(tmp_path)
+    # Three deliberately unpriced reservations must fit while we prove that
+    # missing usage never releases an in-flight hold.
+    app, store, api_keys = _runtime(tmp_path, token_quota=None)
     callback = app.state.telemetry.usage_accounting
 
     for request_id, usage in (
@@ -160,6 +162,7 @@ def test_responses_api_reserves_and_settles_managed_key_usage(tmp_path: Path) ->
 
     from app.config import Settings
     from app.main import create_app
+    from app.request_history_v94_patch import install_request_history_v94_patch
     from app.responses_model_routing_v108_patch import install_responses_model_routing_v108_patch
     from app.responses_v108_patch import install_responses_v108_patch
 
@@ -180,6 +183,9 @@ def test_responses_api_reserves_and_settles_managed_key_usage(tmp_path: Path) ->
             })
 
     app.state.registry.send = fake_worker_send
+    # Match production entrypoint ordering: normalize the admin request-history
+    # owner before the Responses tool-stream installer adds v117 window columns.
+    install_request_history_v94_patch(app)
     install_responses_model_routing_v108_patch(app)
     install_responses_v108_patch(app)
     install_quota_reservation_runtime_v1(app)
