@@ -196,11 +196,25 @@ def test_identity_and_tenant_lookup_failures_fail_closed(tmp_path: Path):
         assert identity_error.value.detail["code"] == "model_entitlement_identity_unavailable"
 
         app.state.user_accounts.owner_for_key = original_owner_lookup
+        app.state.user_accounts.owner_for_key = lambda _key_id: ""
+        with pytest.raises(HTTPException) as empty_owner_error:
+            registry.resolve_client(None)
+        assert empty_owner_error.value.status_code == 503
+        assert empty_owner_error.value.detail["code"] == "model_entitlement_identity_unavailable"
+
+        app.state.user_accounts.owner_for_key = original_owner_lookup
         app.state.tenant_memberships.tenant_for_key = unavailable
         with pytest.raises(HTTPException) as tenant_error:
             registry.resolve_client(None)
         assert tenant_error.value.status_code == 503
         assert tenant_error.value.detail["code"] == "model_entitlement_tenant_context_unavailable"
+
+        app.state.tenant_memberships.tenant_for_key = original_tenant_lookup
+        app.state.tenant_memberships.tenant_for_key = lambda _key_id: ""
+        with pytest.raises(HTTPException) as empty_tenant_error:
+            registry.resolve_client(None)
+        assert empty_tenant_error.value.status_code == 503
+        assert empty_tenant_error.value.detail["code"] == "model_entitlement_tenant_context_unavailable"
 
         app.state.tenant_memberships.tenant_for_key = original_tenant_lookup
         app.state.tenant_memberships.user_for_key = lambda _key_id: None
