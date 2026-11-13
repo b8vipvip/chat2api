@@ -41,6 +41,10 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
     api_keys = getattr(app.state, "api_keys", None)
     if api_keys is None:
         raise RuntimeError("Model entitlements require the existing ApiKeyStore")
+    if accounts is None:
+        raise RuntimeError("Model entitlements require the authoritative UserAccountStore")
+    if tenant_memberships is None:
+        raise RuntimeError("Model entitlements require the authoritative TenantMembershipStore")
     app.state.model_entitlements = store
 
     audit = getattr(app.state, "admin_audit", None) or AdminAuditStore(app.state.settings.data_dir)
@@ -96,23 +100,38 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
             return
 
     def _identity(key_id: str | None) -> str | None:
-        if not key_id or key_id == "master" or accounts is None:
+        if not key_id or key_id == "master":
             return None
         try:
+            # An unowned API key is a valid standalone key. A failed ownership
+            # lookup is not equivalent to an unowned key: fail closed so a
+            # transient account-store error cannot bypass user-level policy.
             return accounts.owner_for_key(str(key_id))
-        except Exception:
-            return None
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "model_entitlement_identity_unavailable"},
+            ) from exc
 
     def _tenant_context_for_key(key_id: str | None) -> tuple[str | None, str | None]:
-        if not key_id or key_id == "master" or tenant_memberships is None:
+        if not key_id or key_id == "master":
             return None, None
         try:
             tenant_id = tenant_memberships.tenant_for_key(str(key_id))
+            if not tenant_id:
+                return None, None
             user_id = tenant_memberships.user_for_key(str(key_id))
-            role = tenant_memberships.role_for(tenant_id, user_id) if tenant_id and user_id else None
-            return tenant_id, role
-        except Exception:
-            return None, None
+            role = tenant_memberships.role_for(tenant_id, user_id) if user_id else None
+            if not user_id or not role:
+                raise RuntimeError("Tenant-bound API key has no active owner membership")
+            return str(tenant_id), str(role)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "model_entitlement_tenant_context_unavailable"},
+            ) from exc
 
     def _decision(key_id: str | None, model_id: str | None) -> dict[str, Any]:
         if not key_id or key_id == "master":
