@@ -8,6 +8,7 @@ from fastapi import HTTPException
 
 from .quota_reservations import QuotaExceeded, QuotaReservationError
 from .token_usage import usage_for
+from .user_commerce import InsufficientWalletBalance, WalletReservationError
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +52,6 @@ def reserve_wallet_charge(
         estimated_cny_cents = max(0, int(round(usd * fx * 100)))
         if estimated_cny_cents <= 0:
             return None
-        from .user_commerce import InsufficientWalletBalance, WalletReservationError
         return billing.reserve_for_request(
             str(owner), str(request_id),
             model_id=str(model_id or ""),
