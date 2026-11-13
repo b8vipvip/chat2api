@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from app.admin_auth import AdminSessionStore
 from app.model_entitlement_v1_patch import install_model_entitlements
+from app.model_capability_routing_patch import install_model_capability_routing_patch
 from app.model_entitlements import ModelEntitlementError, ModelEntitlementStore
 from app import model_capability_routing_patch as model_routing
 from app import v13_patch
@@ -269,6 +270,32 @@ def test_admin_entitlement_api_requires_session_audits_and_validates_subjects(tm
         assert deleted.status_code == 200 and deleted.json()["deleted"] is True
         events = app.state.admin_audit.recent(20)
         assert any(row["action"] == "model.entitlement_completed" for row in events)
+
+
+def test_images_generation_entitlement_uses_server_owned_gpt_image_target(tmp_path: Path):
+    app, _ = build_app(tmp_path)
+    install_model_capability_routing_patch(app)
+
+    @app.post("/v1/images/generations")
+    async def image_route():
+        token = app.state.registry.routing_key_context.set("key_1")
+        try:
+            return {"client_id": app.state.registry.resolve_client("worker_1")}
+        finally:
+            app.state.registry.routing_key_context.reset(token)
+
+    store = app.state.model_entitlements
+    store.upsert("key", "key_1", "deny", ["gpt-image"])
+    with TestClient(app) as client:
+        denied = client.post("/v1/images/generations", json={"model": "gpt-5.5"})
+        assert denied.status_code == 403
+        assert denied.json()["detail"]["code"] == "model_not_entitled"
+
+        store.delete("key", "key_1")
+        store.upsert("key", "key_1", "allow", ["gpt-image"])
+        allowed = client.post("/v1/images/generations", json={"model": "gpt-5.5"})
+        assert allowed.status_code == 200
+        assert allowed.json()["client_id"] == "worker_1"
 
 
 def test_user_console_model_catalog_obeys_global_and_user_entitlements(tmp_path: Path):
