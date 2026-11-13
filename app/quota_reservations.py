@@ -301,10 +301,9 @@ class QuotaReservationStore:
             return "pending"
         usage = record.get("usage") if isinstance(record.get("usage"), dict) else {}
         raw_actual = usage.get("total_tokens")
-        try:
-            actual = 0 if isinstance(raw_actual, bool) else max(0, int(raw_actual or 0))
-        except (TypeError, ValueError):
-            actual = 0
+        # Token counts are integral protocol values. Do not truncate floats or
+        # coerce malformed strings into a smaller charge.
+        actual = raw_actual if type(raw_actual) is int and raw_actual > 0 else 0
         reservation = self.get(request_id)
         if reservation and reservation["key_id"] != key_id:
             raise QuotaReservationError("Completion API key does not match the request reservation")
