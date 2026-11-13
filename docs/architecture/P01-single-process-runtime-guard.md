@@ -14,7 +14,7 @@ The repository's Docker Compose service currently starts one Uvicorn process and
 - The already-acquired guard is held through the existing ASGI lifespan and released at shutdown.
 - A second server process using the same data directory fails before `app.main` can initialize stores.
 - A preloaded Gunicorn-style fork worker detects that the lock descriptor belongs to the parent PID and fails closed instead of inheriting the parent's lock.
-- On POSIX, the lock file is mode `0600`; Windows uses the ACL inherited from the data directory, which must itself be access-controlled. The guard rejects symlinked data directories/lock files and retains the lock inode after shutdown. Retaining the inode is important: unlinking a locked file could let a second process create a new inode and bypass the lock.
+- On POSIX, the lock file is mode `0600`; Windows uses the ACL inherited from the data directory, which must itself be access-controlled. The guard rejects symlinked data directories/lock files and hard-linked lock files (which could otherwise cause `fchmod` to alter another file), and retains the lock inode after shutdown. Retaining the inode is important: unlinking a locked file could let a second process create a new inode and bypass the lock.
 - Known multi-worker environment variables (`WEB_CONCURRENCY`, `UVICORN_WORKERS`, `GUNICORN_WORKERS`) with numeric values greater than one are rejected.
 - The lock is released during ASGI shutdown.
 - Tests cover exclusive ownership, release/reacquire, multi-worker environment rejection, symlink rejection, preloaded-fork rejection and FastAPI lifespan integration.
