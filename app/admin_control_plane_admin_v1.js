@@ -16,6 +16,7 @@
     "user-payments": ["super_admin", "billing_admin"]
   };
   let adminSession = null;
+  let sessionRefreshGeneration = 0;
   let roleCatalogue = {};
   let selectedTenantId = "";
 
@@ -121,8 +122,11 @@
   }
 
   async function refreshSession() {
+    const generation = ++sessionRefreshGeneration;
     try {
-      adminSession = await sessionApi("/api/admin/auth/session");
+      const nextSession = await sessionApi("/api/admin/auth/session");
+      if (generation !== sessionRefreshGeneration) return adminSession;
+      adminSession = nextSession;
       const state = $("adminSessionState");
       if (state) {
         state.textContent = adminSession.authenticated
@@ -155,6 +159,7 @@
       }
       return adminSession;
     } catch (error) {
+      if (generation !== sessionRefreshGeneration) return adminSession;
       adminSession = null;
       applyNavigation();
       window.dispatchEvent(new CustomEvent("chat2api-admin-session-changed", {
