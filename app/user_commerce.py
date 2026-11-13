@@ -462,16 +462,16 @@ class BillingStore:
             if existing_charge:
                 if str(existing_charge.get("user_id") or "") != user_id:
                     raise WalletReservationError("Request is already charged to another user")
-                return {
-                    "request_id": request_id,
-                    "user_id": user_id,
-                    "state": "settled",
-                    "actual_cny_cents": int(existing_charge.get("cost_cny_cents") or 0),
-                }
+                # A settled request ID is never a new dispatch authorization.
+                # Returning a synthetic "settled" hold here would let the
+                # caller reach a Worker without any active wallet capacity.
+                raise WalletReservationError("request_id was already charged and cannot be reused")
             existing = self.reservations.get(request_id)
             if existing:
                 if str(existing.get("user_id") or "") != user_id:
                     raise WalletReservationError("Request wallet reservation belongs to another user")
+                if existing.get("state") != "reserved":
+                    raise WalletReservationError("request_id belongs to a terminal wallet reservation and cannot be reused")
                 if (
                     str(existing.get("model_id") or "") != str(model_id or "")
                     or int(existing.get("reserved_cny_cents") or 0) != estimated_cny_cents
