@@ -2559,7 +2559,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "attachments_count": len(attachments), "stream": False, "prompt_mode": "image",
                     "prompt_chars": len(body.prompt), "completion_chars": 0, "status": "completed",
                     "usage": {**usage, **token_meta}, "timings": state.timings(),
-                    "diagnostics": dict(state.diagnostics), "error": None,
+                    "diagnostics": image_diagnostics(), "error": None,
                 }
             )
             # The standalone Images API already archived verified bytes.
@@ -2587,7 +2587,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "request_id": request_id,
                     "client_id": client_id,
                     "timings": state.timings(),
-                    "diagnostics": state.diagnostics,
+                    "diagnostics": image_diagnostics(),
                     "token_usage": token_meta,
                     "media_files": archived_media,
                     "owned_media": owned_media,
@@ -2606,7 +2606,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                  "requested_model": "gpt-image", "request_type": "image_generation",
                  "attachments_count": len(attachments), "stream": False, "prompt_mode": "image",
                  "prompt_chars": len(body.prompt), "completion_chars": 0, "status": "error",
-                 "usage": {}, "timings": state.timings(), "diagnostics": state.diagnostics,
+                 "usage": {}, "timings": state.timings(), "diagnostics": image_diagnostics(),
                  "error": "Timed out waiting for ChatGPT Images"}
             )
             raise HTTPException(status_code=504, detail="Timed out waiting for ChatGPT Images") from error
@@ -2619,7 +2619,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                  "attachments_count": len(attachments), "stream": False, "prompt_mode": "image",
                  "prompt_chars": len(body.prompt), "completion_chars": 0,
                  "status": failure_status(state, message=str(error)),
-                 "usage": {}, "timings": state.timings(), "diagnostics": state.diagnostics, "error": str(error)}
+                 "usage": {}, "timings": state.timings(), "diagnostics": image_diagnostics(), "error": str(error)}
             )
             raise HTTPException(status_code=502, detail=str(error)) from error
         except Exception as error:
