@@ -262,6 +262,14 @@ def test_wallet_reservations_prevent_overcommit_and_release_idempotently(tmp_pat
     assert billing.release_reservation("req_wallet_hold", "usr_wallet", "worker_failed") is False
     assert billing.reserved_cents("usr_wallet") == 0
     assert billing.available_balance_cents("usr_wallet") == 1000
+    # A terminal release must not be a reusable dispatch admission.
+    with pytest.raises(WalletReservationError, match="terminal wallet reservation"):
+        billing.reserve_for_request(
+            "usr_wallet", "req_wallet_hold",
+            model_id="gpt-5.6-sol", estimated_cny_cents=600,
+            input_tokens=100, output_tokens=4096,
+            price_snapshot=price, usd_cny_rate=7.0,
+        )
 
 
 def test_wallet_reservation_settles_actual_charge_once_and_persists(tmp_path: Path) -> None:
@@ -311,6 +319,15 @@ def test_wallet_reservation_settles_actual_charge_once_and_persists(tmp_path: Pa
     reopened = BillingStore(tmp_path)
     assert reopened.reservations["req_wallet_settle"]["state"] == "settled"
     assert reopened.charge_for_request("req_wallet_settle") == charge
+    # A previously charged ID may be read idempotently, but never used to
+    # dispatch a second billable job without a fresh reservation.
+    with pytest.raises(WalletReservationError, match="already charged"):
+        reopened.reserve_for_request(
+            "usr_wallet", "req_wallet_settle",
+            model_id="gpt-5.6-sol", estimated_cny_cents=600,
+            input_tokens=1000, output_tokens=4096,
+            price_snapshot=price, usd_cny_rate=7.0,
+        )
 
 
 def test_wallet_reservations_are_serialized_under_concurrent_admission(tmp_path: Path) -> None:
