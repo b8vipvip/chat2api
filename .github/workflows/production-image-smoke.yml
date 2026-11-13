@@ -341,3 +341,68 @@ jobs:
           assert '增加 Worker' in v124
           print(json.dumps({'runtime': payload['server']['runtime_version'], 'worker_bundle': payload['chrome_bridge']['bundle_version'], 'qnbot_recovery_v136': True, 'qnbot_orphan_owner_recovery_v140': True, 'chatgpt_choice_policy_v143': True, 'model_evidence_v144': True, 'worker_runtime_preflight_repair_v145': True, 'routable_standby_semantics_v145': True, 'persistent_window_runtime_preflight_v146': True, 'runtime_ready_standby_semantics_v146': True, 'login_ready_admission_v137': True, 'linux_device_authority_v124': True, 'public_https_origin_v125': True, 'device_controller_v127': True, 'controller_provision_rw_v128': True, 'device_diagnostics_v128': True, 'admin_linux_assets': assets}))
           PY
+
+      - name: P-01 same-volume Docker exclusion and abrupt recovery
+        run: |
+          set -euo pipefail
+          data_dir="$(mktemp -d)"
+          first="chat2api-p01-first-${GITHUB_RUN_ID}"
+          cleanup() {
+            docker rm -f "$first" >/dev/null 2>&1 || true
+            rm -rf "$data_dir"
+          }
+          trap cleanup EXIT
+
+          docker run -d --name "$first" \
+            -v "$data_dir:/app/data" \
+            -e CHAT2API_DATA_DIR=/app/data \
+            -e CHAT2API_API_KEY=p01-docker-shared-volume-test-key \
+            chat2api-production-smoke >/dev/null
+
+          ready=0
+          for _ in $(seq 1 30); do
+            if docker exec "$first" python -c 'from pathlib import Path; p=Path("/app/data/.chat2api-runtime.lock"); assert p.is_file() and p.stat().st_size == 32' >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            if ! docker inspect -f '{{.State.Running}}' "$first" | grep -q true; then
+              docker logs "$first"
+              exit 1
+            fi
+            sleep 1
+          done
+          [ "$ready" -eq 1 ] || { docker logs "$first"; echo "first container never acquired the shared-volume runtime lock" >&2; exit 1; }
+
+          second_output="$(docker run --rm \
+            -v "$data_dir:/app/data" \
+            -e CHAT2API_DATA_DIR=/app/data \
+            -e CHAT2API_API_KEY=p01-docker-shared-volume-test-key \
+            --entrypoint python chat2api-production-smoke -c '
+          import sys
+          from app.runtime_single_process_guard import RuntimeTopologyError
+          try:
+              import app.entry
+          except RuntimeTopologyError as exc:
+              assert "already owns" in str(exc)
+              assert "app.main" not in sys.modules
+              print("blocked-before-main")
+          else:
+              raise SystemExit("second production entry unexpectedly acquired the shared volume")
+          ' 2>&1)"
+          echo "$second_output"
+          echo "$second_output" | grep -q "blocked-before-main"
+
+          # SIGKILL proves the OS releases the advisory lock even when Python
+          # cannot run its graceful lifespan/shutdown hooks.
+          docker kill "$first" >/dev/null
+          docker rm "$first" >/dev/null
+          third_output="$(docker run --rm \
+            -v "$data_dir:/app/data" \
+            -e CHAT2API_DATA_DIR=/app/data \
+            -e CHAT2API_API_KEY=p01-docker-shared-volume-test-key \
+            --entrypoint python chat2api-production-smoke -c '
+          import app.entry
+          print("reacquired-after-abrupt-exit")
+          ' 2>&1)"
+          echo "$third_output"
+          echo "$third_output" | grep -q "reacquired-after-abrupt-exit"
