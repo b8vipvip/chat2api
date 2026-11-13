@@ -69,6 +69,9 @@ with TestClient(app) as client:
     assert "recoverPendingMessage" in client_js.text
     assert "Chat2APISafeRenderer" in client_js.text
     assert "uploadPendingImages" in client_js.text
+    assert "uploadPendingFiles" in client_js.text
+    assert "purpose: \"assistants\"" in client_js.text
+    assert "type: \"file\"" in client_js.text
     assert "X-Chat2API-Request-ID" in client_js.text
 
 print("Web Chat production entry integration passed")
