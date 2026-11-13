@@ -1,0 +1,146 @@
+"""C-06 internal wallet chargeback: idempotency, limits, durability and RBAC."""
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.config import Settings
+from app.control_plane import permission_for_admin_route
+from app.main import create_app
+from app.quota_reservation_admin_v1_patch import install_quota_reservation_admin_v1
+from app.user_commerce import BillingStore, PricingStore, WalletReservationError
+from app.user_console_v104_patch import install_user_console_v104_patch
+from app.v17_patch import install_v17_patch
+
+
+ORIGIN = {"Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"}
+
+
+def _charged_wallet(tmp_path: Path) -> tuple[BillingStore, PricingStore]:
+    pricing = PricingStore(tmp_path)
+    config = pricing.public()
+    pricing.update(billing_enabled=True, usd_cny_rate=7.0, models=config["models"])
+    billing = BillingStore(tmp_path)
+    billing.credit("usr_refund", 1000)
+    charge = billing.record_charge("usr_refund", {
+        "request_id": "req_refundable",
+        "status": "completed",
+        "requested_model": "gpt-5.6-sol",
+        "usage": {"prompt_tokens": 1000, "completion_tokens": 500, "total_tokens": 1500, "estimated": True},
+    }, pricing)
+    assert charge is not None and charge["cost_cny_cents"] == 10 and charge["debited"]
+    assert billing.balance_cents("usr_refund") == 990
+    return billing, pricing
+
+
+def test_refund_is_idempotent_partial_and_never_over_refunds(tmp_path: Path) -> None:
+    billing, _pricing = _charged_wallet(tmp_path)
+    first = billing.refund_charge("req_refundable", "rf_partial0001", 3, "billing correction")
+    assert first["amount_cents"] == 3
+    assert first["user_id"] == "usr_refund"
+    assert billing.refund_charge("req_refundable", "rf_partial0001", 3, "billing correction") == first
+    assert billing.balance_cents("usr_refund") == 993
+
+    with pytest.raises(WalletReservationError, match="already used"):
+        billing.refund_charge("req_refundable", "rf_partial0001", 4, "billing correction")
+    with pytest.raises(WalletReservationError, match="exceeds"):
+        billing.refund_charge("req_refundable", "rf_more00001", 8, "billing correction")
+
+    second = billing.refund_charge("req_refundable", "rf_remainder01", 7, "billing correction")
+    assert second["amount_cents"] == 7
+    assert billing.balance_cents("usr_refund") == 1000
+    assert billing.charge_for_request("req_refundable")["cost_cny_cents"] == 10
+    assert sum(row["amount_cents"] for row in billing.refunds_for_user("usr_refund")) == 10
+    assert len(BillingStore(tmp_path).refunds_for_user("usr_refund")) == 2
+
+    with pytest.raises(WalletReservationError, match="exceeds"):
+        billing.refund_charge("req_refundable", "rf_extra00001", 1, "billing correction")
+
+
+def test_refund_requires_existing_debited_charge_and_bounded_reason(tmp_path: Path) -> None:
+    billing, pricing = _charged_wallet(tmp_path)
+    with pytest.raises(WalletReservationError, match="no completed debited"):
+        billing.refund_charge("req_unknown", "rf_unknown0001", 1, "billing correction")
+    with pytest.raises(WalletReservationError, match="5-500"):
+        billing.refund_charge("req_refundable", "rf_reason00001", 1, "no")
+    with pytest.raises(WalletReservationError, match="positive"):
+        billing.refund_charge("req_refundable", "rf_negative0001", -1, "billing correction")
+
+    billing.record_charge("usr_refund", {
+        "request_id": "req_unpriced",
+        "status": "completed", "requested_model": "unknown-model",
+        "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
+    }, pricing)
+    with pytest.raises(WalletReservationError, match="no completed debited"):
+        billing.refund_charge("req_unpriced", "rf_unpriced01", 1, "billing correction")
+    assert billing.balance_cents("usr_refund") == 990
+
+
+def test_refund_disk_error_reverts_credit_and_stays_retryable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    billing, _pricing = _charged_wallet(tmp_path)
+
+    def fail_save() -> None:
+        raise OSError("simulated wallet refund fsync outage")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(billing, "_save", fail_save)
+        with pytest.raises(OSError, match="fsync outage"):
+            billing.refund_charge("req_refundable", "rf_diskoutage", 5, "billing correction")
+    assert billing.balance_cents("usr_refund") == 990
+    assert billing.refunds_for_user("usr_refund") == []
+    assert BillingStore(tmp_path).refunds_for_user("usr_refund") == []
+    assert billing.refund_charge("req_refundable", "rf_diskoutage", 5, "billing correction")["amount_cents"] == 5
+    assert billing.balance_cents("usr_refund") == 995
+
+
+def test_wallet_refund_route_is_csrf_gated_session_scoped_and_audited(tmp_path: Path) -> None:
+    app = create_app(Settings(
+        CHAT2API_DATA_DIR=str(tmp_path),
+        CHAT2API_ADMIN_USERNAME="owner",
+        CHAT2API_ADMIN_PASSWORD="strong-root-password",
+    ))
+    install_v17_patch(app)
+    install_user_console_v104_patch(app)
+    pricing = app.state.user_pricing
+    config = pricing.public()
+    pricing.update(billing_enabled=True, usd_cny_rate=7.0, models=config["models"])
+    billing = app.state.user_billing
+    billing.credit("usr_refund", 1000)
+    charge = billing.record_charge("usr_refund", {
+        "request_id": "req_refundable",
+        "status": "completed", "requested_model": "gpt-5.6-sol",
+        "usage": {"prompt_tokens": 1000, "completion_tokens": 500, "total_tokens": 1500, "estimated": True},
+    }, pricing)
+    assert charge is not None and charge["cost_cny_cents"] == 10
+    install_quota_reservation_admin_v1(app)
+    assert permission_for_admin_route(
+        "/api/admin/billing/charges/req_refundable/refund", "POST",
+    ) == "billing:write"
+    assert permission_for_admin_route(
+        "/api/admin/billing/charges/req_refundable/refund", "GET",
+    ) is None
+    endpoint = "/api/admin/billing/charges/req_refundable/refund"
+    data = {"refund_id": "rf_admin00001", "amount_cents": 5, "reason": "verified correction"}
+    with TestClient(app) as client:
+        assert client.post(endpoint, json=data, headers=ORIGIN).status_code == 401
+        login = client.post("/api/admin/auth/login", json={
+            "username": "owner", "password": "strong-root-password",
+        }, headers=ORIGIN)
+        assert login.status_code == 200, login.text
+        assert client.post(endpoint, json=data).status_code == 403
+        refunded = client.post(endpoint, json=data, headers=ORIGIN)
+        assert refunded.status_code == 200, refunded.text
+        assert refunded.json()["refund"]["amount_cents"] == 5
+        repeated = client.post(endpoint, json=data, headers=ORIGIN)
+        assert repeated.status_code == 200, repeated.text
+        assert billing.balance_cents("usr_refund") == 995
+        changed = client.post(endpoint, json={**data, "amount_cents": 6}, headers=ORIGIN)
+        assert changed.status_code == 409
+        assert client.post(endpoint, json={**data, "refund_id": "not-valid"}, headers=ORIGIN).status_code == 422
+    events = app.state.admin_audit.recent(30)
+    assert any(e["action"] == "billing.wallet_refund_requested" for e in events)
+    assert any(e["action"] == "billing.wallet_refund_completed" for e in events)
