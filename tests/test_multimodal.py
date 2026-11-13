@@ -1,3 +1,4 @@
+import asyncio
 import base64
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -274,3 +275,29 @@ def test_test_report_is_persisted_and_readable(tmp_path: Path) -> None:
         detail = client.get("/api/admin/tests/testrun_1", headers=admin_headers())
         assert detail.status_code == 200
         assert detail.json()["results"][1]["status"] == "skipped"
+
+
+def test_admin_request_media_rejects_file_owned_by_another_api_key(tmp_path: Path) -> None:
+    app = create_app(settings(tmp_path))
+    async def seed():
+        item = await app.state.file_store.create(
+            filename="foreign-generated.png",
+            data_base64=base64.b64encode(b"not-an-image").decode("ascii"),
+            mime_type="image/png",
+            owner_key_id="key_file_owner",
+            purpose="generated-output",
+        )
+        await app.state.telemetry.upsert({
+            "request_id": "req_media_owner_mismatch_0001",
+            "api_key_id": "key_request_owner",
+            "status": "completed",
+            "response_media": [{"file_id": item.file_id}],
+        })
+        return item
+    item = asyncio.run(seed())
+    with TestClient(app) as client:
+        response = client.get(
+            f"/api/admin/requests/req_media_owner_mismatch_0001/media/{item.file_id}",
+            headers=admin_headers(),
+        )
+        assert response.status_code == 404
