@@ -242,6 +242,13 @@ def test_wallet_reservations_prevent_overcommit_and_release_idempotently(tmp_pat
     assert billing.balance_cents("usr_wallet") == 1000
     assert billing.reserved_cents("usr_wallet") == 600
     assert billing.available_balance_cents("usr_wallet") == 400
+    with pytest.raises(WalletReservationError):
+        billing.reserve_for_request(
+            "usr_wallet", "req_wallet_hold",
+            model_id="gpt-5.6-sol", estimated_cny_cents=599,
+            input_tokens=100, output_tokens=4096,
+            price_snapshot=price, usd_cny_rate=7.0,
+        )
 
     with pytest.raises(InsufficientWalletBalance):
         billing.reserve_for_request(
