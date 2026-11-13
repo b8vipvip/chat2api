@@ -130,6 +130,22 @@ def test_guard_rejects_symlinked_lock_file(tmp_path: Path):
         SingleProcessRuntimeGuard(tmp_path).acquire()
 
 
+def test_guard_rejects_hard_linked_lock_file_without_chmodding_target(tmp_path: Path):
+    target = tmp_path / "sensitive.json"
+    target.write_text('{"private":true}', encoding="utf-8")
+    original_mode = target.stat().st_mode & 0o777
+    lock_path = tmp_path / ".chat2api-runtime.lock"
+    try:
+        os.link(target, lock_path)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"hard links are unavailable on this filesystem: {exc}")
+
+    with pytest.raises(RuntimeTopologyError, match="lock path cannot be hard-linked"):
+        SingleProcessRuntimeGuard(tmp_path).acquire()
+
+    assert target.stat().st_mode & 0o777 == original_mode
+    assert target.read_text(encoding="utf-8") == '{"private":true}'
+
 
 def test_installer_wraps_and_preserves_existing_lifespan(tmp_path: Path):
     from contextlib import asynccontextmanager
