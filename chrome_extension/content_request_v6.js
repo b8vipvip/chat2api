@@ -895,6 +895,79 @@
     });
   }
 
+  function dispatchElapsedMs(active, at = performance.now()) {
+    const startedAt = Number(active?.dispatchTimingStartedAt || 0);
+    if (!startedAt || !Number.isFinite(startedAt) || !Number.isFinite(at) || at < startedAt) return null;
+    return Math.round((at - startedAt) * 10) / 10;
+  }
+
+  // The background ACK means only that request-v6 accepted the message. Keep
+  // the subsequent browser-side readiness/submit stages visible so a long gap
+  // before chat.started can be attributed without creating another dispatcher
+  // or terminal authority.
+  async function runDispatchStage(active, stage, task) {
+    const startedAt = performance.now();
+    const startedElapsed = dispatchElapsedMs(active, startedAt);
+    const evidence = active.dispatchStageEvidence || (active.dispatchStageEvidence = {});
+    if (typeof task !== "function") {
+      evidence[stage] = {
+        status: "skipped",
+        started_elapsed_ms: startedElapsed,
+        duration_ms: null,
+        completed_elapsed_ms: dispatchElapsedMs(active),
+      };
+      await diagnostic(active, "dispatch-stage", {
+        request_v6_dispatch_timing_version: 1,
+        request_v6_dispatch_elapsed_ms: dispatchElapsedMs(active),
+        request_v6_dispatch_stage_evidence_v1: { ...evidence },
+      });
+      return;
+    }
+
+    evidence[stage] = {
+      status: "started",
+      started_elapsed_ms: startedElapsed,
+      duration_ms: null,
+      completed_elapsed_ms: null,
+    };
+    await diagnostic(active, "dispatch-stage", {
+      request_v6_dispatch_timing_version: 1,
+      request_v6_dispatch_elapsed_ms: startedElapsed,
+      request_v6_dispatch_stage_evidence_v1: { ...evidence },
+    });
+    try {
+      const result = await task();
+      const completedAt = performance.now();
+      evidence[stage] = {
+        status: "completed",
+        started_elapsed_ms: startedElapsed,
+        duration_ms: Math.max(0, Math.round((completedAt - startedAt) * 10) / 10),
+        completed_elapsed_ms: dispatchElapsedMs(active, completedAt),
+      };
+      await diagnostic(active, "dispatch-stage", {
+        request_v6_dispatch_timing_version: 1,
+        request_v6_dispatch_elapsed_ms: dispatchElapsedMs(active, completedAt),
+        request_v6_dispatch_stage_evidence_v1: { ...evidence },
+      });
+      return result;
+    } catch (error) {
+      const failedAt = performance.now();
+      evidence[stage] = {
+        status: "failed",
+        started_elapsed_ms: startedElapsed,
+        duration_ms: Math.max(0, Math.round((failedAt - startedAt) * 10) / 10),
+        completed_elapsed_ms: dispatchElapsedMs(active, failedAt),
+        error_type: String(error?.name || "Error").slice(0, 60),
+      };
+      await diagnostic(active, "dispatch-stage", {
+        request_v6_dispatch_timing_version: 1,
+        request_v6_dispatch_elapsed_ms: dispatchElapsedMs(active, failedAt),
+        request_v6_dispatch_stage_evidence_v1: { ...evidence },
+      });
+      throw error;
+    }
+  }
+
   function dispatchEnter(element) {
     if (!element) return;
     element.focus();
@@ -2245,6 +2318,7 @@
         send_prompt_match_source: ready.promptMatchSource,
         send_attempts: attempts,
         submit_wait_ms: Math.round((performance.now() - readyStarted) * 10) / 10,
+        request_v6_dispatch_submit_click_elapsed_ms: dispatchElapsedMs(active),
         hydration_safe_baseline: true,
         historical_assistant_count: active.baselineCount,
       });
@@ -2315,7 +2389,17 @@
   async function ensureResponseStarted(active, responseStarted, source) {
     if (responseStarted) return true;
     active.responseStarted = true;
-    await emit({ type: "chat.started", request_id: active.requestId, diagnostics: { response_epoch_revision: 69, response_start_source: source } });
+    await emit({
+      type: "chat.started",
+      request_id: active.requestId,
+      diagnostics: {
+        response_epoch_revision: 69,
+        response_start_source: source,
+        request_v6_dispatch_timing_version: 1,
+        request_v6_dispatch_to_response_started_ms: dispatchElapsedMs(active),
+        request_v6_dispatch_stage_evidence_v1: { ...(active.dispatchStageEvidence || {}) },
+      },
+    });
     return true;
   }
 
@@ -3606,6 +3690,8 @@
       networkStreamEndedWithoutTerminalAt: 0,
       networkUnverifiedStreamId: "",
       networkUnverifiedWaitReportedAt: 0,
+      dispatchTimingStartedAt: performance.now(),
+      dispatchStageEvidence: {},
     };
     state.active = active;
     if (v5) v5.active = active;
@@ -3613,21 +3699,37 @@
     try { probeSupervisor?.begin?.(active); } catch (_) {}
 
     try {
+      await diagnostic(active, "dispatch-started", {
+        request_v6_dispatch_timing_version: 1,
+        request_v6_dispatch_elapsed_ms: 0,
+        request_v6_dispatch_stage_evidence_v1: {},
+      });
       // UI interruption resolution is readiness work owned by the request
       // controller, not a separate message listener with its own ACK/terminal.
       const interruption = globalThis.__CHAT2API_INTERRUPTION_GUARD_V72__;
-      if (typeof interruption?.resolveBlockingInterruption === "function") {
-        await interruption.resolveBlockingInterruption({force:true,phase:"before-request"});
-      }
-      await writePrompt(active, prompt);
-      await submitAndConfirm(active);
+      await runDispatchStage(
+        active,
+        "resolve_blocking_interruption",
+        typeof interruption?.resolveBlockingInterruption === "function"
+          ? () => interruption.resolveBlockingInterruption({force:true,phase:"before-request"})
+          : null,
+      );
+      await runDispatchStage(active, "write_prompt", () => writePrompt(active, prompt));
+      await runDispatchStage(active, "submit_and_confirm", () => submitAndConfirm(active));
       await monitor(active);
     } catch (error) {
       await emit({
         type: "chat.error",
         request_id: active.requestId,
         error: String(error?.message || error),
-        diagnostics: { request_controller: "request-v6", response_epoch_revision: 69, ...(error?.diagnostics || {}) },
+        diagnostics: {
+          request_controller: "request-v6",
+          response_epoch_revision: 69,
+          request_v6_dispatch_timing_version: 1,
+          request_v6_dispatch_elapsed_ms: dispatchElapsedMs(active),
+          request_v6_dispatch_stage_evidence_v1: { ...(active.dispatchStageEvidence || {}) },
+          ...(error?.diagnostics || {}),
+        },
       });
     } finally {
       if (state.active === active) state.active = null;
