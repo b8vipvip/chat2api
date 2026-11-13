@@ -39,7 +39,7 @@ The page sends the full ordered conversation using only standard Chat Completion
 - The existing FileStore persists file bytes on disk without application-level encryption at rest. Deleting an individual conversation makes a best-effort session-authenticated deletion of image files no longer referenced by other local conversations. Clearing browser storage, losing browser state or local-history eviction cannot guarantee server cleanup; no server-side retention policy is added. Do not treat this feature as encrypted archival storage for highly sensitive images.
 - Image attachments are tied to the API Key that uploaded them. A conversation containing images must continue using that same Key for subsequent multimodal requests; another Key may view the conversation but cannot submit it.
 - No generic document/file attachments (PDF, Office documents, etc.), generated-image cards, audio/voice, citations/reference cards, tool/function calling UI, native sidecar blocks, KaTeX/MathML rendering or complete ChatGPT component parity.
-- No stream resume/reconnect after a lost connection. The UI warns when it does not receive the terminal `[DONE]` marker.
+- No durable token-level SSE replay. W-04 can reconcile the original request and restore final Telemetry text when available, but cannot replay missing stream deltas or recover an active request after its Broker state has been lost.
 - No server-side conversation search, message retention policy, export/import API or administrator retention controls.
 - The UI does not create API Keys; users create and manage them in `/console#keys`.
 - The Key is not persisted locally, but it is available to same-origin page JavaScript while the page is open; XSS prevention remains important.
