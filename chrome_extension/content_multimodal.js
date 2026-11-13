@@ -13,7 +13,7 @@
 
   async function fetchFile(spec, requestId) {
     const scopedRequestId = String(requestId || spec.request_id || "");
-    if (!/^[a-zA-Z0-9_-]{6,120}$/.test(scopedRequestId)) {
+    if (!/^[A-Za-z0-9_-]{6,120}$/.test(scopedRequestId)) {
       throw new Error("Attachment fetch requires its original request ID");
     }
     const response = await chrome.runtime.sendMessage({
