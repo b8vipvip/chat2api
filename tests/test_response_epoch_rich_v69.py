@@ -267,7 +267,8 @@ def test_r06_browser_dispatch_stages_are_diagnostic_only_and_precede_response_st
     owner = read("chrome_extension/content_request_v6.js")
 
     assert "async function runDispatchStage(active, stage, task)" in owner
-    assert 'await runDispatchStage(active, "write_prompt", () => writePrompt(active, prompt));' in owner
+    assert 'await runDispatchStage(active, "write_prompt", async () => {' in owner
+    assert "await writePrompt(active, prompt);" in owner
     assert 'await runDispatchStage(active, "submit_and_confirm", () => submitAndConfirm(active));' in owner
     assert "request_v6_dispatch_stage_evidence_v1" in owner
     assert "request_v6_dispatch_to_response_started_ms" in owner
