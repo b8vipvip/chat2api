@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextvars
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
