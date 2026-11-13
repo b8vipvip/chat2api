@@ -378,7 +378,7 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
                 logging.getLogger(__name__).exception(
                     "Invitation finalization failed after account creation"
                 )
-        response = JSONResponse({"ok": True, "user": user})
+        response = JSONResponse({"ok": True, "user": user}, headers={"Cache-Control": "no-store"})
         response.set_cookie(USER_SESSION_COOKIE, token, httponly=True, secure=request.url.scheme == "https", samesite="lax", max_age=accounts.session_ttl_seconds, path="/")
         return response
 
