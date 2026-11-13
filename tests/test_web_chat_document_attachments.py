@@ -201,15 +201,17 @@ def test_chat_completion_enforces_four_combined_file_input_limit(tmp_path: Path)
 
 
 def test_document_file_part_is_bound_to_the_uploading_api_key(tmp_path: Path) -> None:
-    with TestClient(create_app(_settings(tmp_path))) as client:
-        # create_app() is the API core; the user registration/key routes are
-        # installed by the production entrypoint's existing user-console owner.
-        install_user_console_v104_patch(client.app)
-        assert any(
-            getattr(route, "path", None) == "/api/user/register"
-            and "POST" in (getattr(route, "methods", None) or set())
-            for route in client.app.routes
-        )
+    # create_app() is the API core; the user registration/key routes are
+    # installed by the production entrypoint's existing user-console owner.
+    # Install before TestClient starts because this owner adds middleware.
+    app = create_app(_settings(tmp_path))
+    install_user_console_v104_patch(app)
+    assert any(
+        getattr(route, "path", None) == "/api/user/register"
+        and "POST" in (getattr(route, "methods", None) or set())
+        for route in app.routes
+    )
+    with TestClient(app) as client:
         registered = client.post(
             "/api/user/register",
             headers={"Origin": "http://testserver"},
