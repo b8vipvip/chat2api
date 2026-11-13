@@ -188,7 +188,7 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=409, detail=str(error)) from error
 
         quota_reservation = None
-        if request_type == "voice_generation":
+        if request_type in {"voice_generation", "voice_conversation"}:
             try:
                 quota_reservation = reserve_audio_request_quota(
                     app, request_id, principal, prompt,
@@ -198,7 +198,7 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
                 state.diagnostics["quota_reservation_v1"] = {
                     "state": "rejected",
                     "http_status": quota_error.status_code,
-                    "estimate_policy": "prompt_tokens_plus_4096_audio_admission_floor_v1",
+                    "estimate_policy": "text_input_tokens_plus_4096_audio_admission_floor_v1",
                 }
                 try:
                     await record_voice(
@@ -225,7 +225,7 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
                 state.diagnostics["quota_reservation_v1"] = {
                     "state": "reserved",
                     "reserved_tokens": int(quota_reservation.get("reserved_tokens") or 0),
-                    "estimate_policy": "prompt_tokens_plus_4096_audio_admission_floor_v1",
+                    "estimate_policy": "text_input_tokens_plus_4096_audio_admission_floor_v1",
                     "provider_usage_verified": False,
                 }
         registry.busy_clients.add(selected_client)
