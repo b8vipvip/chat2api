@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import create_app
+from app.user_console_v104_patch import install_user_console_v104_patch
 
 
 def _settings(tmp_path: Path) -> Settings:
@@ -201,6 +202,9 @@ def test_chat_completion_enforces_four_combined_file_input_limit(tmp_path: Path)
 
 def test_document_file_part_is_bound_to_the_uploading_api_key(tmp_path: Path) -> None:
     with TestClient(create_app(_settings(tmp_path))) as client:
+        # create_app() is the API core; the user registration/key routes are
+        # installed by the production entrypoint's existing user-console owner.
+        install_user_console_v104_patch(client.app)
         registered = client.post(
             "/api/user/register",
             headers={"Origin": "http://testserver"},
