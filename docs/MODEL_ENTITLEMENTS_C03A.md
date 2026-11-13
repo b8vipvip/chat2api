@@ -54,6 +54,12 @@ This prevents a broad alias from bypassing a concrete allowlist.
   - POST /v1/responses and POST /v1/completions use the existing v13 target context.
   - POST /v1/images/generations uses the server-owned gpt-image target. A
     client-supplied model field cannot change the entitlement target.
+  - POST /v1/audio/speech and POST /v1/audio/conversations bind the model from
+    their validated request body before the shared resolver runs.
+  - WEBSOCKET /v1/audio/realtime binds the requested model from the first
+    session.start frame; the requested gpt-live-mini alias is authorized before
+    the existing gpt-live transport alias is applied. Authorization failures
+    are returned as non-retryable model_not_entitled WebSocket errors.
 - Model aliases are resolved before the entitlement decision; unknown or
   unresolved models are rejected whenever a matching policy applies.
 - A failed UserAccountStore owner lookup, failed TenantMembershipStore lookup,
@@ -81,9 +87,10 @@ API:
 - No editable model metadata, aliases or fallback-routing configuration is added.
 - This does not prove the model actually served; only existing Worker and
   telemetry evidence can do that.
-- The current request inventory covers Chat Completions, Responses, legacy
-  Completions and Images. Any future model-consuming endpoint (including audio
-  or embeddings if introduced) must set an authoritative model context and add
+- The current model-consumption inventory covers Chat Completions, Responses,
+  legacy Completions, Images, Audio Speech/Conversations and the Realtime Voice
+  WebSocket. Embeddings are not currently exposed by the API. Any future
+  model-consuming endpoint must set an authoritative model context and add
   pre-dispatch positive/negative tests before it is exposed to scoped API keys.
 - Local SQLite is single-instance. Multi-instance transactional storage, backup
   and restore are D/P gates.
@@ -98,6 +105,7 @@ Covers default compatibility, alias normalization, global/key/user/tenant/role
 intersection, deny precedence, non-concrete alias denial, catalog filtering,
 pre-dispatch 403, master-key compatibility, API session auth, subject
 validation, audit and restart persistence. Additional tests cover identity and
-tenant-store outages, orphaned tenant memberships, and the server-owned
-gpt-image target on the Images endpoint. Exact-head full CI and production
-image smoke remain required.
+tenant-store outages, orphaned tenant memberships, the server-owned gpt-image
+target, Speech/Conversation request model context, and Realtime session.start
+model context including deny behavior. Exact-head full CI and production image
+smoke remain required.
