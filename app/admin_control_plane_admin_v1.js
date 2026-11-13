@@ -131,6 +131,12 @@
     }
   }
 
+  // admin_v17.js owns the visible login gate; refresh the authoritative RBAC
+  // session whenever that gate logs in or out, without requiring a page reload.
+  window.addEventListener("chat2api-admin-auth-state-changed", () => {
+    void refreshSession();
+  });
+
   $("adminSessionLogin")?.addEventListener("click", async () => {
     const username = $("adminSessionUser").value.trim();
     const password = $("adminSessionPassword").value;
