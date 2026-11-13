@@ -40,6 +40,24 @@ def login(client: TestClient):
     )
 
 
+def test_invitation_email_normalization_and_validation(tmp_path: Path):
+    store = InvitationStore(tmp_path)
+    created = store.create("Alice+Chat2API@Example.co.uk", "root")
+    assert created["invitation"]["email"] == "alice+chat2api@example.co.uk"
+    reservation = store.reserve(created["code"], "ALICE+Chat2API@example.co.uk")
+    store.consume(reservation)
+
+    for invalid in (
+        "alice example@example.com",
+        "alice@example",
+        "alice@@example.com",
+        "alice@example..com",
+        "alice@ example.com",
+    ):
+        with pytest.raises(InvitationError, match="valid email"):
+            store.create(invalid, "root")
+
+
 def test_invitation_store_is_email_bound_single_use_and_hash_only(tmp_path: Path):
     store = InvitationStore(tmp_path)
     created = store.create("Alice@example.com", "root", expires_in_seconds=600)
