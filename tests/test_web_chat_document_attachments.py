@@ -197,3 +197,54 @@ def test_chat_completion_enforces_four_combined_file_input_limit(tmp_path: Path)
         )
         assert response.status_code == 400, response.text
         assert "At most four image/file inputs" in response.json()["detail"]
+
+
+def test_document_file_part_is_bound_to_the_uploading_api_key(tmp_path: Path) -> None:
+    with TestClient(create_app(_settings(tmp_path))) as client:
+        registered = client.post(
+            "/api/user/register",
+            headers={"Origin": "http://testserver"},
+            json={"email": "doc-key-owner@example.test", "password": "document-key-password"},
+        )
+        assert registered.status_code == 200, registered.text
+        key_a = client.post(
+            "/api/user/keys",
+            headers={"Origin": "http://testserver"},
+            json={"name": "document uploader"},
+        )
+        assert key_a.status_code == 200, key_a.text
+        token_a = key_a.json()["token"]
+        payload = b"private document bytes"
+        uploaded = client.post(
+            "/v1/files",
+            headers={"Authorization": "Bearer " + token_a},
+            json={
+                "filename": "private.txt", "mime_type": "text/plain",
+                "data_base64": base64.b64encode(payload).decode("ascii"),
+                "purpose": "assistants",
+            },
+        )
+        assert uploaded.status_code == 200, uploaded.text
+        file_id = uploaded.json()["id"]
+        key_b = client.post(
+            "/api/user/keys",
+            headers={"Origin": "http://testserver"},
+            json={"name": "different document key"},
+        )
+        assert key_b.status_code == 200, key_b.text
+        response = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": "Bearer " + key_b.json()["token"]},
+            json={
+                "model": "default",
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Summarize this document."},
+                        {"type": "file", "file_id": file_id},
+                    ],
+                }],
+            },
+        )
+        assert response.status_code == 403, response.text
+        assert "belongs to another API key" in response.json()["detail"]
