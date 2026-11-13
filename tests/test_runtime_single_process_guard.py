@@ -30,13 +30,13 @@ def test_guard_exclusively_owns_shared_data_directory_until_release(tmp_path: Pa
         assert os.access(first.lock_path, os.W_OK)
     else:
         assert first.lock_path.stat().st_mode & 0o777 == 0o600
+    # Cross-process contention is covered by the spawned-process regression
+    # below. Windows byte-range locks deny even same-process reads of the
+    # locked byte range, so inspect the marker only after releasing the lock.
+    first.release()
     marker = first.lock_path.read_bytes()
     assert marker.startswith(f"pid={os.getpid()}\n".encode("ascii"))
     assert len(marker) == 32
-    # Cross-process contention is covered by the spawned-process regression
-    # below. Windows byte-range locks are process-scoped, so two descriptors
-    # in one process are not a portable contention assertion.
-    first.release()
     second.acquire()
     second.release()
     # The lock file is deliberately retained. Unlinking a locked inode can let
