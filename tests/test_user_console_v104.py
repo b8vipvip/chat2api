@@ -4,9 +4,16 @@ import hashlib
 import shutil
 import subprocess
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+
+import pytest
 
 from app.runtime_contract import SERVER_RUNTIME_VERSION, version_contract_payload
-from app.user_commerce import BillingStore, PaymentConfigStore, PricingStore, UserAccountStore
+from app.user_commerce import (
+    BillingStore, InsufficientWalletBalance, PaymentConfigStore, PricingStore,
+    UserAccountStore, WalletReservationError,
+)
 from app.user_console_v104_patch import _verify_zpay, _zpay_sign
 
 
@@ -216,3 +223,183 @@ def test_user_commerce_runtime_and_production_dependencies_are_published() -> No
     assert '"user_payment_settlement_safety_v107": True' in runtime_source
     assert "python-multipart" in requirements
     assert "python-multipart" in project
+
+
+
+def test_wallet_reservations_prevent_overcommit_and_release_idempotently(tmp_path: Path) -> None:
+    pricing = PricingStore(tmp_path)
+    price = pricing.model("gpt-5.6-sol")
+    billing = BillingStore(tmp_path)
+    billing.credit("usr_wallet", 1000)
+
+    reserved = billing.reserve_for_request(
+        "usr_wallet", "req_wallet_hold",
+        model_id="gpt-5.6-sol", estimated_cny_cents=600,
+        input_tokens=100, output_tokens=4096,
+        price_snapshot=price, usd_cny_rate=7.0,
+    )
+    assert reserved is not None and reserved["state"] == "reserved"
+    assert billing.balance_cents("usr_wallet") == 1000
+    assert billing.reserved_cents("usr_wallet") == 600
+    assert billing.available_balance_cents("usr_wallet") == 400
+
+    with pytest.raises(InsufficientWalletBalance):
+        billing.reserve_for_request(
+            "usr_wallet", "req_wallet_overcommit",
+            model_id="gpt-5.6-sol", estimated_cny_cents=500,
+            input_tokens=100, output_tokens=4096,
+            price_snapshot=price, usd_cny_rate=7.0,
+        )
+
+    assert billing.release_reservation("req_wallet_hold", "usr_wallet", "worker_failed") is True
+    assert billing.release_reservation("req_wallet_hold", "usr_wallet", "worker_failed") is False
+    assert billing.reserved_cents("usr_wallet") == 0
+    assert billing.available_balance_cents("usr_wallet") == 1000
+
+
+def test_wallet_reservation_settles_actual_charge_once_and_persists(tmp_path: Path) -> None:
+    pricing = PricingStore(tmp_path)
+    payload = pricing.public()
+    pricing.update(billing_enabled=True, usd_cny_rate=7.0, models=payload["models"])
+    price = pricing.model("gpt-5.6-sol")
+    billing = BillingStore(tmp_path)
+    billing.credit("usr_wallet", 1000)
+    billing.reserve_for_request(
+        "usr_wallet", "req_wallet_settle",
+        model_id="gpt-5.6-sol", estimated_cny_cents=600,
+        input_tokens=1000, output_tokens=4096,
+        price_snapshot=price, usd_cny_rate=7.0,
+    )
+    request = {
+        "request_id": "req_wallet_settle",
+        "status": "completed",
+        "requested_model": "gpt-5.6-sol",
+        "usage": {
+            "prompt_tokens": 1000,
+            "completion_tokens": 500,
+            "total_tokens": 1500,
+            "estimated": True,
+        },
+        "diagnostics": {},
+    }
+    charge = billing.record_charge("usr_wallet", request, pricing)
+    assert charge is not None
+    assert charge["cost_cny_cents"] == 10
+    assert charge["usage_is_estimated"] is True
+    reservation = billing.reservations["req_wallet_settle"]
+    assert reservation["state"] == "settled"
+    assert reservation["actual_cny_cents"] == 10
+    assert billing.balance_cents("usr_wallet") == 990
+    assert billing.reserved_cents("usr_wallet") == 0
+
+    again = billing.record_charge("usr_wallet", request, pricing)
+    assert again == charge
+    assert billing.balance_cents("usr_wallet") == 990
+    reopened = BillingStore(tmp_path)
+    assert reopened.reservations["req_wallet_settle"]["state"] == "settled"
+    assert reopened.charge_for_request("req_wallet_settle") == charge
+
+
+def test_wallet_reservations_are_serialized_under_concurrent_admission(tmp_path: Path) -> None:
+    billing = BillingStore(tmp_path)
+    billing.credit("usr_wallet", 1000)
+    barrier = Barrier(2)
+
+    def reserve(request_id: str) -> str:
+        barrier.wait(timeout=3)
+        try:
+            billing.reserve_for_request(
+                "usr_wallet", request_id,
+                model_id="test-model", estimated_cny_cents=600,
+                input_tokens=1, output_tokens=1,
+                price_snapshot={"model_id": "test-model"}, usd_cny_rate=7.0,
+            )
+            return "reserved"
+        except InsufficientWalletBalance:
+            return "rejected"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(reserve, ("req_wallet_a", "req_wallet_b")))
+
+    assert sorted(outcomes) == ["rejected", "reserved"]
+    assert billing.reserved_cents("usr_wallet") == 600
+    assert billing.available_balance_cents("usr_wallet") == 400
+
+
+def test_wallet_reservation_and_charge_are_user_scoped(tmp_path: Path) -> None:
+    pricing = PricingStore(tmp_path)
+    billing = BillingStore(tmp_path)
+    billing.credit("usr_alice", 1000)
+    billing.reserve_for_request(
+        "usr_alice", "req_wallet_owner",
+        model_id="gpt-5.6-sol", estimated_cny_cents=100,
+        input_tokens=1, output_tokens=1,
+        price_snapshot=pricing.model("gpt-5.6-sol"), usd_cny_rate=7.0,
+    )
+
+    with pytest.raises(WalletReservationError):
+        billing.record_charge(
+            "usr_bob",
+            {
+                "request_id": "req_wallet_owner",
+                "status": "completed",
+                "requested_model": "gpt-5.6-sol",
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+            pricing,
+        )
+    assert billing.balance_cents("usr_alice") == 1000
+    assert billing.balance_cents("usr_bob") == 0
+    assert billing.reserved_cents("usr_alice") == 100
+
+
+def test_wallet_reservation_rejects_user_request_before_worker_dispatch(tmp_path: Path) -> None:
+    import asyncio
+
+    from fastapi.testclient import TestClient
+
+    from app.config import Settings
+    from app.main import create_app
+    from app.quota_reservations import QuotaReservationStore
+    from app.quota_reservation_runtime_v1 import install_quota_reservation_runtime_v1
+    from app.user_console_v104_patch import install_user_console_v104_patch
+
+    app = create_app(Settings(
+        CHAT2API_API_KEY="wallet-master-key",
+        CHAT2API_DATA_DIR=str(tmp_path),
+    ))
+    install_user_console_v104_patch(app)
+    user = app.state.user_accounts.register("wallet-user@example.com", "long-enough-password")
+    public, token = asyncio.run(app.state.api_keys.create("wallet-user"))
+    app.state.user_accounts.attach_key(user["user_id"], public["key_id"])
+    pricing = app.state.user_pricing
+    config = pricing.public()
+    pricing.update(billing_enabled=True, usd_cny_rate=7.0, models=config["models"])
+    app.state.user_billing.credit(user["user_id"], 1)
+    app.state.quota_reservations = QuotaReservationStore(tmp_path)
+    install_quota_reservation_runtime_v1(app)
+    app.state.registry.resolve_client = lambda requested: "ext_wallet_test"
+    sent: list[dict] = []
+
+    async def fake_worker_send(client_id: str, payload: dict) -> None:
+        sent.append(payload)
+
+    app.state.registry.send = fake_worker_send
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "model": "gpt-5.6-sol",
+                "messages": [{"role": "user", "content": "Wallet admission test"}],
+                "max_tokens": 64,
+            },
+        )
+
+    assert response.status_code == 402, response.text
+    assert sent == []
+    assert app.state.user_billing.balance_cents(user["user_id"]) == 1
+    assert app.state.user_billing.reserved_cents(user["user_id"]) == 0
+    rows = app.state.quota_reservations.list_reservations(key_id=public["key_id"])
+    assert rows and all(row["state"] == "released" for row in rows)
+    app.state.quota_reservations.close()
