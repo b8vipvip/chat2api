@@ -3619,6 +3619,30 @@
       if (typeof interruption?.resolveBlockingInterruption === "function") {
         await interruption.resolveBlockingInterruption({force:true,phase:"before-request"});
       }
+      const attachmentSpecs = Array.isArray(message.attachments) ? message.attachments : [];
+      if (attachmentSpecs.length) {
+        // The server grants this Worker access only to the files attached to
+        // this exact live request. Prepare them before writing/submitting the
+        // prompt, and carry the same request ID through the download bridge.
+        const multimodal = globalThis.__CHAT2API_MULTIMODAL_V4__;
+        if (typeof multimodal?.attach !== "function") {
+          throw new Error("The request-scoped multimodal attachment controller is unavailable");
+        }
+        const prepared = await multimodal.attach(attachmentSpecs, {
+          request_id: active.requestId,
+        });
+        if (prepared?.attachment_verified !== true
+            || Number(prepared.attachments_count) !== attachmentSpecs.length) {
+          throw new Error("ChatGPT did not verify every attachment for this request");
+        }
+        active.attachmentPrepare = {
+          attachments_count: Number(prepared.attachments_count),
+          attachment_prepare_ms: Number(prepared.attachment_prepare_ms || 0),
+          attachment_verification_revision: Number(prepared.attachment_verification_revision || 0),
+          attachment_names: Array.isArray(prepared.attachment_names) ? prepared.attachment_names : [],
+        };
+        await diagnostic(active, "attachments-prepared", active.attachmentPrepare);
+      }
       await writePrompt(active, prompt);
       await submitAndConfirm(active);
       await monitor(active);
