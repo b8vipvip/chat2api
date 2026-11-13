@@ -144,3 +144,46 @@ def test_wallet_refund_route_is_csrf_gated_session_scoped_and_audited(tmp_path: 
     events = app.state.admin_audit.recent(30)
     assert any(e["action"] == "billing.wallet_refund_requested" for e in events)
     assert any(e["action"] == "billing.wallet_refund_completed" for e in events)
+
+
+def test_wallet_refund_history_is_visible_only_to_own_account(tmp_path: Path) -> None:
+    app = create_app(Settings(
+        CHAT2API_API_KEY="wallet-refund-master-key",
+        CHAT2API_DATA_DIR=str(tmp_path),
+    ))
+    install_user_console_v104_patch(app)
+    accounts = app.state.user_accounts
+    alice = accounts.register("wallet-alice@example.com", "long-enough-password")
+    bob = accounts.register("wallet-bob@example.com", "different-long-password")
+    alice_id = alice["user_id"]
+    bob_id = bob["user_id"]
+    pricing = app.state.user_pricing
+    config = pricing.public()
+    pricing.update(billing_enabled=True, usd_cny_rate=7.0, models=config["models"])
+    billing = app.state.user_billing
+    for name, user_id in (("alice", alice_id), ("bob", bob_id)):
+        billing.credit(user_id, 1000)
+        row = billing.record_charge(user_id, {
+            "request_id": "req_refund_" + name,
+            "status": "completed",
+            "requested_model": "gpt-5.6-sol",
+            "usage": {"prompt_tokens": 1000, "completion_tokens": 500, "total_tokens": 1500},
+        }, pricing)
+        assert row is not None and row["cost_cny_cents"] == 10
+    billing.refund_charge("req_refund_alice", "rf_alice00001", 5, "verified correction")
+
+    with TestClient(app) as client:
+        client.cookies.set("chat2api_user_session", accounts.create_session(alice_id))
+        alice_view = client.get("/api/user/billing")
+        assert alice_view.status_code == 200, alice_view.text
+        assert alice_view.json()["refunded_cents"] == 5
+        assert alice_view.json()["net_debited_spend_cents"] == 5
+        assert len(alice_view.json()["refunds"]) == 1
+        assert alice_view.json()["refunds"][0]["request_id"] == "req_refund_alice"
+        client.cookies.set("chat2api_user_session", accounts.create_session(bob_id))
+        bob_view = client.get("/api/user/billing")
+        assert bob_view.status_code == 200, bob_view.text
+        assert bob_view.json()["refunded_cents"] == 0
+        assert bob_view.json()["net_debited_spend_cents"] == 10
+        assert bob_view.json()["refunds"] == []
+        assert "rf_alice00001" not in bob_view.text
