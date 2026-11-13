@@ -671,6 +671,7 @@
     $("modelSelect").disabled = true;
     renderAll();
 
+    let requestSubmitted = false;
     try {
       const messages = conversation.messages
         .filter((message) => message.id !== assistant.id)
@@ -687,6 +688,7 @@
         setConnection("登录已失效", "error");
         throw new Error("用户登录状态已失效，请重新登录后再继续聊天");
       }
+      requestSubmitted = true;
       const response = await fetch("/v1/chat/completions", {
         method: "POST",
         credentials: "same-origin",
@@ -762,7 +764,7 @@
         });
       }
     } catch (error) {
-      assistant.pending = Boolean(assistant.requestId);
+      assistant.pending = Boolean(requestSubmitted && assistant.requestId);
       assistant.recoveryStatus = error.name === "AbortError" ? "cancellation_requested" : "recovery_pending";
       if (assistant.pending) {
         saveHistory();
