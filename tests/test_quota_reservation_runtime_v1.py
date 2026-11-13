@@ -709,6 +709,61 @@ def test_audio_conversation_reserves_and_settles_admission_floor(tmp_path: Path)
     app.state.quota_reservations.close()
 
 
+def test_audio_conversation_zero_text_releases_admission_hold_without_fake_charge(tmp_path: Path) -> None:
+    import asyncio
+    import base64
+
+    from fastapi.testclient import TestClient
+    from app.voice_patch import install_voice_patch
+
+    app, public, token = _managed_chat_quota_app(tmp_path, token_quota=10000)
+    install_voice_patch(app)
+    app.state.registry.resolve_client = lambda requested: "ext_voice_quota"
+    audio_file = asyncio.run(app.state.file_store.create(
+        filename="silent-input.webm",
+        data_base64=base64.b64encode(b"silent-audio-bytes").decode("ascii"),
+        mime_type="audio/webm",
+        owner_key_id=public["key_id"],
+        purpose="voice-input",
+    ))
+    audio = base64.b64encode(b"fake-webm-opus-audio" * 8).decode("ascii")
+
+    async def fake_worker_send(client_id: str, payload: dict) -> None:
+        if payload.get("type") == "voice.request":
+            await app.state.broker.publish(payload["request_id"], {
+                "type": "image.completed",
+                "kind": "voice",
+                "request_id": payload["request_id"],
+                "voice": {
+                    "transcript": "",
+                    "b64_json": audio,
+                    "mime_type": "audio/webm;codecs=opus",
+                    "size": 160,
+                },
+            })
+
+    app.state.registry.send = fake_worker_send
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/audio/conversations",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"model": "gpt-live", "audio_file_id": audio_file.file_id},
+        )
+
+    assert response.status_code == 200, response.text
+    record = next(
+        item for item in app.state.telemetry.recent(20)
+        if item.get("request_type") == "voice_conversation"
+        and item.get("api_key_id") == public["key_id"]
+    )
+    assert record["status"] == "completed"
+    assert record["usage"]["total_tokens"] == 0
+    reservation = app.state.quota_reservations.get(record["request_id"])
+    assert reservation is not None and reservation["state"] == "released"
+    assert app.state.api_keys.keys[public["key_id"]].tokens_used == 0
+    app.state.quota_reservations.close()
+
+
 def test_audio_conversation_rejects_over_quota_before_worker_dispatch(tmp_path: Path) -> None:
     import asyncio
     import base64
