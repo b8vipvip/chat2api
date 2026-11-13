@@ -185,6 +185,7 @@ def test_invite_only_registration_consumes_code_only_after_success(tmp_path: Pat
             "invite_code": code,
         })
         assert registered.status_code == 200
+        assert registered.headers["cache-control"] == "no-store"
         assert registered.json()["ok"] is True
         assert app.state.invitations.list_invitations()[0]["status"] == "consumed"
 
