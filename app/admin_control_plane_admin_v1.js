@@ -69,11 +69,17 @@
 
   function applyNavigation() {
     document.querySelectorAll("[data-cview]").forEach((node) => {
-      node.hidden = !roleCan(node.dataset.view);
+      const allowed = roleCan(node.dataset.view);
+      node.hidden = !allowed;
+      // The legacy inline bootstrap temporarily disables all navigation while
+      // checking its own session. RBAC owns the final state, so explicitly
+      // re-enable only views granted to the authenticated server-side role.
+      node.disabled = !allowed;
     });
     const root = adminSession && adminSession.authenticated && adminSession.role === "super_admin";
     document.querySelectorAll(".nav button:not([data-cview])").forEach((node) => {
       node.hidden = !!(adminSession && adminSession.authenticated && !root);
+      node.disabled = !root;
     });
     if ($("adminKey")) $("adminKey").disabled = !!(adminSession && adminSession.authenticated && !root);
     if ($("connect")) $("connect").hidden = !!(adminSession && adminSession.authenticated && !root);
