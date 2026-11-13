@@ -42,17 +42,23 @@ Admin inspection API:
   commits, only when ApiKeyStore.charged_requests proves the charge.
 
 
-## Integration contract (not yet installed)
+## Runtime integration contract (implemented in #828)
 
-A future single C integration owner must:
-1. Authenticate the API key through the existing ApiKeyStore.
-2. Estimate request input plus a defensible maximum output reservation before
-   Worker dispatch; never trust a client-supplied estimate.
-3. Call reserve_for_key before dispatch; reject over-quota requests.
-4. At terminal finality, call commit_completed_usage for completed requests,
-   and release only failed/cancelled/unsubmitted reservations.
-5. Reconcile committing reservations on startup/recovery before accepting
-   additional scoped traffic.
+The single C integration owner installs the runtime adapter in app.entry:
+1. Chat Completions and Responses authenticate through the existing ApiKeyStore.
+2. Both adapters reserve server-estimated prompt tokens plus a conservative
+   4096-token output floor before Worker dispatch. Larger explicit output budgets
+   increase the reservation; client values never reduce the floor.
+3. Over-quota requests are rejected before Worker dispatch.
+4. TelemetryStore remains the terminal projection owner. Completed requests
+   commit only when total_tokens is a positive integer; error/cancelled/failed
+   terminal requests release their active reservation.
+5. A completed terminal with missing or malformed usage stays committing. The
+   reservation is not released or marked settled without positive usage evidence.
+6. Settlement verifies ApiKeyStore.charged_requests before marking the journal
+   settled. Startup and the audited admin reconcile action replay persisted
+   completed telemetry after a pre-charge crash, then reconcile commits already
+   proven by the API-key ledger. ApiKeyStore remains the only charge authority.
 
 This PR does **not** modify TelemetryStore, request-v6 finality, Broker, Worker
 dispatch, or ApiKeyStore. It is not wired into app.entry:app; per #784 the
@@ -83,22 +89,28 @@ remain required.
 
 ## 2026-11-13 runtime integration status
 
-The first runtime slice is installed for `POST /v1/chat/completions` only.
-It reserves prompt-token estimate plus a conservative 4096-token output floor
-before Worker admission. Explicit max_tokens/max_completion_tokens values
-above that floor increase the reservation; they do not lower the floor because
-the compatibility matrix does not treat those fields as a guaranteed upstream
-generation cap.
+The runtime adapter is installed for `POST /v1/chat/completions` and
+`POST /v1/responses`. Both reserve a server-side prompt estimate plus a
+conservative 4096-token output floor before Worker dispatch. Explicit output
+budgets above the floor increase the reservation; they do not lower it because
+the compatibility matrix does not prove those fields are enforced upstream.
 
 TelemetryStore invokes its usage-accounting callback on queued/running updates
-as well as terminal updates. The reservation adapter therefore keeps
-queued/running reservations pending, commits only `completed`, and releases
-only terminal error/cancelled/stalled/failed/timeout states. Startup performs
-expiry and committing-state reconciliation against the existing ApiKeyStore
-charged-request ledger.
+as well as terminal updates. The reservation adapter keeps nonterminal
+reservations pending, commits only completed requests with a positive integral
+`total_tokens`, and releases only failed/cancelled/stalled/failed/timeout
+terminal states. Missing, zero or malformed usage remains in `committing`
+until usage is proven. Settlement verifies the existing ApiKeyStore request
+ledger before dropping the reservation.
 
-Runtime coverage is explicitly reported as `/v1/chat/completions`. Responses,
-image generation and other usage-bearing routes are not yet reservation-gated;
-do not treat C-06 as complete. Wallet-cents reservation/refund and multi-process
-ledger transactions also remain outside this slice. The existing ApiKeyStore
-and BillingStore remain the only actual charge authorities.
+Startup expires only unstarted reservations, replays persisted completed
+telemetry for interrupted commits, then reconciles reservations whose
+ApiKeyStore charged-request ledger already proves the charge. The audited admin
+reconcile action uses the same recovery sequence.
+
+Runtime coverage is explicitly reported as `/v1/chat/completions` and
+`/v1/responses`. Image generation and other usage-bearing routes remain
+ungated; do not treat C-06 as complete. Wallet-cents reservation/refund,
+tenant quota inheritance, provider-verified usage reconciliation and
+multi-process ledger transactions remain outside this slice. ApiKeyStore and
+BillingStore remain the only actual charge authorities.
