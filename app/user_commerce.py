@@ -558,6 +558,14 @@ class BillingStore:
             else:
                 price = pricing.model(model_id)
                 fx = float(pricing.public().get("usd_cny_rate") or 0)
+                if not price and reservation and reservation.get("state") == "reserved":
+                    # If served_model is unknown or has no configured price,
+                    # settle against the requested-model snapshot that was
+                    # actually held at admission rather than silently dropping
+                    # a priced request's wallet charge.
+                    model_id = reserved_model
+                    price = dict(reservation.get("price_snapshot") or {})
+                    fx = float(reservation.get("usd_cny_rate") or fx)
             if not price:
                 if reservation and reservation.get("state") == "reserved":
                     reservation.update({"state": "released", "release_reason": "pricing_unavailable", "updated_at": _now()})
