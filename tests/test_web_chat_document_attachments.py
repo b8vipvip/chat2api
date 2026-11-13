@@ -270,6 +270,13 @@ def test_document_file_part_is_bound_to_the_uploading_api_key(tmp_path: Path) ->
         assert response.status_code == 403, response.text
         assert "belongs to another API key" in response.json()["detail"]
 
+        deleted = client.delete(
+            f"/api/user/files/{file_id}",
+            headers={"Origin": "http://testserver"},
+        )
+        assert deleted.status_code == 200, deleted.text
+        assert deleted.json() == {"deleted": True}
+
 def test_chat_completion_preflights_combined_file_and_inline_image_count(tmp_path: Path) -> None:
     with TestClient(create_app(_settings(tmp_path))) as client:
         documents = [
