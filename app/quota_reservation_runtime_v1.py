@@ -67,6 +67,10 @@ def reserve_wallet_charge(
         raise HTTPException(status_code=402, detail="账户余额不足，无法预留本次请求预计费用") from error
     except WalletReservationError as error:
         raise HTTPException(status_code=503, detail="Wallet reservation failed: " + str(error)) from error
+    except OSError as error:
+        # Storage write failure is an admission failure, never a best-effort
+        # bypass to Worker dispatch.
+        raise HTTPException(status_code=503, detail="Wallet reservation storage is unavailable") from error
     except (TypeError, ValueError, OverflowError) as error:
         raise HTTPException(status_code=503, detail="Wallet reservation estimate is invalid") from error
 
@@ -119,6 +123,15 @@ def reserve_request_quota(
         raise HTTPException(status_code=429, detail=str(error)) from error
     except QuotaReservationError as error:
         raise HTTPException(status_code=503, detail="Token quota reservation failed: " + str(error)) from error
+    except Exception as error:
+        # Unexpected wallet/journal persistence failure must not leave a
+        # token hold that blocks unrelated, valid requests.
+        if token_reservation:
+            try:
+                store.release(str(request_id), key_id)
+            except Exception:
+                logger.exception("Token hold cleanup failed after quota admission exception request_id=%s", request_id)
+        raise HTTPException(status_code=503, detail="Quota admission is unavailable") from error
 
 
 # Images and Voice do not yet expose provider-verified usage in the Worker
