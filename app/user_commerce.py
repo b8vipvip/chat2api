@@ -557,12 +557,17 @@ class BillingStore:
                     raise WalletReservationError("Request is already charged to another user")
                 reservation = self.reservations.get(request_id)
                 if reservation and reservation.get("state") == "reserved":
+                    previous = dict(reservation)
                     reservation.update({
                         "state": "settled" if existing.get("debited") else "released",
                         "actual_cny_cents": int(existing.get("cost_cny_cents") or 0),
                         "updated_at": _now(),
                     })
-                    self._save()
+                    try:
+                        self._save()
+                    except OSError:
+                        self.reservations[request_id] = previous
+                        raise
                 return dict(existing)
             diagnostics = request_row.get("diagnostics") if isinstance(request_row.get("diagnostics"), dict) else {}
             model_id = str(diagnostics.get("actual_model") or request_row.get("requested_model") or "")
@@ -586,8 +591,13 @@ class BillingStore:
                     fx = float(reservation.get("usd_cny_rate") or fx)
             if not price:
                 if reservation and reservation.get("state") == "reserved":
+                    previous = dict(reservation)
                     reservation.update({"state": "released", "release_reason": "pricing_unavailable", "updated_at": _now()})
-                    self._save()
+                    try:
+                        self._save()
+                    except OSError:
+                        self.reservations[request_id] = previous
+                        raise
                 return None
             usage = request_row.get("usage") if isinstance(request_row.get("usage"), dict) else {}
             input_tokens = max(0, int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0))
@@ -602,6 +612,8 @@ class BillingStore:
             usd_micros = max(0, int(round(usd * 1_000_000)))
             cny_cents = max(0, int(round(usd * fx * 100)))
             billing_enabled = bool(pricing.public().get("billing_enabled"))
+            prior_balance = self.wallets.get(user_id)
+            prior_reservation = dict(reservation) if reservation else None
             if billing_enabled and cny_cents:
                 self.wallets[user_id] = int(self.wallets.get(user_id, 0)) - cny_cents
             row = {
@@ -627,7 +639,21 @@ class BillingStore:
                     "release_reason": None if billing_enabled else "billing_disabled_before_terminal",
                     "updated_at": _now(),
                 })
-            self._save()
+            try:
+                self._save()
+            except OSError:
+                # The charge and debit are one atomic JSON write. Restore the
+                # in-memory ledger if that write failed, otherwise a later
+                # retry would falsely see a charge that was never durable.
+                self.charges.pop(request_id, None)
+                if billing_enabled and cny_cents:
+                    if prior_balance is None:
+                        self.wallets.pop(user_id, None)
+                    else:
+                        self.wallets[user_id] = prior_balance
+                if prior_reservation is not None:
+                    self.reservations[request_id] = prior_reservation
+                raise
             return dict(row)
 
     def charges_for_user(self, user_id: str) -> list[dict[str, Any]]:
