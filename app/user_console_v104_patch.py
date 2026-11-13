@@ -213,8 +213,16 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
         if not owned:
             return
         for row in telemetry.recent(500):
-            if str(row.get("api_key_id") or "") in owned and str(row.get("status") or "") == "completed":
+            if str(row.get("api_key_id") or "") not in owned:
+                continue
+            status = str(row.get("status") or "").lower()
+            if status == "completed":
                 billing.record_charge(user_id, row, pricing)
+            elif status in {"error", "cancelled", "stalled", "failed", "timeout"}:
+                billing.release_reservation(
+                    str(row.get("request_id") or ""), user_id,
+                    reason="reconciled_terminal_" + status,
+                )
 
     def public_request(row: dict[str, Any]) -> dict[str, Any]:
         diagnostics = row.get("diagnostics") if isinstance(row.get("diagnostics"), dict) else {}
@@ -1088,6 +1096,11 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
                     None,
                 )
                 owner = accounts.owner_for_key(str(matched.key_id)) if matched else None
+                if owner:
+                    # Reconcile recent terminal charges/releases before checking
+                    # available funds; this recovers a process interruption
+                    # between telemetry persistence and the billing projection.
+                    sync_user_charges(owner)
                 if owner and not accounts.is_enabled(owner):
                     return JSONResponse(
                         status_code=401,
