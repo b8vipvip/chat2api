@@ -140,6 +140,10 @@ provider-side audio usage are not converted into invented token counts. The
 current Voice Worker event does not carry provider-verified usage. Failed,
 cancelled and timed-out speech/conversation requests release their hold.
 Over-quota speech/conversation requests are rejected before Worker dispatch.
+If an audio conversation completes with no text instruction and no transcript,
+its estimated text usage is explicitly zero: the admission hold is released
+without inventing a token charge. This zero-text path does not imply that the
+underlying audio operation had zero provider cost.
 
 The realtime Voice WebSocket route remains outside this runtime reservation
 coverage: it currently emits no authoritative prompt/transcript token usage
