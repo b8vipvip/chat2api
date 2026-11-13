@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import create_app
+from app.attachment_download_v82_patch import install_attachment_download_v82_patch
 
 
 def settings(tmp_path: Path) -> Settings:
@@ -61,7 +62,9 @@ def upload(client: TestClient, name: str, mime: str, payload: bytes, purpose: st
 
 
 def test_file_upload_is_forwarded_to_chat_and_downloadable_by_extension(tmp_path: Path) -> None:
-    with TestClient(create_app(settings(tmp_path))) as client:
+    app = create_app(settings(tmp_path))
+    install_attachment_download_v82_patch(app)
+    with TestClient(app) as client:
         image = upload(client, "vision.png", "image/png", b"fake-png-payload", "vision")
         client_id, token = pair(client)
 
@@ -120,6 +123,7 @@ def test_file_upload_is_forwarded_to_chat_and_downloadable_by_extension(tmp_path
                 assert extension_download.status_code == 200
                 assert extension_download.content == b"fake-png-payload"
                 assert extension_download.headers["content-type"].startswith("image/png")
+                assert extension_download.headers["x-chat2api-attachment-revision"] == "83"
                 websocket.send_json(
                     {
                         "type": "chat.diagnostics",
