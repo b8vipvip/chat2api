@@ -248,3 +248,28 @@ def test_document_file_part_is_bound_to_the_uploading_api_key(tmp_path: Path) ->
         )
         assert response.status_code == 403, response.text
         assert "belongs to another API key" in response.json()["detail"]
+
+def test_chat_completion_preflights_combined_file_and_inline_image_count(tmp_path: Path) -> None:
+    with TestClient(create_app(_settings(tmp_path))) as client:
+        documents = [
+            _upload_document(client, f"document-{index}.txt", "text/plain", f"doc-{index}".encode())
+            for index in range(4)
+        ]
+        before = set(client.app.state.file_store.items)
+        response = client.post(
+            "/v1/chat/completions", headers=_admin_headers(),
+            json={
+                "model": "default",
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Review these attachments."},
+                        *[{"type": "file", "file_id": item["id"]} for item in documents],
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,not-even-decoded"}},
+                    ],
+                }],
+            },
+        )
+        assert response.status_code == 400, response.text
+        assert "At most four image/file inputs" in response.json()["detail"]
+        assert set(client.app.state.file_store.items) == before
