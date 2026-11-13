@@ -84,9 +84,13 @@ def permission_for_admin_route(path: str, method: str) -> str | None:
     ):
         return "tenants:" + suffix
     if path == "/api/admin/users" or re.fullmatch(
-        r"/api/admin/users/[^/]+(?:/sessions/revoke|/keys(?:/[^/]+)?)?", path
+        r"/api/admin/users/[^/]+(?:/sessions/revoke)?", path
     ):
         return "users:" + suffix
+    # User-owned API keys have their own permission boundary. A user manager
+    # must not gain key visibility or mutation rights through /users/{id}/keys.
+    if re.fullmatch(r"/api/admin/users/[^/]+/keys(?:/[^/]+)?", path):
+        return "keys:" + suffix
     if re.fullmatch(r"/api/admin/keys/[^/]+/secret", path):
         return "secrets:read"
     if re.fullmatch(r"/api/admin/keys/[^/]+/settings", path):
