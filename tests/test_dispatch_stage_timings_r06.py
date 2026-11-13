@@ -121,6 +121,32 @@ def test_production_chat_ingress_only_marks_socket_send_not_worker_ack() -> None
 
 
 
+def test_worker_dispatch_reports_queue_route_content_readiness_and_ack_stages() -> None:
+    background = (ROOT / "chrome_extension/background.js").read_text(encoding="utf-8")
+    conversation = (ROOT / "chrome_extension/conversation_dispatch.js").read_text(encoding="utf-8")
+
+    # Browser-side queue and route allocation happen before background.js
+    # begins the tab handoff; keep them separate from the content ACK.
+    assert "dispatchEnqueuedAt = isRoutedRequest ? monotonicNow() : null" in conversation
+    assert "worker_dispatch_queue_wait_ms" in conversation
+    assert "worker_route_resolve_ms" in conversation
+    assert "message.__chat2api_worker_route_resolve_ms = elapsedMs(routeStarted)" in conversation
+
+    # The background stage clock isolates tab lookup, content injection/ping,
+    # and the exact tabs.sendMessage acceptance round trip.
+    for key in (
+        "worker_target_tab_lookup_ms",
+        "worker_ensure_content_ms",
+        "worker_tabs_send_message_ms",
+        "worker_tab_handler_to_content_ack_ms",
+        "worker_dispatch_failure_stage",
+    ):
+        assert key in background
+    assert "stageStarted = performance.now()" in background
+    assert 'response.controller === "request-v6" && !response.reroute_pending' in background
+    assert "worker_content_dispatch_ack_source: \"background-tabs-sendMessage-request-v6\"" in background
+
+
 def test_worker_event_ingress_requires_exact_request_client_and_socket() -> None:
     dispatched_socket = object()
     replacement_socket = object()
