@@ -103,10 +103,13 @@ terminal states. Missing, zero or malformed usage remains in `committing`
 until usage is proven. Settlement verifies the existing ApiKeyStore request
 ledger before dropping the reservation.
 
-Startup expires only unstarted reservations, replays persisted completed
-telemetry for interrupted commits, then reconciles reservations whose
-ApiKeyStore charged-request ledger already proves the charge. The audited admin
-reconcile action uses the same recovery sequence.
+Startup first replays persisted terminal telemetry for every active
+reservation, including both reserved and committing states. This covers the
+crash window after TelemetryStore appends a terminal row but before its
+accounting callback begins the committing transition. Only after replay and
+ledger reconciliation does startup expire remaining stale, unstarted
+reservations. The audited admin reconcile action uses the same replay and
+ledger-reconciliation sequence.
 
 Runtime coverage is explicitly reported as `/v1/chat/completions` and
 `/v1/responses`. Image generation and other usage-bearing routes remain
