@@ -35,24 +35,32 @@ from app.entry import app
 Path(os.environ["CHAT2API_TEST_ENTRY_READY_FILE"]).write_text("ready", encoding="ascii")
 time.sleep(120)
 """
-    first = subprocess.Popen(
-        [sys.executable, "-c", first_script],
-        cwd=repository_root,
-        env=_isolated_environment(data_dir, ready_file),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+    stderr_path = tmp_path / "first-process.stderr"
+    with stderr_path.open("w", encoding="utf-8") as stderr_handle:
+        first = subprocess.Popen(
+            [sys.executable, "-c", first_script],
+            cwd=repository_root,
+            env=_isolated_environment(data_dir, ready_file),
+            stdout=subprocess.DEVNULL,
+            stderr=stderr_handle,
+            text=True,
+        )
     try:
         deadline = time.monotonic() + 60
         while not ready_file.exists() and first.poll() is None and time.monotonic() < deadline:
             time.sleep(0.05)
 
         if not ready_file.exists():
-            _, stderr = first.communicate(timeout=5)
+            if first.poll() is None:
+                first.terminate()
+            try:
+                first.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                first.kill()
+                first.wait(timeout=10)
             raise AssertionError(
                 "first production entry process did not acquire its runtime lock: "
-                + (stderr or "")[-4000:]
+                + stderr_path.read_text(encoding="utf-8", errors="replace")[-4000:]
             )
 
         second_script = """
@@ -89,10 +97,10 @@ else:
         if first.poll() is None:
             first.terminate()
         try:
-            _, stderr = first.communicate(timeout=10)
+            first.wait(timeout=10)
         except subprocess.TimeoutExpired:
             first.kill()
-            _, stderr = first.communicate(timeout=10)
+            first.wait(timeout=10)
 
     # OS process exit must release the lock without unlinking its inode.
     assert (data_dir / ".chat2api-runtime.lock").is_file()
