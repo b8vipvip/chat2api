@@ -214,6 +214,28 @@ async def test_startup_recovery_replays_terminal_before_expiring_reserved_hold(t
     store.close()
 
 
+@pytest.mark.asyncio
+async def test_startup_recovery_releases_reserved_terminal_failure(tmp_path: Path) -> None:
+    from app.telemetry import TelemetryStore
+
+    app, store, api_keys = _runtime(tmp_path)
+    request_id = "req_replay_reserved_cancelled_0001"
+    reserve_request_quota(
+        app, request_id, SimpleNamespace(key_id="key-1"), "prompt", 4096,
+    )
+    telemetry = TelemetryStore(tmp_path)
+    await telemetry.upsert({
+        "request_id": request_id, "api_key_id": "key-1", "status": "cancelled",
+    })
+    telemetry.items.clear()
+
+    # A crash before the accounting callback must not strand a cancelled
+    # request's reservation until the TTL expires.
+    assert await store.recover_committing(telemetry, api_keys) == 0
+    assert store.get(request_id)["state"] == "released"
+    assert store.active_reserved_tokens("key-1") == 0
+    store.close()
+
 def test_reconcile_accepts_store_level_idempotency_ledger_adapter(tmp_path: Path) -> None:
     app, store, api_keys = _runtime(tmp_path)
     request_id = "req_reconcile_store_ledger_0001"
