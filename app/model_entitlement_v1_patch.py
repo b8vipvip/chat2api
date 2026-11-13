@@ -106,7 +106,13 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
             # An unowned API key is a valid standalone key. A failed ownership
             # lookup is not equivalent to an unowned key: fail closed so a
             # transient account-store error cannot bypass user-level policy.
-            return accounts.owner_for_key(str(key_id))
+            owner_id = accounts.owner_for_key(str(key_id))
+            if owner_id is None:
+                return None
+            normalized_owner_id = str(owner_id).strip()
+            if not normalized_owner_id:
+                raise RuntimeError("API key owner binding is empty")
+            return normalized_owner_id
         except Exception as exc:
             raise HTTPException(
                 status_code=503,
@@ -117,14 +123,18 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
         if not key_id or key_id == "master":
             return None, None
         try:
-            tenant_id = tenant_memberships.tenant_for_key(str(key_id))
-            if not tenant_id:
+            raw_tenant_id = tenant_memberships.tenant_for_key(str(key_id))
+            if raw_tenant_id is None:
                 return None, None
-            user_id = tenant_memberships.user_for_key(str(key_id))
-            role = tenant_memberships.role_for(tenant_id, user_id) if user_id else None
+            tenant_id = str(raw_tenant_id).strip()
+            if not tenant_id:
+                raise RuntimeError("API key tenant binding is empty")
+            raw_user_id = tenant_memberships.user_for_key(str(key_id))
+            user_id = str(raw_user_id or "").strip()
+            role = str(tenant_memberships.role_for(tenant_id, user_id) or "").strip() if user_id else ""
             if not user_id or not role:
                 raise RuntimeError("Tenant-bound API key has no active owner membership")
-            return str(tenant_id), str(role)
+            return tenant_id, role
         except HTTPException:
             raise
         except Exception as exc:
