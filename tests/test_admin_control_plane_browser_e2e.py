@@ -443,7 +443,6 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                     "() => { window.fetch = window.__c07_users_fetch; delete window.__c07_users_fetch; }"
                 )
                 assert not page_errors, "Unexpected browser exceptions: " + repr(page_errors)
-                assert not page_errors, "unexpected admin browser JavaScript errors: " + repr(page_errors)
             finally:
                 context.close()
                 browser.close()
