@@ -45,6 +45,23 @@ def reserve_request_quota(
         raise HTTPException(status_code=503, detail="Token quota reservation failed: " + str(error)) from error
 
 
+# Images has no provider-verified token usage in the current Worker protocol.
+# This fixed amount is an admission hold only; successful requests settle the
+# prompt-token estimate already emitted by the canonical Images executor.
+IMAGE_GENERATION_RESERVATION_FLOOR_TOKENS = 4096
+
+
+def reserve_image_generation_quota(
+    app: Any, request_id: str, principal: Any, prompt: str, image_count: int = 1,
+) -> dict[str, Any] | None:
+    if type(image_count) is not int or not 1 <= image_count <= 4:
+        raise HTTPException(status_code=400, detail="Image count is outside the quota reservation limit")
+    return reserve_request_quota(
+        app, request_id, principal, prompt,
+        IMAGE_GENERATION_RESERVATION_FLOOR_TOKENS * image_count,
+    )
+
+
 def install_quota_reservation_runtime_v1(app: Any) -> Any:
     if getattr(app.state, "quota_reservation_runtime_v1_installed", False):
         return app
@@ -62,6 +79,11 @@ def install_quota_reservation_runtime_v1(app: Any) -> Any:
 
     telemetry.usage_accounting = account_usage_with_reservations
     app.state.quota_reservation_runtime_enabled = True
-    app.state.quota_reservation_runtime_coverage = ["/v1/chat/completions", "/v1/responses"]
+    app.state.quota_reservation_runtime_coverage = [
+        "/v1/chat/completions",
+        "/v1/responses",
+        "/v1/images/generations",
+        "/v1/responses#image_generation (delegated to Images executor)",
+    ]
     app.state.quota_reservation_runtime_v1_installed = True
     return app
