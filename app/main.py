@@ -49,6 +49,7 @@ from .media_public_origin_v187 import media_base_for_request
 from .response_history_media_v188 import history_safe_response_text
 from .responses_multimodal_input_v183 import (
     attachment_specs as canonical_attachment_specs,
+    validate_document_file,
     validate_image_file,
     verify_raster_image,
 )
@@ -1860,6 +1861,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         require_scope(principal, "chat")
         prompt = build_prompt(body.messages, body.prompt_mode)
         inline_ids = await inline_image_files(body, principal)
+        for message in body.messages:
+            for file_id in message.referenced_document_file_ids():
+                try:
+                    validate_document_file(file_store, file_id, principal)
+                except ValueError as error:
+                    raise HTTPException(status_code=400, detail=str(error)) from error
         file_ids = list(dict.fromkeys(body.all_file_ids() + inline_ids))
         attachments = attachment_specs(file_ids, principal)
         request_id = accepted_request_id(x_chat2api_request_id, "req_")
