@@ -118,7 +118,17 @@
       applyNavigation();
       window.dispatchEvent(new CustomEvent("chat2api-admin-session-changed", { detail: adminSession }));
       const active = location.hash.replace(/^#/, "");
-      if (C_ROLES[active]) {
+      if (adminSession.authenticated && adminSession.role !== "super_admin") {
+        const defaults = {
+          system_admin: "client-policy",
+          user_admin: "registration-invitations",
+          api_key_admin: "api-keys",
+          billing_admin: "quota-ledger",
+          plugin_admin: "plugins",
+          support: "model-entitlements",
+        };
+        show(roleCan(active) ? active : (defaults[adminSession.role] || "model-entitlements"));
+      } else if (C_ROLES[active]) {
         if (!roleCan(active)) show("overview");
         else show(active);
       }
