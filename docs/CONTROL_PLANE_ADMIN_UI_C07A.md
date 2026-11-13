@@ -18,8 +18,12 @@ request-history table owner.
   a newly created token is displayed once and historical secret reveal remains
   root-only. The user-commerce key subview remains the existing owner for
   per-user key operations.
-- Client policy: open/closed registration, Web Chat enable flag and plain-text
+- Client policy: open/invite_only/closed registration, Web Chat enable flag and plain-text
   announcement.
+- Registration invitations: role-aware issue/list/revoke controls with bounded
+  24-hour/7-day/30-day expiry. The one-time code is displayed only in the create
+  response and can be copied; list/history never returns the code. `user_admin`
+  can issue/revoke, while read-only roles can inspect metadata.
 - Tenants: create/list workspaces, manage membership roles, bind/unbind
   user-owned API keys. Cross-tenant administration is system_admin/super_admin
   only until tenant-scoped delegated console identities are implemented. Key binding requires an existing UserAccountStore owner
@@ -59,12 +63,14 @@ execution.
   install the asset route and the C service installers together after module
   reviews, per #784. Until that integration PR lands, the HTML references an
   asset route not yet installed in production.
-- The quota reservation PR is only a service module and has no admin query API
-  yet; no quota dashboard is shown as if it were functional.
+- The quota reservation PR exposes bounded admin inspection and audited
+  reconciliation APIs, but it does not enforce request admission/terminal
+  quota accounting yet. The UI displays that runtime integration status.
 
 ## Acceptance gaps
 
-No visual browser/e2e test, mobile layout review, password rotation/MFA
-workflow, cross-resource tenant authorization, or billing ledger UI is claimed
-complete. The views remain Draft until CI, production image smoke, browser
+No visual browser/e2e test, mobile layout review, MFA workflow,
+cross-resource tenant authorization, or billing ledger UI is claimed complete.
+The invitation view is present in this branch but cannot operate in production
+until C-04 and the central C composition root are integrated. The views remain Draft until CI, production image smoke, browser
 verification, central entrypoint integration and security review.
