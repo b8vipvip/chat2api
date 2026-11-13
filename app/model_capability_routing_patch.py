@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import secrets
+from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, Awaitable, Callable
 
@@ -22,6 +23,22 @@ _MODEL_CONTEXT: ContextVar[dict[str, Any] | None] = ContextVar(
     "chat2api_model_capability_routing_context",
     default=None,
 )
+
+@contextmanager
+def model_target_context(model: str, *, needs_multimodal: bool = False):
+    """Expose the actual requested model to the existing entitlement resolver."""
+    target = {
+        "model": str(model or "").strip().lower(),
+        "needs_multimodal": bool(needs_multimodal),
+    }
+    local_token = _MODEL_CONTEXT.set(target)
+    historical_token = v13_patch._target_context.set(target)
+    try:
+        yield target
+    finally:
+        v13_patch._target_context.reset(historical_token)
+        _MODEL_CONTEXT.reset(local_token)
+
 
 
 def _account_type(registry: Any, client_id: str) -> str:
