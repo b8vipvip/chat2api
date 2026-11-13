@@ -77,7 +77,7 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
             try:
                 page = context.new_page()
                 page_errors: list[str] = []
-                page.on("pageerror", lambda error: page_errors.append(str(error)))
+                page.on("pageerror", lambda error: page_errors.append(error.stack or str(error)))
                 page.goto(base_url + "/admin", wait_until="domcontentloaded")
                 page.locator("#adminSessionState").wait_for(state="visible", timeout=10000)
                 page.wait_for_function(
@@ -287,6 +287,10 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                     timeout=10000,
                 )
                 page.wait_for_function(
+                    "() => document.documentElement.dataset.adminPaymentRole === 'billing_admin' && document.documentElement.dataset.adminPaymentSessionReady === 'true'",
+                    timeout=10000,
+                )
+                page.wait_for_function(
                     "() => document.querySelector('[data-view=user-pricing]')?.disabled === false",
                     timeout=5000,
                 )
@@ -304,12 +308,13 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                     "() => document.getElementById('view-user-payments')?.classList.contains('active')",
                     timeout=5000,
                 )
-                assert page.locator("#commercePayKey").count() == 1, (
-                    "Commerce payment form was not mounted; view="
+                assert page.locator("#payV106PaypalSecret").count() == 1, (
+                    "V106 payment form was not mounted; view="
                     + page.locator("#view-user-payments").evaluate("(node) => node.outerHTML")
                     + "; page errors=" + repr(page_errors)
                 )
-                assert page.locator("#commercePayKey").is_disabled()
+                assert page.locator("#payV106PaypalSecret").is_disabled()
+                assert page.locator("#payV106Save").is_disabled()
                 billing_statuses = page.evaluate(
                     """async () => {
                       const read = async (url) => (await fetch(url, {credentials: "same-origin"})).status;
@@ -322,7 +327,8 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                       return {
                         pricingRead: await read("/api/admin/user-pricing"),
                         paymentsRead: await read("/api/admin/user-payments"),
-                        paymentSecretsWrite: await write("/api/admin/user-payments", {}),
+                        paymentChannelsRead: await read("/api/admin/payment-channels-v106"),
+                        paymentSecretsWrite: await write("/api/admin/payment-channels-v106", {}),
                         usersRead: await read("/api/admin/users"),
                       };
                     }"""
@@ -330,6 +336,7 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                 assert billing_statuses == {
                     "pricingRead": 200,
                     "paymentsRead": 200,
+                    "paymentChannelsRead": 200,
                     "paymentSecretsWrite": 403,
                     "usersRead": 403,
                 }
