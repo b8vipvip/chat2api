@@ -15,6 +15,11 @@ def reserve_request_quota(
     """Reserve a conservative estimate before a Chat Completions Worker dispatch."""
     if not bool(getattr(app.state, "quota_reservation_runtime_enabled", False)):
         return None
+    # The server master key is deliberately not a ManagedApiKey row and has
+    # no per-key token quota. Keep it on the existing unmetered path instead
+    # of treating its synthetic key_id="master" as a missing managed key.
+    if str(getattr(principal, "kind", "")) == "master":
+        return None
     store = getattr(app.state, "quota_reservations", None)
     api_keys = getattr(app.state, "api_keys", None)
     if store is None or api_keys is None:
