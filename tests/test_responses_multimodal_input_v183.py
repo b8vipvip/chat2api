@@ -134,17 +134,31 @@ def test_responses_dispatch_transfers_canonical_attachments_to_one_worker(tmp_pa
         events.append((client_id, message))
     registry.send = send
     async def create(request_id, client_id):
-        return SimpleNamespace(request_id=request_id, client_id=client_id)
+        return SimpleNamespace(request_id=request_id, client_id=client_id, timings=lambda: {})
+    class FakeTelemetry:
+        def __init__(self):
+            self.rows = {}
+        def get(self, request_id):
+            return self.rows.get(request_id)
+        async def upsert(self, row):
+            self.rows[row["request_id"]] = dict(row)
+            return dict(row)
+    telemetry = FakeTelemetry()
     app = SimpleNamespace(state=SimpleNamespace(registry=registry,
-        broker=SimpleNamespace(create=create),
+        broker=SimpleNamespace(create=create, release=lambda request_id: None),
+        telemetry=telemetry,
         settings=SimpleNamespace(request_timeout_seconds=600)))
     state, request_id, client, timeout = asyncio.run(_dispatch(
         app, _request(), {"model":"gpt-6"}, _key(), "描述图片", [],
         attachments=specs,
     ))
     assert len(events) == 1
-    assert events[0][1]["attachments"] == specs
+    assert events[0][1]["attachments"][0]["file_id"] == specs[0]["file_id"]
+    assert events[0][1]["attachments"][0]["request_id"] == request_id
     assert events[0][1]["options"]["model"] == "gpt-6"
+    assert telemetry.get(request_id)["api_key_id"] == "key-a"
+    assert telemetry.get(request_id)["client_id"] == "ext_ready"
+    assert telemetry.get(request_id)["input_file_ids"] == [stored.file_id]
     assert request_id.startswith("resp_req_")
     assert client == "ext_ready"
     assert timeout == 600
