@@ -112,8 +112,7 @@ reservations. The audited admin reconcile action uses the same replay and
 ledger-reconciliation sequence.
 
 Runtime coverage is explicitly reported as `/v1/chat/completions`,
-`/v1/responses`, `/v1/images/generations`, `/v1/audio/speech`, and
-`/v1/audio/conversations`. Responses hosted `image_generation` is covered
+`/v1/responses`, `/v1/images/generations`, and `/v1/audio/speech`. Responses hosted `image_generation` is covered
 because it delegates to the same canonical Images executor and child request
 ID; the parent Responses row remains zero-token to avoid double billing.
 
@@ -128,19 +127,26 @@ released when the reservation settles. Failed, cancelled and timed-out image
 requests release their hold. Over-quota image requests are rejected before
 Worker dispatch.
 
-Speech and uploaded-audio conversation requests use the same pre-dispatch
-reservation lifecycle with a fixed 4096-token output admission floor. Their
-existing terminal usage record estimates prompt plus returned transcript text;
+The `/v1/audio/speech` endpoint uses the same pre-dispatch reservation
+lifecycle with a fixed 4096-token output admission floor. Its terminal usage
+record estimates the input prompt plus returned transcript text; generated
 audio bytes and provider-side audio usage are not converted into invented
 token counts. The current Voice Worker event does not carry provider-verified
-usage. Failed, cancelled and timed-out voice requests release their hold.
-Over-quota requests are rejected before Worker dispatch.
+usage. Failed, cancelled and timed-out speech requests release their hold.
+Over-quota speech requests are rejected before Worker dispatch.
 
-The realtime Voice WebSocket route remains outside this runtime reservation
-coverage: it currently emits no authoritative prompt/transcript token usage
-record at session termination, so there is no honest terminal amount with
-which to settle a token reservation. It requires a separate metering contract
-before quota enforcement can be safely enabled.
+Uploaded-audio conversations remain outside reservation coverage. Their
+instruction is optional and audio input is not represented by a reliable
+pre-dispatch token estimate; the returned transcript is available only after
+the Worker finishes. They retain the existing post-terminal estimated
+prompt/transcript accounting, but no in-flight reservation is claimed.
+
+The realtime Voice WebSocket route also remains outside this runtime
+reservation coverage: it currently emits no authoritative prompt/transcript
+token usage record at session termination, so there is no honest terminal
+amount with which to settle a token reservation. Both audio conversation and
+realtime Voice require a separate metering contract before quota enforcement
+can be safely enabled.
 
 These additions close the in-flight token-quota admission gap for the listed
 routes, but they do **not** implement image/audio provider cost accounting or
