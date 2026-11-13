@@ -438,6 +438,9 @@
   function showPricingError(error) { document.getElementById("commercePricingStatus").textContent = `错误：${error.message}`; }
 
   async function loadPayments() {
+    // The V106 payment console owns this view when it has replaced the legacy
+    // form. Do not dereference controls that no longer exist.
+    if (!document.getElementById("commercePayEnabled")) return;
     const payload = await adminApi("/api/admin/user-payments");
     document.getElementById("commercePayEnabled").value = String(Boolean(payload.enabled));
     document.getElementById("commercePid").value = payload.pid || "";
@@ -451,6 +454,9 @@
     document.getElementById("commercePaymentStatus").textContent = payload.configured ? `ZPAY 已配置 · PID ${payload.pid_hint || ""}` : "ZPAY 尚未配置完整";
   }
   async function savePayments() {
+    if (!document.getElementById("commercePayEnabled")) {
+      throw new Error("Payment settings are managed by the V106 payment console");
+    }
     const body = {
       enabled: document.getElementById("commercePayEnabled").value === "true",
       pid: document.getElementById("commercePid").value.trim(),
