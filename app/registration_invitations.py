@@ -276,7 +276,7 @@ class InvitationStore:
                     (now,),
                 )
                 rows = conn.execute(
-                    "SELECT * FROM invitations ORDER BY created_at DESC LIMIT ?",
+                    "SELECT * FROM invitations ORDER BY created_at DESC, rowid DESC LIMIT ?",
                     (bounded,),
                 ).fetchall()
                 return [self._public(row) for row in rows]
