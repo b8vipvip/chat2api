@@ -131,8 +131,9 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                 # session. Delegated login must clear it before legacy requests.
                 page.evaluate(
                     """() => {
+                      // The production login gate removes the legacy master-key
+                      // input entirely; seed only the persisted stale credential.
                       sessionStorage.setItem("chat2api_admin_key", "stale-root-key");
-                      document.getElementById("adminKey").value = "stale-root-key";
                     }"""
                 )
                 page.locator("#adminUsername").fill(support_username)
@@ -154,9 +155,11 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                 assert page.locator('[data-view="plugins"]').is_hidden()
                 assert page.locator('[data-view="tenants"]').is_hidden()
                 assert page.locator('[data-view="overview"]').is_hidden()
-                assert page.locator("#adminKey").is_disabled()
-                assert page.locator("#adminKey").input_value() == ""
-                assert page.locator("#connect").is_hidden()
+                # The legacy gate replaces the master-key controls with
+                # session identity controls; delegated login must also purge
+                # the stale persisted credential.
+                assert page.locator("#adminKey").count() == 0
+                assert page.locator("#connect").count() == 0
                 assert page.evaluate("sessionStorage.getItem('chat2api_admin_key')") is None
 
                 page.locator('[data-view="model-entitlements"]').click()
