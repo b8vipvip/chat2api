@@ -79,6 +79,11 @@
     const logout = document.getElementById("adminLogout");
     if (logout) logout.style.display = adminLoggedIn ? "inline-block" : "none";
     if (!adminLoggedIn) status("请登录管理员账号", "muted");
+    // Keep the C-track role/navigation state synchronized with the legacy
+    // login gate. The server session remains the source of truth.
+    window.dispatchEvent(new CustomEvent("chat2api-admin-auth-state-changed", {
+      detail: { authenticated: adminLoggedIn, username: username || "" },
+    }));
   }
 
   async function checkSession() {
