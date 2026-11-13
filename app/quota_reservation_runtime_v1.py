@@ -62,6 +62,19 @@ def reserve_image_generation_quota(
     )
 
 
+def reserve_audio_request_quota(
+    app: Any, request_id: str, principal: Any, prompt: str,
+) -> dict[str, Any] | None:
+    """Hold a bounded output allowance for one speech/conversation request.
+
+    The current Voice Worker reports transcript text and audio bytes, but no
+    provider-verified token usage. The fixed floor is admission capacity only;
+    terminal settlement still uses the existing estimated prompt/transcript
+    usage record.
+    """
+    return reserve_request_quota(app, request_id, principal, prompt, 4096)
+
+
 def install_quota_reservation_runtime_v1(app: Any) -> Any:
     if getattr(app.state, "quota_reservation_runtime_v1_installed", False):
         return app
@@ -84,6 +97,8 @@ def install_quota_reservation_runtime_v1(app: Any) -> Any:
         "/v1/responses",
         "/v1/images/generations",
         "/v1/responses#image_generation (delegated to Images executor)",
+        "/v1/audio/speech",
+        "/v1/audio/conversations",
     ]
     app.state.quota_reservation_runtime_v1_installed = True
     return app
