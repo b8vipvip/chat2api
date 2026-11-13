@@ -742,7 +742,7 @@
         if (!state.pendingImages.length) {
           state.pendingImagesConversationId = "";
           const conversation = currentConversation();
-          if (conversation && !conversation.messages.some((message) => messageImageIds(message).length)) {
+          if (conversation && !state.pendingFiles.length && !conversation.messages.some((message) => messageAttachmentIds(message).length)) {
             conversation.apiKeyId = "";
             saveHistory();
           }
@@ -1121,6 +1121,7 @@
     state.abortController = new AbortController();
     $("sendButton").disabled = true;
     $("attachButton").disabled = true;
+    $("fileButton").disabled = true;
     $("newChatButton").disabled = true;
     $("apiKeySelect").disabled = true;
     $("modelSelect").disabled = true;
