@@ -417,6 +417,20 @@ jobs:
             -e CHAT2API_API_KEY=p01-docker-shared-volume-test-key \
             chat2api-production-smoke >/dev/null
 
+          started=0
+          for _ in $(seq 1 30); do
+            if docker logs "$graceful" 2>&1 | grep -q "Application startup complete"; then
+              started=1
+              break
+            fi
+            if ! docker inspect -f '{{.State.Running}}' "$graceful" | grep -q true; then
+              docker logs "$graceful"
+              exit 1
+            fi
+            sleep 1
+          done
+          [ "$started" -eq 1 ] || { docker logs "$graceful"; echo "graceful-shutdown test server never completed ASGI startup" >&2; exit 1; }
+
           blocked=0
           for _ in $(seq 1 30); do
             probe_output="$(docker run --rm \
