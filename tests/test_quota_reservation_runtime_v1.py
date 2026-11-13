@@ -54,7 +54,10 @@ def test_runtime_reserves_prompt_plus_conservative_output_floor(tmp_path: Path) 
     assert reservation["state"] == "reserved"
     assert reservation["reserved_tokens"] >= 4097
     assert app.state.quota_reservation_runtime_enabled is True
-    assert app.state.quota_reservation_runtime_coverage == ["/v1/chat/completions", "/v1/responses"]
+    assert "/v1/chat/completions" in app.state.quota_reservation_runtime_coverage
+    assert "/v1/responses" in app.state.quota_reservation_runtime_coverage
+    assert "/v1/images/generations" in app.state.quota_reservation_runtime_coverage
+    assert any("image_generation" in value for value in app.state.quota_reservation_runtime_coverage)
     store.close()
 
 
@@ -418,4 +421,178 @@ def test_chat_completions_rejects_over_quota_before_worker_dispatch(tmp_path: Pa
     assert sent == []
     assert app.state.api_keys.keys[public["key_id"]].tokens_used == 0
     assert app.state.quota_reservations.list_reservations(key_id=public["key_id"]) == []
+    app.state.quota_reservations.close()
+
+
+def test_images_api_reserves_and_settles_managed_key_usage(tmp_path: Path) -> None:
+    import base64
+
+    from fastapi.testclient import TestClient
+
+    app, public, token = _managed_chat_quota_app(tmp_path, token_quota=10000)
+    app.state.registry.resolve_client = lambda requested: "ext_image_quota"
+    generated = base64.b64encode(b"generated-image-bytes").decode("ascii")
+
+    async def fake_worker_send(client_id: str, payload: dict) -> None:
+        if payload.get("type") == "image.request":
+            await app.state.broker.publish(payload["request_id"], {
+                "type": "image.completed",
+                "request_id": payload["request_id"],
+                "images": [{"b64_json": generated, "mime_type": "image/png"}],
+            })
+
+    app.state.registry.send = fake_worker_send
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/images/generations",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"model": "gpt-image", "prompt": "quota image", "response_format": "b64_json"},
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["data"][0]["b64_json"] == generated
+    record = next(
+        item for item in app.state.telemetry.recent(20)
+        if item.get("request_type") == "image_generation"
+        and item.get("api_key_id") == public["key_id"]
+    )
+    reservation = app.state.quota_reservations.get(record["request_id"])
+    assert record["status"] == "completed"
+    assert record["usage"]["estimated"] is True
+    assert reservation is not None
+    assert reservation["state"] == "settled"
+    assert reservation["reserved_tokens"] >= 4096 + record["usage"]["prompt_tokens"]
+    assert reservation["actual_tokens"] == record["usage"]["total_tokens"]
+    assert app.state.api_keys.keys[public["key_id"]].tokens_used == record["usage"]["total_tokens"]
+    assert record["diagnostics"]["quota_reservation_v1"]["provider_usage_verified"] is False
+    app.state.quota_reservations.close()
+
+
+def test_images_api_rejects_over_quota_before_worker_dispatch(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    app, public, token = _managed_chat_quota_app(tmp_path, token_quota=4096)
+    app.state.registry.resolve_client = lambda requested: "ext_image_quota"
+    sent: list[dict] = []
+
+    async def fake_worker_send(client_id: str, payload: dict) -> None:
+        sent.append(payload)
+
+    app.state.registry.send = fake_worker_send
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/images/generations",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"model": "gpt-image", "prompt": "quota image"},
+        )
+
+    assert response.status_code == 429, response.text
+    assert sent == []
+    assert app.state.api_keys.keys[public["key_id"]].tokens_used == 0
+    assert app.state.quota_reservations.list_reservations(key_id=public["key_id"]) == []
+    rejected = next(
+        item for item in app.state.telemetry.recent(20)
+        if item.get("request_type") == "image_generation"
+    )
+    assert rejected["status"] == "error"
+    assert rejected["diagnostics"]["quota_reservation_v1"]["state"] == "rejected"
+    app.state.quota_reservations.close()
+
+
+def test_images_api_worker_failure_releases_reserved_quota(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    app, public, token = _managed_chat_quota_app(tmp_path, token_quota=10000)
+    app.state.registry.resolve_client = lambda requested: "ext_image_quota"
+
+    async def fake_worker_send(client_id: str, payload: dict) -> None:
+        if payload.get("type") == "image.request":
+            await app.state.broker.publish(payload["request_id"], {
+                "type": "image.error",
+                "request_id": payload["request_id"],
+                "error": "synthetic image worker failure",
+            })
+
+    app.state.registry.send = fake_worker_send
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/images/generations",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"model": "gpt-image", "prompt": "quota image"},
+        )
+
+    assert response.status_code == 502, response.text
+    record = next(
+        item for item in app.state.telemetry.recent(20)
+        if item.get("request_type") == "image_generation"
+        and item.get("api_key_id") == public["key_id"]
+    )
+    reservation = app.state.quota_reservations.get(record["request_id"])
+    assert record["status"] in {"error", "failed", "cancelled", "stalled"}
+    assert reservation is not None
+    assert reservation["state"] == "released"
+    assert app.state.api_keys.keys[public["key_id"]].tokens_used == 0
+    app.state.quota_reservations.close()
+
+
+def test_responses_image_generation_uses_the_same_managed_quota_reservation(tmp_path: Path) -> None:
+    import asyncio
+    import base64
+
+    from fastapi.testclient import TestClient
+
+    from app.config import Settings
+    from app.main import create_app
+    from app.responses_model_routing_v108_patch import install_responses_model_routing_v108_patch
+    from app.responses_v108_patch import install_responses_v108_patch
+
+    app = create_app(Settings(
+        CHAT2API_API_KEY="responses-image-quota-master",
+        CHAT2API_DATA_DIR=str(tmp_path),
+    ))
+    public, token = asyncio.run(app.state.api_keys.create("responses-image-quota"))
+    asyncio.run(app.state.api_keys.update(public["key_id"], token_quota=10000))
+    app.state.registry.resolve_client = lambda requested: "ext_responses_image_quota"
+    generated = base64.b64encode(b"generated-image-bytes").decode("ascii")
+
+    async def fake_worker_send(client_id: str, payload: dict) -> None:
+        if payload.get("type") == "image.request":
+            await app.state.broker.publish(payload["request_id"], {
+                "type": "image.completed",
+                "request_id": payload["request_id"],
+                "images": [{"b64_json": generated, "mime_type": "image/png"}],
+            })
+
+    app.state.registry.send = fake_worker_send
+    install_responses_model_routing_v108_patch(app)
+    install_responses_v108_patch(app)
+    app.state.quota_reservations = QuotaReservationStore(tmp_path)
+    install_quota_reservation_runtime_v1(app)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/responses",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "model": "gpt-5.6-sol",
+                "input": "Generate a quota test image",
+                "tools": [{"type": "image_generation"}],
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["output"][0]["type"] == "image_generation_call"
+    child_id = body["chat2api"]["request_id"]
+    record = app.state.telemetry.get(child_id)
+    reservation = app.state.quota_reservations.get(child_id)
+    assert record["request_type"] == "image_generation"
+    assert record["status"] == "completed"
+    assert reservation is not None and reservation["state"] == "settled"
+    assert app.state.api_keys.keys[public["key_id"]].tokens_used == record["usage"]["total_tokens"]
+    parent_rows = [
+        row for row in app.state.telemetry.recent(30)
+        if row.get("request_type") == "responses" and row.get("api_key_id") == public["key_id"]
+    ]
+    assert parent_rows and parent_rows[0]["usage"]["total_tokens"] == 0
     app.state.quota_reservations.close()
