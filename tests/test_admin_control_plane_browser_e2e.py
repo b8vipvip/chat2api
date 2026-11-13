@@ -76,6 +76,14 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                 page = context.new_page()
                 page.goto(base_url + "/admin", wait_until="domcontentloaded")
                 page.locator("#adminSessionState").wait_for(state="visible", timeout=10000)
+                page.wait_for_function(
+                    "() => window.__CHAT2API_CONTROL_PLANE_ADMIN_V1_READY__ === true",
+                    timeout=10000,
+                )
+                page.wait_for_function(
+                    "() => document.getElementById('adminSessionState')?.textContent.includes('未登录管理会话')",
+                    timeout=10000,
+                )
 
                 # Authenticate as the environment-managed root and create a real
                 # delegated support administrator through the production UI.
