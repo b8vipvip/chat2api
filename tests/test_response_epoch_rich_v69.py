@@ -261,3 +261,23 @@ def test_a_inline_document_does_not_create_second_terminal_or_media_owner():
     assert 'type: "chat.completed"' in owner
     assert "long_text_requested=long_text_requested" in server
     assert "server_effective_timeout_seconds" in server
+
+
+def test_r06_browser_dispatch_stages_are_diagnostic_only_and_precede_response_start():
+    owner = read("chrome_extension/content_request_v6.js")
+
+    assert "async function runDispatchStage(active, stage, task)" in owner
+    assert 'await runDispatchStage(active, "write_prompt", () => writePrompt(active, prompt));' in owner
+    assert 'await runDispatchStage(active, "submit_and_confirm", () => submitAndConfirm(active));' in owner
+    assert "request_v6_dispatch_stage_evidence_v1" in owner
+    assert "request_v6_dispatch_to_response_started_ms" in owner
+    assert "request_v6_dispatch_submit_click_elapsed_ms" in owner
+
+    # The extra stage markers are evidence only: they do not add a send path,
+    # change response classification, or acquire a terminal transition.
+    submit = owner[owner.index("async function submitAndConfirm(active)"):]
+    assert submit.count("ready.button.click()") == 1
+    assert "async function runRequest(message)" in owner
+    assert 'type: "chat.started"' in owner
+    assert 'type: "chat.completed"' in owner
+    assert 'type: "chat.error"' in owner
