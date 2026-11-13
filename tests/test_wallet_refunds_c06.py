@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
-from app.control_plane import permission_for_admin_route
+from app.control_plane import ControlPlaneStore, permission_for_admin_route
 from app.main import create_app
 from app.quota_reservation_admin_v1_patch import install_quota_reservation_admin_v1
 from app.user_commerce import BillingStore, PricingStore, WalletReservationError
@@ -96,6 +96,21 @@ def test_refund_disk_error_reverts_credit_and_stays_retryable(
     assert billing.refund_charge("req_refundable", "rf_diskoutage", 5, "billing correction")["amount_cents"] == 5
     assert billing.balance_cents("usr_refund") == 995
 
+
+
+def test_wallet_refunds_require_billing_write_not_support_or_read_only(
+    tmp_path: Path,
+) -> None:
+    control = ControlPlaneStore(tmp_path, root_username="owner")
+    control.create_admin("billing_operator", "strong-billing-password", "billing_admin")
+    control.create_admin("helpdesk_operator", "strong-support-password", "support")
+    control.create_admin("system_operator", "strong-system-password", "system_admin")
+    endpoint = "/api/admin/billing/charges/req_refundable/refund"
+    assert control.permitted("owner", endpoint, "POST")
+    assert control.permitted("billing_operator", endpoint, "POST")
+    assert not control.permitted("helpdesk_operator", endpoint, "POST")
+    assert not control.permitted("system_operator", endpoint, "POST")
+    assert not control.permitted("billing_operator", endpoint, "GET")
 
 def test_wallet_refund_route_is_csrf_gated_session_scoped_and_audited(tmp_path: Path) -> None:
     app = create_app(Settings(
