@@ -330,4 +330,4 @@ def test_chat_inline_data_url_rejects_invalid_raster_bytes(tmp_path: Path) -> No
             json={"messages":[{"role":"user","content":[{"type":"text","text":"Describe this image."},{"type":"image_url","image_url":{"url":invalid}}]}]},
         )
     assert response.status_code == 400
-    assert "valid raster image" in response.json()["detail"]
+    assert "valid raster image" in _error_message(response)
