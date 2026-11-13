@@ -275,9 +275,27 @@ async function handleServerMessage(message) {
     return;
   }
   if (message.type === "chat.request") {
+    const handlerStarted = performance.now();
+    const timing = value => typeof value === "number" && Number.isFinite(value) && value >= 0
+      ? Math.round(value * 10) / 10 : null;
+    const workerTimings = {
+      worker_dispatch_queue_wait_ms: timing(message.__chat2api_worker_dispatch_queue_wait_ms),
+      worker_route_resolve_ms: timing(message.__chat2api_worker_route_resolve_ms),
+      worker_target_tab_lookup_ms: null,
+      worker_ensure_content_ms: null,
+      worker_tabs_send_message_ms: null,
+    };
+    let failureStage = "target-tab-lookup";
     try {
+      let stageStarted = performance.now();
       const tab = await resolveTargetTab();
+      workerTimings.worker_target_tab_lookup_ms = Math.max(0, Math.round((performance.now() - stageStarted) * 10) / 10);
+      failureStage = "ensure-content";
+      stageStarted = performance.now();
       await ensureContent(tab.id);
+      workerTimings.worker_ensure_content_ms = Math.max(0, Math.round((performance.now() - stageStarted) * 10) / 10);
+      failureStage = "content-script-message";
+      stageStarted = performance.now();
       const response = await chrome.tabs.sendMessage(tab.id, {
         type: "chat2api.request",
         requestId: message.request_id,
@@ -285,6 +303,7 @@ async function handleServerMessage(message) {
         attachments: message.attachments || [],
         options: message.options || {},
       });
+      workerTimings.worker_tabs_send_message_ms = Math.max(0, Math.round((performance.now() - stageStarted) * 10) / 10);
       if (!response?.ok) throw new Error(response?.error || "ChatGPT tab rejected the request");
       // This response is the content-script's request-v6 acceptance ACK, not
       // proof that ChatGPT has started generating or that the request succeeded.
@@ -295,6 +314,8 @@ async function handleServerMessage(message) {
           diagnostics: {
             worker_content_dispatch_ack_v1: true,
             worker_content_dispatch_ack_source: "background-tabs-sendMessage-request-v6",
+            ...workerTimings,
+            worker_tab_handler_to_content_ack_ms: Math.max(0, Math.round((performance.now() - handlerStarted) * 10) / 10),
           },
         });
       }
@@ -308,7 +329,14 @@ async function handleServerMessage(message) {
         error.stage = "tab-dispatch";
         throw error;
       }
-      await trySendSocket({ type: "chat.error", request_id: message.request_id, error: detail });
+      await trySendSocket({
+        type: "chat.error", request_id: message.request_id, error: detail,
+        diagnostics: {
+          ...workerTimings,
+          worker_dispatch_failure_stage: failureStage,
+          worker_tab_handler_to_failure_ms: Math.max(0, Math.round((performance.now() - handlerStarted) * 10) / 10),
+        },
+      });
     }
     return;
   }
