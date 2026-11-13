@@ -145,7 +145,7 @@ function rejectPendingNativeAcks(reason) {
 function awaitNativeAck(event) {
   if (!socketReady()) return Promise.resolve({ok:false,committed:false,error:"socket-disconnected"});
   if (!["chat.native.snapshot","chat.native.chunk"].includes(event?.type)
-      || !/^(?:req|resp|imgreq)_[a-zA-Z0-9_-]{6,100}$/.test(String(event?.request_id || ""))
+      || !/^[a-zA-Z0-9_-]{6,120}$/.test(String(event?.request_id || ""))
       || !Number.isInteger(nativeAckRevision(event)) || nativeAckRevision(event) < 1
       || (event.type === "chat.native.chunk"
           && (!Number.isInteger(event.index) || event.index < 0)))
