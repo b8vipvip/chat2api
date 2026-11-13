@@ -204,6 +204,14 @@ def test_tenant_membership_does_not_grant_cross_user_resource_access(tmp_path: P
             "status": "completed",
             "response_media": [],
         })
+        await app.state.telemetry.merge_diagnostics("req_alice_native_0001", {
+            "native_snapshot_terminal_complete": True,
+            "native_capture_revision": 1,
+            "native_final_capture_committed": True,
+            "native_chunk_complete": True,
+            "native_snapshot_persisted": True,
+            "native_reply_scope_verified": True,
+        })
         return alice_key, alice_token, bob_key, bob_token, charlie_key, charlie_token, file_a
 
     alice_key, alice_token, bob_key, bob_token, charlie_key, charlie_token, file_a = asyncio.run(seed())
@@ -243,6 +251,14 @@ def test_tenant_membership_does_not_grant_cross_user_resource_access(tmp_path: P
     }
     app.state.user_billing._save()
 
+    snapshot = {
+        "version": 1, "revision": 1,
+        "root": {"tag": "div", "children": [{"tag": "p", "text": "private"}]},
+    }
+    assert app.state.native_content.publish(
+        "req_alice_native_0001", alice_key["key_id"], snapshot,
+    )
+
     alice_session = accounts.create_session(alice_id)
     bob_session = accounts.create_session(bob_id)
     charlie_session = accounts.create_session(charlie_id)
@@ -277,23 +293,6 @@ def test_tenant_membership_does_not_grant_cross_user_resource_access(tmp_path: P
             f"/v1/generated-files/{generated['id']}", headers=alice_auth
         ).status_code == 200
 
-        snapshot = {
-            "version": 1, "revision": 1,
-            "root": {"tag": "div", "children": [{"tag": "p", "text": "private"}]},
-        }
-        async def mark_native_final():
-            await app.state.telemetry.merge_diagnostics("req_alice_native_0001", {
-                "native_snapshot_terminal_complete": True,
-                "native_capture_revision": 1,
-                "native_final_capture_committed": True,
-                "native_chunk_complete": True,
-                "native_snapshot_persisted": True,
-                "native_reply_scope_verified": True,
-            })
-        asyncio.run(mark_native_final())
-        assert app.state.native_content.publish(
-            "req_alice_native_0001", alice_key["key_id"], snapshot,
-        )
         assert client.get(
             "/v1/native-content/req_alice_native_0001", headers=bob_auth
         ).status_code == 404
