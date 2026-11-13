@@ -183,7 +183,12 @@ class _ModelRequestContextMiddleware:
         self.app = app
 
     async def __call__(self, scope: dict[str, Any], receive, send) -> None:
-        if scope.get("type") != "http" or scope.get("method") != "POST" or scope.get("path") != "/v1/chat/completions":
+        path = scope.get("path")
+        if (
+            scope.get("type") != "http"
+            or scope.get("method") != "POST"
+            or path not in {"/v1/chat/completions", "/v1/images/generations"}
+        ):
             await self.app(scope, receive, send)
             return
         chunks: list[bytes] = []
@@ -206,19 +211,25 @@ class _ModelRequestContextMiddleware:
             return await receive()
 
         target: dict[str, Any] | None = None
-        try:
-            payload = json.loads(raw.decode("utf-8")) if raw else {}
-            if isinstance(payload, dict):
-                raw_model = str(payload.get("model") or "").strip().lower()
-                try:
-                    target = dict(v13_patch._target_from_payload(payload))
-                except (ValueError, TypeError, KeyError):
-                    target = {}
-                if raw_model:
-                    target["model"] = raw_model
-                target["needs_multimodal"] = bool(target.get("needs_multimodal")) or mini_quota._needs_multimodal(payload)
-        except (UnicodeDecodeError, ValueError, TypeError):
-            target = None
+        if path == "/v1/images/generations":
+            # The Images endpoint currently dispatches the server-owned
+            # gpt-image model; never let an optional client body field select
+            # a different entitlement target for this route.
+            target = {"model": "gpt-image", "needs_multimodal": False}
+        else:
+            try:
+                payload = json.loads(raw.decode("utf-8")) if raw else {}
+                if isinstance(payload, dict):
+                    raw_model = str(payload.get("model") or "").strip().lower()
+                    try:
+                        target = dict(v13_patch._target_from_payload(payload))
+                    except (ValueError, TypeError, KeyError):
+                        target = {}
+                    if raw_model:
+                        target["model"] = raw_model
+                    target["needs_multimodal"] = bool(target.get("needs_multimodal")) or mini_quota._needs_multimodal(payload)
+            except (UnicodeDecodeError, ValueError, TypeError):
+                target = None
         local_token = _MODEL_CONTEXT.set(target)
         historical_token = v13_patch._target_context.set(target)
         try:
