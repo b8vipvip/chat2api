@@ -71,14 +71,19 @@
     document.querySelectorAll("[data-cview]").forEach((node) => {
       const allowed = roleCan(node.dataset.view);
       node.hidden = !allowed;
+      // Author CSS sets nav buttons to display:flex, which overrides the
+      // browser's user-agent [hidden] rule. Set display explicitly so a
+      // denied route is actually absent from the visible navigation.
+      node.style.display = allowed ? "" : "none";
       // The legacy inline bootstrap temporarily disables all navigation while
-      // checking its own session. RBAC owns the final state, so explicitly
-      // re-enable only views granted to the authenticated server-side role.
+      // checking its own session. RBAC owns the final state.
       node.disabled = !allowed;
     });
     const root = adminSession && adminSession.authenticated && adminSession.role === "super_admin";
     document.querySelectorAll(".nav button:not([data-cview])").forEach((node) => {
-      node.hidden = !!(adminSession && adminSession.authenticated && !root);
+      const visible = !(adminSession && adminSession.authenticated && !root);
+      node.hidden = !visible;
+      node.style.display = visible ? "" : "none";
       node.disabled = !root;
     });
     if ($("adminKey")) $("adminKey").disabled = !!(adminSession && adminSession.authenticated && !root);
