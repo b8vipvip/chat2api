@@ -45,6 +45,46 @@ with TestClient(app) as client:
     image_delete = client.delete("/api/user/files/file_12345678", headers={"Origin": "http://testserver"})
     assert image_delete.status_code == 401
     assert image_delete.headers["cache-control"] == "private, no-store"
+
+    # Exercise the actual app.entry composition, not a manually installed route.
+    registered = client.post(
+        "/api/user/register",
+        headers={"Origin": "http://testserver"},
+        json={"email": "entry-document@example.test", "password": "entry-document-password"},
+    )
+    assert registered.status_code == 200, registered.text
+    key = client.post(
+        "/api/user/keys",
+        headers={"Origin": "http://testserver"},
+        json={"name": "entry document key"},
+    )
+    assert key.status_code == 200, key.text
+    token = key.json()["token"]
+    import base64
+    payload = b"%PDF-1.4\\n% app.entry download test\\n%%EOF\\n"
+    uploaded = client.post(
+        "/v1/files",
+        headers={"Authorization": "Bearer " + token},
+        json={
+            "filename": "entry-proof.pdf",
+            "mime_type": "application/pdf",
+            "data_base64": base64.b64encode(payload).decode("ascii"),
+            "purpose": "assistants",
+        },
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    file_id = uploaded.json()["id"]
+    downloaded = client.get(f"/api/user/chat/files/{file_id}/download")
+    assert downloaded.status_code == 200
+    assert downloaded.content == payload
+    assert downloaded.headers["content-disposition"].startswith("attachment;")
+    deleted = client.delete(
+        f"/api/user/files/{file_id}", headers={"Origin": "http://testserver"},
+    )
+    assert deleted.status_code == 200, deleted.text
+    assert client.get(f"/api/user/chat/files/{file_id}/download").status_code == 404
+    assert image_delete.status_code == 401
+    assert image_delete.headers["cache-control"] == "private, no-store"
     renderer = client.get("/assets/chat2api-chat-renderer-v2.js")
     assert renderer.status_code == 200
     assert "Chat2APISafeRenderer" in renderer.text
