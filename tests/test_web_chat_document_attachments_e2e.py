@@ -86,15 +86,30 @@ def test_web_chat_document_attachment_upload_send_and_download_in_chromium(tmp_p
                     ".pdf,.txt,.md,.csv,.json,.rtf,.docx,.xlsx,.pptx"
                 )
 
-                document_bytes = b"Browser E2E document payload\nRevenue increased by 12 percent.\n"
-                page.locator("#fileInput").set_input_files({
-                    "name": "quarterly-summary.txt",
-                    "mimeType": "text/plain",
-                    "buffer": document_bytes,
-                })
-                page.locator(".attachment-file-chip").wait_for(state="visible", timeout=5000)
-                assert page.locator(".attachment-file-name").inner_text() == "quarterly-summary.txt"
-                page.locator("#messageInput").fill("Summarize the attached quarterly report.")
+                documents = [
+                    {
+                        "name": "quarterly-summary.txt",
+                        "mimeType": "text/plain",
+                        "buffer": b"Browser E2E document payload\\nRevenue increased by 12 percent.\\n",
+                    },
+                    {
+                        "name": "metrics.csv",
+                        "mimeType": "text/csv",
+                        "buffer": b"quarter,revenue\\nQ1,120\\nQ2,135\\n",
+                    },
+                    {
+                        "name": "reference.pdf",
+                        "mimeType": "application/pdf",
+                        "buffer": b"%PDF-1.4\\n% browser E2E fixture\\n%%EOF\\n",
+                    },
+                ]
+                page.locator("#fileInput").set_input_files(documents)
+                page.locator(".attachment-file-chip").nth(2).wait_for(state="visible", timeout=5000)
+                assert page.locator(".attachment-file-chip").count() == len(documents)
+                assert page.locator(".attachment-file-name").all_text_contents() == [
+                    "quarterly-summary.txt", "metrics.csv", "reference.pdf",
+                ]
+                page.locator("#messageInput").fill("Summarize the attached quarterly report and data.")
 
                 captured: dict[str, object] = {}
 
@@ -114,7 +129,9 @@ def test_web_chat_document_attachment_upload_send_and_download_in_chromium(tmp_p
 
                 page.route("**/v1/chat/completions", complete_chat)
                 page.locator("#sendButton").click()
-                page.locator("#messages .message-file-card").wait_for(state="visible", timeout=15000)
+                cards = page.locator("#messages .message-file-card")
+                cards.nth(2).wait_for(state="visible", timeout=15000)
+                assert cards.count() == len(documents)
                 page.get_by_text("已读取季度报告。").wait_for(state="visible", timeout=5000)
 
                 messages = captured.get("messages")
@@ -125,20 +142,21 @@ def test_web_chat_document_attachment_upload_send_and_download_in_chromium(tmp_p
                     part for part in content
                     if isinstance(part, dict) and part.get("type") == "file"
                 ]
-                assert len(file_parts) == 1
-                file_part = file_parts[0]
-                assert file_part["filename"] == "quarterly-summary.txt"
-                assert file_part["mime_type"] == "text/plain"
-                assert file_part["size"] == len(document_bytes)
-                assert str(file_part["file_id"]).startswith("file_")
+                assert len(file_parts) == len(documents)
+                for part, document in zip(file_parts, documents, strict=True):
+                    assert part["filename"] == document["name"]
+                    assert part["mime_type"] == document["mimeType"]
+                    assert part["size"] == len(document["buffer"])
+                    assert str(part["file_id"]).startswith("file_")
 
-                with page.expect_download(timeout=10000) as download_info:
-                    page.locator("#messages .message-file-card").click()
-                download = download_info.value
-                assert download.suggested_filename == "quarterly-summary.txt"
-                downloaded_path = download.path()
-                assert downloaded_path is not None
-                assert Path(downloaded_path).read_bytes() == document_bytes
+                for index, document in enumerate(documents):
+                    with page.expect_download(timeout=10000) as download_info:
+                        cards.nth(index).click()
+                    download = download_info.value
+                    assert download.suggested_filename == document["name"]
+                    downloaded_path = download.path()
+                    assert downloaded_path is not None
+                    assert Path(downloaded_path).read_bytes() == document["buffer"]
             finally:
                 context.close()
                 browser.close()
