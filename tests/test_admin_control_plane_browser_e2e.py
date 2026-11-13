@@ -340,6 +340,7 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                     "paymentSecretsWrite": 403,
                     "usersRead": 403,
                 }
+                assert not page_errors, "unexpected admin browser JavaScript errors: " + repr(page_errors)
             finally:
                 context.close()
                 browser.close()
