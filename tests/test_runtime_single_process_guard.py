@@ -4,6 +4,9 @@ from pathlib import Path
 import os
 from types import SimpleNamespace
 import multiprocessing
+import os
+import subprocess
+import sys
 
 import pytest
 from fastapi import FastAPI
@@ -149,25 +152,34 @@ def test_installer_wraps_and_preserves_existing_lifespan(tmp_path: Path):
     assert app.state.single_process_runtime_guard._fd is None
 
 
-def test_production_entry_installs_guard_before_startup():
-    from app.entry import app
-
-    guard = app.state.single_process_runtime_guard
-    try:
-        assert app.state.single_process_runtime_guard_installed is True
-        assert isinstance(guard, SingleProcessRuntimeGuard)
-        assert guard._fd is not None
-    finally:
-        # Import-time acquisition protects store construction. The real server
-        # retains the descriptor until ASGI shutdown; tests release their import.
-        guard.release()
+def test_production_entry_installs_guard_before_startup(tmp_path: Path):
+    root = Path(__file__).resolve().parents[1]
+    script = """
+from app.entry import app
+from app.runtime_single_process_guard import SingleProcessRuntimeGuard
+guard = app.state.single_process_runtime_guard
+assert app.state.single_process_runtime_guard_installed is True
+assert isinstance(guard, SingleProcessRuntimeGuard)
+assert guard._fd is not None
+guard.release()
+"""
+    env = os.environ.copy()
+    env["CHAT2API_DATA_DIR"] = str(tmp_path / "isolated-data")
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_production_entry_acquires_guard_before_importing_main():
-    import app.entry as entry
-    from pathlib import Path
-
-    source = Path(entry.__file__).read_text(encoding="utf-8")
+    source_path = Path(__file__).resolve().parents[1] / "app" / "entry.py"
+    source = source_path.read_text(encoding="utf-8")
     assert source.index("_runtime_guard.acquire()") < source.index("from .main import app")
     assert source.index("_runtime_guard.acquire()") < source.index("install_single_process_runtime_guard(app")
 
