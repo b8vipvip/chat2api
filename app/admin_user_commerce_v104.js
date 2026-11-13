@@ -5,6 +5,7 @@
   if (!nav || !content || document.getElementById("view-user-pricing")) return;
   const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[ch]);
   let adminRoleResolved = false;
+  let adminRoleRefreshGeneration = 0;
   const keyHeader = () => {
     // Never send a possibly stale root key until the current Session role is
     // known. A delegated Session must not inherit a prior administrator key.
@@ -46,15 +47,18 @@
   }
 
   async function refreshAdminRole() {
+    const generation = ++adminRoleRefreshGeneration;
     let sessionCheckSucceeded = false;
     try {
       const response = await fetch("/api/admin/auth/session", {credentials:"same-origin", cache:"no-store"});
       if (!response.ok) throw new Error("Admin session lookup failed");
       const session = await response.json();
+      if (generation !== adminRoleRefreshGeneration) return;
       sessionAuthenticated = !!session.authenticated;
       currentAdminRole = sessionAuthenticated ? (session.role || "unknown") : null;
       sessionCheckSucceeded = true;
     } catch (_) {
+      if (generation !== adminRoleRefreshGeneration) return;
       sessionAuthenticated = false;
       currentAdminRole = null;
     }
@@ -490,6 +494,7 @@
   // The C-track session is authoritative. Consume its event detail instead
   // of issuing a second racing session request with potentially stale role data.
   window.addEventListener("chat2api-admin-session-changed", (event) => {
+    adminRoleRefreshGeneration += 1;
     const session = event.detail || {};
     sessionAuthenticated = !!session.authenticated;
     currentAdminRole = sessionAuthenticated ? (session.role || "unknown") : null;
