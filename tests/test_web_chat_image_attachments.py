@@ -70,6 +70,10 @@ def test_user_image_content_is_session_authenticated_and_account_owned(tmp_path:
         assert preview.status_code == 200
         assert preview.content == payload
         assert preview.headers["content-type"].startswith("image/png")
+        import hashlib
+        digest = hashlib.sha256(payload).hexdigest()
+        assert preview.headers["etag"] == f'"sha256-{digest}"'
+        assert preview.headers["x-chat2api-content-sha256"] == digest
         assert preview.headers["cache-control"] == "private, no-store"
         assert "cookie" in {value.strip().lower() for value in preview.headers["vary"].split(",")}
         assert preview.headers["x-content-type-options"] == "nosniff"
@@ -148,6 +152,42 @@ def test_user_image_preview_rejects_invalid_raster_bytes(tmp_path: Path) -> None
         preview = client.get(f"/api/user/files/{uploaded.json()['id']}/content")
         assert preview.status_code == 415
         assert preview.headers["cache-control"] == "private, no-store"
+
+def test_user_image_preview_rejects_same_length_at_rest_corruption(tmp_path: Path) -> None:
+    settings = Settings(
+        CHAT2API_API_KEY="web-chat-image-master-key",
+        CHAT2API_DATA_DIR=str(tmp_path),
+    )
+    app = create_app(settings)
+    install_user_console_v104_patch(app)
+    payload = _png_bytes()
+
+    with TestClient(app) as client:
+        token = _register_and_create_key(client, "corrupt-raster@example.com")
+        uploaded = client.post(
+            "/v1/files",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "filename": "integrity.png",
+                "mime_type": "image/png",
+                "data_base64": base64.b64encode(payload).decode("ascii"),
+                "purpose": "vision",
+            },
+        )
+        assert uploaded.status_code == 200, uploaded.text
+        file_id = uploaded.json()["id"]
+        item = app.state.file_store.get(file_id)
+        assert item is not None and item.sha256
+        disk_path = app.state.file_store.root / item.path
+        tampered = payload[:-1] + bytes([payload[-1] ^ 0x01])
+        assert len(tampered) == len(payload)
+        disk_path.write_bytes(tampered)
+
+        response = client.get(f"/api/user/files/{file_id}/content")
+        assert response.status_code == 503
+        assert response.headers["cache-control"] == "private, no-store"
+        assert "cookie" in {value.strip().lower() for value in response.headers["vary"].split(",")}
+
 
 def test_user_can_delete_owned_vision_image_with_session_only(tmp_path: Path) -> None:
     settings = Settings(
