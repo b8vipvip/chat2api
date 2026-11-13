@@ -188,6 +188,9 @@ def test_responses_api_reserves_and_settles_managed_key_usage(tmp_path: Path) ->
     install_request_history_v94_patch(app)
     install_responses_model_routing_v108_patch(app)
     install_responses_v108_patch(app)
+    # create_app() is the API core; the production C composition owner creates
+    # this journal before installing the runtime adapter.
+    app.state.quota_reservations = QuotaReservationStore(tmp_path)
     install_quota_reservation_runtime_v1(app)
 
     with TestClient(app) as client:
