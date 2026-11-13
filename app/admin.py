@@ -370,9 +370,9 @@ $('connect').disabled=true;$('refresh').disabled=true;document.querySelectorAll(
     $('view-overview').classList.add('active');
     status('无法验证管理员 Session；已阻止自动使用缓存主密钥，请检查服务后重新登录','bad');
   }
-  const cTrackAdminScript=document.createElement("script");cTrackAdminScript.src="/assets/chat2api-control-plane-admin-v1.js";cTrackAdminScript.defer=true;document.body.appendChild(cTrackAdminScript);
 })();
 </script>
+<script src="/assets/chat2api-control-plane-admin-v1.js" defer></script>
 <dialog id="adminPasswordDialog">
   <div class="dialogHead"><b>修改管理员密码</b><button class="action" id="adminPasswordClose" type="button">关闭</button></div>
   <div class="dialogBody">
