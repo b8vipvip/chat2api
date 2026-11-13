@@ -135,6 +135,52 @@ async def test_completed_usage_without_positive_total_keeps_reservation_until_le
 
 
 @pytest.mark.asyncio
+async def test_completed_usage_requires_durable_api_key_ledger_proof_before_settlement(tmp_path: Path) -> None:
+    app, store, api_keys = _runtime(tmp_path)
+    request_id = "req_charge_proof_missing_0001"
+    reserve_request_quota(app, request_id, SimpleNamespace(key_id="key-1"), "prompt", 4096)
+
+    async def interrupted_charge(record: dict) -> None:
+        # Simulate an accounting owner that returned without persisting a
+        # request_id ledger entry (for example, a missing key after restart).
+        return None
+
+    api_keys.account_completed_usage = interrupted_charge
+    await app.state.telemetry.usage_accounting({
+        "request_id": request_id, "api_key_id": "key-1", "status": "completed",
+        "usage": {"total_tokens": 12},
+    })
+    assert store.get(request_id)["state"] == "committing"
+    assert store.active_reserved_tokens("key-1") >= store.get(request_id)["reserved_tokens"]
+    assert api_keys.keys["key-1"].tokens_used == 0
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_startup_recovery_replays_completed_telemetry_after_pre_charge_crash(tmp_path: Path) -> None:
+    app, store, api_keys = _runtime(tmp_path)
+    request_id = "req_replay_completed_terminal_0001"
+    reserve_request_quota(app, request_id, SimpleNamespace(key_id="key-1"), "prompt", 4096)
+    # Simulate a crash after the durable committing transition but before the
+    # ApiKeyStore accounting owner wrote charged_requests.
+    store.begin_commit(request_id, "key-1", 17)
+    terminal = {
+        "request_id": request_id, "api_key_id": "key-1", "status": "completed",
+        "usage": {"total_tokens": 17},
+    }
+    telemetry = SimpleNamespace(get=lambda candidate: terminal if candidate == request_id else None)
+
+    replayed = await store.recover_committing(telemetry, api_keys)
+    assert replayed == 1
+    assert api_keys.keys["key-1"].tokens_used == 17
+    assert api_keys.charged_requests[request_id] == 17
+    assert store.get(request_id)["state"] == "settled"
+    assert await store.recover_committing(telemetry, api_keys) == 0
+    assert store.reconcile(api_keys) == 0
+    store.close()
+
+
+@pytest.mark.asyncio
 async def test_completed_usage_commits_once_and_terminal_failure_releases(tmp_path: Path) -> None:
     app, store, api_keys = _runtime(tmp_path)
     callback = app.state.telemetry.usage_accounting
