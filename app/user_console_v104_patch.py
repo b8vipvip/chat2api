@@ -471,9 +471,15 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
         try:
             stored, payload = file_store.read(file_id)
         except (KeyError, FileNotFoundError) as error:
-            raise HTTPException(status_code=404, detail="图片附件内容不存在") from error
+            raise HTTPException(
+                status_code=404, detail="图片附件内容不存在",
+                headers={"Cache-Control": "private, no-store", "Vary": "Cookie"},
+            ) from error
         except OSError as error:
-            raise HTTPException(status_code=503, detail="图片附件暂时不可用") from error
+            raise HTTPException(
+                status_code=503, detail="图片附件暂时不可用",
+                headers={"Cache-Control": "private, no-store", "Vary": "Cookie"},
+            ) from error
         try:
             verify_raster_image(payload, stored.mime_type)
         except ValueError as error:
