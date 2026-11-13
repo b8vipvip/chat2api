@@ -205,6 +205,11 @@ def test_document_file_part_is_bound_to_the_uploading_api_key(tmp_path: Path) ->
         # create_app() is the API core; the user registration/key routes are
         # installed by the production entrypoint's existing user-console owner.
         install_user_console_v104_patch(client.app)
+        assert any(
+            getattr(route, "path", None) == "/api/user/register"
+            and "POST" in (getattr(route, "methods", None) or set())
+            for route in client.app.routes
+        )
         registered = client.post(
             "/api/user/register",
             headers={"Origin": "http://testserver"},
