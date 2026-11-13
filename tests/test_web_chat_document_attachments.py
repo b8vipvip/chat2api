@@ -175,3 +175,25 @@ def test_document_content_part_rejects_corrupt_size_metadata(tmp_path: Path) -> 
         )
         assert response.status_code == 400, response.text
         assert "byte count" in response.json()["detail"]
+
+def test_chat_completion_enforces_four_combined_file_input_limit(tmp_path: Path) -> None:
+    with TestClient(create_app(_settings(tmp_path))) as client:
+        response = client.post(
+            "/v1/chat/completions", headers=_admin_headers(),
+            json={
+                "model": "default",
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Review these files."},
+                        {"type": "file", "file_id": "file_document0001"},
+                        {"type": "file", "file_id": "file_document0002"},
+                        {"type": "file", "file_id": "file_document0003"},
+                        {"type": "file", "file_id": "file_document0004"},
+                        {"type": "file", "file_id": "file_document0005"},
+                    ],
+                }],
+            },
+        )
+        assert response.status_code == 400, response.text
+        assert "At most four image/file inputs" in response.json()["detail"]
