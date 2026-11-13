@@ -135,6 +135,7 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                     timeout=10000,
                 )
 
+                assert page.locator("#view-model-entitlements").evaluate("(node) => node.classList.contains('active')")
                 assert page.locator('[data-view="model-entitlements"]').is_visible()
                 assert page.locator('[data-view="api-keys"]').is_visible()
                 assert page.locator('[data-view="control-admins"]').is_hidden()
