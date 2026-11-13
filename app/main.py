@@ -115,11 +115,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         quota_store = getattr(app.state, "quota_reservations", None)
         if quota_store is not None and getattr(app.state, "quota_reservation_runtime_enabled", False):
             expired_reservations = quota_store.expire_reservations()
+            # Replay persisted completed terminals first. This closes the
+            # crash window between begin_commit() and ApiKeyStore's durable
+            # charged_requests write; replay remains request_id-idempotent.
+            replayed_reservations = await quota_store.recover_committing(telemetry, api_keys)
             reconciled_reservations = quota_store.reconcile(api_keys)
-            if expired_reservations or reconciled_reservations:
+            if expired_reservations or replayed_reservations or reconciled_reservations:
                 logger.info(
-                    "Quota reservation startup recovery expired=%s reconciled=%s",
-                    expired_reservations, reconciled_reservations,
+                    "Quota reservation startup recovery expired=%s replayed=%s reconciled=%s",
+                    expired_reservations, replayed_reservations, reconciled_reservations,
                 )
         await file_store.load()
         await test_runs.load()
