@@ -406,6 +406,72 @@ def test_wallet_reservation_rejects_user_request_before_worker_dispatch(tmp_path
 
 
 
+def test_wallet_admission_is_reserved_before_chat_worker_and_settled_after_success(tmp_path: Path) -> None:
+    import asyncio
+
+    from fastapi.testclient import TestClient
+
+    from app.config import Settings
+    from app.main import create_app
+    from app.quota_reservations import QuotaReservationStore
+    from app.quota_reservation_runtime_v1 import install_quota_reservation_runtime_v1
+    from app.user_console_v104_patch import install_user_console_v104_patch
+
+    app = create_app(Settings(
+        CHAT2API_API_KEY="wallet-route-master-key",
+        CHAT2API_DATA_DIR=str(tmp_path),
+    ))
+    install_user_console_v104_patch(app)
+    user = app.state.user_accounts.register("wallet-route@example.com", "long-enough-password")
+    public, token = asyncio.run(app.state.api_keys.create("wallet-route"))
+    app.state.user_accounts.attach_key(user["user_id"], public["key_id"])
+    pricing = app.state.user_pricing
+    config = pricing.public()
+    pricing.update(billing_enabled=True, usd_cny_rate=7.0, models=config["models"])
+    app.state.user_billing.credit(user["user_id"], 1000)
+    app.state.quota_reservations = QuotaReservationStore(tmp_path)
+    install_quota_reservation_runtime_v1(app)
+    app.state.registry.resolve_client = lambda requested: "ext_wallet_route"
+
+    async def fake_worker_send(client_id: str, payload: dict) -> None:
+        if payload.get("type") == "chat.request":
+            hold = app.state.user_billing.reservations.get(payload["request_id"])
+            assert hold is not None and hold["state"] == "reserved"
+            assert hold["reserved_cny_cents"] > 0
+            await app.state.broker.publish(payload["request_id"], {
+                "type": "chat.completed",
+                "text": "Wallet reservation completed successfully",
+            })
+
+    app.state.registry.send = fake_worker_send
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "model": "gpt-5.6-sol",
+                "messages": [{"role": "user", "content": "Wallet success path"}],
+                "max_tokens": 64,
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    record = next(
+        row for row in app.state.telemetry.recent(20)
+        if row.get("api_key_id") == public["key_id"]
+        and row.get("request_type") == "text"
+    )
+    charge = app.state.user_billing.charge_for_request(record["request_id"])
+    reservation = app.state.user_billing.reservations[record["request_id"]]
+    assert charge is not None
+    assert charge["usage_is_estimated"] is True
+    assert reservation["state"] == "settled"
+    assert reservation["actual_cny_cents"] == charge["cost_cny_cents"]
+    assert app.state.user_billing.reserved_cents(user["user_id"]) == 0
+    assert app.state.user_billing.balance_cents(user["user_id"]) == 1000 - charge["cost_cny_cents"]
+    app.state.quota_reservations.close()
+
+
 def test_wallet_telemetry_settles_success_and_releases_failed_request(tmp_path: Path) -> None:
     import asyncio
 
