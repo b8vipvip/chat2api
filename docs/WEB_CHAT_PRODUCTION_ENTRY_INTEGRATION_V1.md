@@ -13,7 +13,7 @@ does not install the W-02 plaintext SQLite conversation prototype.
   adapter before the chat client. Assets are same-origin and no-store.
 - Assistant Markdown uses the DOM-only allowlist renderer; fallback is
   textContent, never untrusted HTML.
-- W-01 accepts PNG/JPEG/WebP/GIF image attachments, uses the standard Files
+- W-01 accepts PNG/JPEG/WebP/GIF image attachments, validates actual raster bytes on Chat Completions/Responses image references and browser previews, uses the standard Files
   endpoint with purpose=vision, enforces per-image/message size limits, binds
   file IDs to the current account/API key, and provides owner-checked preview
   and same-origin deletion endpoints.
