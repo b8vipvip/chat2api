@@ -492,6 +492,8 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
                 "X-Content-Type-Options": "nosniff",
                 "Cross-Origin-Resource-Policy": "same-origin",
                 "Referrer-Policy": "no-referrer",
+                "ETag": f'"sha256-{stored.sha256}"',
+                "X-Chat2API-Content-SHA256": stored.sha256,
             },
         )
 
