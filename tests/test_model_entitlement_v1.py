@@ -9,6 +9,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from app.admin_auth import AdminSessionStore
+from app.api_keys import ApiPrincipal
+from app.live_voice_patch import install_live_voice_patch
+from app.voice_patch import install_voice_patch
 from app.model_entitlement_v1_patch import install_model_entitlements
 from app.model_capability_routing_patch import install_model_capability_routing_patch
 from app.model_entitlements import ModelEntitlementError, ModelEntitlementStore
@@ -20,6 +23,7 @@ class FakeRegistry:
     def __init__(self):
         self.routing_key_context = contextvars.ContextVar("test_route_key", default=None)
         self.resolve_calls = []
+        self.busy_clients = set()
         self.catalog = [
             {"id": "default", "label": "Default"},
             {"id": "chatgpt-web", "label": "Web alias"},
@@ -33,6 +37,15 @@ class FakeRegistry:
     def resolve_client(self, requested):
         self.resolve_calls.append(requested)
         return requested or "worker_1"
+
+    def set_routing_key(self, key_id):
+        self.routing_key_context.set(key_id)
+
+    def online_client_ids(self):
+        return ["worker_1"]
+
+    def route_for_key(self, key_id):
+        return None
 
 
 class FakeAccounts:
@@ -61,6 +74,13 @@ class FakeTenantMemberships:
 
 
 class FakeApiKeys:
+    async def authenticate(self, token):
+        if token == "voice-token":
+            return ApiPrincipal(
+                key_id="key_1", name="voice-test", kind="managed", scopes=("audio",)
+            )
+        return None
+
     def get_public(self, key_id):
         return {"key_id": key_id} if key_id in {"key_1", "key_2"} else None
 
@@ -87,6 +107,87 @@ def build_app(tmp_path: Path):
 
     install_model_entitlements(app)
     return app, token
+
+
+
+class StopBeforeWorkerDispatchBroker:
+    def can_accept(self, client_id, weight=1):
+        return True
+
+    async def create(self, request_id, client_id):
+        # Stop after the entitlement gate but before any Worker dispatch.
+        raise RuntimeError("fixture stopped after entitlement check")
+
+
+def install_voice_test_runtime(app):
+    app.state.settings.api_key = "master-test-secret"
+    app.state.settings.request_timeout_seconds = 30
+    app.state.broker = StopBeforeWorkerDispatchBroker()
+    app.state.telemetry = SimpleNamespace()
+    app.state.file_store = SimpleNamespace()
+
+
+@pytest.mark.parametrize("model_id", ["gpt-live", "gpt-live-mini"])
+def test_voice_speech_entitlement_uses_the_requested_model(tmp_path: Path, model_id: str):
+    app, _ = build_app(tmp_path)
+    install_voice_test_runtime(app)
+    install_voice_patch(app)
+    app.state.model_entitlements.upsert("key", "key_1", "allow", [model_id])
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/audio/speech",
+            headers={"Authorization": "Bearer voice-token"},
+            json={"model": model_id, "input": "hello"},
+        )
+
+    # 409 is the deliberate broker fixture stop; 403 would mean the model
+    # context was lost and the entitlement resolver saw an empty model.
+    assert response.status_code == 409, response.text
+    assert app.state.registry.resolve_calls == ["worker_1"]
+
+
+def test_live_realtime_entitlement_uses_session_start_model(tmp_path: Path):
+    app, _ = build_app(tmp_path)
+    install_voice_test_runtime(app)
+    install_live_voice_patch(app)
+    app.state.model_entitlements.upsert("key", "key_1", "allow", ["gpt-live-mini"])
+
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            "/v1/audio/realtime",
+            headers={"Authorization": "Bearer voice-token"},
+        ) as websocket:
+            websocket.send_text(json.dumps({
+                "type": "session.start", "model": "gpt-live-mini",
+            }))
+            error = websocket.receive_json()
+
+    # The allow rule is evaluated against the requested alias (mini), not an
+    # empty ContextVar or the transport's effective gpt-live alias.
+    assert error["code"] == "GPT_LIVE_UNAVAILABLE"
+    assert app.state.registry.resolve_calls == ["worker_1"]
+
+
+def test_live_realtime_denied_model_returns_authorization_error(tmp_path: Path):
+    app, _ = build_app(tmp_path)
+    install_voice_test_runtime(app)
+    install_live_voice_patch(app)
+    app.state.model_entitlements.upsert("key", "key_1", "deny", ["gpt-live-mini"])
+
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            "/v1/audio/realtime",
+            headers={"Authorization": "Bearer voice-token"},
+        ) as websocket:
+            websocket.send_text(json.dumps({
+                "type": "session.start", "model": "gpt-live-mini",
+            }))
+            error = websocket.receive_json()
+
+    assert error["code"] == "model_not_entitled"
+    assert error["retryable"] is False
+    assert app.state.registry.resolve_calls == []
 
 
 def set_model_context(model_id: str):
