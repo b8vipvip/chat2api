@@ -170,11 +170,13 @@ def test_tenant_membership_does_not_grant_cross_user_resource_access(tmp_path: P
     accounts = app.state.user_accounts
     alice = accounts.register("alice-resource@example.com", "alice-password-123")
     bob = accounts.register("bob-resource@example.com", "bob-password-123")
-    alice_id, bob_id = alice["user_id"], bob["user_id"]
+    charlie = accounts.register("charlie-resource@example.com", "charlie-password-123")
+    alice_id, bob_id, charlie_id = alice["user_id"], bob["user_id"], charlie["user_id"]
 
     async def seed():
         alice_key, alice_token = await app.state.api_keys.create("Alice resource key")
         bob_key, bob_token = await app.state.api_keys.create("Bob resource key")
+        charlie_key, charlie_token = await app.state.api_keys.create("Charlie resource key")
         file_a = await app.state.file_store.create(
             filename="alice-private.txt",
             data_base64=base64.b64encode(b"alice-private-bytes").decode("ascii"),
@@ -202,19 +204,22 @@ def test_tenant_membership_does_not_grant_cross_user_resource_access(tmp_path: P
             "status": "completed",
             "response_media": [],
         })
-        return alice_key, alice_token, bob_key, bob_token, file_a
+        return alice_key, alice_token, bob_key, bob_token, charlie_key, charlie_token, file_a
 
-    alice_key, alice_token, bob_key, bob_token, file_a = asyncio.run(seed())
+    alice_key, alice_token, bob_key, bob_token, charlie_key, charlie_token, file_a = asyncio.run(seed())
     accounts.attach_key(alice_id, alice_key["key_id"])
     accounts.attach_key(bob_id, bob_key["key_id"])
+    accounts.attach_key(charlie_id, charlie_key["key_id"])
 
     tenants = app.state.tenant_memberships
     tenant_a = tenants.create("alice-workspace", "Alice Workspace")
     tenant_b = tenants.create("bob-workspace", "Bob Workspace")
     tenants.upsert_member(tenant_a["tenant_id"], alice_id, "owner")
     tenants.upsert_member(tenant_b["tenant_id"], bob_id, "owner")
+    tenants.upsert_member(tenant_a["tenant_id"], charlie_id, "member")
     tenants.bind_key(tenant_a["tenant_id"], alice_id, alice_key["key_id"])
     tenants.bind_key(tenant_b["tenant_id"], bob_id, bob_key["key_id"])
+    tenants.bind_key(tenant_a["tenant_id"], charlie_id, charlie_key["key_id"])
 
     image_buffer = io.BytesIO()
     with Image.new("RGB", (2, 2), (20, 80, 160)) as image:
@@ -240,6 +245,7 @@ def test_tenant_membership_does_not_grant_cross_user_resource_access(tmp_path: P
 
     alice_session = accounts.create_session(alice_id)
     bob_session = accounts.create_session(bob_id)
+    charlie_session = accounts.create_session(charlie_id)
 
     with TestClient(app) as client:
         client.cookies.set(USER_SESSION_COOKIE, bob_session)
@@ -291,6 +297,21 @@ def test_tenant_membership_does_not_grant_cross_user_resource_access(tmp_path: P
         assert client.get(
             "/v1/native-content/req_alice_native_0001", headers=bob_auth
         ).status_code == 404
+
+        # Even a member of Alice's tenant gets no implicit access to Alice's
+        # personal files, media, history, billing or native sidecar.
+        charlie_auth = {"Authorization": f"Bearer {charlie_token}"}
+        assert client.get(f"/v1/files/{file_a.file_id}", headers=charlie_auth).status_code == 403
+        assert client.get(f"/v1/media/{media['id']}", headers=charlie_auth).status_code == 404
+        assert client.get(
+            f"/v1/generated-files/{generated['id']}", headers=charlie_auth
+        ).status_code == 404
+        assert client.get(
+            "/v1/native-content/req_alice_native_0001", headers=charlie_auth
+        ).status_code == 404
+        client.cookies.set(USER_SESSION_COOKIE, charlie_session)
+        assert client.get("/api/user/requests").json()["data"] == []
+        assert client.get("/api/user/billing").json()["charges"] == []
 
         client.cookies.set(USER_SESSION_COOKIE, alice_session)
         alice_requests = client.get("/api/user/requests")
