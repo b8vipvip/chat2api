@@ -47,8 +47,18 @@ This prevents a broad alias from bypassing a concrete allowlist.
 - GET /api/user/models: filter the user-console pricing/model list using the
   authenticated user plus global/user policy. A browser user session is not
   enough to infer one tenant when the user belongs to multiple workspaces.
-- Existing registry.resolve_client boundary: reject unauthorized model
-  requests with HTTP 403 before invoking the existing Worker resolver.
+- The shared registry.resolve_client boundary rejects unauthorized requests
+  with HTTP 403 before the existing Worker resolver.
+- Request model context is owned by the existing routing adapters:
+  - POST /v1/chat/completions uses the concrete model extracted from its request.
+  - POST /v1/responses and POST /v1/completions use the existing v13 target context.
+  - POST /v1/images/generations uses the server-owned gpt-image target. A
+    client-supplied model field cannot change the entitlement target.
+- Model aliases are resolved before the entitlement decision; unknown or
+  unresolved models are rejected whenever a matching policy applies.
+- A failed UserAccountStore owner lookup, failed TenantMembershipStore lookup,
+  or tenant-bound key without an active owner role returns 503. It is never
+  treated as an unowned/unbound key and does not silently drop policy scope.
 - Master server API key remains unrestricted for compatibility.
 - Admin policy APIs use the existing administrator Session and same-origin
   ingress; mutations write to the existing AdminAuditStore.
@@ -60,27 +70,34 @@ API:
 
 ## Explicit gaps
 
-- Tenant policy is now supported only through an explicit server-side
-  API-key-to-tenant binding. The binding API is delivered independently in
-  C-02a PR #815. Role, subscription-plan and Mode 1/Mode 2 policy dimensions
-  are not implemented here; membership count or browser-provided tenant headers
-  are never used as identity.
+- Tenant policy is supported only through an explicit server-side
+  API-key-to-tenant binding. The binding API is delivered in C-02a PR #815.
+  The tenant policy dimension is not a substitute for resource-level tenant
+  authorization: File, Conversation, History, Media and Billing ownership still
+  require their own cross-tenant negative tests and explicit owner contracts.
+- Role, subscription-plan and Mode 1/Mode 2 policy dimensions beyond the
+  implemented tenant membership role are not implemented here; membership
+  count or browser-provided tenant headers are never used as identity.
 - No editable model metadata, aliases or fallback-routing configuration is added.
 - This does not prove the model actually served; only existing Worker and
   telemetry evidence can do that.
-- Enforcement is attached to the shared existing resolver and model catalog.
-  Any future dispatch path that bypasses that resolver must be covered before
-  it is exposed to scoped API keys.
+- The current request inventory covers Chat Completions, Responses, legacy
+  Completions and Images. Any future model-consuming endpoint (including audio
+  or embeddings if introduced) must set an authoritative model context and add
+  pre-dispatch positive/negative tests before it is exposed to scoped API keys.
 - Local SQLite is single-instance. Multi-instance transactional storage, backup
   and restore are D/P gates.
-- The module is not wired into app.entry:app in this PR. Per #784, all
-  production installer wiring will be owned by one C-track integration PR
-  after independent module reviews; this avoids concurrent edits to the
-  production composition root.
+- Production composition is wired through app.entry:app by the single C-track
+  integration owner in PR #824. That PR remains Draft pending the complete
+  route-permission matrix, tenant-resource isolation, exact-head CI and
+  production acceptance; module wiring is not equivalent to release approval.
 
 ## Tests
 
-Covers default compatibility, alias normalization, global/key/user intersection,
-deny precedence, non-concrete alias denial, catalog filtering, pre-dispatch
-403, master-key compatibility, API session auth, subject validation, audit and
-restart persistence. Full CI and production image smoke remain required.
+Covers default compatibility, alias normalization, global/key/user/tenant/role
+intersection, deny precedence, non-concrete alias denial, catalog filtering,
+pre-dispatch 403, master-key compatibility, API session auth, subject
+validation, audit and restart persistence. Additional tests cover identity and
+tenant-store outages, orphaned tenant memberships, and the server-owned
+gpt-image target on the Images endpoint. Exact-head full CI and production
+image smoke remain required.
