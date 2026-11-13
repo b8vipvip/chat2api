@@ -400,6 +400,7 @@ class BillingStore:
         self.charges: dict[str, dict[str, Any]] = {}
         self.orders: dict[str, dict[str, Any]] = {}
         self.reservations: dict[str, dict[str, Any]] = {}
+        self.refunds: dict[str, dict[str, Any]] = {}
         self._load()
 
     def _load(self) -> None:
@@ -411,8 +412,9 @@ class BillingStore:
             self.charges = {str(k): dict(v) for k, v in (payload.get("charges") or {}).items() if isinstance(v, dict)}
             self.orders = {str(k): dict(v) for k, v in (payload.get("orders") or {}).items() if isinstance(v, dict)}
             self.reservations = {str(k): dict(v) for k, v in (payload.get("reservations") or {}).items() if isinstance(v, dict)}
+            self.refunds = {str(k): dict(v) for k, v in (payload.get("refunds") or {}).items() if isinstance(v, dict)}
         except (OSError, ValueError, TypeError):
-            self.wallets, self.charges, self.orders, self.reservations = {}, {}, {}, {}
+            self.wallets, self.charges, self.orders, self.reservations, self.refunds = {}, {}, {}, {}, {}
 
     def _save(self) -> None:
         _atomic_json(self.path, {
@@ -421,6 +423,7 @@ class BillingStore:
             "charges": self.charges,
             "orders": self.orders,
             "reservations": self.reservations,
+            "refunds": self.refunds,
         })
 
     def balance_cents(self, user_id: str) -> int:
@@ -665,6 +668,76 @@ class BillingStore:
         with self.lock:
             row = self.charges.get(str(request_id or ""))
             return dict(row) if row else None
+
+    def refunds_for_user(self, user_id: str) -> list[dict[str, Any]]:
+        with self.lock:
+            rows = [dict(row) for row in self.refunds.values() if row.get("user_id") == user_id]
+        return sorted(rows, key=lambda row: str(row.get("created_at") or ""), reverse=True)
+
+    def refund_charge(
+        self, request_id: str, refund_id: str, amount_cents: int, reason: str,
+    ) -> dict[str, Any]:
+        """Credit back an already debited internal wallet charge, exactly once.
+
+        Not a payment-provider refund. The original request charge stays
+        immutable; refund_id is a durable idempotency key in the same JSON
+        transaction as the wallet credit.
+        """
+        request_id = str(request_id or "").strip()
+        refund_id = str(refund_id or "").strip()
+        reason = str(reason or "").strip()
+        if not request_id or not re.fullmatch(r"rf_[A-Za-z0-9_-]{8,100}", refund_id):
+            raise WalletReservationError("A valid request_id and refund_id are required")
+        if type(amount_cents) is not int or amount_cents <= 0:
+            raise WalletReservationError("Refund amount must be positive integer cents")
+        if not 5 <= len(reason) <= 500:
+            raise WalletReservationError("A refund reason of 5-500 characters is required")
+        with self.lock:
+            existing = self.refunds.get(refund_id)
+            if existing is not None:
+                if (
+                    str(existing.get("request_id") or "") != request_id
+                    or int(existing.get("amount_cents") or 0) != amount_cents
+                    or str(existing.get("reason") or "") != reason
+                ):
+                    raise WalletReservationError("refund_id is already used for another refund payload")
+                return dict(existing)
+            charge = self.charges.get(request_id)
+            if not charge or not bool(charge.get("debited")):
+                raise WalletReservationError("Request has no completed debited wallet charge")
+            charged = int(charge.get("cost_cny_cents") or 0)
+            refunded = sum(
+                int(row.get("amount_cents") or 0)
+                for row in self.refunds.values()
+                if str(row.get("request_id") or "") == request_id
+            )
+            if charged <= 0 or amount_cents > charged - refunded:
+                raise WalletReservationError("Refund exceeds the remaining debited charge")
+            user_id = str(charge.get("user_id") or "")
+            if not user_id:
+                raise WalletReservationError("Charge has no owner")
+            old_balance = self.wallets.get(user_id)
+            row = {
+                "refund_id": refund_id,
+                "request_id": request_id,
+                "user_id": user_id,
+                "amount_cents": amount_cents,
+                "reason": reason,
+                "charge_cny_cents": charged,
+                "created_at": _now(),
+            }
+            self.wallets[user_id] = int(old_balance or 0) + amount_cents
+            self.refunds[refund_id] = row
+            try:
+                self._save()
+            except OSError:
+                self.refunds.pop(refund_id, None)
+                if old_balance is None:
+                    self.wallets.pop(user_id, None)
+                else:
+                    self.wallets[user_id] = old_balance
+                raise
+            return dict(row)
 
     def create_order(self, user_id: str, amount_cents: int, channel: str) -> dict[str, Any]:
         amount = int(amount_cents)
