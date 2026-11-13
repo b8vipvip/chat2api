@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 from types import SimpleNamespace
 import multiprocessing
 
@@ -22,6 +23,9 @@ def test_guard_exclusively_owns_shared_data_directory_until_release(tmp_path: Pa
     first.acquire()
     assert first.lock_path.exists()
     assert first.lock_path.stat().st_mode & 0o777 == 0o600
+    marker = first.lock_path.read_bytes()
+    assert marker.startswith(f"pid={os.getpid()}\\n".encode("ascii"))
+    assert len(marker) == 32
     with pytest.raises(RuntimeTopologyError, match="already owns"):
         second.acquire()
 
