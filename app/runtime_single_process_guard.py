@@ -113,7 +113,7 @@ class SingleProcessRuntimeGuard:
                 # the file after msvcrt.locking can make byte-range lock
                 # semantics filesystem-dependent; the marker is diagnostic
                 # only, so overwrite a fixed-size record without truncation.
-                payload = f"pid={os.getpid()}\\n".encode("ascii").ljust(32, b" ")
+                payload = f"pid={os.getpid()}\n".encode("ascii").ljust(32, b" ")
                 os.lseek(fd, 0, os.SEEK_SET)
                 view = memoryview(payload)
                 while view:
