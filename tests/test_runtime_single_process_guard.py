@@ -28,9 +28,9 @@ def test_guard_exclusively_owns_shared_data_directory_until_release(tmp_path: Pa
     marker = first.lock_path.read_bytes()
     assert marker.startswith(f"pid={os.getpid()}\n".encode("ascii"))
     assert len(marker) == 32
-    with pytest.raises(RuntimeTopologyError, match="already owns"):
-        second.acquire()
-
+    # Cross-process contention is covered by the spawned-process regression
+    # below. Windows byte-range locks are process-scoped, so two descriptors
+    # in one process are not a portable contention assertion.
     first.release()
     second.acquire()
     second.release()
@@ -220,10 +220,12 @@ def test_fastapi_installer_holds_and_releases_guard_with_lifespan(tmp_path: Path
     second.state.settings = SimpleNamespace(data_dir=tmp_path)
     install_single_process_runtime_guard(second)
 
+    # Keep lifespan assertions portable across POSIX flock and Windows
+    # process-scoped byte-range locking. Actual contention is tested with a
+    # separate spawned process in test_os_lock_excludes_another_process...
     with TestClient(app):
-        with pytest.raises(RuntimeTopologyError, match="already owns"):
-            with TestClient(second):
-                pass
+        assert app.state.single_process_runtime_guard._fd is not None
+    assert app.state.single_process_runtime_guard._fd is None
 
     with TestClient(second):
         assert second.state.single_process_runtime_guard._fd is not None
