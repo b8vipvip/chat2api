@@ -284,6 +284,31 @@ class QuotaReservationStore:
                 reconciled += 1
         return reconciled
 
+    async def recover_committing(self, telemetry: Any, api_keys: Any) -> int:
+        """Replay durable completed telemetry before ledger-only reconciliation.
+
+        A crash can occur after the reservation enters committing but
+        before ApiKeyStore records the charge. The terminal telemetry row is
+        persisted before its accounting callback, so replaying that exact
+        request is safe: ApiKeyStore de-duplicates by request_id.
+        """
+        getter = getattr(telemetry, "get", None)
+        if not callable(getter):
+            return 0
+        replayed = 0
+        for reservation in self.list_reservations(state="committing", limit=500):
+            record = getter(str(reservation["request_id"]))
+            if not isinstance(record, dict) or str(record.get("status") or "").lower() != "completed":
+                continue
+            usage = record.get("usage") if isinstance(record.get("usage"), dict) else {}
+            actual = usage.get("total_tokens")
+            if type(actual) is not int or actual <= 0:
+                continue
+            result = await self.commit_completed_usage(record, api_keys)
+            if result == "settled":
+                replayed += 1
+        return replayed
+
     async def commit_completed_usage(self, record: dict[str, Any], api_keys: Any) -> str:
         """Coordinate settlement without becoming a second completed-usage ledger."""
         request_id = str(record.get("request_id") or "")
@@ -317,7 +342,17 @@ class QuotaReservationStore:
                 return "usage_pending"
             self.begin_commit(request_id, key_id, actual)
             await api_keys.account_completed_usage(record)
-            self.mark_settled(request_id, key_id, actual)
+            # ApiKeyStore is the sole charge authority. Its API intentionally
+            # returns no status, so prove the durable request ledger was
+            # updated before dropping the in-flight reservation. A missing
+            # key or interrupted/no-op charge must remain recoverable.
+            item = getattr(api_keys, "keys", {}).get(key_id)
+            ledger = getattr(item, "charged_requests", None) if item else None
+            raw_charged = (ledger or {}).get(request_id, 0)
+            charged = raw_charged if type(raw_charged) is int and raw_charged > 0 else 0
+            if charged < actual:
+                return "charge_pending"
+            self.mark_settled(request_id, key_id, max(actual, charged))
             return "settled"
         # Preserve legacy final accounting for requests admitted before this
         # reservation journal was installed or whose reservation expired.
