@@ -112,10 +112,10 @@ reservations. The audited admin reconcile action uses the same replay and
 ledger-reconciliation sequence.
 
 Runtime coverage is explicitly reported as `/v1/chat/completions`,
-`/v1/responses`, and `/v1/images/generations`. Responses hosted
-`image_generation` is covered because it delegates to the same canonical
-Images executor and child request ID; the parent Responses row remains
-zero-token to avoid double billing.
+`/v1/responses`, `/v1/images/generations`, `/v1/audio/speech`, and
+`/v1/audio/conversations`. Responses hosted `image_generation` is covered
+because it delegates to the same canonical Images executor and child request
+ID; the parent Responses row remains zero-token to avoid double billing.
 
 Images admission reserves the estimated prompt tokens plus a fixed 4096-token
 per-image artifact floor before Worker dispatch. This fixed floor is an
@@ -128,11 +128,25 @@ released when the reservation settles. Failed, cancelled and timed-out image
 requests release their hold. Over-quota image requests are rejected before
 Worker dispatch.
 
-This closes the Images route's in-flight token-quota admission gap, but it
-does **not** implement image-provider cost accounting or a monetary image
-budget. Other usage-bearing routes still require an endpoint-by-endpoint
-coverage audit. Wallet-cents reservation/refund, tenant quota inheritance,
-provider-verified usage reconciliation and multi-process ledger transactions
-remain outside this slice. ApiKeyStore and BillingStore remain the only actual
-charge authorities. C-06 is not complete until those explicit gaps and the
-remaining production acceptance gates are resolved.
+Speech and uploaded-audio conversation requests use the same pre-dispatch
+reservation lifecycle with a fixed 4096-token output admission floor. Their
+existing terminal usage record estimates prompt plus returned transcript text;
+audio bytes and provider-side audio usage are not converted into invented
+token counts. The current Voice Worker event does not carry provider-verified
+usage. Failed, cancelled and timed-out voice requests release their hold.
+Over-quota requests are rejected before Worker dispatch.
+
+The realtime Voice WebSocket route remains outside this runtime reservation
+coverage: it currently emits no authoritative prompt/transcript token usage
+record at session termination, so there is no honest terminal amount with
+which to settle a token reservation. It requires a separate metering contract
+before quota enforcement can be safely enabled.
+
+These additions close the in-flight token-quota admission gap for the listed
+routes, but they do **not** implement image/audio provider cost accounting or
+monetary budgets. Other usage-bearing routes still require an
+endpoint-by-endpoint coverage audit. Wallet-cents reservation/refund, tenant
+quota inheritance, provider-verified usage reconciliation and multi-process
+ledger transactions remain outside this slice. ApiKeyStore and BillingStore
+remain the only actual charge authorities. C-06 is not complete until those
+explicit gaps and the remaining production acceptance gates are resolved.
