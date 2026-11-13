@@ -2,7 +2,10 @@
 
 Broker and ClientRegistry are process-local authorities. Until a shared lease,
 message transport and transactional persistence architecture is approved, two
-server processes must not concurrently own the same data directory.
+server processes must not concurrently own the same data directory. A bind mount
+shared by containers on the same host is the same data directory and must be
+protected by the same OS advisory lock; separate volumes or hosts are not a
+supported distributed-lock topology.
 """
 from __future__ import annotations
 
