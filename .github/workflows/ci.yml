@@ -129,7 +129,8 @@ jobs:
           node --check app/admin_v14.js
           node --check app/admin_v15.js
           node --check app/admin_v16.js
-                    node --check app/admin_v17_1.js
+          node --check app/admin_v17.js
+          node --check app/admin_v17_1.js
           node --check app/admin_v18.js
           node --check app/admin_v20.js
           node --check app/admin_v20_1.js
