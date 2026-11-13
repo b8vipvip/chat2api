@@ -65,12 +65,7 @@ def test_file_upload_is_forwarded_to_chat_and_downloadable_by_extension(tmp_path
         image = upload(client, "vision.png", "image/png", b"fake-png-payload", "vision")
         client_id, token = pair(client)
 
-        extension_download = client.get(
-            f"/api/extensions/files/{image['id']}?client_id={client_id}&token={token}"
-        )
-        assert extension_download.status_code == 200
-        assert extension_download.content == b"fake-png-payload"
-        assert extension_download.headers["content-type"].startswith("image/png")
+        unrelated = upload(client, "other.png", "image/png", b"other-payload", "vision")
 
         with client.websocket_connect(f"/ws/extensions/{client_id}?token={token}") as websocket:
             websocket.receive_json()
@@ -93,6 +88,38 @@ def test_file_upload_is_forwarded_to_chat_and_downloadable_by_extension(tmp_path
                 assert message["type"] == "chat.request"
                 assert message["attachments"][0]["file_id"] == image["id"]
                 assert message["attachments"][0]["mime_type"] == "image/png"
+                assert message["attachments"][0]["request_id"] == message["request_id"]
+
+                # Worker access is request-scoped: missing, unrelated request,
+                # wrong Worker and a same-owner but unattached file all fail closed.
+                missing_request = client.get(
+                    f"/api/extensions/files/{image['id']}?client_id={client_id}&token={token}"
+                )
+                assert missing_request.status_code == 422
+                wrong_request = client.get(
+                    f"/api/extensions/files/{image['id']}?request_id=req_unrelated_000001"
+                    f"&client_id={client_id}&token={token}"
+                )
+                assert wrong_request.status_code == 404
+                wrong_worker_id, wrong_worker_token = pair(client)
+                wrong_worker = client.get(
+                    f"/api/extensions/files/{image['id']}?request_id={message['request_id']}"
+                    f"&client_id={wrong_worker_id}&token={wrong_worker_token}"
+                )
+                assert wrong_worker.status_code == 404
+                unattached = client.get(
+                    f"/api/extensions/files/{unrelated['id']}?request_id={message['request_id']}"
+                    f"&client_id={client_id}&token={token}"
+                )
+                assert unattached.status_code == 404
+
+                extension_download = client.get(
+                    f"/api/extensions/files/{image['id']}?request_id={message['request_id']}"
+                    f"&client_id={client_id}&token={token}"
+                )
+                assert extension_download.status_code == 200
+                assert extension_download.content == b"fake-png-payload"
+                assert extension_download.headers["content-type"].startswith("image/png")
                 websocket.send_json(
                     {
                         "type": "chat.diagnostics",
@@ -110,6 +137,7 @@ def test_file_upload_is_forwarded_to_chat_and_downloadable_by_extension(tmp_path
         records = client.get("/api/admin/requests?limit=5", headers=admin_headers()).json()["data"]
         assert records[0]["request_type"] == "multimodal"
         assert records[0]["attachments_count"] == 1
+        assert records[0]["input_file_ids"] == [image["id"]]
         assert records[0]["timings"]["attachment_prepare_ms"] == 123.4
 
 
