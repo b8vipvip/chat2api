@@ -157,6 +157,9 @@
     } catch (error) {
       adminSession = null;
       applyNavigation();
+      window.dispatchEvent(new CustomEvent("chat2api-admin-session-changed", {
+        detail: { authenticated: false, role: null, username: "" },
+      }));
       setStatus("adminSessionState", "会话检查失败：" + error.message, true);
       return null;
     }
