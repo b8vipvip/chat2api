@@ -98,7 +98,7 @@ the compatibility matrix does not prove those fields are enforced upstream.
 TelemetryStore invokes its usage-accounting callback on queued/running updates
 as well as terminal updates. The reservation adapter keeps nonterminal
 reservations pending, commits only completed requests with a positive integral
-`total_tokens`, and releases only failed/cancelled/stalled/failed/timeout
+`total_tokens`, and releases only error/cancelled/stalled/failed/timeout
 terminal states. Missing, zero or malformed usage remains in `committing`
 until usage is proven. Settlement verifies the existing ApiKeyStore request
 ledger before dropping the reservation.
