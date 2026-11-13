@@ -69,6 +69,7 @@ def test_file_id_and_file_data_use_same_owner_boundary(tmp_path: Path):
         filename="photo.png", data_base64=base64.b64encode(_png()).decode(),
         mime_type="image/png", owner_key_id="key-a", purpose="vision",
     ))
+    assert existing.purpose == "vision"
     data = base64.b64encode(b"%PDF-1.4\nhello").decode()
     body = {"input": [{"role": "user", "content": [
         {"type": "input_image", "file_id": existing.file_id},
