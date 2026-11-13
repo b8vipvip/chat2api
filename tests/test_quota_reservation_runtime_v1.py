@@ -217,3 +217,88 @@ def test_responses_api_reserves_and_settles_managed_key_usage(tmp_path: Path) ->
     assert record["usage"]["total_tokens"] > 0
     assert app.state.api_keys.keys[public["key_id"]].tokens_used == record["usage"]["total_tokens"]
     app.state.quota_reservations.close()
+
+def _managed_chat_quota_app(tmp_path: Path, token_quota: int):
+    import asyncio
+
+    from app.config import Settings
+    from app.main import create_app
+
+    app = create_app(Settings(
+        CHAT2API_API_KEY="chat-quota-master",
+        CHAT2API_DATA_DIR=str(tmp_path),
+    ))
+    public, token = asyncio.run(app.state.api_keys.create("chat-quota"))
+    asyncio.run(app.state.api_keys.update(public["key_id"], token_quota=token_quota))
+    app.state.quota_reservations = QuotaReservationStore(tmp_path)
+    install_quota_reservation_runtime_v1(app)
+    return app, public, token
+
+
+def test_chat_completions_reserves_and_settles_managed_key_usage(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    app, public, token = _managed_chat_quota_app(tmp_path, token_quota=10000)
+    app.state.registry.resolve_client = lambda requested: "ext_chat_quota"
+
+    async def fake_worker_send(client_id: str, payload: dict) -> None:
+        if payload.get("type") == "chat.request":
+            await app.state.broker.publish(payload["request_id"], {
+                "type": "chat.completed",
+                "text": "Chat Completions quota settlement fixture",
+            })
+
+    app.state.registry.send = fake_worker_send
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "model": "gpt-5.6-sol",
+                "messages": [{"role": "user", "content": "Hello quota"}],
+                "max_tokens": 64,
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    record = next(
+        item for item in app.state.telemetry.recent(20)
+        if item.get("request_type") == "text"
+        and item.get("api_key_id") == public["key_id"]
+    )
+    assert record["status"] == "completed"
+    assert record["usage"]["total_tokens"] > 0
+    reservation = app.state.quota_reservations.get(record["request_id"])
+    assert reservation is not None
+    assert reservation["state"] == "settled"
+    assert app.state.api_keys.keys[public["key_id"]].tokens_used == record["usage"]["total_tokens"]
+    app.state.quota_reservations.close()
+
+
+def test_chat_completions_rejects_over_quota_before_worker_dispatch(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    app, public, token = _managed_chat_quota_app(tmp_path, token_quota=100)
+    app.state.registry.resolve_client = lambda requested: "ext_chat_quota"
+    sent: list[dict] = []
+
+    async def fake_worker_send(client_id: str, payload: dict) -> None:
+        sent.append(payload)
+
+    app.state.registry.send = fake_worker_send
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "model": "gpt-5.6-sol",
+                "messages": [{"role": "user", "content": "Hello quota"}],
+                "max_tokens": 64,
+            },
+        )
+
+    assert response.status_code == 429, response.text
+    assert sent == []
+    assert app.state.api_keys.keys[public["key_id"]].tokens_used == 0
+    assert app.state.quota_reservations.list_reservations(key_id=public["key_id"]) == []
+    app.state.quota_reservations.close()
