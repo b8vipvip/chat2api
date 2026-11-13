@@ -76,6 +76,8 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
             context = browser.new_context()
             try:
                 page = context.new_page()
+                page_errors: list[str] = []
+                page.on("pageerror", lambda error: page_errors.append(str(error)))
                 page.goto(base_url + "/admin", wait_until="domcontentloaded")
                 page.locator("#adminSessionState").wait_for(state="visible", timeout=10000)
                 page.wait_for_function(
@@ -293,6 +295,11 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                 page.wait_for_function(
                     "() => document.getElementById('view-user-payments')?.classList.contains('active')",
                     timeout=5000,
+                )
+                assert page.locator("#commercePayKey").count() == 1, (
+                    "Commerce payment form was not mounted; view="
+                    + page.locator("#view-user-payments").evaluate("(node) => node.outerHTML")
+                    + "; page errors=" + repr(page_errors)
                 )
                 assert page.locator("#commercePayKey").is_disabled()
                 billing_statuses = page.evaluate(
