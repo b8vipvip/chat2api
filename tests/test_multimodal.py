@@ -148,6 +148,50 @@ def test_inline_data_url_image_is_materialized_as_attachment(tmp_path: Path) -> 
         assert response.status_code == 200
 
 
+def test_image_url_file_id_is_forwarded_as_a_scoped_attachment(tmp_path: Path) -> None:
+    with TestClient(create_app(settings(tmp_path))) as client:
+        image = upload(client, "web-chat-image.png", "image/png", b"stored-image", "vision")
+        client_id, token = pair(client)
+        with client.websocket_connect(f"/ws/extensions/{client_id}?token={token}") as websocket:
+            websocket.receive_json()
+
+            def request():
+                return client.post(
+                    "/v1/chat/completions",
+                    headers=admin_headers(),
+                    json={
+                        "model": "default",
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "text", "text": "describe this image"},
+                                    {"type": "image_url", "image_url": {"url": image["id"]}},
+                                ],
+                            }
+                        ],
+                        "stream": False,
+                    },
+                )
+
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(request)
+                message = websocket.receive_json()
+                assert message["type"] == "chat.request"
+                assert message["attachments"][0]["file_id"] == image["id"]
+                assert message["attachments"][0]["mime_type"] == "image/png"
+                websocket.send_json(
+                    {"type": "chat.completed", "request_id": message["request_id"], "text": "image received"}
+                )
+                response = future.result(timeout=5)
+
+        assert response.status_code == 200, response.text
+        assert response.json()["choices"][0]["message"]["content"] == "image received"
+        records = client.get("/api/admin/requests?limit=5", headers=admin_headers()).json()["data"]
+        assert records[0]["request_type"] == "multimodal"
+        assert records[0]["attachments_count"] == 1
+
+
 def test_remote_image_url_is_rejected_without_ssrf_fetch(tmp_path: Path) -> None:
     with TestClient(create_app(settings(tmp_path))) as client:
         response = client.post(

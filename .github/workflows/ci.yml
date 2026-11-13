@@ -153,6 +153,7 @@ jobs:
           node --check app/chat_renderer_v2.js
           node --check app/chat_stream_recovery_v1.js
           node --check app/chat_client_v1.js
+          node --check app/chat_image_drop_v1.js
           python - <<'PY'
           import re
           from pathlib import Path
