@@ -54,7 +54,8 @@ for method, path in expected:
 
 html = admin_response("tenants").body.decode("utf-8")
 assert "/assets/chat2api-control-plane-admin-v1.js" in html
-assert app.state.quota_reservation_runtime_enabled is False
+assert app.state.quota_reservation_runtime_enabled is True
+assert app.state.quota_reservation_runtime_coverage == ["/v1/chat/completions"]
 
 with TestClient(app) as client:
     assert client.get("/api/client/plugins").json() == {
