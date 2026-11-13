@@ -111,9 +111,28 @@ ledger reconciliation does startup expire remaining stale, unstarted
 reservations. The audited admin reconcile action uses the same replay and
 ledger-reconciliation sequence.
 
-Runtime coverage is explicitly reported as `/v1/chat/completions` and
-`/v1/responses`. Image generation and other usage-bearing routes remain
-ungated; do not treat C-06 as complete. Wallet-cents reservation/refund,
-tenant quota inheritance, provider-verified usage reconciliation and
-multi-process ledger transactions remain outside this slice. ApiKeyStore and
-BillingStore remain the only actual charge authorities.
+Runtime coverage is explicitly reported as `/v1/chat/completions`,
+`/v1/responses`, and `/v1/images/generations`. Responses hosted
+`image_generation` is covered because it delegates to the same canonical
+Images executor and child request ID; the parent Responses row remains
+zero-token to avoid double billing.
+
+Images admission reserves the estimated prompt tokens plus a fixed 4096-token
+per-image artifact floor before Worker dispatch. This fixed floor is an
+**admission hold only**, not an assertion about image token usage, provider
+price, or generation cost. The current Worker image event does not carry
+provider-verified usage. On successful completion, the existing API-key ledger
+therefore charges only the prompt-token estimate already emitted by
+`standard_usage` (marked `estimated: true`); the unused admission hold is
+released when the reservation settles. Failed, cancelled and timed-out image
+requests release their hold. Over-quota image requests are rejected before
+Worker dispatch.
+
+This closes the Images route's in-flight token-quota admission gap, but it
+does **not** implement image-provider cost accounting or a monetary image
+budget. Other usage-bearing routes still require an endpoint-by-endpoint
+coverage audit. Wallet-cents reservation/refund, tenant quota inheritance,
+provider-verified usage reconciliation and multi-process ledger transactions
+remain outside this slice. ApiKeyStore and BillingStore remain the only actual
+charge authorities. C-06 is not complete until those explicit gaps and the
+remaining production acceptance gates are resolved.
