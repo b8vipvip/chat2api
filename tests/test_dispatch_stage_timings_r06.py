@@ -245,6 +245,8 @@ def test_request_v6_reports_browser_readiness_stages_after_content_ack() -> None
     source = (ROOT / "chrome_extension/content_request_v6.js").read_text(encoding="utf-8")
 
     assert "async function runDispatchStage(active, stage, task)" in source
+    assert 'await runDispatchStage(active, "write_prompt", async () => {' in source
+    assert "await writePrompt(active, prompt);" in source
     assert "request_v6_dispatch_stage_evidence_v1" in source
     assert "request_v6_dispatch_to_response_started_ms" in source
     assert "request_v6_dispatch_submit_click_elapsed_ms" in source
