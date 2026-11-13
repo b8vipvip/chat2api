@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 
-EMAIL_RE = re.compile(r"^[^@\\s]{1,64}@[^@\\s.]+(?:\\.[^@\\s.]+)+$")
+EMAIL_RE = re.compile(r"^[^@\s]{1,64}@[^@\s.]+(?:\.[^@\s.]+)+$")
 MIN_TTL_SECONDS = 300
 MAX_TTL_SECONDS = 30 * 24 * 60 * 60
 
