@@ -68,4 +68,4 @@ Draft until these gates pass.
 - Up to four combined image/document attachments and 20 MiB total per message. Browser history stores file IDs and metadata only; it does not store file bytes.
 - No server-side conversation store, encrypted FileStore, server retention policy, document OCR, or browser E2E is claimed by this slice.
 
-- `app.entry:app` explicitly installs `install_web_chat_file_download_api` after user-account and Web Chat feature installation. Production-entry tests register an account, create a `files`-scoped key, upload a document, download exact bytes through the HttpOnly session, and delete the owner-scoped file.
+- `app.entry:app` installs the owner-scoped download route through the single Web Chat composition owner `install_web_chat_features_v1`, after the user-account routes exist. Production-entry tests register an account, create a `files`-scoped key, upload a document, download exact bytes through the HttpOnly session, and delete the owner-scoped file.
