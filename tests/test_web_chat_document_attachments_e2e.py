@@ -89,7 +89,7 @@ def test_web_chat_document_attachment_upload_send_and_download_in_chromium(tmp_p
                 document_bytes = b"Browser E2E document payload\nRevenue increased by 12 percent.\n"
                 page.locator("#fileInput").set_input_files({
                     "name": "quarterly-summary.txt",
-                    "mime_type": "text/plain",
+                    "mimeType": "text/plain",
                     "buffer": document_bytes,
                 })
                 page.locator(".attachment-file-chip").wait_for(state="visible", timeout=5000)
