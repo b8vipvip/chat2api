@@ -59,7 +59,7 @@ def test_runtime_reserves_prompt_plus_conservative_output_floor(tmp_path: Path) 
     assert "/v1/images/generations" in app.state.quota_reservation_runtime_coverage
     assert any("image_generation" in value for value in app.state.quota_reservation_runtime_coverage)
     assert "/v1/audio/speech" in app.state.quota_reservation_runtime_coverage
-    assert "/v1/audio/conversations" not in app.state.quota_reservation_runtime_coverage
+    assert "/v1/audio/conversations" in app.state.quota_reservation_runtime_coverage
     store.close()
 
 
@@ -650,7 +650,7 @@ def test_audio_speech_reserves_and_settles_managed_key_usage(tmp_path: Path) -> 
     app.state.quota_reservations.close()
 
 
-def test_audio_conversation_keeps_posthoc_estimate_without_false_reservation(tmp_path: Path) -> None:
+def test_audio_conversation_reserves_and_settles_admission_floor(tmp_path: Path) -> None:
     import asyncio
     import base64
 
@@ -700,8 +700,55 @@ def test_audio_conversation_keeps_posthoc_estimate_without_false_reservation(tmp
     assert record["status"] == "completed"
     assert record["usage"]["total_tokens"] > 0
     assert record["usage"]["estimated"] is True
-    assert app.state.quota_reservations.get(record["request_id"]) is None
+    reservation = app.state.quota_reservations.get(record["request_id"])
+    assert reservation is not None and reservation["state"] == "settled"
+    assert reservation["reserved_tokens"] >= 4096
+    assert reservation["actual_tokens"] == record["usage"]["total_tokens"]
+    assert record["diagnostics"]["quota_reservation_v1"]["provider_usage_verified"] is False
     assert app.state.api_keys.keys[public["key_id"]].tokens_used == record["usage"]["total_tokens"]
+    app.state.quota_reservations.close()
+
+
+def test_audio_conversation_rejects_over_quota_before_worker_dispatch(tmp_path: Path) -> None:
+    import asyncio
+    import base64
+
+    from fastapi.testclient import TestClient
+    from app.voice_patch import install_voice_patch
+
+    app, public, token = _managed_chat_quota_app(tmp_path, token_quota=4095)
+    install_voice_patch(app)
+    app.state.registry.resolve_client = lambda requested: "ext_voice_quota"
+    audio_file = asyncio.run(app.state.file_store.create(
+        filename="quota-input.webm",
+        data_base64=base64.b64encode(b"voice-input-bytes").decode("ascii"),
+        mime_type="audio/webm",
+        owner_key_id=public["key_id"],
+        purpose="voice-input",
+    ))
+    sent: list[dict] = []
+
+    async def fake_worker_send(client_id: str, payload: dict) -> None:
+        sent.append(payload)
+
+    app.state.registry.send = fake_worker_send
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/audio/conversations",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"model": "gpt-live", "audio_file_id": audio_file.file_id},
+        )
+
+    assert response.status_code == 429, response.text
+    assert sent == []
+    assert app.state.api_keys.keys[public["key_id"]].tokens_used == 0
+    assert app.state.quota_reservations.list_reservations(key_id=public["key_id"]) == []
+    rejected = next(
+        item for item in app.state.telemetry.recent(20)
+        if item.get("request_type") == "voice_conversation"
+    )
+    assert rejected["status"] == "error"
+    assert rejected["diagnostics"]["quota_reservation_v1"]["state"] == "rejected"
     app.state.quota_reservations.close()
 
 
