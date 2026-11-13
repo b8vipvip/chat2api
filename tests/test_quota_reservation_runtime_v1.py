@@ -214,7 +214,6 @@ def test_responses_api_reserves_and_settles_managed_key_usage(tmp_path: Path) ->
 
     from app.config import Settings
     from app.main import create_app
-    from app.request_history_v94_patch import install_request_history_v94_patch
     from app.responses_model_routing_v108_patch import install_responses_model_routing_v108_patch
     from app.responses_v108_patch import install_responses_v108_patch
 
@@ -235,9 +234,9 @@ def test_responses_api_reserves_and_settles_managed_key_usage(tmp_path: Path) ->
             })
 
     app.state.registry.send = fake_worker_send
-    # Match production entrypoint ordering: normalize the admin request-history
-    # owner before the Responses tool-stream installer adds v117 window columns.
-    install_request_history_v94_patch(app)
+    # create_app() is the API core and intentionally has no production admin
+    # asset owner. The v117 request-history column patch defers in this mode;
+    # app.entry installs v94 first and applies the column in production.
     install_responses_model_routing_v108_patch(app)
     install_responses_v108_patch(app)
     # create_app() is the API core; the production C composition owner creates
