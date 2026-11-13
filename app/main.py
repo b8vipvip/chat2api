@@ -1128,6 +1128,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return canonical_attachment_specs(file_store, file_ids, principal)
 
     async def inline_image_files(body: ChatCompletionRequest, principal: ApiPrincipal) -> list[str]:
+        existing_file_ids = body.all_file_ids()
+        if len(existing_file_ids) > 4:
+            raise HTTPException(status_code=400, detail="At most four image/file inputs are supported per request")
+        seen_file_ids = set(existing_file_ids)
         result: list[str] = []
         sequence = 0
         for message in body.messages:
@@ -1153,6 +1157,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         status_code=400,
                         detail="Remote image URLs are not fetched for security. Use a base64 data URL or upload via POST /v1/files.",
                     )
+                if len(seen_file_ids) >= 4:
+                    raise HTTPException(status_code=400, detail="At most four image/file inputs are supported per request")
                 sequence += 1
                 try:
                     image_bytes, image_mime = file_store._decode(value, None)
@@ -1167,6 +1173,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 except ValueError as error:
                     raise HTTPException(status_code=400, detail=str(error)) from error
                 result.append(item.file_id)
+                seen_file_ids.add(item.file_id)
         return result
 
     def chat2api_meta(state: RequestState, token_meta: dict[str, object], principal: ApiPrincipal) -> dict[str, object]:
