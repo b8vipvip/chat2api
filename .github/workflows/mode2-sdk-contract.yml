@@ -1,0 +1,93 @@
+name: Mode 2 SDK compatibility
+
+on:
+  pull_request:
+    paths:
+      - "docs/architecture/mode2-api-compatibility-matrix.json"
+      - "docs/architecture/MODE2_API_COMPATIBILITY.md"
+      - "docs/architecture/adr-005-mode2-api-service.md"
+      - "tests/test_mode2_compatibility_matrix.py"
+      - "tests/test_mode2_openai_python_sdk.py"
+      - "tests/test_mode2_openai_node_sdk.py"
+      - "tests/mode2_sdk_node.mjs"
+      - ".github/workflows/mode2-sdk-contract.yml"
+      - "app/main.py"
+      - "app/responses_v108_patch.py"
+      - "app/file_store.py"
+      - "app/api_keys.py"
+      - "app/config.py"
+      - "app/broker.py"
+      - "app/registry.py"
+      - "app/models.py"
+      - "app/model_catalog.py"
+      - "app/prompting.py"
+      - "app/v13_patch.py"
+      - "app/responses_multimodal_input_v183.py"
+      - "app/responses_image_tool_v182.py"
+      - "app/mode_resolver.py"
+      - "app/entry.py"
+      - "app/v7_patch.py"
+      - "app/v9_patch.py"
+      - "app/v13_patch.py"
+      - "app/voice_patch.py"
+      - "app/live_voice_patch.py"
+  push:
+    branches: [main]
+    paths:
+      - "docs/architecture/mode2-api-compatibility-matrix.json"
+      - "docs/architecture/MODE2_API_COMPATIBILITY.md"
+      - "docs/architecture/adr-005-mode2-api-service.md"
+      - "tests/test_mode2_compatibility_matrix.py"
+      - "tests/test_mode2_openai_python_sdk.py"
+      - "tests/test_mode2_openai_node_sdk.py"
+      - "tests/mode2_sdk_node.mjs"
+      - ".github/workflows/mode2-sdk-contract.yml"
+      - "app/main.py"
+      - "app/responses_v108_patch.py"
+      - "app/file_store.py"
+      - "app/api_keys.py"
+      - "app/config.py"
+      - "app/broker.py"
+      - "app/registry.py"
+      - "app/models.py"
+      - "app/model_catalog.py"
+      - "app/prompting.py"
+      - "app/v13_patch.py"
+      - "app/responses_multimodal_input_v183.py"
+      - "app/responses_image_tool_v182.py"
+      - "app/mode_resolver.py"
+      - "app/entry.py"
+      - "app/v7_patch.py"
+      - "app/v9_patch.py"
+      - "app/v13_patch.py"
+      - "app/voice_patch.py"
+      - "app/live_voice_patch.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mode2-sdk-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sdk-compatibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: Install Python project and official SDK
+        run: python -m pip install -e '.[dev]' pytest-timeout 'openai>=2,<3'
+      - name: Install official Node SDK in isolated test directory
+        run: npm install --prefix "$RUNNER_TEMP/mode2-sdk" --no-save --ignore-scripts 'openai@^6'
+      - name: Python and Node SDK against real Mode 2 ASGI routes
+        env:
+          MODE2_SDK_NODE_MODULES: ${{ runner.temp }}/mode2-sdk/node_modules
+        run: pytest -q tests/test_mode2_compatibility_matrix.py tests/test_mode2_openai_python_sdk.py tests/test_mode2_openai_node_sdk.py --timeout=120
