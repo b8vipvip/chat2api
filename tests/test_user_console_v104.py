@@ -403,3 +403,74 @@ def test_wallet_reservation_rejects_user_request_before_worker_dispatch(tmp_path
     rows = app.state.quota_reservations.list_reservations(key_id=public["key_id"])
     assert rows and all(row["state"] == "released" for row in rows)
     app.state.quota_reservations.close()
+
+
+
+def test_wallet_telemetry_settles_success_and_releases_failed_request(tmp_path: Path) -> None:
+    import asyncio
+
+    from app.config import Settings
+    from app.main import create_app
+    from app.quota_reservations import QuotaReservationStore
+    from app.quota_reservation_runtime_v1 import install_quota_reservation_runtime_v1
+    from app.user_console_v104_patch import install_user_console_v104_patch
+
+    app = create_app(Settings(
+        CHAT2API_API_KEY="wallet-hook-master-key",
+        CHAT2API_DATA_DIR=str(tmp_path),
+    ))
+    install_user_console_v104_patch(app)
+    user = app.state.user_accounts.register("wallet-hook@example.com", "long-enough-password")
+    public, _token = asyncio.run(app.state.api_keys.create("wallet-hook"))
+    app.state.user_accounts.attach_key(user["user_id"], public["key_id"])
+    pricing = app.state.user_pricing
+    config = pricing.public()
+    pricing.update(billing_enabled=True, usd_cny_rate=7.0, models=config["models"])
+    billing = app.state.user_billing
+    billing.credit(user["user_id"], 1000)
+    price = pricing.model("gpt-5.6-sol")
+    billing.reserve_for_request(
+        user["user_id"], "req_wallet_hook_success",
+        model_id="gpt-5.6-sol", estimated_cny_cents=100,
+        input_tokens=100, output_tokens=4096,
+        price_snapshot=price, usd_cny_rate=7.0,
+    )
+    billing.reserve_for_request(
+        user["user_id"], "req_wallet_hook_failure",
+        model_id="gpt-5.6-sol", estimated_cny_cents=100,
+        input_tokens=100, output_tokens=4096,
+        price_snapshot=price, usd_cny_rate=7.0,
+    )
+    app.state.quota_reservations = QuotaReservationStore(tmp_path)
+    install_quota_reservation_runtime_v1(app)
+
+    async def append_rows() -> None:
+        await app.state.telemetry.append({
+            "request_id": "req_wallet_hook_success",
+            "api_key_id": public["key_id"],
+            "requested_model": "gpt-5.6-sol",
+            "status": "completed",
+            "usage": {
+                "prompt_tokens": 1000, "completion_tokens": 500,
+                "total_tokens": 1500, "estimated": True,
+            },
+            "diagnostics": {},
+        })
+        await app.state.telemetry.append({
+            "request_id": "req_wallet_hook_failure",
+            "api_key_id": public["key_id"],
+            "requested_model": "gpt-5.6-sol",
+            "status": "error",
+            "usage": {},
+            "diagnostics": {},
+        })
+
+    asyncio.run(append_rows())
+    success_charge = billing.charge_for_request("req_wallet_hook_success")
+    assert success_charge is not None and success_charge["debited"] is True
+    assert billing.reservations["req_wallet_hook_success"]["state"] == "settled"
+    assert billing.reservations["req_wallet_hook_success"]["actual_cny_cents"] == success_charge["cost_cny_cents"]
+    assert billing.reservations["req_wallet_hook_failure"]["state"] == "released"
+    assert billing.reserved_cents(user["user_id"]) == 0
+    assert billing.balance_cents(user["user_id"]) == 1000 - success_charge["cost_cny_cents"]
+    app.state.quota_reservations.close()
