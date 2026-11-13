@@ -18,6 +18,7 @@ The repository's Docker Compose service currently starts one Uvicorn process and
 - Known multi-worker environment variables (`WEB_CONCURRENCY`, `UVICORN_WORKERS`, `GUNICORN_WORKERS`) with numeric values greater than one are rejected.
 - The lock is released during ASGI shutdown.
 - Tests cover exclusive ownership, release/reacquire, multi-worker environment rejection, symlink rejection, preloaded-fork rejection and FastAPI lifespan integration.
+- A subprocess-level production-entry regression starts `app.entry` in one process, proves a second process is rejected before `app.main` is imported, checks the retained lock inode, terminates the first process and verifies a third process can reacquire the directory. This exercises the actual import-time guard but is not a substitute for the separately required Docker Compose / mounted-volume smoke on the deployment host.
 
 ## Integration boundary
 
