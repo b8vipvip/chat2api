@@ -99,6 +99,7 @@ async def test_completed_usage_without_positive_total_keeps_reservation_until_le
     for request_id, usage in (
         ("req_usage_missing_0001", None),
         ("req_usage_zero_0001", {"total_tokens": 0}),
+        ("req_usage_fractional_0001", {"total_tokens": 1.5}),
     ):
         reserve_request_quota(
             app, request_id, SimpleNamespace(key_id="key-1"), "prompt", 4096,
@@ -117,6 +118,7 @@ async def test_completed_usage_without_positive_total_keeps_reservation_until_le
     assert store.reconcile(api_keys) == 0
     assert store.get("req_usage_missing_0001")["state"] == "committing"
     assert store.get("req_usage_zero_0001")["state"] == "committing"
+    assert store.get("req_usage_fractional_0001")["state"] == "committing"
 
     # A later terminal replay with real usage can complete the same
     # reservation exactly once without dropping the conservative hold.
