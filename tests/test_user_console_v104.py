@@ -272,6 +272,44 @@ def test_wallet_reservations_prevent_overcommit_and_release_idempotently(tmp_pat
         )
 
 
+
+def test_wallet_reservation_storage_failures_preserve_available_balance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pricing = PricingStore(tmp_path)
+    billing = BillingStore(tmp_path)
+    billing.credit("usr_durable", 1000)
+    kwargs = {
+        "model_id": "gpt-5.6-sol",
+        "estimated_cny_cents": 300,
+        "input_tokens": 100,
+        "output_tokens": 4096,
+        "price_snapshot": pricing.model("gpt-5.6-sol"),
+        "usd_cny_rate": 7.0,
+    }
+
+    def fail_save() -> None:
+        raise OSError("simulated full data volume")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(billing, "_save", fail_save)
+        with pytest.raises(OSError, match="full data volume"):
+            billing.reserve_for_request("usr_durable", "req_failed_save", **kwargs)
+    assert "req_failed_save" not in billing.reservations
+    assert billing.available_balance_cents("usr_durable") == 1000
+    assert "req_failed_save" not in BillingStore(tmp_path).reservations
+
+    assert billing.reserve_for_request(
+        "usr_durable", "req_release_failure", **kwargs,
+    )["state"] == "reserved"
+    with monkeypatch.context() as patch:
+        patch.setattr(billing, "_save", fail_save)
+        with pytest.raises(OSError, match="full data volume"):
+            billing.release_reservation("req_release_failure", "usr_durable")
+    assert billing.reservations["req_release_failure"]["state"] == "reserved"
+    assert billing.available_balance_cents("usr_durable") == 700
+    assert BillingStore(tmp_path).reservations["req_release_failure"]["state"] == "reserved"
+
 def test_wallet_reservation_settles_actual_charge_once_and_persists(tmp_path: Path) -> None:
     pricing = PricingStore(tmp_path)
     payload = pricing.public()
