@@ -55,12 +55,14 @@ def install_control_plane_features_v1(app: Any) -> Any:
     from .plugin_registry_v1_patch import install_plugin_registry
     install_plugin_registry(app)
 
-    # The reservation journal is exposed for inspection/reconciliation only.
-    # Its request-admission and Broker-terminal hooks remain deliberately off.
+    # Install the reservation journal's admin/read-reconcile surface here.
+    # This composition owner does not enable request admission or terminal
+    # settlement; app.entry installs the dedicated runtime adapter afterward.
+    # The guard prevents any earlier installer from silently enabling it.
     from .quota_reservation_admin_v1_patch import install_quota_reservation_admin_v1
     install_quota_reservation_admin_v1(app)
     if getattr(app.state, "quota_reservation_runtime_enabled", False):
-        raise RuntimeError("C-06 runtime reservation hooks must remain disabled until lifecycle integration is verified")
+        raise RuntimeError("C-06 runtime hooks must be enabled only by the dedicated runtime adapter")
 
     # Serve the C-07 feature asset through the existing single admin page owner.
     from .admin_control_plane_ui_v1_patch import install_admin_control_plane_ui_v1
