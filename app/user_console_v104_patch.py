@@ -410,7 +410,13 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
     @app.get("/api/user/me")
     async def user_me(request: Request) -> dict[str, Any]:
         user = current_user(request)
-        return {"ok": True, "user": user, "balance_cents": billing.balance_cents(str(user["user_id"]))}
+        user_id = str(user["user_id"])
+        return {
+            "ok": True, "user": user,
+            "balance_cents": billing.balance_cents(user_id),
+            "reserved_cents": billing.reserved_cents(user_id),
+            "available_balance_cents": billing.available_balance_cents(user_id),
+        }
 
     @app.patch("/api/user/profile")
     async def user_profile(body: ProfileBody, request: Request) -> dict[str, Any]:
