@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 assert app.state.web_chat_features_v1_installed is True
 assert app.state.web_chat_integration_version == 1
 assert app.state.quota_reservation_runtime_enabled is True
-assert app.state.quota_reservation_runtime_coverage == ["/v1/chat/completions"]
+assert app.state.quota_reservation_runtime_coverage == ["/v1/chat/completions", "/v1/responses"]
 expected = {
     ("GET", "/api/user/chat/requests/{request_id}/recovery"),
     ("POST", "/api/user/chat/requests/{request_id}/cancel"),
