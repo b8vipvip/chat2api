@@ -276,8 +276,11 @@ class QuotaReservationStore:
             ledger = getattr(item, "charged_requests", None) if item else None
             charged = max(0, int((ledger or {}).get(request_id, 0) or 0))
             expected = max(0, int(actual_tokens or 0))
-            if expected == 0 or charged >= expected:
-                self.mark_settled(request_id, key_id, expected)
+            # A zero/missing usage estimate is not proof that a completed
+            # request consumed zero tokens. Keep its reservation active until
+            # the existing ApiKeyStore ledger proves a positive charge.
+            if charged > 0 and charged >= expected:
+                self.mark_settled(request_id, key_id, max(expected, charged))
                 reconciled += 1
         return reconciled
 
@@ -297,14 +300,22 @@ class QuotaReservationStore:
             # release a live reservation.
             return "pending"
         usage = record.get("usage") if isinstance(record.get("usage"), dict) else {}
+        raw_actual = usage.get("total_tokens")
         try:
-            actual = max(0, int(usage.get("total_tokens") or 0))
+            actual = 0 if isinstance(raw_actual, bool) else max(0, int(raw_actual or 0))
         except (TypeError, ValueError):
             actual = 0
         reservation = self.get(request_id)
         if reservation and reservation["key_id"] != key_id:
             raise QuotaReservationError("Completion API key does not match the request reservation")
         if reservation and reservation["state"] not in {"released", "expired"}:
+            if actual <= 0:
+                # Fail closed: a completed request with absent/zero usage must
+                # not release its in-flight reservation. Freeze it in
+                # committing so startup/admin reconciliation can settle only
+                # after ApiKeyStore proves a positive request charge.
+                self.begin_commit(request_id, key_id, 0)
+                return "usage_pending"
             self.begin_commit(request_id, key_id, actual)
             await api_keys.account_completed_usage(record)
             self.mark_settled(request_id, key_id, actual)
