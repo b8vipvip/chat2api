@@ -192,6 +192,10 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                     "() => document.getElementById('adminSessionState')?.textContent.includes('support_agent')",
                     timeout=10000,
                 )
+                page.wait_for_function(
+                    "() => document.documentElement.dataset.adminCommerceRole === 'support' && document.documentElement.dataset.adminCommerceSessionReady === 'true'",
+                    timeout=10000,
+                )
 
                 assert page.locator("#view-model-entitlements").evaluate("(node) => node.classList.contains('active')")
                 assert page.locator('[data-view="model-entitlements"]').is_visible()
@@ -276,6 +280,10 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                 page.locator("#adminLoginButton").click()
                 page.wait_for_function(
                     "() => document.getElementById('adminSessionState')?.textContent.includes('billing_admin')",
+                    timeout=10000,
+                )
+                page.wait_for_function(
+                    "() => document.documentElement.dataset.adminCommerceRole === 'billing_admin' && document.documentElement.dataset.adminCommerceSessionReady === 'true'",
                     timeout=10000,
                 )
                 page.wait_for_function(
