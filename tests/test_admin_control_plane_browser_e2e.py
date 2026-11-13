@@ -439,6 +439,13 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                 assert page.locator('#adminUsersBody button[data-user-action="toggle"]').count() == 1
                 assert page.locator('#adminUsersBody button[data-user-action="revoke"]').count() == 1
                 assert page.locator("#adminAuditPanel").is_hidden()
+                user_admin_key_read = page.evaluate(
+                    """async () => (await fetch(
+                      "/api/admin/users/usr_fixture_123456/keys",
+                      {credentials: "same-origin"}
+                    )).status"""
+                )
+                assert user_admin_key_read == 403
                 page.evaluate(
                     "() => { window.fetch = window.__c07_users_fetch; delete window.__c07_users_fetch; }"
                 )
