@@ -45,10 +45,11 @@ def reserve_request_quota(
         raise HTTPException(status_code=503, detail="Token quota reservation failed: " + str(error)) from error
 
 
-# Images has no provider-verified token usage in the current Worker protocol.
-# This fixed amount is an admission hold only; successful requests settle the
-# prompt-token estimate already emitted by the canonical Images executor.
+# Images and Voice do not yet expose provider-verified usage in the Worker
+# protocol. These fixed amounts are admission holds only; terminal settlement
+# continues to use the existing estimated text usage emitted by each executor.
 IMAGE_GENERATION_RESERVATION_FLOOR_TOKENS = 4096
+AUDIO_SPEECH_RESERVATION_FLOOR_TOKENS = 4096
 
 
 def reserve_image_generation_quota(
@@ -73,7 +74,10 @@ def reserve_audio_request_quota(
     Audio-only conversation input is deliberately not covered here because
     its usage cannot be estimated from text before dispatch.
     """
-    return reserve_request_quota(app, request_id, principal, prompt, 4096)
+    return reserve_request_quota(
+        app, request_id, principal, prompt,
+        AUDIO_SPEECH_RESERVATION_FLOOR_TOKENS,
+    )
 
 
 def install_quota_reservation_runtime_v1(app: Any) -> Any:
