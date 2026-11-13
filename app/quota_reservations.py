@@ -274,6 +274,10 @@ class QuotaReservationStore:
         for request_id, key_id, actual_tokens in rows:
             item = getattr(api_keys, "keys", {}).get(str(key_id))
             ledger = getattr(item, "charged_requests", None) if item else None
+            if not isinstance(ledger, dict):
+                # Production ApiKeyStore keeps the ledger on ManagedApiKey;
+                # adapters may expose the same idempotency proof at store level.
+                ledger = getattr(api_keys, "charged_requests", None)
             charged = max(0, int((ledger or {}).get(request_id, 0) or 0))
             expected = max(0, int(actual_tokens or 0))
             # A zero/missing usage estimate is not proof that a completed
@@ -284,16 +288,30 @@ class QuotaReservationStore:
                 reconciled += 1
         return reconciled
 
-    async def recover_committing(self, telemetry: Any, api_keys: Any) -> int:
-        """Replay durable completed telemetry before ledger-only reconciliation.
+    def _list_active_reservations(self) -> list[dict[str, Any]]:
+        """Return every in-flight reservation for startup terminal recovery."""
+        with self.lock:
+            rows = self.db.execute(
+                """SELECT request_id,key_id,reserved_tokens,actual_tokens,state,created_at,expires_at,updated_at
+                   FROM quota_reservations
+                   WHERE state IN ('reserved','committing')
+                   ORDER BY created_at ASC"""
+            ).fetchall()
+        return [value for row in rows if (value := self._row(row)) is not None]
 
-        A crash can occur after the reservation enters committing but
-        before ApiKeyStore records the charge. The terminal telemetry row is
-        persisted before its accounting callback, so replaying that exact
-        request is safe: ApiKeyStore de-duplicates by request_id.
+    async def recover_committing(self, telemetry: Any, api_keys: Any) -> int:
+        """Replay persisted terminal telemetry for every active reservation.
+
+        TelemetryStore appends a terminal record before invoking its accounting
+        callback. A crash can therefore leave the reservation either reserved
+        (before begin_commit/callback) or committing (during settlement).
+        Recover both states before expiring old reservations. ApiKeyStore
+        remains the sole charge authority and de-duplicates by request_id.
         """
-        reservations = self.list_reservations(state="committing", limit=500)
+        reservations = self._list_active_reservations()
         request_ids = {str(row["request_id"]) for row in reservations}
+        if not request_ids:
+            return 0
         get_many = getattr(telemetry, "get_many_persisted", None)
         getter = getattr(telemetry, "get", None)
         if callable(get_many):
@@ -303,13 +321,12 @@ class QuotaReservationStore:
         else:
             return 0
         replayed = 0
+        terminal_statuses = {"completed", "error", "cancelled", "stalled", "failed", "timeout"}
         for reservation in reservations:
             record = records.get(str(reservation["request_id"]))
-            if not isinstance(record, dict) or str(record.get("status") or "").lower() != "completed":
+            if not isinstance(record, dict):
                 continue
-            usage = record.get("usage") if isinstance(record.get("usage"), dict) else {}
-            actual = usage.get("total_tokens")
-            if type(actual) is not int or actual <= 0:
+            if str(record.get("status") or "").lower() not in terminal_statuses:
                 continue
             result = await self.commit_completed_usage(record, api_keys)
             if result == "settled":
