@@ -239,3 +239,29 @@ def test_every_request_scoped_worker_sidecar_uses_dispatch_socket_ownership() ->
     # ordinary chat/image progress+terminal ingress must share the same
     # request/client/original-socket/current-socket ownership predicate.
     assert source.count("owns_dispatch_socket(") == 5
+
+
+def test_request_v6_reports_browser_readiness_stages_after_content_ack() -> None:
+    source = (ROOT / "chrome_extension/content_request_v6.js").read_text(encoding="utf-8")
+
+    assert "async function runDispatchStage(active, stage, task)" in source
+    assert "request_v6_dispatch_stage_evidence_v1" in source
+    assert "request_v6_dispatch_to_response_started_ms" in source
+    assert "request_v6_dispatch_submit_click_elapsed_ms" in source
+
+    run_request = source[source.index("async function runRequest(message)"):]
+    interruption = run_request.index('"resolve_blocking_interruption"')
+    prompt_write = run_request.index('"write_prompt"')
+    submit = run_request.index('"submit_and_confirm"')
+    monitor = run_request.index("await monitor(active)")
+    assert interruption < prompt_write < submit < monitor
+
+    started = source[source.index("async function ensureResponseStarted("):
+                     source.index("function completeResponsesBridgeDocument(")]
+    assert "dispatchElapsedMs(active)" in started
+    assert "active.dispatchStageEvidence" in started
+
+    failure = run_request[run_request.index("} catch (error) {"):
+                          run_request.index("} finally {")]
+    assert "request_v6_dispatch_elapsed_ms" in failure
+    assert "request_v6_dispatch_stage_evidence_v1" in failure
