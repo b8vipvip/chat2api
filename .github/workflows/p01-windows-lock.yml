@@ -20,8 +20,8 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - name: Install focused test dependencies
-        run: python -m pip install pytest fastapi httpx
+      - name: Install project dependencies
+        run: python -m pip install -e ".[dev]"
       - name: Verify Windows byte-range locking and lifespan behavior
         run: >-
           python -m pytest -q tests/test_runtime_single_process_guard.py
