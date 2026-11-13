@@ -126,6 +126,29 @@ def test_user_image_content_rejects_non_vision_and_non_image_files(tmp_path: Pat
         assert client.get(f"/api/user/files/{mislabeled.json()['id']}/content").status_code == 404
 
 
+def test_user_image_preview_rejects_invalid_raster_bytes(tmp_path: Path) -> None:
+    settings = Settings(
+        CHAT2API_API_KEY="web-chat-image-master-key",
+        CHAT2API_DATA_DIR=str(tmp_path),
+    )
+    app = create_app(settings)
+    install_user_console_v104_patch(app)
+    with TestClient(app) as client:
+        token = _register_and_create_key(client, "invalid-raster@example.com")
+        uploaded = client.post(
+            "/v1/files",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "filename": "invalid.png", "mime_type": "image/png",
+                "data_base64": base64.b64encode(b"not a raster image").decode("ascii"),
+                "purpose": "vision",
+            },
+        )
+        assert uploaded.status_code == 200, uploaded.text
+        preview = client.get(f"/api/user/files/{uploaded.json()['id']}/content")
+        assert preview.status_code == 415
+        assert preview.headers["cache-control"] == "private, no-store"
+
 def test_user_can_delete_owned_vision_image_with_session_only(tmp_path: Path) -> None:
     settings = Settings(
         CHAT2API_API_KEY="web-chat-image-master-key",
