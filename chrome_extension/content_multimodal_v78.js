@@ -38,6 +38,9 @@
 
   async function fetchAttachment(spec, requestId) {
     const scopedRequestId = String(requestId || spec.request_id || "");
+    if (!/^[a-zA-Z0-9_-]{6,120}$/.test(scopedRequestId)) {
+      throw new Error("Attachment fetch requires its original request ID");
+    }
     const response = await chrome.runtime.sendMessage({
       type: "chat2api.attachment.fetch",
       fileId: spec.file_id,
@@ -362,7 +365,7 @@
     if (!Array.isArray(specs) || !specs.length) return { attachments_count: 0, attachment_prepare_ms: 0 };
     if (specs.length > 4) throw new Error("A maximum of 4 attachments is supported per request");
     const requestId = String(options.request_id || specs[0]?.request_id || "");
-    if (!/^(?:req|resp|imgreq)_[a-zA-Z0-9_-]{6,100}$/.test(requestId)) {
+    if (!/^[a-zA-Z0-9_-]{6,120}$/.test(requestId)) {
       throw new Error("Attachment preparation requires its original request ID");
     }
     const items = [];
