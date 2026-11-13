@@ -77,14 +77,20 @@ def _registry_window_fields(registry: Any, request_id: str) -> dict[str, Any]:
     return {}
 
 
-def _patch_admin_html() -> None:
+def _patch_admin_html() -> bool:
     html = admin_module.ADMIN_HTML
     if 'data-request-window-number-v117="1"' in html:
-        return
+        return True
 
     header_old = "<th>设备标识</th><th>模型</th>"
     header_new = '<th>设备标识</th><th data-request-window-number-v117="1">窗口标识</th><th>模型</th>'
     if html.count(header_old) != 1:
+        # create_app() is intentionally the API core and does not install the
+        # production v94 admin-asset/request-history owner. In that supported
+        # composition, defer only the HTML mutation; the production entrypoint
+        # installs v94 before this patch. Unexpected table drift still fails.
+        if html.count('id="rqBody"') == 1 and "设备标识" not in html:
+            return False
         raise RuntimeError(f"{PATCH_ID}: expected one canonical request-history device/model header")
     html = html.replace(header_old, header_new, 1)
 
@@ -111,13 +117,16 @@ def _patch_admin_html() -> None:
         raise RuntimeError(f"{PATCH_ID}: expected three canonical request-history colSpan=13 markers, found {colspan_count}")
     html = html.replace("colSpan=13", "colSpan=14")
     admin_module.ADMIN_HTML = html
+    return True
 
 
 def install_request_window_observability_v117_patch(app: FastAPI) -> FastAPI:
     if getattr(app.state, "request_window_observability_v117_installed", False):
+        if getattr(app.state, "request_window_observability_v117_html_pending", False):
+            app.state.request_window_observability_v117_html_pending = not _patch_admin_html()
         return app
 
-    _patch_admin_html()
+    html_patched = _patch_admin_html()
     broker = app.state.broker
     telemetry = app.state.telemetry
     registry = app.state.registry
@@ -161,6 +170,7 @@ def install_request_window_observability_v117_patch(app: FastAPI) -> FastAPI:
 
     broker.publish = publish_with_window_observability
     app.state.request_window_observability_v117_installed = True
+    app.state.request_window_observability_v117_html_pending = not html_patched
     app.state.request_window_observability_revision = PATCH_REVISION
     return app
 
