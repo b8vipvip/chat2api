@@ -29,6 +29,7 @@
   let currentAdminRole = null;
   let sessionAuthenticated = false;
   const canWriteUsers = () => ["super_admin", "user_admin"].includes(currentAdminRole);
+  const canReadUserKeys = () => ["super_admin", "support"].includes(currentAdminRole);
   const canReadAudit = () => currentAdminRole === "super_admin";
   function applyAdminRole() {
     // Expose the resolved, non-secret role for diagnostics and deterministic
@@ -40,6 +41,17 @@
     usersButton.hidden = !["super_admin", "user_admin", "system_admin", "support"].includes(currentAdminRole);
     const auditPanel = document.getElementById("adminAuditPanel");
     if (auditPanel) auditPanel.hidden = !canReadAudit();
+    if (!canReadAudit()) {
+      const auditBody = document.getElementById("adminAuditBody");
+      if (auditBody) auditBody.textContent = "";
+    }
+    if (!canReadUserKeys()) {
+      const keysPanel = document.getElementById("adminUserKeysPanel");
+      const keysBody = document.getElementById("adminUserKeysBody");
+      if (keysPanel) keysPanel.style.display = "none";
+      if (keysBody) keysBody.textContent = "";
+      activeAdminUserId = "";
+    }
     const canWritePaymentSecrets = currentAdminRole === "super_admin";
     document.querySelectorAll("#view-user-payments input, #view-user-payments select, #view-user-payments textarea").forEach((node) => {
       node.disabled = !canWritePaymentSecrets;
@@ -267,7 +279,7 @@
         '<td>' + Number(user.active_sessions || 0) + '</td>' +
         '<td>' + balance + '</td>' +
         '<td><div class="rowactions">' + writeActions +
-        '<button class="action" data-user-action="keys" data-user-id="' + esc(user.user_id) + '">查看 Key</button>' +
+        (canReadUserKeys() ? '<button class="action" data-user-action="keys" data-user-id="' + esc(user.user_id) + '">查看 Key</button>' : '') +
         '</div></td></tr>';
     }).join("");
     const page = document.getElementById("adminUserPage");
@@ -281,6 +293,7 @@
     document.getElementById("adminUserStatus").textContent = "错误：" + error.message;
   }
   async function loadUserKeys(userId) {
+    if (!canReadUserKeys()) throw new Error("当前管理员角色无权查看用户 API Key");
     activeAdminUserId = String(userId || "");
     const panel = document.getElementById("adminUserKeysPanel");
     const user = adminUserRows.find((row) => row.user_id === activeAdminUserId);
