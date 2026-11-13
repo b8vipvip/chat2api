@@ -292,12 +292,19 @@ class QuotaReservationStore:
         persisted before its accounting callback, so replaying that exact
         request is safe: ApiKeyStore de-duplicates by request_id.
         """
+        reservations = self.list_reservations(state="committing", limit=500)
+        request_ids = {str(row["request_id"]) for row in reservations}
+        get_many = getattr(telemetry, "get_many_persisted", None)
         getter = getattr(telemetry, "get", None)
-        if not callable(getter):
+        if callable(get_many):
+            records = get_many(request_ids)
+        elif callable(getter):
+            records = {request_id: getter(request_id) for request_id in request_ids}
+        else:
             return 0
         replayed = 0
-        for reservation in self.list_reservations(state="committing", limit=500):
-            record = getter(str(reservation["request_id"]))
+        for reservation in reservations:
+            record = records.get(str(reservation["request_id"]))
             if not isinstance(record, dict) or str(record.get("status") or "").lower() != "completed":
                 continue
             usage = record.get("usage") if isinstance(record.get("usage"), dict) else {}
