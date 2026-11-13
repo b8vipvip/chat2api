@@ -79,12 +79,13 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
 
                 # Authenticate as the environment-managed root and create a real
                 # delegated support administrator through the production UI.
-                page.locator("#adminSessionUser").fill(root_username)
-                page.locator("#adminSessionPassword").fill(root_password)
-                gate = page.locator("#adminLoginGate")
-                if gate.count():
-                    print("adminLoginGate diagnostic:", gate.evaluate("(node) => node.outerHTML"))
-                page.locator("#adminSessionLogin").click()
+                page.locator("#adminUsername").fill(root_username)
+                page.locator("#adminPassword").fill(root_password)
+                page.locator("#adminLoginButton").click()
+                page.wait_for_function(
+                    "() => document.getElementById('adminLoginGate')?.style.display === 'none'",
+                    timeout=10000,
+                )
                 page.wait_for_function(
                     "() => document.getElementById('adminSessionState')?.textContent.includes('super_admin')",
                     timeout=10000,
@@ -104,7 +105,11 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                 )
                 assert support_password not in page.locator("#cAdminRows").inner_text()
 
-                page.locator("#adminSessionLogout").click()
+                page.locator("#adminLogout").click()
+                page.wait_for_function(
+                    "() => document.getElementById('adminLoginGate')?.style.display === 'flex'",
+                    timeout=10000,
+                )
                 page.wait_for_function(
                     "() => document.getElementById('adminSessionState')?.textContent.includes('未登录')",
                     timeout=10000,
@@ -118,9 +123,13 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                       document.getElementById("adminKey").value = "stale-root-key";
                     }"""
                 )
-                page.locator("#adminSessionUser").fill(support_username)
-                page.locator("#adminSessionPassword").fill(support_password)
-                page.locator("#adminSessionLogin").click()
+                page.locator("#adminUsername").fill(support_username)
+                page.locator("#adminPassword").fill(support_password)
+                page.locator("#adminLoginButton").click()
+                page.wait_for_function(
+                    "() => document.getElementById('adminLoginGate')?.style.display === 'none'",
+                    timeout=10000,
+                )
                 page.wait_for_function(
                     "() => document.getElementById('adminSessionState')?.textContent.includes('support_agent')",
                     timeout=10000,
