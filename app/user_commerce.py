@@ -472,6 +472,13 @@ class BillingStore:
             if existing:
                 if str(existing.get("user_id") or "") != user_id:
                     raise WalletReservationError("Request wallet reservation belongs to another user")
+                if (
+                    str(existing.get("model_id") or "") != str(model_id or "")
+                    or int(existing.get("reserved_cny_cents") or 0) != estimated_cny_cents
+                    or int(existing.get("estimated_input_tokens") or 0) != max(0, int(input_tokens))
+                    or int(existing.get("estimated_output_tokens") or 0) != max(0, int(output_tokens))
+                ):
+                    raise WalletReservationError("Request wallet reservation payload does not match the original admission")
                 return dict(existing)
             active = sum(
                 max(0, int(row.get("reserved_cny_cents") or 0))
