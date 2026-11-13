@@ -141,12 +141,14 @@ def test_invite_only_registration_consumes_code_only_after_success(tmp_path: Pat
             headers=ORIGIN,
         )
         assert issued.status_code == 201
+        assert issued.headers["cache-control"] == "no-store"
         payload = issued.json()
         code = payload["code"]
         invitation_id = payload["invitation"]["invitation_id"]
 
         listing = client.get("/api/admin/control/invitations")
         assert listing.status_code == 200
+        assert listing.headers["cache-control"] == "no-store"
         assert code not in json.dumps(listing.json())
         assert "token_hash" not in json.dumps(listing.json())
 
