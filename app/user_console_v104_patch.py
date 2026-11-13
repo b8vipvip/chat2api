@@ -503,7 +503,7 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
         try:
             parsed_origin = urlsplit(origin)
         except ValueError as error:
-            raise HTTPException(status_code=403, detail="图片删除必须使用同源用户会话请求") from error
+            raise HTTPException(status_code=403, detail="附件删除必须使用同源用户会话请求") from error
         request_host = str(request.headers.get("host") or "").strip().lower()
         forwarded_proto = str(request.headers.get("x-forwarded-proto") or "").split(",", 1)[0].strip().lower()
         expected_scheme = forwarded_proto if forwarded_proto in {"http", "https"} else request.url.scheme.lower()
@@ -513,7 +513,7 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
             or parsed_origin.netloc.lower() != request_host or parsed_origin.path not in {"", "/"}
             or parsed_origin.query or parsed_origin.fragment or fetch_site not in {"", "same-origin"}
         ):
-            raise HTTPException(status_code=403, detail="图片删除必须使用同源用户会话请求")
+            raise HTTPException(status_code=403, detail="附件删除必须使用同源用户会话请求")
         user = current_user(request)
         file_store = app.state.file_store
         item = file_store.get(file_id)
@@ -536,9 +536,9 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
         try:
             await file_store.delete(file_id, str(item.owner_key_id))
         except (KeyError, PermissionError) as error:
-            raise HTTPException(status_code=404, detail="图片附件不存在") from error
+            raise HTTPException(status_code=404, detail="附件不存在") from error
         except OSError as error:
-            raise HTTPException(status_code=503, detail="图片附件暂时不可用") from error
+            raise HTTPException(status_code=503, detail="附件暂时不可用") from error
         return {"deleted": True}
     @app.patch("/api/user/keys/{key_id}/quota")
     async def user_update_key_quota(key_id: str, body: UserKeyQuotaBody, request: Request) -> dict[str, Any]:
