@@ -333,6 +333,8 @@ install_native_page_diagnostics(app)
 # after user accounts, Worker/model routing and the legacy admin auth stack exist.
 install_control_plane_features_v1(app)
 install_web_chat_features_v1(app)
+from .web_chat_file_download_api import install_web_chat_file_download_api
+install_web_chat_file_download_api(app)
 # The transport-only SSE guard is the final ASGI middleware installation, after
 # every patch that can register a BaseHTTPMiddleware wrapper. The trailing
 # idempotent request-history call only reasserts its table ownership.
