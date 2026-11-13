@@ -62,6 +62,6 @@ def install_quota_reservation_runtime_v1(app: Any) -> Any:
 
     telemetry.usage_accounting = account_usage_with_reservations
     app.state.quota_reservation_runtime_enabled = True
-    app.state.quota_reservation_runtime_coverage = ["/v1/chat/completions"]
+    app.state.quota_reservation_runtime_coverage = ["/v1/chat/completions", "/v1/responses"]
     app.state.quota_reservation_runtime_v1_installed = True
     return app
