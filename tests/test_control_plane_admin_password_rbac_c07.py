@@ -51,17 +51,31 @@ def test_delegated_user_admin_cannot_reset_peer_but_can_rotate_own_password(tmp_
             with TestClient(app) as support:
                 assert _login(support, "support_operator", "strong-initial-password").status_code == 200
 
-            own_reset = delegated.post(
-                "/api/admin/control/self/password",
+            compatibility_self_reset = delegated.post(
+                "/api/admin/control/admins/user_operator/password",
                 json={
                     "current_password": "strong-initial-password",
+                    "new_password": "strong-compat-password",
+                },
+                headers=ORIGIN,
+            )
+            assert compatibility_self_reset.status_code == 200, compatibility_self_reset.text
+            assert compatibility_self_reset.json()["revoked_sessions"] >= 1
+            assert delegated.get("/api/admin/auth/session").json()["authenticated"] is False
+
+        with TestClient(app) as self_service:
+            assert _login(self_service, "user_operator", "strong-compat-password").status_code == 200
+            own_reset = self_service.post(
+                "/api/admin/control/self/password",
+                json={
+                    "current_password": "strong-compat-password",
                     "new_password": "strong-rotated-password",
                 },
                 headers=ORIGIN,
             )
             assert own_reset.status_code == 200, own_reset.text
             assert own_reset.json()["revoked_sessions"] >= 1
-            assert delegated.get("/api/admin/auth/session").json()["authenticated"] is False
+            assert self_service.get("/api/admin/auth/session").json()["authenticated"] is False
 
         with TestClient(app) as rotated:
             assert _login(rotated, "user_operator", "strong-rotated-password").status_code == 200
