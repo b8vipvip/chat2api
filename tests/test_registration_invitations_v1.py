@@ -58,6 +58,18 @@ def test_invitation_email_normalization_and_validation(tmp_path: Path):
             store.create(invalid, "root")
 
 
+def test_user_console_clears_one_time_invitation_code_on_auth_transitions():
+    source = (
+        Path(__file__).resolve().parents[1] / "app" / "user_console_v104.js"
+    ).read_text(encoding="utf-8")
+    show_auth = source.split("function showAuth", 1)[1].split("function showApp", 1)[0]
+    show_app = source.split("function showApp", 1)[1].split("async function loadRegistrationPolicy", 1)[0]
+    assert '$("registerInviteCode")' in show_auth
+    assert 'inviteInput.value = ""' in show_auth
+    assert '$("registerInviteCode")' in show_app
+    assert 'inviteInput.value = ""' in show_app
+
+
 def test_invitation_store_is_email_bound_single_use_and_hash_only(tmp_path: Path):
     store = InvitationStore(tmp_path)
     created = store.create("Alice@example.com", "root", expires_in_seconds=600)
