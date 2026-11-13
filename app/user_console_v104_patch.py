@@ -1096,7 +1096,7 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
                     None,
                 )
                 owner = accounts.owner_for_key(str(matched.key_id)) if matched else None
-                if owner:
+                if owner and billing.reserved_cents(owner) > 0:
                     # Reconcile recent terminal charges/releases before checking
                     # available funds; this recovers a process interruption
                     # between telemetry persistence and the billing projection.
