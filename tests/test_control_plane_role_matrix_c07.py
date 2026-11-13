@@ -12,7 +12,7 @@ ROUTE_MATRIX = (
     ("/api/admin/pairing-codes", "POST", "system:write"),
     ("/api/admin/control/admins", "GET", "admins:read"),
     ("/api/admin/control/admins", "POST", "admins:write"),
-    ("/api/admin/control/admins/support_1/password", "POST", "admins:write"),
+    ("/api/admin/control/admins/support_1/password", "POST", "users:write"),
     ("/api/admin/control/self/password", "POST", "admin:self_password"),
     ("/api/admin/control/roles", "GET", "admins:read"),
     ("/api/admin/control/client", "PUT", "clients:write"),
