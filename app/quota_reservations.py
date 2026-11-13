@@ -354,6 +354,20 @@ class QuotaReservationStore:
         # coerce malformed strings into a smaller charge.
         actual = raw_actual if type(raw_actual) is int and raw_actual > 0 else 0
         reservation = self.get(request_id)
+        # Uploaded-audio conversations can legitimately produce no text
+        # transcript and have no provider-verified audio usage yet. In that
+        # narrow, explicitly estimated zero-text case, release the admission
+        # hold instead of freezing a permanent committing reservation. This
+        # does not claim that provider-side audio cost was zero.
+        if (
+            reservation
+            and reservation["state"] == "reserved"
+            and actual == 0
+            and str(record.get("request_type") or "") == "voice_conversation"
+            and usage.get("estimated") is True
+        ):
+            self.release(request_id, key_id)
+            return "released_zero_text_estimate"
         if reservation and reservation["key_id"] != key_id:
             raise QuotaReservationError("Completion API key does not match the request reservation")
         if reservation and reservation["state"] not in {"released", "expired"}:
