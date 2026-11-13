@@ -55,7 +55,10 @@ def permission_for_admin_route(path: str, method: str) -> str | None:
     if path == "/api/admin/control/admins" or re.fullmatch(r"/api/admin/control/admins/[^/]+", path):
         return "admins:write" if write else "admins:read"
     if re.fullmatch(r"/api/admin/control/admins/[^/]+/password", path):
-        return "users:write"
+        # Resetting another administrator's password is a root-only
+        # administration action. Delegated self-service uses the dedicated
+        # /control/self/password endpoint below.
+        return "admins:write"
     if path == "/api/admin/control/self/password":
         return "admin:self_password"
     if path == "/api/admin/control/client":
