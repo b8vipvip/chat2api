@@ -711,5 +711,6 @@
   });
 
 
+  window.__CHAT2API_CONTROL_PLANE_ADMIN_V1_READY__ = true;
   refreshSession();
 })();
