@@ -60,8 +60,10 @@ This prevents a broad alias from bypassing a concrete allowlist.
     session.start frame; the requested gpt-live-mini alias is authorized before
     the existing gpt-live transport alias is applied. Authorization failures
     are returned as non-retryable model_not_entitled WebSocket errors.
-- Model aliases are resolved before the entitlement decision; unknown or
-  unresolved models are rejected whenever a matching policy applies.
+- Text model aliases are normalized before entitlement decisions. Realtime
+  Voice checks the requested public gpt-live-mini model before applying its
+  transport-only gpt-live alias. Unknown or unresolved models are rejected
+  whenever a matching policy applies.
 - A failed UserAccountStore owner lookup, failed TenantMembershipStore lookup,
   or tenant-bound key without an active owner role returns 503. It is never
   treated as an unowned/unbound key and does not silently drop policy scope.
