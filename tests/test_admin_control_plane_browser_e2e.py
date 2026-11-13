@@ -81,6 +81,9 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                 # delegated support administrator through the production UI.
                 page.locator("#adminSessionUser").fill(root_username)
                 page.locator("#adminSessionPassword").fill(root_password)
+                gate = page.locator("#adminLoginGate")
+                if gate.count():
+                    print("adminLoginGate diagnostic:", gate.evaluate("(node) => node.outerHTML"))
                 page.locator("#adminSessionLogin").click()
                 page.wait_for_function(
                     "() => document.getElementById('adminSessionState')?.textContent.includes('super_admin')",
