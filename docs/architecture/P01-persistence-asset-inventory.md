@@ -43,6 +43,7 @@ The following stores exist on independent Open/Draft branches and must not be tr
 - W-02 Web Chat conversation SQLite prototype: message bodies are plaintext; no encrypted-at-rest or cross-device migration; not installed in app.entry:app.
 - C-01 ControlPlaneStore JSON and AdminAuditStore JSONL: independent RBAC/audit prototype; no central composition-root integration.
 - C-02 TenantMembershipStore SQLite, C-03 ModelEntitlementStore SQLite, C-05 PluginRegistry SQLite, C-06 QuotaReservationStore SQLite: independent catalogs/journals; not yet the authoritative owner for existing users, keys, models, plugins or completed billing.
+- C-04 InvitationStore SQLite: email-bound invitation metadata and SHA256-only invitation-code hashes; the email field is plaintext, and the store is not installed in app.entry:app. It remains a prototype pending G0 encryption/retention and central C integration.
 - Any future migration must explicitly choose which existing owner remains authoritative and must not dual-write competing usage, wallet or request-terminal state.
 
 ## JSON → transactional database migration decision
