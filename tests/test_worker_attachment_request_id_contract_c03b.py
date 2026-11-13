@@ -34,3 +34,22 @@ def test_worker_attachment_request_id_grammar_matches_responses_server_contract(
     invalid = ("", "short", "bad/request", "bad.request", "x" * 121)
     assert all(SAFE_REQUEST_ID.fullmatch(value) for value in valid)
     assert all(not SAFE_REQUEST_ID.fullmatch(value) for value in invalid)
+
+
+def test_worker_request_prepares_request_scoped_attachments_before_prompt_submission() -> None:
+    request_v6 = (ROOT / "chrome_extension/content_request_v6.js").read_text(encoding="utf-8")
+    run_request = request_v6.split("async function runRequest(message)", 1)[1].split(
+        "async function cancelRequest", 1
+    )[0]
+
+    assert "globalThis.__CHAT2API_MULTIMODAL_V4__" in run_request
+    assert "await multimodal.attach(attachmentSpecs" in run_request
+    assert "request_id: active.requestId" in run_request
+    assert "prepared?.attachment_verified !== true" in run_request
+
+    # The owner-scoped file download and ChatGPT composer upload must finish
+    # before the request prompt is written or submitted.
+    prepare = run_request.index("await multimodal.attach(attachmentSpecs")
+    write_prompt = run_request.index("await writePrompt(active, prompt)")
+    submit = run_request.index("await submitAndConfirm(active)")
+    assert prepare < write_prompt < submit
