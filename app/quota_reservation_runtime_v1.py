@@ -49,7 +49,7 @@ def reserve_request_quota(
 # protocol. These fixed amounts are admission holds only; terminal settlement
 # continues to use the existing estimated text usage emitted by each executor.
 IMAGE_GENERATION_RESERVATION_FLOOR_TOKENS = 4096
-AUDIO_SPEECH_RESERVATION_FLOOR_TOKENS = 4096
+AUDIO_REQUEST_RESERVATION_FLOOR_TOKENS = 4096
 
 
 def reserve_image_generation_quota(
@@ -66,17 +66,17 @@ def reserve_image_generation_quota(
 def reserve_audio_request_quota(
     app: Any, request_id: str, principal: Any, prompt: str,
 ) -> dict[str, Any] | None:
-    """Hold a bounded output allowance for one speech-generation request.
+    """Hold an admission allowance for speech or uploaded-audio requests.
 
-    Speech input text is known before dispatch. The current Voice Worker does
-    not report provider-verified usage; the fixed floor is admission capacity
-    only, while terminal settlement uses the estimated prompt/transcript row.
-    Audio-only conversation input is deliberately not covered here because
-    its usage cannot be estimated from text before dispatch.
+    Text input (speech prompt or optional conversation instruction) is
+    estimated before dispatch. Uploaded audio bytes are not converted into
+    fabricated tokens; the fixed floor is admission capacity only. The Voice
+    Worker does not report provider-verified usage, so terminal settlement
+    continues to use the existing estimated prompt/transcript row.
     """
     return reserve_request_quota(
         app, request_id, principal, prompt,
-        AUDIO_SPEECH_RESERVATION_FLOOR_TOKENS,
+        AUDIO_REQUEST_RESERVATION_FLOOR_TOKENS,
     )
 
 
@@ -103,6 +103,7 @@ def install_quota_reservation_runtime_v1(app: Any) -> Any:
         "/v1/images/generations",
         "/v1/responses#image_generation (delegated to Images executor)",
         "/v1/audio/speech",
+        "/v1/audio/conversations",
     ]
     app.state.quota_reservation_runtime_v1_installed = True
     return app
