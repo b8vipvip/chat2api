@@ -12,7 +12,7 @@ from .token_usage import usage_for
 def reserve_request_quota(
     app: Any, request_id: str, principal: Any, prompt: str, output_limit: int,
 ) -> dict[str, Any] | None:
-    """Reserve a conservative estimate before a Chat Completions Worker dispatch."""
+    """Reserve a conservative estimate before a usage-bearing Worker dispatch."""
     if not bool(getattr(app.state, "quota_reservation_runtime_enabled", False)):
         return None
     # The server master key is deliberately not a ManagedApiKey row and has
