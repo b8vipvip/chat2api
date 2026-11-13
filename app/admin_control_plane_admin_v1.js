@@ -10,7 +10,10 @@
     "model-entitlements": ["super_admin", "system_admin", "support"],
     "plugins": ["super_admin", "plugin_admin"],
     "quota-ledger": ["super_admin", "system_admin", "api_key_admin", "billing_admin"],
-    "api-keys": ["super_admin", "api_key_admin", "support"]
+    "api-keys": ["super_admin", "api_key_admin", "support"],
+    "admin-users": ["super_admin", "user_admin", "system_admin", "support"],
+    "user-pricing": ["super_admin", "billing_admin"],
+    "user-payments": ["super_admin", "billing_admin"]
   };
   let adminSession = null;
   let roleCatalogue = {};
@@ -68,6 +71,13 @@
   }
 
   function applyNavigation() {
+    // The existing Commerce module creates these nav buttons dynamically.
+    // Adopt them into the same server-session RBAC visibility contract.
+    for (const view of ["admin-users", "user-pricing", "user-payments"]) {
+      document.querySelectorAll('.nav button[data-view="' + view + '"]').forEach((node) => {
+        node.dataset.cview = "";
+      });
+    }
     document.querySelectorAll("[data-cview]").forEach((node) => {
       const allowed = roleCan(node.dataset.view);
       node.hidden = !allowed;
@@ -132,9 +142,9 @@
       if (adminSession.authenticated && adminSession.role !== "super_admin") {
         const defaults = {
           system_admin: "client-policy",
-          user_admin: "registration-invitations",
+          user_admin: "admin-users",
           api_key_admin: "api-keys",
-          billing_admin: "quota-ledger",
+          billing_admin: "user-pricing",
           plugin_admin: "plugins",
           support: "model-entitlements",
         };
