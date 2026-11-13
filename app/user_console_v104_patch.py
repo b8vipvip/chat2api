@@ -17,6 +17,8 @@ from pydantic import BaseModel, Field
 from .admin_auth import SESSION_COOKIE as ADMIN_SESSION_COOKIE
 from .admin_audit import AdminAuditError, AdminAuditStore
 from .api_keys import load_or_create_data_secret, token_hash
+from .responses_multimodal_input_v183 import verify_raster_image
+
 from .user_commerce import (
     BillingStore,
     PaymentConfigStore,
@@ -472,6 +474,10 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=404, detail="图片附件内容不存在") from error
         except OSError as error:
             raise HTTPException(status_code=503, detail="图片附件暂时不可用") from error
+        try:
+            verify_raster_image(payload, stored.mime_type)
+        except ValueError as error:
+            raise HTTPException(status_code=415, detail="图片附件内容无效") from error
         return Response(
             payload,
             media_type=stored.mime_type,
