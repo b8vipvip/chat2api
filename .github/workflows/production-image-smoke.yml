@@ -342,7 +342,7 @@ jobs:
           print(json.dumps({'runtime': payload['server']['runtime_version'], 'worker_bundle': payload['chrome_bridge']['bundle_version'], 'qnbot_recovery_v136': True, 'qnbot_orphan_owner_recovery_v140': True, 'chatgpt_choice_policy_v143': True, 'model_evidence_v144': True, 'worker_runtime_preflight_repair_v145': True, 'routable_standby_semantics_v145': True, 'persistent_window_runtime_preflight_v146': True, 'runtime_ready_standby_semantics_v146': True, 'login_ready_admission_v137': True, 'linux_device_authority_v124': True, 'public_https_origin_v125': True, 'device_controller_v127': True, 'controller_provision_rw_v128': True, 'device_diagnostics_v128': True, 'admin_linux_assets': assets}))
           PY
 
-      - name: P-01 same-volume Docker exclusion and abrupt recovery
+      - name: P-01 same-volume Docker exclusion, shutdown and backup recovery
         run: |
           set -euo pipefail
           data_dir="$(mktemp -d)"
@@ -462,7 +462,7 @@ jobs:
 
           # Exercise the packaged backup/verify/restore-check commands against
           # an isolated production-image data directory, without touching host data.
-          printf '{"p01":"backup-restore-smoke"}\\n' > "$data_dir/p01-backup-smoke.json"
+          printf '{"p01":"backup-restore-smoke"}\n' > "$data_dir/p01-backup-smoke.json"
           docker run --rm \
             -v "$data_dir:/app/data" \
             -v "$backup_dir:/backups" \
@@ -488,6 +488,6 @@ jobs:
             --entrypoint python chat2api-production-smoke -c '
           from pathlib import Path
           restored = Path("/restore/restore-check/p01-backup-smoke.json")
-          assert restored.read_text(encoding="utf-8") == "{\\"p01\\":\\"backup-restore-smoke\\"}\\n"
+          assert restored.read_text(encoding="utf-8") == "{\"p01\":\"backup-restore-smoke\"}\n"
           print("production-image-backup-restore-verified")
           '
