@@ -1,12 +1,15 @@
 """Bounded runtime adapter for the C-06 in-flight token reservation ledger."""
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import HTTPException
 
 from .quota_reservations import QuotaExceeded, QuotaReservationError
 from .token_usage import usage_for
+
+logger = logging.getLogger(__name__)
 
 
 def reserve_wallet_charge(
@@ -169,7 +172,24 @@ def install_quota_reservation_runtime_v1(app: Any) -> Any:
         # TelemetryStore invokes this for queued/running snapshots too. The
         # reservation store treats those as pending and settles/releases only
         # the Broker-owned terminal projection.
-        await store.commit_completed_usage(record, api_keys)
+        status = str(record.get("status") or "").lower()
+        try:
+            await store.commit_completed_usage(record, api_keys)
+        finally:
+            if status in {"error", "cancelled", "stalled", "failed", "timeout"}:
+                request_id = str(record.get("request_id") or "")
+                key_id = str(record.get("api_key_id") or "")
+                accounts = getattr(app.state, "user_accounts", None)
+                billing = getattr(app.state, "user_billing", None)
+                owner = accounts.owner_for_key(key_id) if accounts is not None and key_id else None
+                if owner and billing is not None and request_id:
+                    try:
+                        billing.release_reservation(request_id, str(owner), reason="request_" + status)
+                    except Exception as error:
+                        logger.warning(
+                            "Wallet reservation release deferred request_id=%s error_type=%s",
+                            request_id, type(error).__name__,
+                        )
 
     telemetry.usage_accounting = account_usage_with_reservations
     app.state.quota_reservation_runtime_enabled = True
