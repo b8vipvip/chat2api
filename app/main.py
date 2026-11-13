@@ -1135,9 +1135,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if isinstance(message.content, list)
             for part in message.content
             if isinstance(part, dict) and part.get("type") in {"image_url", "input_image"}
-            for value in [part.get("image_url")]
-            for value in [value.get("url") if isinstance(value, dict) else value]
-            if isinstance(value, str) and value.startswith("data:")
+            for raw_image_value in [part.get("image_url")]
+            for image_value in [raw_image_value.get("url") if isinstance(raw_image_value, dict) else raw_image_value]
+            if isinstance(image_value, str) and image_value.startswith("data:")
         )
         if len(existing_file_ids) + inline_data_count > 4:
             raise HTTPException(status_code=400, detail="At most four image/file inputs are supported per request")
