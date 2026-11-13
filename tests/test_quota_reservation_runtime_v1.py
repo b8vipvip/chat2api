@@ -92,6 +92,45 @@ async def test_nonterminal_telemetry_updates_do_not_release_reservation(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_completed_usage_without_positive_total_keeps_reservation_until_ledger_proof(tmp_path: Path) -> None:
+    app, store, api_keys = _runtime(tmp_path)
+    callback = app.state.telemetry.usage_accounting
+
+    for request_id, usage in (
+        ("req_usage_missing_0001", None),
+        ("req_usage_zero_0001", {"total_tokens": 0}),
+    ):
+        reserve_request_quota(
+            app, request_id, SimpleNamespace(key_id="key-1"), "prompt", 4096,
+        )
+        record = {
+            "request_id": request_id, "api_key_id": "key-1", "status": "completed",
+        }
+        if usage is not None:
+            record["usage"] = usage
+        await callback(record)
+        reservation = store.get(request_id)
+        assert reservation["state"] == "committing"
+        assert store.active_reserved_tokens("key-1") >= reservation["reserved_tokens"]
+
+    assert api_keys.keys["key-1"].tokens_used == 0
+    assert store.reconcile(api_keys) == 0
+    assert store.get("req_usage_missing_0001")["state"] == "committing"
+    assert store.get("req_usage_zero_0001")["state"] == "committing"
+
+    # A later terminal replay with real usage can complete the same
+    # reservation exactly once without dropping the conservative hold.
+    await callback({
+        "request_id": "req_usage_missing_0001", "api_key_id": "key-1",
+        "status": "completed", "usage": {"total_tokens": 12},
+    })
+    assert store.get("req_usage_missing_0001")["state"] == "settled"
+    assert api_keys.keys["key-1"].tokens_used == 12
+    assert store.get("req_usage_zero_0001")["state"] == "committing"
+    store.close()
+
+
+@pytest.mark.asyncio
 async def test_completed_usage_commits_once_and_terminal_failure_releases(tmp_path: Path) -> None:
     app, store, api_keys = _runtime(tmp_path)
     callback = app.state.telemetry.usage_accounting
