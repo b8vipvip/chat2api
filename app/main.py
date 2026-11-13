@@ -1044,7 +1044,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/extensions/files/{file_id}")
     async def extension_file(
-        file_id: str, request_id: str = Query(..., min_length=10, max_length=120),
+        file_id: str, request_id: str = Query(..., min_length=6, max_length=120),
         client_id: str = Query(...), token: str = Query(...),
     ) -> Response:
         if not await registry.authenticate(client_id, token):
