@@ -250,7 +250,7 @@ def test_dispatch_correlates_worker_and_protocol_repair_attempts() -> None:
         busy_clients=set(),
         send=send,
     )
-    broker = SimpleNamespace(create=create)
+    broker = SimpleNamespace(create=create, release=release)
     app = SimpleNamespace(state=SimpleNamespace(
         registry=registry, broker=broker,
         settings=SimpleNamespace(request_timeout_seconds=120),
