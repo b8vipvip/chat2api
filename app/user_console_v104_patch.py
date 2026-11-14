@@ -253,6 +253,11 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
                     reason="reconciled_terminal_" + status,
                 )
 
+    # The production lifespan invokes this after TelemetryStore has loaded,
+    # so a process restart can reconcile every durable active wallet hold
+    # before the first authenticated request arrives.
+    app.state.wallet_charge_reconciler = sync_user_charges
+
     def public_request(row: dict[str, Any]) -> dict[str, Any]:
         diagnostics = row.get("diagnostics") if isinstance(row.get("diagnostics"), dict) else {}
         usage = row.get("usage") if isinstance(row.get("usage"), dict) else {}
