@@ -21,6 +21,8 @@ class RequestState:
     dispatch_socket: Any | None = field(default=None, repr=False, compare=False)
     # Server-side dispatch clocks only. A successful registry.send is not
     # proof that the Worker acknowledged or started the browser request.
+    dispatch_socket_lock_wait_started_mono: float | None = None
+    dispatch_socket_lock_acquired_mono: float | None = None
     dispatch_send_started_mono: float | None = None
     dispatch_send_completed_mono: float | None = None
     # Server timestamp of the authenticated Worker's request-v6 content ACK.
@@ -49,6 +51,12 @@ class RequestState:
             # Stage durations are for diagnostics, never Broker finality.
             # Missing/overlapping clocks return unknown, not a made-up zero.
             "request_admission_wait_ms": self.diagnostics.get("request_admission_wait_ms"),
+            "server_dispatch_socket_lock_wait_ms": (
+                round((self.dispatch_socket_lock_acquired_mono - self.dispatch_socket_lock_wait_started_mono) * 1000, 1)
+                if self.dispatch_socket_lock_wait_started_mono is not None
+                and self.dispatch_socket_lock_acquired_mono is not None
+                and self.dispatch_socket_lock_acquired_mono >= self.dispatch_socket_lock_wait_started_mono else None
+            ),
             "server_send_start_after_broker_ms": (
                 round((self.dispatch_send_started_mono - self.created_mono) * 1000, 1)
                 if self.dispatch_send_started_mono is not None
