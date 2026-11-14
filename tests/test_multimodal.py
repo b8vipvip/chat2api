@@ -172,6 +172,17 @@ def test_worker_attachment_grant_requires_a_live_nonterminal_broker_lease(tmp_pa
         assert response.status_code == 404
         assert response.content != b"private-payload"
 
+        # Even if a stale telemetry row remains "running", a terminal Broker
+        # state revokes the download grant before the telemetry projection catches up.
+        active_state = asyncio.run(app.state.broker.create(request_id, client_id))
+        active_state.terminal_event_type = "chat.completed"
+        terminal_response = client.get(
+            f"/api/extensions/files/{image['id']}?request_id={request_id}"
+            f"&client_id={client_id}&token={token}"
+        )
+        assert terminal_response.status_code == 404
+        asyncio.run(app.state.broker.release(request_id))
+
 
 def test_inline_data_url_image_is_materialized_as_attachment(tmp_path: Path) -> None:
     with TestClient(create_app(settings(tmp_path))) as client:
