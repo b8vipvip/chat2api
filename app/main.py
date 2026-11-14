@@ -82,6 +82,7 @@ from .playground_truth_v170 import (reconcile_playground_runs, reconcile_playgro
 from .playground_stream_contract_v293 import playground_stream_attribution
 from .playground_request_evidence_v207 import request_test_index, playground_link
 from .token_usage import usage_for
+from .quota_reservation_runtime_v1 import reserve_image_generation_quota, reserve_request_quota
 
 logger = logging.getLogger("chat2api")
 APP_VERSION = "0.5.0"
@@ -116,6 +117,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await registry.load()
         await telemetry.load()
         await api_keys.load()
+        quota_store = getattr(app.state, "quota_reservations", None)
+        if quota_store is not None and getattr(app.state, "quota_reservation_runtime_enabled", False):
+            # Recover terminal telemetry before expiring old reservations.
+            # TelemetryStore persists a terminal row before its accounting
+            # callback; a crash in that gap leaves the reservation reserved,
+            # not committing, and must not lose a completed charge.
+            replayed_reservations = await quota_store.recover_committing(telemetry, api_keys)
+            reconciled_reservations = quota_store.reconcile(api_keys)
+            expired_reservations = quota_store.expire_reservations()
+            if expired_reservations or replayed_reservations or reconciled_reservations:
+                logger.info(
+                    "Quota reservation startup recovery expired=%s replayed=%s reconciled=%s",
+                    expired_reservations, replayed_reservations, reconciled_reservations,
+                )
         await file_store.load()
         await test_runs.load()
         recovered_runs = await test_runs.recover_interrupted()
@@ -2126,6 +2141,40 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             request_id=request_id, stream=body.stream,
             headers=request.headers, test_runs=test_runs,
         )
+        requested_output_limits = [
+            getattr(body, "max_tokens", None),
+            getattr(body, "max_completion_tokens", None),
+        ]
+        output_budget = max([
+            4096,
+            *(value for value in requested_output_limits if isinstance(value, int) and not isinstance(value, bool) and value > 0),
+        ])
+        try:
+            quota_reservation = reserve_request_quota(
+                app, request_id, principal, prompt, output_budget,
+            )
+        except HTTPException as quota_error:
+            await record_early_error(
+                request_id=request_id, response_id=response_id, requested_model=body.model,
+                prompt=prompt, principal=principal, stream=body.stream, prompt_mode=body.prompt_mode,
+                started_mono=request_started, error=str(quota_error.detail), request_type=request_type,
+                attachments_count=len(attachments),
+            )
+            raise
+        if quota_reservation:
+            try:
+                await telemetry.merge_diagnostics(request_id, {
+                    "quota_reservation_v1": {
+                        "state": "reserved",
+                        "reserved_tokens": int(quota_reservation.get("reserved_tokens") or 0),
+                        "estimate_policy": "prompt_tokens_plus_conservative_4096_output_floor_v1",
+                    },
+                })
+            except Exception as quota_diagnostic_error:
+                logger.warning(
+                    "Quota reservation diagnostic persistence failed request_id=%s error_type=%s",
+                    request_id, type(quota_diagnostic_error).__name__,
+                )
         if origin_evidence:
             try:
                 await telemetry.merge_diagnostics(
@@ -2437,6 +2486,54 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             state = await broker.create(request_id, client_id)
         except RuntimeError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+
+        quota_reservation = None
+        try:
+            quota_reservation = reserve_image_generation_quota(
+                app, request_id, principal, body.prompt, body.n,
+            )
+        except HTTPException as quota_error:
+            state.completed_mono = time.perf_counter()
+            try:
+                await telemetry.upsert({
+                    "request_id": request_id, "response_id": response_id, "client_id": client_id,
+                    "api_key_id": principal.key_id, "api_key_name": principal.name, "auth_kind": principal.kind,
+                    "requested_model": "gpt-image", "request_type": "image_generation",
+                    "attachments_count": len(attachments), "stream": False, "prompt_mode": "image",
+                    "prompt_chars": len(body.prompt), "completion_chars": 0, "status": "error",
+                    "usage": {}, "timings": state.timings(),
+                    "diagnostics": {"quota_reservation_v1": {
+                        "state": "rejected", "http_status": quota_error.status_code,
+                        "estimate_policy": "prompt_tokens_plus_4096_per_image_admission_floor_v1",
+                    }},
+                    "error": str(quota_error.detail),
+                })
+            except Exception as telemetry_error:
+                logger.warning(
+                    "Image quota rejection could not be persisted request_id=%s error_type=%s",
+                    request_id, type(telemetry_error).__name__,
+                )
+            try:
+                await broker.release(request_id)
+            except Exception as release_error:
+                logger.warning(
+                    "Image quota rejection broker release failed request_id=%s error_type=%s",
+                    request_id, type(release_error).__name__,
+                )
+            raise
+
+        quota_diagnostics = {}
+        if quota_reservation:
+            quota_diagnostics = {"quota_reservation_v1": {
+                "state": "reserved",
+                "reserved_tokens": int(quota_reservation.get("reserved_tokens") or 0),
+                "estimate_policy": "prompt_tokens_plus_4096_per_image_admission_floor_v1",
+                "provider_usage_verified": False,
+            }}
+
+        def image_diagnostics() -> dict[str, Any]:
+            return {**dict(state.diagnostics), **quota_diagnostics}
+
         registry.busy_clients.add(client_id)
         state.probe_policy = probe_policy(client_id)
         timeout_seconds = body.timeout or max(config.request_timeout_seconds, 300)
@@ -2450,7 +2547,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "input_file_ids": [str(item["file_id"]) for item in attachments],
                     "stream": False, "prompt_mode": "image",
                     "prompt_chars": len(body.prompt), "completion_chars": 0, "status": "running",
-                    "usage": {}, "timings": state.timings(), "diagnostics": dict(state.diagnostics), "error": None,
+                    "usage": {}, "timings": state.timings(), "diagnostics": image_diagnostics(), "error": None,
                 }
             )
             await registry.send(
@@ -2559,7 +2656,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "attachments_count": len(attachments), "stream": False, "prompt_mode": "image",
                     "prompt_chars": len(body.prompt), "completion_chars": 0, "status": "completed",
                     "usage": {**usage, **token_meta}, "timings": state.timings(),
-                    "diagnostics": dict(state.diagnostics), "error": None,
+                    "diagnostics": image_diagnostics(), "error": None,
                 }
             )
             # The standalone Images API already archived verified bytes.
@@ -2587,7 +2684,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "request_id": request_id,
                     "client_id": client_id,
                     "timings": state.timings(),
-                    "diagnostics": state.diagnostics,
+                    "diagnostics": image_diagnostics(),
                     "token_usage": token_meta,
                     "media_files": archived_media,
                     "owned_media": owned_media,
@@ -2606,7 +2703,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                  "requested_model": "gpt-image", "request_type": "image_generation",
                  "attachments_count": len(attachments), "stream": False, "prompt_mode": "image",
                  "prompt_chars": len(body.prompt), "completion_chars": 0, "status": "error",
-                 "usage": {}, "timings": state.timings(), "diagnostics": state.diagnostics,
+                 "usage": {}, "timings": state.timings(), "diagnostics": image_diagnostics(),
                  "error": "Timed out waiting for ChatGPT Images"}
             )
             raise HTTPException(status_code=504, detail="Timed out waiting for ChatGPT Images") from error
@@ -2619,11 +2716,42 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                  "attachments_count": len(attachments), "stream": False, "prompt_mode": "image",
                  "prompt_chars": len(body.prompt), "completion_chars": 0,
                  "status": failure_status(state, message=str(error)),
-                 "usage": {}, "timings": state.timings(), "diagnostics": state.diagnostics, "error": str(error)}
+                 "usage": {}, "timings": state.timings(), "diagnostics": image_diagnostics(), "error": str(error)}
             )
             raise HTTPException(status_code=502, detail=str(error)) from error
+        except Exception as error:
+            current = telemetry.get(request_id)
+            current_status = str((current or {}).get("status") or "")
+            if current_status not in {"completed", "error", "cancelled", "stalled", "failed", "timeout"}:
+                state.completed_mono = state.completed_mono or time.perf_counter()
+                try:
+                    await telemetry.upsert({
+                        "request_id": request_id, "response_id": response_id, "client_id": client_id,
+                        "api_key_id": principal.key_id, "api_key_name": principal.name, "auth_kind": principal.kind,
+                        "requested_model": "gpt-image", "request_type": "image_generation",
+                        "attachments_count": len(attachments), "stream": False, "prompt_mode": "image",
+                        "prompt_chars": len(body.prompt), "completion_chars": 0, "status": "error",
+                        "usage": {}, "timings": state.timings(), "diagnostics": image_diagnostics(),
+                        "error": type(error).__name__,
+                    })
+                except Exception as telemetry_error:
+                    logger.warning(
+                        "Image request failure telemetry could not be persisted request_id=%s error_type=%s",
+                        request_id, type(telemetry_error).__name__,
+                    )
+            raise
         finally:
             registry.busy_clients.discard(client_id)
+            if quota_reservation:
+                current = telemetry.get(request_id)
+                if str((current or {}).get("status") or "") != "completed":
+                    try:
+                        app.state.quota_reservations.release(request_id, principal.key_id)
+                    except Exception as release_error:
+                        logger.warning(
+                            "Image quota reservation cleanup deferred request_id=%s error_type=%s",
+                            request_id, type(release_error).__name__,
+                        )
             await broker.release(request_id)
 
     # Both Images and Responses image_generation use this exact Worker/Broker

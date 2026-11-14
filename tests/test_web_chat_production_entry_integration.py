@@ -14,6 +14,21 @@ from fastapi.testclient import TestClient
 
 assert app.state.web_chat_features_v1_installed is True
 assert app.state.web_chat_integration_version == 1
+assert app.state.quota_reservation_runtime_enabled is True
+assert app.state.quota_reservation_runtime_coverage == [
+    "/v1/chat/completions",
+    "/v1/responses",
+    "/v1/images/generations",
+    "/v1/responses#image_generation (delegated to Images executor)",
+    "/v1/audio/speech",
+    "/v1/audio/conversations",
+]
+for path in ("/v1/images/generations", "/v1/audio/speech", "/v1/audio/conversations"):
+    assert len([
+        route for route in app.routes
+        if getattr(route, "path", None) == path
+        and "POST" in (getattr(route, "methods", None) or set())
+    ]) == 1
 expected = {
     ("GET", "/api/user/chat/requests/{request_id}/recovery"),
     ("POST", "/api/user/chat/requests/{request_id}/cancel"),

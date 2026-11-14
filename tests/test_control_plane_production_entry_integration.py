@@ -54,7 +54,21 @@ for method, path in expected:
 
 html = admin_response("tenants").body.decode("utf-8")
 assert "/assets/chat2api-control-plane-admin-v1.js" in html
-assert app.state.quota_reservation_runtime_enabled is False
+assert app.state.quota_reservation_runtime_enabled is True
+assert app.state.quota_reservation_runtime_coverage == [
+    "/v1/chat/completions",
+    "/v1/responses",
+    "/v1/images/generations",
+    "/v1/responses#image_generation (delegated to Images executor)",
+    "/v1/audio/speech",
+    "/v1/audio/conversations",
+]
+for path in ("/v1/images/generations", "/v1/audio/speech", "/v1/audio/conversations"):
+    assert len([
+        route for route in app.routes
+        if getattr(route, "path", None) == path
+        and "POST" in (getattr(route, "methods", None) or set())
+    ]) == 1
 
 with TestClient(app) as client:
     assert client.get("/api/client/plugins").json() == {
