@@ -202,3 +202,35 @@ def test_wallet_refund_history_is_visible_only_to_own_account(tmp_path: Path) ->
         assert bob_view.json()["net_debited_spend_cents"] == 10
         assert bob_view.json()["refunds"] == []
         assert "rf_alice00001" not in bob_view.text
+
+
+def test_wallet_credit_fsync_failure_never_leaves_spendable_phantom_balance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    billing = BillingStore(tmp_path)
+
+    def fail_save() -> None:
+        raise OSError("simulated wallet credit fsync outage")
+
+    # First credit for an account: no in-memory balance must survive the failed write.
+    with monkeypatch.context() as patch:
+        patch.setattr(billing, "_save", fail_save)
+        with pytest.raises(OSError, match="fsync outage"):
+            billing.credit("usr_credit_new", 500)
+    assert billing.balance_cents("usr_credit_new") == 0
+    assert billing.available_balance_cents("usr_credit_new") == 0
+    assert BillingStore(tmp_path).balance_cents("usr_credit_new") == 0
+
+    assert billing.credit("usr_credit_existing", 100) == 100
+    # Existing durable balance: a failed top-up must restore the exact prior value.
+    with monkeypatch.context() as patch:
+        patch.setattr(billing, "_save", fail_save)
+        with pytest.raises(OSError, match="fsync outage"):
+            billing.credit("usr_credit_existing", 50)
+    assert billing.balance_cents("usr_credit_existing") == 100
+    assert billing.available_balance_cents("usr_credit_existing") == 100
+    assert BillingStore(tmp_path).balance_cents("usr_credit_existing") == 100
+
+    # The exact same credit may be safely retried after storage recovers.
+    assert billing.credit("usr_credit_existing", 50) == 150
+    assert BillingStore(tmp_path).balance_cents("usr_credit_existing") == 150
