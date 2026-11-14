@@ -1426,10 +1426,43 @@ class PaymentConfigStore:
             return
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
-            if isinstance(raw, dict):
-                self.payload.update(raw)
-        except (OSError, ValueError, TypeError):
-            pass
+            if not isinstance(raw, dict):
+                raise ValueError("payment configuration must be an object")
+            candidate = {**self.payload, **raw}
+            if type(candidate.get("version")) is not int or candidate["version"] != USER_COMMERCE_VERSION:
+                raise ValueError("payment configuration version is unsupported")
+            if candidate.get("provider") != "zpay":
+                raise ValueError("payment configuration provider is unsupported")
+            if type(candidate.get("enabled")) is not bool:
+                raise ValueError("payment configuration enabled flag is invalid")
+            if any(type(candidate.get(field)) is not bool for field in ("alipay_enabled", "wechat_enabled")):
+                raise ValueError("payment configuration channel flags are invalid")
+            for field, limit in (
+                ("pid", 80), ("key_ciphertext", 8192),
+                ("alipay_cid", 240), ("wechat_cid", 240),
+                ("public_origin", 2048), ("updated_at", 80),
+            ):
+                value = candidate.get(field)
+                if not isinstance(value, str) or len(value) > limit:
+                    raise ValueError(f"payment configuration {field} is invalid")
+            for field in ("alipay_cid", "wechat_cid"):
+                if candidate[field] and not re.fullmatch(r"\\d+(?:,\\d+)*", candidate[field]):
+                    raise ValueError(f"payment configuration {field} is invalid")
+            origin = candidate["public_origin"]
+            if origin and not origin.startswith("https://"):
+                raise ValueError("payment configuration public_origin is invalid")
+            self.payload = candidate
+            # Existing ciphertext is authoritative. A missing or rotated key
+            # must fail startup rather than look like an empty credential that
+            # a later administrator save could overwrite.
+            if self.payload["key_ciphertext"]:
+                self.secret_key()
+        except RuntimeError:
+            raise
+        except (OSError, ValueError, TypeError) as error:
+            raise RuntimeError(
+                "User payment configuration is unreadable; existing file was preserved"
+            ) from error
 
     def _save(self) -> None:
         _atomic_json(self.path, self.payload)
@@ -1440,8 +1473,10 @@ class PaymentConfigStore:
             return ""
         try:
             return self.cipher.decrypt(value.encode("ascii")).decode("utf-8")
-        except (InvalidToken, ValueError):
-            return ""
+        except (InvalidToken, ValueError) as error:
+            raise RuntimeError(
+                "User payment credentials cannot be decrypted; existing configuration was preserved"
+            ) from error
 
     def public(self) -> dict[str, Any]:
         with self.lock:
@@ -1473,20 +1508,25 @@ class PaymentConfigStore:
         if origin and not origin.startswith("https://"):
             raise ValueError("公网回调地址必须使用 https://")
         with self.lock:
-            self.payload.update({
-                "enabled": bool(data.get("enabled")),
-                "pid": pid,
-                "alipay_enabled": bool(data.get("alipay_enabled", True)),
-                "wechat_enabled": bool(data.get("wechat_enabled", True)),
-                "alipay_cid": alipay_cid,
-                "wechat_cid": wechat_cid,
-                "public_origin": origin,
-                "updated_at": _now(),
-            })
-            supplied_key = data.get("key")
-            if supplied_key is not None and str(supplied_key):
-                self.payload["key_ciphertext"] = self.cipher.encrypt(str(supplied_key).encode("utf-8")).decode("ascii")
-            if bool(data.get("clear_key")):
-                self.payload["key_ciphertext"] = ""
-            self._save()
+            previous = copy.deepcopy(self.payload)
+            try:
+                self.payload.update({
+                    "enabled": bool(data.get("enabled")),
+                    "pid": pid,
+                    "alipay_enabled": bool(data.get("alipay_enabled", True)),
+                    "wechat_enabled": bool(data.get("wechat_enabled", True)),
+                    "alipay_cid": alipay_cid,
+                    "wechat_cid": wechat_cid,
+                    "public_origin": origin,
+                    "updated_at": _now(),
+                })
+                supplied_key = data.get("key")
+                if supplied_key is not None and str(supplied_key):
+                    self.payload["key_ciphertext"] = self.cipher.encrypt(str(supplied_key).encode("utf-8")).decode("ascii")
+                if bool(data.get("clear_key")):
+                    self.payload["key_ciphertext"] = ""
+                self._save()
+            except Exception:
+                self.payload = previous
+                raise
             return self.public()
