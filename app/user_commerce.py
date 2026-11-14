@@ -18,6 +18,16 @@ from .timezone_utils import beijing_now_iso
 
 USER_SESSION_COOKIE = "chat2api_user_session"
 USER_COMMERCE_VERSION = 1
+
+
+class WalletReservationError(RuntimeError):
+    pass
+
+
+class InsufficientWalletBalance(WalletReservationError):
+    pass
+
+
 _EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
 # Reference rates are intentionally persisted as editable seed data. They are
@@ -389,6 +399,7 @@ class BillingStore:
         self.wallets: dict[str, int] = {}
         self.charges: dict[str, dict[str, Any]] = {}
         self.orders: dict[str, dict[str, Any]] = {}
+        self.reservations: dict[str, dict[str, Any]] = {}
         self._load()
 
     def _load(self) -> None:
@@ -399,15 +410,132 @@ class BillingStore:
             self.wallets = {str(k): int(v) for k, v in (payload.get("wallets") or {}).items()}
             self.charges = {str(k): dict(v) for k, v in (payload.get("charges") or {}).items() if isinstance(v, dict)}
             self.orders = {str(k): dict(v) for k, v in (payload.get("orders") or {}).items() if isinstance(v, dict)}
+            self.reservations = {str(k): dict(v) for k, v in (payload.get("reservations") or {}).items() if isinstance(v, dict)}
         except (OSError, ValueError, TypeError):
-            self.wallets, self.charges, self.orders = {}, {}, {}
+            self.wallets, self.charges, self.orders, self.reservations = {}, {}, {}, {}
 
     def _save(self) -> None:
-        _atomic_json(self.path, {"version": USER_COMMERCE_VERSION, "wallets": self.wallets, "charges": self.charges, "orders": self.orders})
+        _atomic_json(self.path, {
+            "version": USER_COMMERCE_VERSION,
+            "wallets": self.wallets,
+            "charges": self.charges,
+            "orders": self.orders,
+            "reservations": self.reservations,
+        })
 
     def balance_cents(self, user_id: str) -> int:
         with self.lock:
             return int(self.wallets.get(user_id, 0))
+
+    def reserved_cents(self, user_id: str) -> int:
+        with self.lock:
+            return sum(
+                max(0, int(row.get("reserved_cny_cents") or 0))
+                for row in self.reservations.values()
+                if row.get("user_id") == user_id and row.get("state") == "reserved"
+            )
+
+    def available_balance_cents(self, user_id: str) -> int:
+        with self.lock:
+            reserved = sum(
+                max(0, int(row.get("reserved_cny_cents") or 0))
+                for row in self.reservations.values()
+                if row.get("user_id") == user_id and row.get("state") == "reserved"
+            )
+            return int(self.wallets.get(user_id, 0)) - reserved
+
+    def reserve_for_request(
+        self, user_id: str, request_id: str, *,
+        model_id: str, estimated_cny_cents: int,
+        input_tokens: int, output_tokens: int,
+        price_snapshot: dict[str, Any], usd_cny_rate: float,
+    ) -> dict[str, Any] | None:
+        if not user_id or not request_id:
+            raise WalletReservationError("user_id and request_id are required")
+        if type(estimated_cny_cents) is not int or estimated_cny_cents < 0:
+            raise WalletReservationError("estimated wallet amount must be non-negative integer cents")
+        if estimated_cny_cents == 0:
+            return None
+        now = _now()
+        with self.lock:
+            existing_charge = self.charges.get(request_id)
+            if existing_charge:
+                if str(existing_charge.get("user_id") or "") != user_id:
+                    raise WalletReservationError("Request is already charged to another user")
+                # A settled request ID is never a new dispatch authorization.
+                # Returning a synthetic "settled" hold here would let the
+                # caller reach a Worker without any active wallet capacity.
+                raise WalletReservationError("request_id was already charged and cannot be reused")
+            existing = self.reservations.get(request_id)
+            if existing:
+                if str(existing.get("user_id") or "") != user_id:
+                    raise WalletReservationError("Request wallet reservation belongs to another user")
+                if existing.get("state") != "reserved":
+                    raise WalletReservationError("request_id belongs to a terminal wallet reservation and cannot be reused")
+                if (
+                    str(existing.get("model_id") or "") != str(model_id or "")
+                    or int(existing.get("reserved_cny_cents") or 0) != estimated_cny_cents
+                    or int(existing.get("estimated_input_tokens") or 0) != max(0, int(input_tokens))
+                    or int(existing.get("estimated_output_tokens") or 0) != max(0, int(output_tokens))
+                ):
+                    raise WalletReservationError("Request wallet reservation payload does not match the original admission")
+                return dict(existing)
+            active = sum(
+                max(0, int(row.get("reserved_cny_cents") or 0))
+                for row in self.reservations.values()
+                if row.get("user_id") == user_id and row.get("state") == "reserved"
+            )
+            available = int(self.wallets.get(user_id, 0)) - active
+            if available < estimated_cny_cents:
+                raise InsufficientWalletBalance(
+                    f"Insufficient wallet balance: available {available} cents, "
+                    f"estimated request requires {estimated_cny_cents} cents"
+                )
+            row = {
+                "request_id": request_id,
+                "user_id": user_id,
+                "model_id": str(model_id or ""),
+                "estimated_input_tokens": max(0, int(input_tokens)),
+                "estimated_output_tokens": max(0, int(output_tokens)),
+                "reserved_cny_cents": estimated_cny_cents,
+                "actual_cny_cents": None,
+                "price_snapshot": dict(price_snapshot),
+                "usd_cny_rate": float(usd_cny_rate),
+                "state": "reserved",
+                "created_at": now,
+                "updated_at": now,
+            }
+            self.reservations[request_id] = row
+            try:
+                self._save()
+            except OSError:
+                # Admission must not expose a non-durable hold as successful
+                # and must not strand the in-memory available balance.
+                self.reservations.pop(request_id, None)
+                raise
+            return dict(row)
+
+    def release_reservation(self, request_id: str, user_id: str, reason: str = "request_not_completed") -> bool:
+        with self.lock:
+            row = self.reservations.get(str(request_id or ""))
+            if row is None:
+                return False
+            if str(row.get("user_id") or "") != user_id:
+                raise WalletReservationError("Request wallet reservation belongs to another user")
+            if row.get("state") != "reserved":
+                return False
+            previous = dict(row)
+            row.update({
+                "state": "released",
+                "release_reason": str(reason or "request_not_completed")[:120],
+                "updated_at": _now(),
+            })
+            try:
+                self._save()
+            except OSError:
+                self.reservations[str(request_id)] = previous
+                raise
+            return True
 
     def credit(self, user_id: str, amount_cents: int) -> int:
         amount = int(amount_cents)
@@ -425,11 +553,51 @@ class BillingStore:
         with self.lock:
             existing = self.charges.get(request_id)
             if existing:
+                if str(existing.get("user_id") or "") != user_id:
+                    raise WalletReservationError("Request is already charged to another user")
+                reservation = self.reservations.get(request_id)
+                if reservation and reservation.get("state") == "reserved":
+                    previous = dict(reservation)
+                    reservation.update({
+                        "state": "settled" if existing.get("debited") else "released",
+                        "actual_cny_cents": int(existing.get("cost_cny_cents") or 0),
+                        "updated_at": _now(),
+                    })
+                    try:
+                        self._save()
+                    except OSError:
+                        self.reservations[request_id] = previous
+                        raise
                 return dict(existing)
             diagnostics = request_row.get("diagnostics") if isinstance(request_row.get("diagnostics"), dict) else {}
             model_id = str(diagnostics.get("actual_model") or request_row.get("requested_model") or "")
-            price = pricing.model(model_id)
+            reservation = self.reservations.get(request_id)
+            if reservation and str(reservation.get("user_id") or "") != user_id:
+                raise WalletReservationError("Request wallet reservation belongs to another user")
+            reserved_model = str((reservation or {}).get("model_id") or "")
+            if reservation and reservation.get("state") == "reserved" and reserved_model == model_id:
+                price = dict(reservation.get("price_snapshot") or {})
+                fx = float(reservation.get("usd_cny_rate") or 0)
+            else:
+                price = pricing.model(model_id)
+                fx = float(pricing.public().get("usd_cny_rate") or 0)
+                if not price and reservation and reservation.get("state") == "reserved":
+                    # If served_model is unknown or has no configured price,
+                    # settle against the requested-model snapshot that was
+                    # actually held at admission rather than silently dropping
+                    # a priced request's wallet charge.
+                    model_id = reserved_model
+                    price = dict(reservation.get("price_snapshot") or {})
+                    fx = float(reservation.get("usd_cny_rate") or fx)
             if not price:
+                if reservation and reservation.get("state") == "reserved":
+                    previous = dict(reservation)
+                    reservation.update({"state": "released", "release_reason": "pricing_unavailable", "updated_at": _now()})
+                    try:
+                        self._save()
+                    except OSError:
+                        self.reservations[request_id] = previous
+                        raise
                 return None
             usage = request_row.get("usage") if isinstance(request_row.get("usage"), dict) else {}
             input_tokens = max(0, int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0))
@@ -442,9 +610,10 @@ class BillingStore:
                 + output_tokens * float(price.get("output_usd_per_million") or 0)
             ) / 1_000_000
             usd_micros = max(0, int(round(usd * 1_000_000)))
-            fx = float(pricing.public().get("usd_cny_rate") or 0)
             cny_cents = max(0, int(round(usd * fx * 100)))
             billing_enabled = bool(pricing.public().get("billing_enabled"))
+            prior_balance = self.wallets.get(user_id)
+            prior_reservation = dict(reservation) if reservation else None
             if billing_enabled and cny_cents:
                 self.wallets[user_id] = int(self.wallets.get(user_id, 0)) - cny_cents
             row = {
@@ -457,12 +626,34 @@ class BillingStore:
                 "cost_usd_micros": usd_micros,
                 "cost_cny_cents": cny_cents,
                 "debited": billing_enabled,
+                "usage_is_estimated": bool(usage.get("estimated", True)),
                 "usd_cny_rate": fx,
                 "price_snapshot": price,
                 "created_at": _now(),
             }
             self.charges[request_id] = row
-            self._save()
+            if reservation and reservation.get("state") == "reserved":
+                reservation.update({
+                    "state": "settled" if billing_enabled else "released",
+                    "actual_cny_cents": cny_cents,
+                    "release_reason": None if billing_enabled else "billing_disabled_before_terminal",
+                    "updated_at": _now(),
+                })
+            try:
+                self._save()
+            except OSError:
+                # The charge and debit are one atomic JSON write. Restore the
+                # in-memory ledger if that write failed, otherwise a later
+                # retry would falsely see a charge that was never durable.
+                self.charges.pop(request_id, None)
+                if billing_enabled and cny_cents:
+                    if prior_balance is None:
+                        self.wallets.pop(user_id, None)
+                    else:
+                        self.wallets[user_id] = prior_balance
+                if prior_reservation is not None:
+                    self.reservations[request_id] = prior_reservation
+                raise
             return dict(row)
 
     def charges_for_user(self, user_id: str) -> list[dict[str, Any]]:
