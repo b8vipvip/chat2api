@@ -1188,3 +1188,115 @@ def test_legacy_payment_config_update_rolls_back_memory_when_persistence_fails(
     assert store.public() == previous_public
     assert store.path.read_bytes() == original_file
 
+@pytest.mark.parametrize(
+    "corrupt_payload",
+    [
+        b'{"version":',
+        b'{"version":1,"users":{},"sessions":{}}',
+        b'{"version":1,"users":[],"sessions":{"not-a-sha256-digest":{"user_id":"usr_missing","expires_at":9999999999}}}',
+    ],
+)
+def test_user_account_store_corruption_fails_closed_without_overwrite(
+    tmp_path: Path, corrupt_payload: bytes,
+) -> None:
+    path = tmp_path / "user_accounts.json"
+    path.write_bytes(corrupt_payload)
+
+    with pytest.raises(RuntimeError, match="existing file was preserved"):
+        UserAccountStore(tmp_path)
+    assert path.read_bytes() == corrupt_payload
+
+
+def test_user_account_store_rejects_duplicate_persisted_key_owners_without_overwrite(
+    tmp_path: Path,
+) -> None:
+    import json
+
+    store = UserAccountStore(tmp_path)
+    alice = store.register("account-owner-a@example.com", "valid-password-123")
+    bob = store.register("account-owner-b@example.com", "valid-password-456")
+    store.attach_key(alice["user_id"], "key_shared_account")
+    payload = json.loads(store.path.read_text(encoding="utf-8"))
+    next(row for row in payload["users"] if row["user_id"] == bob["user_id"])["key_ids"] = [
+        "key_shared_account"
+    ]
+    corrupt_payload = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    store.path.write_bytes(corrupt_payload)
+
+    with pytest.raises(RuntimeError, match="existing file was preserved"):
+        UserAccountStore(tmp_path)
+    assert store.path.read_bytes() == corrupt_payload
+
+
+def test_user_account_attach_key_prevents_cross_user_reassignment(tmp_path: Path) -> None:
+    store = UserAccountStore(tmp_path)
+    alice = store.register("account-attach-a@example.com", "valid-password-123")
+    bob = store.register("account-attach-b@example.com", "valid-password-456")
+    store.attach_key(alice["user_id"], "key_owned_by_alice")
+
+    with pytest.raises(ValueError, match="already assigned to another user"):
+        store.attach_key(bob["user_id"], "key_owned_by_alice")
+
+    assert store.owner_for_key("key_owned_by_alice") == alice["user_id"]
+    assert store.owns_key(alice["user_id"], "key_owned_by_alice") is True
+    assert store.owns_key(bob["user_id"], "key_owned_by_alice") is False
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "register",
+        "create_session",
+        "authenticate_expired",
+        "revoke_session",
+        "update_profile",
+        "attach_key",
+        "set_enabled",
+        "revoke_user_sessions",
+        "cleanup_sessions",
+    ],
+)
+def test_user_account_store_mutations_roll_back_after_save_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str,
+) -> None:
+    import copy
+    import time
+
+    store = UserAccountStore(tmp_path)
+    user = store.register("account-rollback@example.com", "valid-password-123")
+    user_id = user["user_id"]
+    store.attach_key(user_id, "key_account_rollback")
+    token = store.create_session(user_id)
+    if mutation in {"authenticate_expired", "cleanup_sessions"}:
+        store.sessions[next(iter(store.sessions))]["expires_at"] = time.time() - 1
+
+    previous_users = copy.deepcopy(store.users)
+    previous_sessions = copy.deepcopy(store.sessions)
+
+    def fail_save() -> None:
+        raise OSError("simulated account store persistence failure")
+
+    monkeypatch.setattr(store, "_save", fail_save)
+    with pytest.raises(OSError, match="simulated account store persistence failure"):
+        if mutation == "register":
+            store.register("account-rollback-new@example.com", "another-valid-password")
+        elif mutation == "create_session":
+            store.create_session(user_id)
+        elif mutation == "authenticate_expired":
+            store.authenticate(token)
+        elif mutation == "revoke_session":
+            store.revoke_session(token)
+        elif mutation == "update_profile":
+            store.update_profile(user_id, display_name="Changed")
+        elif mutation == "attach_key":
+            store.attach_key(user_id, "key_account_rollback_new")
+        elif mutation == "set_enabled":
+            store.set_enabled(user_id, False)
+        elif mutation == "revoke_user_sessions":
+            store.revoke_user_sessions(user_id)
+        elif mutation == "cleanup_sessions":
+            store.admin_list()
+
+    assert store.users == previous_users
+    assert store.sessions == previous_sessions
+
