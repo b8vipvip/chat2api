@@ -304,3 +304,69 @@ def test_wallet_credit_rolls_back_on_non_os_serialization_failure(
     assert billing.balance_cents("usr_serialization_credit") == 125
     assert billing.available_balance_cents("usr_serialization_credit") == 125
     assert BillingStore(tmp_path).balance_cents("usr_serialization_credit") == 125
+
+
+def test_wallet_ledger_mutations_roll_back_non_os_save_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pricing = PricingStore(tmp_path)
+    config = pricing.public()
+    pricing.update(billing_enabled=True, usd_cny_rate=7.0, models=config["models"])
+    billing = BillingStore(tmp_path)
+    billing.credit("usr_non_os", 1000)
+    kwargs = {
+        "model_id": "gpt-5.6-sol",
+        "estimated_cny_cents": 100,
+        "input_tokens": 1000,
+        "output_tokens": 500,
+        "price_snapshot": pricing.model("gpt-5.6-sol"),
+        "usd_cny_rate": 7.0,
+    }
+
+    def fail_save() -> None:
+        raise TypeError("simulated ledger serialization failure")
+
+    # A failed hold write cannot remain as an in-memory capacity reservation.
+    with monkeypatch.context() as patch:
+        patch.setattr(billing, "_save", fail_save)
+        with pytest.raises(TypeError, match="serialization failure"):
+            billing.reserve_for_request("usr_non_os", "req_non_os_hold", **kwargs)
+    assert "req_non_os_hold" not in billing.reservations
+    assert billing.available_balance_cents("usr_non_os") == 1000
+
+    billing.reserve_for_request("usr_non_os", "req_non_os_charge", **kwargs)
+    with monkeypatch.context() as patch:
+        patch.setattr(billing, "_save", fail_save)
+        with pytest.raises(TypeError, match="serialization failure"):
+            billing.release_reservation("req_non_os_charge", "usr_non_os")
+    assert billing.reservations["req_non_os_charge"]["state"] == "reserved"
+
+    request = {
+        "request_id": "req_non_os_charge",
+        "status": "completed",
+        "requested_model": "gpt-5.6-sol",
+        "usage": {"prompt_tokens": 1000, "completion_tokens": 500, "estimated": True},
+    }
+    with monkeypatch.context() as patch:
+        patch.setattr(billing, "_save", fail_save)
+        with pytest.raises(TypeError, match="serialization failure"):
+            billing.record_charge("usr_non_os", request, pricing)
+    assert billing.balance_cents("usr_non_os") == 1000
+    assert billing.charge_for_request("req_non_os_charge") is None
+    assert billing.reservations["req_non_os_charge"]["state"] == "reserved"
+
+    charge = billing.record_charge("usr_non_os", request, pricing)
+    assert charge is not None and charge["debited"] is True
+    assert billing.balance_cents("usr_non_os") == 990
+    with monkeypatch.context() as patch:
+        patch.setattr(billing, "_save", fail_save)
+        with pytest.raises(TypeError, match="serialization failure"):
+            billing.refund_charge(
+                "req_non_os_charge", "rf_nonos000001", 5, "verified correction",
+            )
+    assert billing.balance_cents("usr_non_os") == 990
+    assert billing.refunds_for_user("usr_non_os") == []
+    reopened = BillingStore(tmp_path)
+    assert reopened.balance_cents("usr_non_os") == 990
+    assert reopened.charge_for_request("req_non_os_charge") == charge
+    assert reopened.refunds_for_user("usr_non_os") == []
