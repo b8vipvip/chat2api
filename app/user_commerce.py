@@ -419,7 +419,9 @@ class PricingStore:
                 raise ValueError(f"模型 {model_id} 的启用状态必须为布尔值")
             values: dict[str, float] = {}
             for key in ("input_usd_per_million", "cached_input_usd_per_million", "output_usd_per_million"):
-                raw_value = raw.get(key) or 0
+                raw_value = raw.get(key, 0)
+                if raw_value is None or raw_value == "":
+                    raw_value = 0
                 if isinstance(raw_value, bool):
                     raise ValueError(f"模型 {model_id} 的价格必须为数字")
                 try:
@@ -583,16 +585,26 @@ class BillingStore:
             # These fields control money movement and reservation accounting;
             # accepting truthy strings or unknown states would let corrupted
             # records masquerade as paid/debited or disappear from active holds.
+            def validate_price_snapshot(snapshot: Any, collection: str, model_id: str) -> None:
+                if not isinstance(snapshot, dict) or snapshot.get("model_id") != model_id:
+                    raise ValueError(f"billing ledger {collection}.price_snapshot identity is invalid")
+                if "enabled" in snapshot and type(snapshot["enabled"]) is not bool:
+                    raise ValueError(f"billing ledger {collection}.price_snapshot.enabled must be boolean")
+                for field in ("input_usd_per_million", "cached_input_usd_per_million", "output_usd_per_million"):
+                    value = snapshot.get(field, 0)
+                    if type(value) not in {int, float} or not math.isfinite(float(value)) or value < 0 or value > 100000:
+                        raise ValueError(f"billing ledger {collection}.price_snapshot.{field} is invalid")
+
             for charge in charges.values():
                 if type(charge.get("debited")) is not bool:
                     raise ValueError("billing ledger charges.debited must be boolean")
                 if (
                     not isinstance(charge.get("model_id"), str) or not charge["model_id"]
                     or not isinstance(charge.get("created_at"), str) or not charge["created_at"]
-                    or not isinstance(charge.get("price_snapshot"), dict)
                     or type(charge.get("usage_is_estimated", False)) is not bool
                 ):
                     raise ValueError("billing ledger charge metadata is invalid")
+                validate_price_snapshot(charge.get("price_snapshot"), "charges", charge["model_id"])
                 rate = charge.get("usd_cny_rate")
                 if type(rate) not in {int, float} or not math.isfinite(float(rate)) or rate < 0:
                     raise ValueError("billing ledger charges.usd_cny_rate must be finite and non-negative")
@@ -624,11 +636,11 @@ class BillingStore:
                 if (
                     not isinstance(reservation.get("model_id"), str) or not reservation["model_id"]
                     or reservation["reserved_cny_cents"] <= 0
-                    or not isinstance(reservation.get("price_snapshot"), dict)
                     or not isinstance(reservation.get("created_at"), str) or not reservation["created_at"]
                     or not isinstance(reservation.get("updated_at"), str) or not reservation["updated_at"]
                 ):
                     raise ValueError("billing ledger reservation metadata is invalid")
+                validate_price_snapshot(reservation.get("price_snapshot"), "reservations", reservation["model_id"])
                 rate = reservation.get("usd_cny_rate")
                 if type(rate) not in {int, float} or not math.isfinite(float(rate)) or rate < 0:
                     raise ValueError("billing ledger reservations.usd_cny_rate must be finite and non-negative")
