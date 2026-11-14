@@ -783,7 +783,11 @@ class BillingStore:
         }
         with self.lock:
             self.orders[order_id] = row
-            self._save()
+            try:
+                self._save()
+            except Exception:
+                self.orders.pop(order_id, None)
+                raise
             return dict(row)
 
     def update_order_checkout(self, order_id: str, *, pay_url: str = "", qr_image_url: str = "", qr_payload: str = "") -> dict[str, Any]:
@@ -791,8 +795,13 @@ class BillingStore:
             row = self.orders.get(order_id)
             if not row:
                 raise KeyError("充值订单不存在")
+            previous = dict(row)
             row.update({"pay_url": pay_url, "qr_image_url": qr_image_url, "qr_payload": qr_payload, "updated_at": _now()})
-            self._save()
+            try:
+                self._save()
+            except Exception:
+                self.orders[order_id] = previous
+                raise
             return dict(row)
 
     def order_by_trade_no(self, trade_no: str) -> dict[str, Any] | None:
@@ -807,13 +816,24 @@ class BillingStore:
                 raise KeyError("充值订单不存在")
             if row.get("status") == "paid":
                 return dict(row)
+            previous_order = dict(row)
             row["status"] = "paid"
             row["provider_trade_no"] = str(provider_trade_no or "")[:160]
             row["paid_at"] = _now()
             row["updated_at"] = _now()
             user_id = str(row.get("user_id") or "")
-            self.wallets[user_id] = int(self.wallets.get(user_id, 0)) + int(row.get("amount_cents") or 0)
-            self._save()
+            previous_balance = self.wallets.get(user_id)
+            had_balance = user_id in self.wallets
+            self.wallets[user_id] = int(previous_balance or 0) + int(row.get("amount_cents") or 0)
+            try:
+                self._save()
+            except Exception:
+                self.orders[order_id] = previous_order
+                if had_balance:
+                    self.wallets[user_id] = int(previous_balance or 0)
+                else:
+                    self.wallets.pop(user_id, None)
+                raise
             return dict(row)
 
     def orders_for_user(self, user_id: str) -> list[dict[str, Any]]:
