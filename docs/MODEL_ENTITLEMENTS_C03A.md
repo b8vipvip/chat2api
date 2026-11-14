@@ -65,8 +65,10 @@ This prevents a broad alias from bypassing a concrete allowlist.
   transport-only gpt-live alias. Unknown or unresolved models are rejected
   whenever a matching policy applies.
 - A failed UserAccountStore owner lookup, failed TenantMembershipStore lookup,
-  or tenant-bound key without an active owner role returns 503. It is never
-  treated as an unowned/unbound key and does not silently drop policy scope.
+  a tenant-bound key without an active owner role, or a stale tenant binding
+  whose recorded owner differs from the current UserAccountStore owner returns
+  503. It is never treated as an unowned/unbound key and does not silently
+  drop or transfer policy scope.
 - Master server API key remains unrestricted for compatibility.
 - Admin policy APIs use the existing administrator Session and same-origin
   ingress; mutations write to the existing AdminAuditStore.
