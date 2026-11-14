@@ -79,6 +79,11 @@ def test_v106_admin_and_user_assets_express_requested_payment_structure() -> Non
     assert "/api/user/billing/recharge-v106" in user
     assert "manual_confirmation" in patch
     assert "v2/checkout/orders" in patch
+    paypal_start = patch.index('@app.get("/api/user/payments/v106/paypal/return"')
+    paypal_end = patch.index('@app.get("/api/admin/payment-channels-v106")', paypal_start)
+    paypal_return = patch[paypal_start:paypal_end]
+    assert 'if order.get("status") != "pending":' in paypal_return
+    assert paypal_return.index('if order.get("status") != "pending":') < paypal_return.index("await paypal_token()")
     assert "install_payment_channels_v106_patch(app)" in entry
     assert entry.rstrip().endswith("install_request_history_v94_patch(app)")
 

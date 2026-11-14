@@ -635,6 +635,10 @@ def install_payment_channels_v106_patch(app: FastAPI) -> FastAPI:
             return RedirectResponse("/console#billing", status_code=303)
         if order.get("status") == "paid":
             return RedirectResponse("/console#billing", status_code=303)
+        # Do not capture a provider order after its local recharge order has
+        # been rejected, cancelled, expired or otherwise made terminal.
+        if order.get("status") != "pending":
+            return RedirectResponse("/console#billing&payment=failed", status_code=303)
         base, access_token = await paypal_token()
         try:
             async with httpx.AsyncClient(timeout=20.0) as client:
