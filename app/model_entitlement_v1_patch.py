@@ -5,7 +5,9 @@ model request context. It never selects a Worker or asserts served-model truth.
 """
 from __future__ import annotations
 
+import contextvars
 import json
+import secrets
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
@@ -23,6 +25,11 @@ from .model_entitlements import (
 )
 from . import model_capability_routing_patch as model_routing
 from . import v13_patch
+
+
+_API_KEY_CONTEXT_CAPTURE = contextvars.ContextVar(
+    "chat2api_model_entitlement_api_key_context_capture", default=False
+)
 
 
 class ModelEntitlementUpdate(BaseModel):
@@ -66,6 +73,41 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
     if tenant_memberships is None:
         raise RuntimeError("Model entitlements require the authoritative TenantMembershipStore")
     app.state.model_entitlements = store
+
+    # Bind the principal authenticated by the existing API-key store without
+    # changing main.py's dependency contract. The marker is request-scoped and
+    # the middleware resets its routing context on every /v1 response.
+    base_authenticate = api_keys.authenticate
+    if not getattr(base_authenticate, "_model_entitlement_context_wrapper", False):
+        async def authenticate_with_routing_context(token: str):
+            principal = await base_authenticate(token)
+            if principal is not None and _API_KEY_CONTEXT_CAPTURE.get():
+                key_id = str(getattr(principal, "key_id", "") or "")
+                if key_id:
+                    registry.routing_key_context.set(key_id)
+            return principal
+
+        authenticate_with_routing_context._model_entitlement_context_wrapper = True
+        api_keys.authenticate = authenticate_with_routing_context
+
+    @app.middleware("http")
+    async def api_key_routing_context_middleware(request: Request, call_next):
+        if not request.url.path.startswith("/v1/"):
+            return await call_next(request)
+        routing_token = registry.routing_key_context.set(None)
+        capture_token = _API_KEY_CONTEXT_CAPTURE.set(True)
+        supplied = str(request.headers.get("x-api-key") or "").strip()
+        authorization = request.headers.get("authorization")
+        if authorization and authorization.lower().startswith("bearer "):
+            supplied = authorization[7:].strip()
+        master_key = str(getattr(app.state.settings, "api_key", "") or "")
+        if master_key and supplied and secrets.compare_digest(supplied, master_key):
+            registry.routing_key_context.set("master")
+        try:
+            return await call_next(request)
+        finally:
+            _API_KEY_CONTEXT_CAPTURE.reset(capture_token)
+            registry.routing_key_context.reset(routing_token)
 
     # Responses image_generation calls the canonical Images executor directly
     # from its adapter. Keep the C-03B adapter/resource-ownership module free of
