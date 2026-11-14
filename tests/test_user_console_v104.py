@@ -431,7 +431,13 @@ def test_wallet_completed_request_without_valid_usage_keeps_reservation(
 ) -> None:
     pricing = PricingStore(tmp_path)
     pricing_payload = pricing.public()
-    pricing.update(billing_enabled=True, usd_cny_rate=7.0, models=pricing_payload["models"])
+    models = [dict(row) for row in pricing_payload["models"]]
+    for model_price in models:
+        if model_price["model_id"] == "gpt-5.6-sol":
+            model_price["input_usd_per_million"] = 1000.0
+            model_price["cached_input_usd_per_million"] = 100.0
+            model_price["output_usd_per_million"] = 1000.0
+    pricing.update(billing_enabled=True, usd_cny_rate=7.0, models=models)
     billing = BillingStore(tmp_path)
     billing.credit("usr_usage_pending", 1000)
     billing.reserve_for_request(
