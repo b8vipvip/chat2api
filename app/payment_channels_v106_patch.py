@@ -591,10 +591,13 @@ def install_payment_channels_v106_patch(app: FastAPI) -> FastAPI:
                 raise HTTPException(status_code=404, detail="USDT 充值订单不存在")
             if order.get("status") == "paid":
                 return {"ok": True, "order": dict(order)}
-            if order.get("status") not in {"pending", "reviewing"}:
+            # Once a TXID is submitted, the order enters manual review. Freeze
+            # that proof while an administrator verifies it; otherwise a user
+            # could replace the hash after the admin inspected the displayed one.
+            if order.get("status") != "pending":
                 raise HTTPException(
                     status_code=409,
-                    detail="该 USDT 订单已结束，不能再提交交易哈希",
+                    detail="该 USDT 订单已提交或已结束，不能修改交易哈希",
                 )
             previous = dict(order)
             order["txid"] = txid.lower()
