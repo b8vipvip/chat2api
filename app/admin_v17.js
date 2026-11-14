@@ -79,6 +79,11 @@
     const logout = document.getElementById("adminLogout");
     if (logout) logout.style.display = adminLoggedIn ? "inline-block" : "none";
     if (!adminLoggedIn) status("请登录管理员账号", "muted");
+    // Keep the C-track role/navigation state synchronized with the legacy
+    // login gate. The server session remains the source of truth.
+    window.dispatchEvent(new CustomEvent("chat2api-admin-auth-state-changed", {
+      detail: { authenticated: adminLoggedIn, username: username || "" },
+    }));
   }
 
   async function checkSession() {
@@ -271,7 +276,13 @@
     baseShow(v);
     if (v === "extensions") await loadExtensions();
   };
-  document.querySelectorAll(".nav button").forEach(button => button.onclick = () => show(button.dataset.view));
+  document.querySelectorAll(".nav button").forEach(button => {
+    // Commerce views own a role-aware activation handler and must not also
+    // pass through the legacy view switcher, which does not know their
+    // lifecycle or permission-aware default route.
+    if (["admin-users", "user-pricing", "user-payments"].includes(button.dataset.view)) return;
+    button.onclick = () => show(button.dataset.view);
+  });
 
   checkSession();
 })();

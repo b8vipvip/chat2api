@@ -5,6 +5,7 @@
   if (!nav || !content || document.getElementById("view-user-pricing")) return;
   const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[ch]);
   let adminRoleResolved = false;
+  let adminRoleRefreshGeneration = 0;
   const keyHeader = () => {
     // Never send a possibly stale root key until the current Session role is
     // known. A delegated Session must not inherit a prior administrator key.
@@ -28,28 +29,29 @@
   let currentAdminRole = null;
   let sessionAuthenticated = false;
   const canWriteUsers = () => ["super_admin", "user_admin"].includes(currentAdminRole);
+  const canReadUserKeys = () => ["super_admin", "support"].includes(currentAdminRole);
   const canReadAudit = () => currentAdminRole === "super_admin";
-  async function refreshAdminRole() {
-    let sessionCheckSucceeded = false;
-    try {
-      const response = await fetch("/api/admin/auth/session", {credentials:"same-origin", cache:"no-store"});
-      if (!response.ok) throw new Error("Admin session lookup failed");
-      const session = await response.json();
-      sessionAuthenticated = !!session.authenticated;
-      currentAdminRole = sessionAuthenticated ? (session.role || "unknown") : null;
-      sessionCheckSucceeded = true;
-    } catch (_) {
-      currentAdminRole = null;
-    }
-    if (sessionCheckSucceeded && !sessionAuthenticated && !currentAdminRole && String(document.getElementById("adminKey")?.value || "").trim()) {
-      currentAdminRole = "super_admin";
-    }
-    adminRoleResolved = sessionCheckSucceeded;
+  function applyAdminRole() {
+    // Expose the resolved, non-secret role for diagnostics and deterministic
+    // UI readiness checks; server middleware remains the authorization gate.
+    document.documentElement.dataset.adminCommerceRole = currentAdminRole || "";
+    document.documentElement.dataset.adminCommerceSessionReady = adminRoleResolved ? "true" : "false";
     pricingButton.hidden = !["super_admin", "billing_admin"].includes(currentAdminRole);
     paymentButton.hidden = !["super_admin", "billing_admin"].includes(currentAdminRole);
     usersButton.hidden = !["super_admin", "user_admin", "system_admin", "support"].includes(currentAdminRole);
     const auditPanel = document.getElementById("adminAuditPanel");
     if (auditPanel) auditPanel.hidden = !canReadAudit();
+    if (!canReadAudit()) {
+      const auditBody = document.getElementById("adminAuditBody");
+      if (auditBody) auditBody.textContent = "";
+    }
+    if (!canReadUserKeys()) {
+      const keysPanel = document.getElementById("adminUserKeysPanel");
+      const keysBody = document.getElementById("adminUserKeysBody");
+      if (keysPanel) keysPanel.style.display = "none";
+      if (keysBody) keysBody.textContent = "";
+      activeAdminUserId = "";
+    }
     const canWritePaymentSecrets = currentAdminRole === "super_admin";
     document.querySelectorAll("#view-user-payments input, #view-user-payments select, #view-user-payments textarea").forEach((node) => {
       node.disabled = !canWritePaymentSecrets;
@@ -58,6 +60,29 @@
       const node = document.getElementById(id);
       if (node) node.disabled = !canWritePaymentSecrets;
     });
+  }
+
+  async function refreshAdminRole() {
+    const generation = ++adminRoleRefreshGeneration;
+    let sessionCheckSucceeded = false;
+    try {
+      const response = await fetch("/api/admin/auth/session", {credentials:"same-origin", cache:"no-store"});
+      if (!response.ok) throw new Error("Admin session lookup failed");
+      const session = await response.json();
+      if (generation !== adminRoleRefreshGeneration) return;
+      sessionAuthenticated = !!session.authenticated;
+      currentAdminRole = sessionAuthenticated ? (session.role || "unknown") : null;
+      sessionCheckSucceeded = true;
+    } catch (_) {
+      if (generation !== adminRoleRefreshGeneration) return;
+      sessionAuthenticated = false;
+      currentAdminRole = null;
+    }
+    if (sessionCheckSucceeded && !sessionAuthenticated && !currentAdminRole && String(document.getElementById("adminKey")?.value || "").trim()) {
+      currentAdminRole = "super_admin";
+    }
+    adminRoleResolved = sessionCheckSucceeded;
+    applyAdminRole();
   }
 
   const pricingButton = document.createElement("button");
@@ -254,7 +279,7 @@
         '<td>' + Number(user.active_sessions || 0) + '</td>' +
         '<td>' + balance + '</td>' +
         '<td><div class="rowactions">' + writeActions +
-        '<button class="action" data-user-action="keys" data-user-id="' + esc(user.user_id) + '">查看 Key</button>' +
+        (canReadUserKeys() ? '<button class="action" data-user-action="keys" data-user-id="' + esc(user.user_id) + '">查看 Key</button>' : '') +
         '</div></td></tr>';
     }).join("");
     const page = document.getElementById("adminUserPage");
@@ -268,6 +293,7 @@
     document.getElementById("adminUserStatus").textContent = "错误：" + error.message;
   }
   async function loadUserKeys(userId) {
+    if (!canReadUserKeys()) throw new Error("当前管理员角色无权查看用户 API Key");
     activeAdminUserId = String(userId || "");
     const panel = document.getElementById("adminUserKeysPanel");
     const user = adminUserRows.find((row) => row.user_id === activeAdminUserId);
@@ -425,6 +451,9 @@
   function showPricingError(error) { document.getElementById("commercePricingStatus").textContent = `错误：${error.message}`; }
 
   async function loadPayments() {
+    // The V106 payment console owns this view when it has replaced the legacy
+    // form. Do not dereference controls that no longer exist.
+    if (!document.getElementById("commercePayEnabled")) return;
     const payload = await adminApi("/api/admin/user-payments");
     document.getElementById("commercePayEnabled").value = String(Boolean(payload.enabled));
     document.getElementById("commercePid").value = payload.pid || "";
@@ -438,6 +467,9 @@
     document.getElementById("commercePaymentStatus").textContent = payload.configured ? `ZPAY 已配置 · PID ${payload.pid_hint || ""}` : "ZPAY 尚未配置完整";
   }
   async function savePayments() {
+    if (!document.getElementById("commercePayEnabled")) {
+      throw new Error("Payment settings are managed by the V106 payment console");
+    }
     const body = {
       enabled: document.getElementById("commercePayEnabled").value === "true",
       pid: document.getElementById("commercePid").value.trim(),
@@ -482,8 +514,15 @@
       activate("user-pricing");
     }
   }
-  window.addEventListener("chat2api-admin-session-changed", async () => {
-    await refreshAdminRole();
+  // The C-track session is authoritative. Consume its event detail instead
+  // of issuing a second racing session request with potentially stale role data.
+  window.addEventListener("chat2api-admin-session-changed", (event) => {
+    adminRoleRefreshGeneration += 1;
+    const session = event.detail || {};
+    sessionAuthenticated = !!session.authenticated;
+    currentAdminRole = sessionAuthenticated ? (session.role || "unknown") : null;
+    adminRoleResolved = true;
+    applyAdminRole();
     activateRoleDefault();
   });
   refreshAdminRole().then(activateRoleDefault);
