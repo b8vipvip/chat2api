@@ -264,6 +264,33 @@ class TelemetryStore:
                 return dict(row)
         return None
 
+    def get_many_persisted(self, request_ids: set[str]) -> dict[str, dict[str, Any]]:
+        """Return the newest persisted rows for exact IDs using the bounded JSONL tail.
+
+        Recovery may need a committing request older than the in-memory 500-row
+        window. This read-only path scans one bounded tail once for all IDs.
+        """
+        targets = {str(value) for value in request_ids if str(value)}
+        if not targets:
+            return {}
+        found: dict[str, dict[str, Any]] = {}
+        try:
+            for row in iter_recent_jsonl(self.path):
+                request_id = str(row.get("request_id") or "")
+                if request_id in targets and request_id not in found:
+                    found[request_id] = _normalize_record_time(row)
+                    if len(found) == len(targets):
+                        break
+        except OSError:
+            # A failed disk read is not proof of completion. In-memory rows
+            # remain a best-effort fallback; unresolved reservations stay held.
+            pass
+        for request_id in targets - set(found):
+            cached = self.get(request_id)
+            if cached is not None:
+                found[request_id] = cached
+        return found
+
     def query(
         self,
         *,

@@ -281,6 +281,30 @@ async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], princi
         state = await app.state.chat_request_service.reserve(request_id, client_id)
     except RuntimeError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
+    # Responses is metered by the outer Responses middleware, which writes the
+    # authoritative terminal usage row under this same request_id. Reserve
+    # before Worker dispatch so the shared TelemetryStore hook can commit or
+    # release it from that terminal. Only the trusted internal tool-repair
+    # override is non-billable; a caller-supplied request-id prefix is not.
+    internal_repair = bool(request_id_override and request_id.startswith("resp_repair_"))
+    if not internal_repair:
+        raw_output_budget = body.get("max_output_tokens")
+        try:
+            requested_output_budget = (
+                0 if isinstance(raw_output_budget, bool)
+                else max(0, int(raw_output_budget or 0))
+            )
+        except (TypeError, ValueError):
+            requested_output_budget = 0
+        try:
+            from .quota_reservation_runtime_v1 import reserve_request_quota
+            reserve_request_quota(
+                app, request_id, principal, prompt,
+                max(4096, requested_output_budget),
+            )
+        except Exception:
+            await broker.release(request_id)
+            raise
     trace_scope = getattr(request, "scope", None)
     trace = trace_scope.get("chat2api.responses_trace") if isinstance(trace_scope, dict) else None
     if isinstance(trace, dict):

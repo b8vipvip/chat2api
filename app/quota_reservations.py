@@ -274,12 +274,64 @@ class QuotaReservationStore:
         for request_id, key_id, actual_tokens in rows:
             item = getattr(api_keys, "keys", {}).get(str(key_id))
             ledger = getattr(item, "charged_requests", None) if item else None
+            if not isinstance(ledger, dict):
+                # Production ApiKeyStore keeps the ledger on ManagedApiKey;
+                # adapters may expose the same idempotency proof at store level.
+                ledger = getattr(api_keys, "charged_requests", None)
             charged = max(0, int((ledger or {}).get(request_id, 0) or 0))
             expected = max(0, int(actual_tokens or 0))
-            if expected == 0 or charged >= expected:
-                self.mark_settled(request_id, key_id, expected)
+            # A zero/missing usage estimate is not proof that a completed
+            # request consumed zero tokens. Keep its reservation active until
+            # the existing ApiKeyStore ledger proves a positive charge.
+            if charged > 0 and charged >= expected:
+                self.mark_settled(request_id, key_id, max(expected, charged))
                 reconciled += 1
         return reconciled
+
+    def _list_active_reservations(self) -> list[dict[str, Any]]:
+        """Return every in-flight reservation for startup terminal recovery."""
+        with self.lock:
+            rows = self.db.execute(
+                """SELECT request_id,key_id,reserved_tokens,actual_tokens,state,created_at,expires_at,updated_at
+                   FROM quota_reservations
+                   WHERE state IN ('reserved','committing')
+                   ORDER BY created_at ASC"""
+            ).fetchall()
+        return [value for row in rows if (value := self._row(row)) is not None]
+
+    async def recover_committing(self, telemetry: Any, api_keys: Any) -> int:
+        """Replay persisted terminal telemetry for every active reservation.
+
+        TelemetryStore appends a terminal record before invoking its accounting
+        callback. A crash can therefore leave the reservation either reserved
+        (before begin_commit/callback) or committing (during settlement).
+        Recover both states before expiring old reservations. ApiKeyStore
+        remains the sole charge authority and de-duplicates by request_id.
+        """
+        reservations = self._list_active_reservations()
+        request_ids = {str(row["request_id"]) for row in reservations}
+        if not request_ids:
+            return 0
+        get_many = getattr(telemetry, "get_many_persisted", None)
+        getter = getattr(telemetry, "get", None)
+        if callable(get_many):
+            records = get_many(request_ids)
+        elif callable(getter):
+            records = {request_id: getter(request_id) for request_id in request_ids}
+        else:
+            return 0
+        replayed = 0
+        terminal_statuses = {"completed", "error", "cancelled", "stalled", "failed", "timeout"}
+        for reservation in reservations:
+            record = records.get(str(reservation["request_id"]))
+            if not isinstance(record, dict):
+                continue
+            if str(record.get("status") or "").lower() not in terminal_statuses:
+                continue
+            result = await self.commit_completed_usage(record, api_keys)
+            if result == "settled":
+                replayed += 1
+        return replayed
 
     async def commit_completed_usage(self, record: dict[str, Any], api_keys: Any) -> str:
         """Coordinate settlement without becoming a second completed-usage ledger."""
@@ -287,21 +339,63 @@ class QuotaReservationStore:
         key_id = str(record.get("api_key_id") or "")
         if not request_id or not key_id:
             return "ignored"
-        if record.get("status") != "completed":
+        status = str(record.get("status") or "").lower()
+        if status in {"error", "cancelled", "stalled", "failed", "timeout"}:
             self.release(request_id, key_id)
             return "released"
+        if status != "completed":
+            # TelemetryStore calls the accounting hook for queued/running as
+            # well as terminal snapshots. Nonterminal updates must never
+            # release a live reservation.
+            return "pending"
         usage = record.get("usage") if isinstance(record.get("usage"), dict) else {}
-        try:
-            actual = max(0, int(usage.get("total_tokens") or 0))
-        except (TypeError, ValueError):
-            actual = 0
+        raw_actual = usage.get("total_tokens")
+        # Token counts are integral protocol values. Do not truncate floats or
+        # coerce malformed strings into a smaller charge.
+        actual = raw_actual if type(raw_actual) is int and raw_actual > 0 else 0
         reservation = self.get(request_id)
+        # Uploaded-audio conversations can legitimately produce no text
+        # transcript and have no provider-verified audio usage yet. In that
+        # narrow, explicitly estimated zero-text case, release the admission
+        # hold instead of freezing a permanent committing reservation. This
+        # does not claim that provider-side audio cost was zero.
+        if (
+            reservation
+            and reservation["state"] == "reserved"
+            and actual == 0
+            and str(record.get("request_type") or "") == "voice_conversation"
+            and usage.get("estimated") is True
+        ):
+            self.release(request_id, key_id)
+            return "released_zero_text_estimate"
         if reservation and reservation["key_id"] != key_id:
             raise QuotaReservationError("Completion API key does not match the request reservation")
         if reservation and reservation["state"] not in {"released", "expired"}:
+            if actual <= 0:
+                # Fail closed: a completed request with absent/zero usage must
+                # not release its in-flight reservation. Freeze it in
+                # committing so startup/admin reconciliation can settle only
+                # after ApiKeyStore proves a positive request charge.
+                self.begin_commit(request_id, key_id, 0)
+                return "usage_pending"
             self.begin_commit(request_id, key_id, actual)
             await api_keys.account_completed_usage(record)
-            self.mark_settled(request_id, key_id, actual)
+            # ApiKeyStore is the sole charge authority. Its API intentionally
+            # returns no status, so prove the durable request ledger was
+            # updated before dropping the in-flight reservation. A missing
+            # key or interrupted/no-op charge must remain recoverable.
+            item = getattr(api_keys, "keys", {}).get(key_id)
+            ledger = getattr(item, "charged_requests", None) if item else None
+            if not isinstance(ledger, dict):
+                # Production ApiKeyStore persists the ledger on ManagedApiKey;
+                # lightweight accounting adapters may expose the same
+                # idempotency ledger directly on the store.
+                ledger = getattr(api_keys, "charged_requests", None)
+            raw_charged = (ledger or {}).get(request_id, 0) if isinstance(ledger, dict) else 0
+            charged = raw_charged if type(raw_charged) is int and raw_charged > 0 else 0
+            if charged < actual:
+                return "charge_pending"
+            self.mark_settled(request_id, key_id, max(actual, charged))
             return "settled"
         # Preserve legacy final accounting for requests admitted before this
         # reservation journal was installed or whose reservation expired.
