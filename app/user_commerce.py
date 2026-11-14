@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import math
 import os
 import re
 import secrets
@@ -433,6 +434,7 @@ class BillingStore:
                 id_field: str,
                 integer_fields: tuple[str, ...],
                 nullable_integer_fields: tuple[str, ...] = (),
+                required_fields: tuple[str, ...] = (),
             ) -> dict[str, dict[str, Any]]:
                 raw_rows = payload.get(name, {})
                 if not isinstance(raw_rows, dict):
@@ -442,6 +444,11 @@ class BillingStore:
                     if not isinstance(row_id, str) or not row_id or not isinstance(raw_row, dict):
                         raise ValueError(f"billing ledger {name} contains an invalid row")
                     row = dict(raw_row)
+                    missing = [field for field in required_fields if field not in row]
+                    if missing:
+                        raise ValueError(
+                            f"billing ledger {name} is missing required fields: {', '.join(missing)}"
+                        )
                     if row.get(id_field) != row_id:
                         raise ValueError(f"billing ledger {name}.{id_field} does not match its ledger key")
                     if not isinstance(row.get("user_id"), str) or not row["user_id"]:
@@ -463,15 +470,39 @@ class BillingStore:
                 "charges",
                 "request_id",
                 ("input_tokens", "cached_input_tokens", "output_tokens", "cost_usd_micros", "cost_cny_cents"),
+                required_fields=(
+                    "request_id", "user_id", "model_id", "input_tokens",
+                    "cached_input_tokens", "output_tokens", "cost_usd_micros",
+                    "cost_cny_cents", "debited", "usd_cny_rate",
+                    "price_snapshot", "created_at",
+                ),
             )
-            orders = read_rows("orders", "order_id", ("amount_cents",))
+            orders = read_rows(
+                "orders", "order_id", ("amount_cents",),
+                required_fields=(
+                    "order_id", "merchant_trade_no", "user_id", "amount_cents",
+                    "channel", "status", "provider_trade_no", "pay_url",
+                    "qr_image_url", "qr_payload", "created_at", "paid_at", "updated_at",
+                ),
+            )
             reservations = read_rows(
                 "reservations",
                 "request_id",
                 ("estimated_input_tokens", "estimated_output_tokens", "reserved_cny_cents"),
                 ("actual_cny_cents",),
+                required_fields=(
+                    "request_id", "user_id", "model_id", "estimated_input_tokens",
+                    "estimated_output_tokens", "reserved_cny_cents", "actual_cny_cents",
+                    "price_snapshot", "usd_cny_rate", "state", "created_at", "updated_at",
+                ),
             )
-            refunds = read_rows("refunds", "refund_id", ("amount_cents", "charge_cny_cents"))
+            refunds = read_rows(
+                "refunds", "refund_id", ("amount_cents", "charge_cny_cents"),
+                required_fields=(
+                    "refund_id", "request_id", "user_id", "amount_cents",
+                    "reason", "charge_cny_cents", "created_at",
+                ),
+            )
 
             # These fields control money movement and reservation accounting;
             # accepting truthy strings or unknown states would let corrupted
@@ -479,6 +510,16 @@ class BillingStore:
             for charge in charges.values():
                 if type(charge.get("debited")) is not bool:
                     raise ValueError("billing ledger charges.debited must be boolean")
+                if (
+                    not isinstance(charge.get("model_id"), str) or not charge["model_id"]
+                    or not isinstance(charge.get("created_at"), str) or not charge["created_at"]
+                    or not isinstance(charge.get("price_snapshot"), dict)
+                    or type(charge.get("usage_is_estimated", False)) is not bool
+                ):
+                    raise ValueError("billing ledger charge metadata is invalid")
+                rate = charge.get("usd_cny_rate")
+                if type(rate) not in {int, float} or not math.isfinite(float(rate)) or rate < 0:
+                    raise ValueError("billing ledger charges.usd_cny_rate must be finite and non-negative")
             allowed_order_states = {
                 "pending", "reviewing", "rejected", "paid",
                 "failed", "cancelled", "expired",
@@ -489,18 +530,45 @@ class BillingStore:
                     raise ValueError("billing ledger orders.status is unsupported")
                 if order.get("channel") not in allowed_order_channels:
                     raise ValueError("billing ledger orders.channel is unsupported")
+                if (
+                    type(order.get("amount_cents")) is not int
+                    or not 1 <= order["amount_cents"] <= 10_000_000
+                    or not isinstance(order.get("merchant_trade_no"), str)
+                    or not order["merchant_trade_no"]
+                    or not isinstance(order.get("provider_trade_no"), str)
+                    or any(not isinstance(order.get(field), str) for field in ("pay_url", "qr_image_url", "qr_payload"))
+                    or not isinstance(order.get("created_at"), str) or not order["created_at"]
+                    or not isinstance(order.get("updated_at"), str) or not order["updated_at"]
+                    or (order.get("paid_at") is not None and not isinstance(order.get("paid_at"), str))
+                ):
+                    raise ValueError("billing ledger payment order metadata is invalid")
             for reservation in reservations.values():
                 if reservation.get("state") not in {"reserved", "settled", "released"}:
                     raise ValueError("billing ledger reservations.state is unsupported")
-                if not isinstance(reservation.get("price_snapshot"), dict):
-                    raise ValueError("billing ledger reservations.price_snapshot must be an object")
+                if (
+                    not isinstance(reservation.get("model_id"), str) or not reservation["model_id"]
+                    or reservation["reserved_cny_cents"] <= 0
+                    or not isinstance(reservation.get("price_snapshot"), dict)
+                    or not isinstance(reservation.get("created_at"), str) or not reservation["created_at"]
+                    or not isinstance(reservation.get("updated_at"), str) or not reservation["updated_at"]
+                ):
+                    raise ValueError("billing ledger reservation metadata is invalid")
+                rate = reservation.get("usd_cny_rate")
+                if type(rate) not in {int, float} or not math.isfinite(float(rate)) or rate < 0:
+                    raise ValueError("billing ledger reservations.usd_cny_rate must be finite and non-negative")
+                if reservation["state"] == "settled" and reservation.get("actual_cny_cents") is None:
+                    raise ValueError("settled wallet reservation must include actual cost")
             for refund in refunds.values():
                 if (
                     not re.fullmatch(r"rf_[A-Za-z0-9_-]{8,100}", str(refund.get("refund_id") or ""))
+                    or not isinstance(refund.get("request_id"), str) or not refund["request_id"]
                     or not isinstance(refund.get("reason"), str)
-                    or not 5 <= len(refund["reason"]) <= 500
+                    or not 5 <= len(refund["reason"].strip()) <= 500
+                    or refund["amount_cents"] <= 0
+                    or refund["charge_cny_cents"] <= 0
+                    or not isinstance(refund.get("created_at"), str) or not refund["created_at"]
                 ):
-                    raise ValueError("billing ledger refund identity or reason is invalid")
+                    raise ValueError("billing ledger refund identity, amount or reason is invalid")
 
             # A refund is a derived credit against one immutable, debited
             # charge. Reject orphaned, cross-owner or cumulatively excessive
