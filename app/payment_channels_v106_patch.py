@@ -137,6 +137,7 @@ class PaymentChannelsStore:
     """
 
     def __init__(self, data_dir: Path, secret: str) -> None:
+        self.lock = threading.RLock()
         self.path = data_dir / "user_payment_channels_v106.json"
         key = base64.urlsafe_b64encode(hashlib.sha256(str(secret or "chat2api-payment-v106").encode()).digest())
         self.cipher = Fernet(key)
