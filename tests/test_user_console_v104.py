@@ -1071,3 +1071,52 @@ def test_wallet_recovery_uses_persisted_request_id_beyond_telemetry_memory_windo
     assert billing.reservations["req_wallet_recovery_old"]["state"] == "settled"
     assert billing.reserved_cents(user["user_id"]) == 0
     assert billing.balance_cents(user["user_id"]) == 1000 - charge["cost_cny_cents"]
+
+
+
+def test_wallet_enabled_rejects_disabled_model_price_and_releases_token_hold(tmp_path: Path) -> None:
+    import asyncio
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+    from app.config import Settings
+    from app.main import create_app
+    from app.quota_reservations import QuotaReservationStore
+    from app.quota_reservation_runtime_v1 import install_quota_reservation_runtime_v1, reserve_request_quota
+    from app.user_console_v104_patch import install_user_console_v104_patch
+
+    app = create_app(Settings(
+        CHAT2API_API_KEY="wallet-disabled-price-master-key",
+        CHAT2API_DATA_DIR=str(tmp_path),
+    ))
+    install_user_console_v104_patch(app)
+    user = app.state.user_accounts.register("wallet-disabled-price@example.com", "long-enough-password")
+    public, _token = asyncio.run(app.state.api_keys.create("wallet-disabled-price"))
+    app.state.user_accounts.attach_key(user["user_id"], public["key_id"])
+    pricing = app.state.user_pricing
+    config = pricing.public()
+    models = [dict(row) for row in config["models"]]
+    for row in models:
+        if row["model_id"] in {"gpt-5.6-sol", "gpt-5.6"}:
+            row["enabled"] = False
+    pricing.update(billing_enabled=True, usd_cny_rate=7.0, models=models)
+    billing = app.state.user_billing
+    billing.credit(user["user_id"], 1000)
+    app.state.quota_reservations = QuotaReservationStore(tmp_path)
+    install_quota_reservation_runtime_v1(app)
+
+    with pytest.raises(HTTPException) as error:
+        reserve_request_quota(
+            app, "req_wallet_disabled_price_0001",
+            SimpleNamespace(kind="api_key", key_id=public["key_id"]),
+            "disabled model price request", 4096, model_id="gpt-5.6-sol",
+        )
+
+    assert error.value.status_code == 503
+    assert "not configured or enabled" in str(error.value.detail)
+    assert billing.balance_cents(user["user_id"]) == 1000
+    assert billing.reserved_cents(user["user_id"]) == 0
+    assert billing.charge_for_request("req_wallet_disabled_price_0001") is None
+    token_rows = app.state.quota_reservations.list_reservations(key_id=public["key_id"])
+    assert len(token_rows) == 1 and token_rows[0]["state"] == "released"
+    app.state.quota_reservations.close()
