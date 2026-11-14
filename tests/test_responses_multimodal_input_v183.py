@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+import json
 import time
 from collections import OrderedDict
 from pathlib import Path
@@ -185,7 +186,8 @@ def test_image_generation_tool_passes_image_reference_into_same_existing_executo
     result = asyncio.run(handle_image_tool(app, _request(), body, _key(), "以此图片为参考生成插画"))
     assert result.status_code == 200
     assert len(records) == 1
-    assert app.state.responses_v108_owners[result.json()["id"]] == "key-a"
+    result_body = json.loads(result.body)
+    assert app.state.responses_v108_owners[result_body["id"]] == "key-a"
     references = records[0]["body"].attachments
     assert len(references) == 1
     assert files.read(references[0].file_id)[1] == _png()
