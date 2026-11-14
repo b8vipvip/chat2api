@@ -127,12 +127,12 @@ API:
   The tenant policy dimension is not a substitute for resource-level tenant
   authorization: File, Conversation, History, Media and Billing ownership still
   require their own cross-tenant negative tests and explicit owner contracts.
-- User-role and subscription-plan authorities now exist, but the administrative
-  UI for managing these fields and a complete user-facing subscription
-  lifecycle/renewal/payment reconciliation flow remain incomplete. Subscription
-  assignment is immediate, single-instance and administrator-operated; no
-  self-service purchase, scheduled upgrade/downgrade, proration, refunds or
-  provider-webhook subscription activation is claimed.
+- The admin console now exposes user system-role editing to user_admin
+  and subscription plan/assignment management to billing_admin. This is an
+  administrator-operated control surface, not a complete user-facing
+  subscription lifecycle. Self-service purchase, scheduled upgrade/downgrade,
+  proration, refunds and provider-webhook subscription activation remain
+  incomplete. Subscription assignment is immediate and single-instance.
 - UserAccountStore remains JSON + process-local lock and UserSubscriptionStore
   is local SQLite. Multi-instance transactional identity/subscription storage,
   backup and restore are D/P gates. The subscription store does not claim
@@ -173,8 +173,10 @@ validation, audit and restart persistence. Additional tests cover identity and
 tenant-store outages, orphaned tenant memberships, the server-owned gpt-image
 target, Speech/Conversation request model context, Realtime session.start
 model context including deny behavior, legacy v13 manual-auth key-context
-binding for model detail and Completions, and Responses hosted image-tool
-key/model context with a negative `gpt-image` entitlement regression. The legacy model detail route must
+binding for model detail and Completions, Responses hosted image-tool
+key/model context with a negative `gpt-image` entitlement regression,
+user-role/subscription admin API and audit behavior, and RBAC-separated admin
+UI visibility for user_admin versus billing_admin. The legacy model detail route must
 enforce the models scope and conceal policy-filtered model IDs; legacy
 Completions must reject a denied model before Worker resolution. Exact-head full CI and production image
 smoke remain required.
