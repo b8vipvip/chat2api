@@ -67,7 +67,7 @@ def permission_for_admin_route(path: str, method: str) -> str | None:
     if path == "/api/admin/control/roles":
         return "admins:read"
     if path == "/api/admin/model-entitlements" or re.fullmatch(
-        r"/api/admin/model-entitlements/(global|key|user|tenant|tenant_role)/[^/]+", path
+        r"/api/admin/model-entitlements/(global|key|user|tenant|tenant_role|user_role|subscription_plan)/[^/]+", path
     ):
         return "models:" + suffix
     if path == "/api/admin/audit":
@@ -80,6 +80,12 @@ def permission_for_admin_route(path: str, method: str) -> str | None:
         r"/api/admin/tenants/[^/]+/(?:members(?:/[^/]+)?|keys(?:/[^/]+)?)", path
     ):
         return "tenants:" + suffix
+    if re.fullmatch(r"/api/admin/users/[^/]+/role", path):
+        return "users:" + suffix
+    if path == "/api/admin/subscription-plans" or re.fullmatch(
+        r"/api/admin/subscription-plans/[^/]+", path
+    ) or re.fullmatch(r"/api/admin/users/[^/]+/subscription", path):
+        return "billing:" + suffix
     if path == "/api/admin/users" or re.fullmatch(
         r"/api/admin/users/[^/]+(?:/sessions/revoke|/keys(?:/[^/]+)?)?", path
     ):
