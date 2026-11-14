@@ -152,6 +152,8 @@ jobs:
           node --check app/admin_extension_columns.js
           node --check app/admin_linux_workers.js
           node --check app/admin_control_plane_admin_v1.js
+          node --check app/admin_user_commerce_v104.js
+          node --check app/admin_payments_v106.js
           node --check app/chat_renderer_v2.js
           node --check app/chat_stream_recovery_v1.js
           node --check app/chat_client_v1.js
@@ -283,5 +285,7 @@ jobs:
         run: pytest -q tests/test_responses_bridge_regeneration_v154.py --timeout=120
       - name: Web Chat document attachment browser E2E
         run: pytest -q tests/test_web_chat_document_attachments_e2e.py --timeout=180
+      - name: C-track delegated admin browser E2E
+        run: pytest -q tests/test_admin_control_plane_browser_e2e.py --timeout=180
       - name: Tests
         run: pytest -q --timeout=120

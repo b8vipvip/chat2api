@@ -69,6 +69,31 @@ class ChatMessage(BaseModel):
             return "\n".join(item for item in parts if item).strip()
         return str(self.content or "").strip()
 
+    def has_user_content(self) -> bool:
+        """Accept non-empty text, image-only and explicit file-only user turns."""
+        if self.text():
+            return True
+        if not isinstance(self.content, list):
+            return False
+        for part in self.content:
+            if not isinstance(part, dict):
+                continue
+            kind = str(part.get("type") or "")
+            if kind in {"image_url", "input_image"}:
+                value = part.get("image_url")
+                if isinstance(value, dict):
+                    value = value.get("url")
+                if isinstance(value, str) and value.strip():
+                    return True
+            elif kind in {"file", "input_file"}:
+                nested = part.get("file")
+                value = part.get("file_id") or (
+                    nested.get("file_id") if isinstance(nested, dict) else None
+                )
+                if isinstance(value, str) and value.strip():
+                    return True
+        return False
+
     def referenced_file_ids(self) -> list[str]:
         if not isinstance(self.content, list):
             return []
@@ -128,7 +153,7 @@ class ChatCompletionRequest(BaseModel):
     def validate_messages(cls, value: list[ChatMessage]) -> list[ChatMessage]:
         if not value:
             raise ValueError("messages must not be empty")
-        if not any(item.role == "user" and item.text() for item in value):
+        if not any(item.role == "user" and item.has_user_content() for item in value):
             raise ValueError("messages must contain a non-empty user message")
         return value
 
