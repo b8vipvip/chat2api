@@ -171,16 +171,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def require_api_key(
         authorization: str | None = Header(default=None),
         x_api_key: str | None = Header(default=None),
-    ) -> ApiPrincipal:
+    ) -> AsyncIterator[ApiPrincipal]:
         supplied = supplied_token(authorization, x_api_key)
         if not supplied:
             raise HTTPException(status_code=401, detail="Missing API key")
         if config.api_key and secrets.compare_digest(supplied, config.api_key):
-            return master_principal()
-        principal = await api_keys.authenticate(supplied)
-        if not principal:
-            raise HTTPException(status_code=401, detail="Invalid or disabled API key")
-        return principal
+            principal = master_principal()
+        else:
+            principal = await api_keys.authenticate(supplied)
+            if not principal:
+                raise HTTPException(status_code=401, detail="Invalid or disabled API key")
+
+        # The routing key is request-scoped authorization context, not merely
+        # a sticky-route hint. Bind it for the entire authenticated request so
+        # model entitlement checks on /v1/models and every model-consuming
+        # endpoint evaluate the same principal that passed API-key auth.
+        routing_token = registry.routing_key_context.set(principal.key_id)
+        try:
+            yield principal
+        finally:
+            registry.routing_key_context.reset(routing_token)
 
     async def require_admin_key(
         authorization: str | None = Header(default=None),

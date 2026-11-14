@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import contextvars
 from collections import OrderedDict
 from types import SimpleNamespace
 
@@ -9,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api_keys import ApiPrincipal
+from app import model_capability_routing_patch as model_routing
 from app.responses_v108_patch import install_responses_v108_patch
 
 
@@ -25,10 +27,17 @@ def _app():
         return principals.get(token)
 
     app.state.api_keys = SimpleNamespace(authenticate=authenticate)
+    registry = SimpleNamespace(
+        routing_key_context=contextvars.ContextVar("responses_hosted_image_test_key", default=None)
+    )
+    app.state.registry = registry
     calls = []
 
     async def existing_engine(**kwargs):
         calls.append(kwargs)
+        assert registry.routing_key_context.get() == kwargs["principal"].key_id
+        target = model_routing._MODEL_CONTEXT.get()
+        assert isinstance(target, dict) and target.get("model") == "gpt-image"
         return {
             "data": [{"b64_json": base64.b64encode(b"true-image-result").decode()}],
             "chat2api": {"request_id": kwargs["x_chat2api_request_id"], "owned_media": []},

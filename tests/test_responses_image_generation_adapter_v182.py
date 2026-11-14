@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import base64
 import json
 import time
@@ -12,6 +13,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.api_keys import ApiPrincipal
+from app import model_capability_routing_patch as model_routing
 from app.responses_emulated_tools_v109_patch import needs_emulated_tools
 from app.responses_image_tool_v182 import (
     handle_image_tool, is_image_generation_request, validate_image_tool,
@@ -35,10 +37,17 @@ def principal(scopes=("chat", "images")):
 def app_with_fake_engine():
     app = FastAPI()
     app.state.responses_v108_store = OrderedDict()
+    registry = SimpleNamespace(
+        routing_key_context=contextvars.ContextVar("responses_image_tool_test_key", default=None)
+    )
+    app.state.registry = registry
     calls = []
 
     async def execute(**kwargs):
         calls.append(kwargs)
+        assert registry.routing_key_context.get() == kwargs["principal"].key_id
+        target = model_routing._MODEL_CONTEXT.get()
+        assert isinstance(target, dict) and target.get("model") == "gpt-image"
         return {
             "data": [{"b64_json": base64.b64encode(b"generated-example").decode()}],
             "chat2api": {

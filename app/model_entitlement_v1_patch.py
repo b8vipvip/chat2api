@@ -219,23 +219,78 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
             return response
         user = accounts.authenticate(request.cookies.get(USER_SESSION_COOKIE))
         if not user:
-            return response
+            return JSONResponse(
+                {"detail": "User session is unavailable"},
+                status_code=401,
+                headers={"Cache-Control": "private, no-store"},
+            )
         try:
             payload = json.loads((await _response_bytes(response)).decode("utf-8"))
         except (UnicodeDecodeError, ValueError, TypeError):
-            return response
+            return JSONResponse(
+                {"detail": {"code": "model_entitlement_catalog_unavailable"}},
+                status_code=503,
+                headers={"Cache-Control": "private, no-store"},
+            )
         if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
-            return response
+            return JSONResponse(
+                {"detail": {"code": "model_entitlement_catalog_unavailable"}},
+                status_code=503,
+                headers={"Cache-Control": "private, no-store"},
+            )
+
         user_id = str(user.get("user_id") or "")
-        payload["data"] = [
-            row for row in payload["data"]
-            if isinstance(row, dict)
-            and store.evaluate(
-                str(row.get("id") or row.get("model") or ""),
-                key_id=None, user_id=user_id,
-            ).get("allowed") is True
-        ]
-        return JSONResponse(payload, status_code=response.status_code, headers={"Cache-Control": "private, no-store"})
+        selected_key_id = str(request.query_params.get("key_id") or "").strip()
+        if selected_key_id:
+            try:
+                owns_selected_key = accounts.owns_key(user_id, selected_key_id)
+            except Exception:
+                owns_selected_key = False
+            if not owns_selected_key:
+                return JSONResponse(
+                    {"detail": "API key not found"},
+                    status_code=404,
+                    headers={"Cache-Control": "private, no-store"},
+                )
+
+        filtered: list[dict[str, Any]] = []
+        try:
+            for row in payload["data"]:
+                if not isinstance(row, dict):
+                    continue
+                # The production pricing catalog uses model_id. Keep id/model
+                # aliases for compatible test and older catalog providers.
+                model_id = str(
+                    row.get("model_id") or row.get("id") or row.get("model") or ""
+                ).strip()
+                if not model_id:
+                    continue
+                decision = (
+                    _decision(selected_key_id, model_id)
+                    if selected_key_id
+                    else store.evaluate(model_id, key_id=None, user_id=user_id)
+                )
+                if decision.get("allowed") is True:
+                    filtered.append(row)
+        except HTTPException as exc:
+            return JSONResponse(
+                {"detail": exc.detail},
+                status_code=exc.status_code,
+                headers={"Cache-Control": "private, no-store"},
+            )
+        except Exception:
+            return JSONResponse(
+                {"detail": {"code": "model_entitlement_policy_unavailable"}},
+                status_code=503,
+                headers={"Cache-Control": "private, no-store"},
+            )
+
+        payload["data"] = filtered
+        return JSONResponse(
+            payload,
+            status_code=response.status_code,
+            headers={"Cache-Control": "private, no-store"},
+        )
 
     @app.get("/api/admin/model-entitlements")
     async def list_model_entitlements(request: Request) -> dict[str, Any]:

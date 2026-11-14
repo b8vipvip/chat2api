@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+import asyncio
 import contextvars
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from app.admin_auth import AdminSessionStore
 from app.api_keys import ApiPrincipal
+from app.models import ChatCompletionRequest
 from app.live_voice_patch import install_live_voice_patch
 from app.voice_patch import install_voice_patch
 from app.model_entitlement_v1_patch import install_model_entitlements
@@ -18,6 +22,7 @@ from app.model_capability_routing_patch import install_model_capability_routing_
 from app.model_entitlements import ModelEntitlementError, ModelEntitlementStore
 from app import model_capability_routing_patch as model_routing
 from app import v13_patch
+from app.responses_image_tool_v182 import handle_image_tool
 
 
 class FakeRegistry:
@@ -53,6 +58,9 @@ class FakeRegistry:
 class FakeAccounts:
     def owner_for_key(self, key_id):
         return {"key_1": "usr_abcdef123"}.get(key_id)
+
+    def owns_key(self, user_id, key_id):
+        return user_id == "usr_abcdef123" and key_id == "key_1"
 
     def authenticate(self, token):
         return {"user_id": "usr_abcdef123"} if token == "valid-user-session" else None
@@ -102,9 +110,9 @@ def build_app(tmp_path: Path):
     @app.get("/api/user/models")
     async def user_models():
         return {"data": [
-            {"id": "gpt-5.5", "enabled": True},
-            {"id": "gpt-5.6-sol", "enabled": True},
-            {"id": "default", "enabled": True},
+            {"model_id": "gpt-5.5", "enabled": True},
+            {"model_id": "gpt-5.6-sol", "enabled": True},
+            {"model_id": "default", "enabled": True},
         ]}
 
     install_model_entitlements(app)
@@ -469,7 +477,37 @@ def test_user_console_model_catalog_obeys_global_and_user_entitlements(tmp_path:
             cookies={"chat2api_user_session": "valid-user-session"},
         )
         assert response.status_code == 200
-        assert [row["id"] for row in response.json()["data"]] == ["gpt-5.6-sol"]
+        # The production pricing catalog uses model_id, not id/model. The
+        # filter must use the actual field or user/global rules silently vanish.
+        assert [row["model_id"] for row in response.json()["data"]] == ["gpt-5.6-sol"]
+
+
+def test_user_console_model_catalog_applies_selected_key_and_tenant_entitlements(
+    tmp_path: Path,
+):
+    app, _ = build_app(tmp_path)
+    store = app.state.model_entitlements
+    store.upsert("global", "default", "allow", ["gpt-5.5", "gpt-5.6-sol"])
+    store.upsert("user", "usr_abcdef123", "deny", ["gpt-5.6-sol"])
+    store.upsert("tenant", "ten_abc123", "allow", ["gpt-5.5"])
+    store.upsert("tenant_role", "owner", "allow", ["gpt-5.5"])
+    store.upsert("key", "key_1", "allow", ["gpt-5.5"])
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/user/models?key_id=key_1",
+            cookies={"chat2api_user_session": "valid-user-session"},
+        )
+        assert response.status_code == 200
+        assert [row["model_id"] for row in response.json()["data"]] == ["gpt-5.5"]
+
+        # A user cannot query the catalog under another user's API-key policy.
+        foreign = client.get(
+            "/api/user/models?key_id=key_2",
+            cookies={"chat2api_user_session": "valid-user-session"},
+        )
+        assert foreign.status_code == 404
+        assert foreign.json()["detail"] == "API key not found"
 
 
 def test_tenant_allowlist_applies_only_through_explicit_api_key_binding(tmp_path: Path):
@@ -493,3 +531,165 @@ def test_tenant_allowlist_applies_only_through_explicit_api_key_binding(tmp_path
     # An unbound key does not inherit another tenant's policy.
     registry.routing_key_context.set("key_2")
     assert [row["id"] for row in registry.model_catalog()] == ["gpt-5.5", "gpt-5.6-sol"]
+
+
+def test_legacy_v13_catalog_and_completions_bind_authenticated_api_key_context(tmp_path: Path):
+    app = FastAPI()
+    app.state.settings = SimpleNamespace(
+        data_dir=tmp_path,
+        admin_username="owner",
+        api_key="master-test-secret",
+    )
+    registry = FakeRegistry()
+
+    async def send(_client_id, _payload):
+        return None
+
+    registry.send = send
+    app.state.registry = registry
+    app.state.user_accounts = FakeAccounts()
+    app.state.tenant_memberships = FakeTenantMemberships()
+
+    class LegacyApiKeys:
+        async def authenticate(self, token):
+            scopes = {
+                "chat-token": ("chat",),
+                "models-token": ("models",),
+            }.get(token)
+            if scopes is None:
+                return None
+            return ApiPrincipal(
+                key_id="key_1",
+                name="legacy-test",
+                kind="managed",
+                scopes=scopes,
+            )
+
+        def get_public(self, key_id):
+            return {"key_id": key_id} if key_id == "key_1" else None
+
+    app.state.api_keys = LegacyApiKeys()
+    app.state.admin_sessions = AdminSessionStore(
+        "owner", "strong-admin-password", storage_path=tmp_path / "admin_sessions.json"
+    )
+
+    @app.post("/v1/chat/completions")
+    async def chat_endpoint(
+        body: ChatCompletionRequest,
+        request: Request,
+        x_chat2api_client: str | None = None,
+        x_chat2api_request_id: str | None = None,
+        principal: Any = None,
+    ):
+        # v13 calls this adapter directly rather than through FastAPI's
+        # require_api_key dependency. The entitlement check must still see
+        # the principal authenticated by the outer legacy route.
+        client_id = registry.resolve_client(body.client_id or x_chat2api_client)
+        return JSONResponse({
+            "id": "chatcmpl_legacy_test",
+            "choices": [{"message": {"content": "allowed"}, "finish_reason": "stop"}],
+            "usage": {},
+            "chat2api": {"client_id": client_id},
+        })
+
+    # Production order: the legacy route/catalog decorators are installed
+    # first, then C-03A wraps their final resolver/catalog boundary.
+    v13_patch.install_v13_patch(app)
+    install_model_entitlements(app)
+    app.state.model_entitlements.upsert("key", "key_1", "deny", ["gpt-5.5"])
+
+    with TestClient(app) as client:
+        denied_catalog_item = client.get(
+            "/v1/models/gpt-5.5",
+            headers={"Authorization": "Bearer models-token"},
+        )
+        assert denied_catalog_item.status_code == 404
+
+        allowed_catalog_item = client.get(
+            "/v1/models/gpt-5.6-sol",
+            headers={"Authorization": "Bearer models-token"},
+        )
+        assert allowed_catalog_item.status_code == 200
+        assert allowed_catalog_item.json()["id"] == "gpt-5.6-sol"
+
+        wrong_scope = client.get(
+            "/v1/models/gpt-5.6-sol",
+            headers={"Authorization": "Bearer chat-token"},
+        )
+        assert wrong_scope.status_code == 403
+
+        denied_completion = client.post(
+            "/v1/completions",
+            headers={"Authorization": "Bearer chat-token"},
+            json={"model": "gpt-5.5", "prompt": "must be denied"},
+        )
+        assert denied_completion.status_code == 403
+        assert denied_completion.json()["detail"]["code"] == "model_not_entitled"
+        assert registry.resolve_calls == []
+
+        allowed_completion = client.post(
+            "/v1/completions",
+            headers={"Authorization": "Bearer chat-token"},
+            json={"model": "gpt-5.6-sol", "prompt": "must be allowed"},
+        )
+        assert allowed_completion.status_code == 200
+        assert allowed_completion.json()["choices"][0]["text"] == "allowed"
+        assert registry.resolve_calls == ["worker_1"]
+
+    # Manual legacy auth must not leave a key bound to the next request/task.
+    assert registry.routing_key_context.get() is None
+
+
+def test_responses_hosted_image_tool_enforces_key_and_server_owned_image_model(tmp_path: Path):
+    app, _ = build_app(tmp_path)
+    app.state.responses_v108_store = {}
+    principal = ApiPrincipal(
+        key_id="key_1",
+        name="image-key",
+        kind="managed",
+        scopes=("chat", "images"),
+    )
+    observed = []
+
+    async def image_executor(**kwargs):
+        observed.append((
+            app.state.registry.routing_key_context.get(),
+            model_routing._MODEL_CONTEXT.get(),
+        ))
+        # This is the same resolver reached by the production Images executor.
+        app.state.registry.resolve_client(None)
+        return {"data": [{"b64_json": "aW1hZ2U="}], "chat2api": {}}
+
+    app.state.image_generation_executor = image_executor
+    request = Request({
+        "type": "http",
+        "method": "POST",
+        "scheme": "https",
+        "path": "/v1/responses",
+        "server": ("chat2api.example", 443),
+        "query_string": b"",
+        "headers": [],
+        "chat2api.responses_trace": {"worker_attempt_ids": []},
+    })
+    body = {
+        "model": "gpt-5.5",
+        "input": "Generate a simple icon",
+        "tools": [{"type": "image_generation"}],
+    }
+
+    app.state.model_entitlements.upsert("key", "key_1", "deny", ["gpt-image"])
+    with pytest.raises(HTTPException) as denied:
+        asyncio.run(handle_image_tool(app, request, body, principal, "Generate a simple icon"))
+    assert denied.value.status_code == 403
+    assert denied.value.detail["code"] == "model_not_entitled"
+    assert observed[0][0] == "key_1"
+    assert observed[0][1]["model"] == "gpt-image"
+    assert app.state.registry.resolve_calls == []
+
+    # Removing the deny makes the same authenticated image tool dispatchable.
+    app.state.model_entitlements.delete("key", "key_1")
+    response = asyncio.run(handle_image_tool(app, request, body, principal, "Generate a simple icon"))
+    assert response.status_code == 200
+    assert app.state.registry.resolve_calls == ["worker_1"]
+    assert observed[1][0] == "key_1"
+    assert observed[1][1]["model"] == "gpt-image"

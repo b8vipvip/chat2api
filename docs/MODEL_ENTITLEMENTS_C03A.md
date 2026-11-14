@@ -41,19 +41,35 @@ This prevents a broad alias from bypassing a concrete allowlist.
 
 ## Enforcement
 
-- GET /v1/models: filter the existing live model catalog using the current
-  authenticated API-key context. Global, tenant, tenant-role, user and key policies apply.
-  Admin model inventory remains unfiltered.
-- GET /api/user/models: filter the user-console pricing/model list using the
-  authenticated user plus global/user policy. A browser user session is not
-  enough to infer one tenant when the user belongs to multiple workspaces.
+- GET /v1/models and GET /v1/models/{model_id}: filter the existing live
+  model catalog using the authenticated API-key context. The detail route
+  requires the same `models` scope as the collection route and returns 404
+  for models hidden by the caller's policy. Admin model inventory remains
+  unfiltered. The legacy v13 detail handler authenticates manually, so it
+  explicitly binds and restores the authenticated key context rather than
+  relying on the main API dependency.
+- GET /api/user/models: filter the production pricing catalog by its
+  `model_id` field. Without `key_id`, apply global/user policy only; the
+  browser session is not enough to infer one tenant when the user belongs to
+  multiple workspaces. The Playground supplies its selected `key_id`; the
+  server first verifies that the key belongs to the authenticated user, then
+  applies the complete global/tenant/tenant-role/user/key intersection. A
+  foreign or unowned key returns 404.
 - The shared registry.resolve_client boundary rejects unauthorized requests
   with HTTP 403 before the existing Worker resolver.
 - Request model context is owned by the existing routing adapters:
   - POST /v1/chat/completions uses the concrete model extracted from its request.
-  - POST /v1/responses and POST /v1/completions use the existing v13 target context.
+  - POST /v1/responses and POST /v1/completions use the existing v13 target
+    context. Their legacy adapter authenticates outside the main FastAPI API-key
+    dependency, so it now binds the same authenticated key around the direct
+    Chat adapter call; the context is always restored after dispatch.
   - POST /v1/images/generations uses the server-owned gpt-image target. A
     client-supplied model field cannot change the entitlement target.
+  - Responses `image_generation` delegates to that same Images executor.
+    Because the adapter calls the route function directly, it explicitly binds
+    the authenticated API key and server-owned `gpt-image` model context around
+    the executor call; it does not inherit the outer Responses text model or
+    rely on a FastAPI dependency that is not executed by a direct function call.
   - POST /v1/audio/speech and POST /v1/audio/conversations bind the model from
     their validated request body before the shared resolver runs.
   - WEBSOCKET /v1/audio/realtime binds the requested model from the first
@@ -75,8 +91,8 @@ This prevents a broad alias from bypassing a concrete allowlist.
 
 API:
 - GET /api/admin/model-entitlements
-- PUT /api/admin/model-entitlements/{global|key|user}/{subject_id}
-- DELETE /api/admin/model-entitlements/{global|key|user}/{subject_id}
+- PUT /api/admin/model-entitlements/{global|key|user|tenant|tenant_role}/{subject_id}
+- DELETE /api/admin/model-entitlements/{global|key|user|tenant|tenant_role}/{subject_id}
 
 ## Explicit gaps
 
@@ -85,15 +101,27 @@ API:
   The tenant policy dimension is not a substitute for resource-level tenant
   authorization: File, Conversation, History, Media and Billing ownership still
   require their own cross-tenant negative tests and explicit owner contracts.
-- Role, subscription-plan and Mode 1/Mode 2 policy dimensions beyond the
-  implemented tenant membership role are not implemented here; membership
-  count or browser-provided tenant headers are never used as identity.
+- End-user system-role and subscription-plan policy dimensions are not
+  implemented: no authoritative end-user role or subscription lifecycle owner
+  exists in the current UserAccountStore/BillingStore contracts. Administrator
+  RBAC roles are not customer entitlements and must not be reused as such.
+- ModeResolverMiddleware marks every unmarked /v1 request as Mode 2; explicit
+  `api`/`mode2` aliases remain Mode 2, while Mode 1 selection on /v1 is
+  rejected with an entrypoint-conflict error. Mode 1 Cookie proxy is not an
+  OpenAI API transport and remains NO-GO/not implemented, so it has no
+  model-dispatch entitlement path to evaluate. A future separately approved
+  Mode 1 transport must provide its own authenticated principal and model
+  context before it can inherit any policy. The current Web Chat browser sends
+  its selected API Key directly to Mode 2 /v1 endpoints; its cookie-authenticated
+  recovery/cancel BFF only observes or signals an existing request and does not
+  independently select a model or dispatch a new generation.
 - No editable model metadata, aliases or fallback-routing configuration is added.
 - This does not prove the model actually served; only existing Worker and
   telemetry evidence can do that.
 - The current model-consumption inventory covers Chat Completions, Responses,
   legacy Completions, Images, Audio Speech/Conversations and the Realtime Voice
-  WebSocket. Embeddings are not currently exposed by the API. Any future
+  WebSocket. The model-discovery inventory also includes both /v1/models and
+  /v1/models/{model_id}. Embeddings are not currently exposed by the API. Any future
   model-consuming endpoint must set an authoritative model context and add
   pre-dispatch positive/negative tests before it is exposed to scoped API keys.
 - Local SQLite is single-instance. Multi-instance transactional storage, backup
@@ -106,10 +134,15 @@ API:
 ## Tests
 
 Covers default compatibility, alias normalization, global/key/user/tenant/role
-intersection, deny precedence, non-concrete alias denial, catalog filtering,
+intersection, deny precedence, non-concrete alias denial, production `model_id`
+catalog filtering, selected-key catalog intersection and foreign-key rejection,
 pre-dispatch 403, master-key compatibility, API session auth, subject
 validation, audit and restart persistence. Additional tests cover identity and
 tenant-store outages, orphaned tenant memberships, the server-owned gpt-image
-target, Speech/Conversation request model context, and Realtime session.start
-model context including deny behavior. Exact-head full CI and production image
+target, Speech/Conversation request model context, Realtime session.start
+model context including deny behavior, legacy v13 manual-auth key-context
+binding for model detail and Completions, and Responses hosted image-tool
+key/model context with a negative `gpt-image` entitlement regression. The legacy model detail route must
+enforce the models scope and conceal policy-filtered model IDs; legacy
+Completions must reject a denied model before Worker resolution. Exact-head full CI and production image
 smoke remain required.
