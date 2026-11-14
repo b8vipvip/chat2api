@@ -156,3 +156,20 @@ def test_backup_refuses_invalid_json_and_sqlite_integrity_failure(tmp_path: Path
             source, tmp_path / "backup-sqlite",
             acknowledge_plaintext_sensitive_data=True,
         )
+
+
+def test_backup_rejects_file_count_over_manifest_cap_before_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source-data"
+    destination = tmp_path / "backup"
+    make_data_dir(source)
+    monkeypatch.setattr("app.data_dir_backup.MAX_MANIFEST_FILES", 3)
+
+    with pytest.raises(BackupError, match="backup limit"):
+        create_backup(
+            source, destination,
+            acknowledge_plaintext_sensitive_data=True,
+        )
+    assert not destination.exists()
+    assert (source / "api_keys.json").exists()
