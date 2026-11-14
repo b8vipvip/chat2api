@@ -146,6 +146,33 @@ def test_file_upload_is_forwarded_to_chat_and_downloadable_by_extension(tmp_path
         assert records[0]["timings"]["attachment_prepare_ms"] == 123.4
 
 
+
+def test_worker_attachment_grant_requires_a_live_nonterminal_broker_lease(tmp_path: Path) -> None:
+    app = create_app(settings(tmp_path))
+    install_attachment_download_v82_patch(app)
+    with TestClient(app) as client:
+        image = upload(client, "stale-grant.png", "image/png", b"private-payload", "vision")
+        client_id, token = pair(client)
+        request_id = "req_stale_worker_grant_0001"
+        asyncio.run(app.state.telemetry.upsert({
+            "request_id": request_id,
+            "client_id": client_id,
+            "api_key_id": "master",
+            "status": "running",
+            "input_file_ids": [image["id"]],
+        }))
+
+        # Telemetry can outlive a failed dispatch or a process-local lease.
+        # A running row alone is never sufficient authority for a Worker read.
+        assert app.state.broker.requests.get(request_id) is None
+        response = client.get(
+            f"/api/extensions/files/{image['id']}?request_id={request_id}"
+            f"&client_id={client_id}&token={token}"
+        )
+        assert response.status_code == 404
+        assert response.content != b"private-payload"
+
+
 def test_inline_data_url_image_is_materialized_as_attachment(tmp_path: Path) -> None:
     with TestClient(create_app(settings(tmp_path))) as client:
         client_id, token = pair(client)
