@@ -69,6 +69,11 @@ the Control Plane maps this route to `billing:write`. Caller body:
 - The internal wallet ledger uses an in-process lock plus atomic
   file replacement under P-01's **single-process** runtime.
   Multi-worker or multi-host wallet transactions are not supported.
+- When wallet billing is enabled for a managed user, every dispatched
+  model must have an explicit pricing row. An unpriced model is rejected
+  before Worker dispatch; administrators may add an explicit zero-rate row
+  only when free use is intentional. Disabling wallet billing preserves the
+  existing unmetered-wallet behavior.
 - This does not solve payment provider callbacks, chargebacks,
   payment disputes, cash payouts, tax or reconciled provider usage.
 - G0 DataKeyring migration remains deferred. Do not infer
