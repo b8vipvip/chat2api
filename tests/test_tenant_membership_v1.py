@@ -325,3 +325,35 @@ def test_tenant_membership_does_not_grant_cross_user_resource_access(tmp_path: P
         assert client.get(
             "/v1/native-content/req_alice_native_0001", headers=alice_auth
         ).status_code == 200
+
+
+def test_non_master_api_key_cannot_delete_master_owned_file(tmp_path: Path):
+    import asyncio
+    import base64
+
+    app = app_with_tenants(tmp_path)
+
+    async def seed():
+        _key, token = await app.state.api_keys.create("ordinary user key")
+        item = await app.state.file_store.create(
+            filename="master-owned.txt",
+            data_base64=base64.b64encode(b"privileged asset").decode("ascii"),
+            mime_type="text/plain",
+            owner_key_id="master",
+            purpose="chat2api",
+        )
+        return token, item
+
+    token, item = asyncio.run(seed())
+    headers = {"Authorization": f"Bearer {token}"}
+
+    with TestClient(app) as client:
+        # Metadata/read and delete must enforce the same owner boundary. A
+        # regular key cannot read a master-owned file and must not be able to
+        # destroy it through the delete endpoint either.
+        assert client.get(f"/v1/files/{item.file_id}", headers=headers).status_code == 403
+        deleted = client.delete(f"/v1/files/{item.file_id}", headers=headers)
+        assert deleted.status_code == 403
+        assert app.state.file_store.get(item.file_id) is not None
+        _stored, payload = app.state.file_store.read(item.file_id)
+        assert payload == b"privileged asset"
