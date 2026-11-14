@@ -213,6 +213,17 @@ def _message_item(message_id: str, text: str, status: str = "completed") -> dict
     return {"id": message_id, "type": "message", "status": status, "role": "assistant", "content": [{"type": "output_text", "text": text, "annotations": [], "logprobs": []}]}
 
 
+def _store_response(app: FastAPI, response_id: str, response: dict[str, Any], owner_key_id: str) -> None:
+    """Store a Responses object and its owner as one bounded in-process record."""
+    store: OrderedDict[str, dict[str, Any]] = app.state.responses_v108_store
+    owners: dict[str, str] = app.state.responses_v108_owners
+    store[response_id] = response
+    owners[response_id] = str(owner_key_id or "")
+    while len(store) > 256:
+        evicted_id, _ = store.popitem(last=False)
+        owners.pop(evicted_id, None)
+
+
 def _response(response_id: str, body: dict[str, Any], prompt: str, text: str, output: list[dict[str, Any]], created_at: int, status: str = "completed") -> dict[str, Any]:
     return {
         "id": response_id,
@@ -558,10 +569,7 @@ async def _stream(app: FastAPI, request: Request, state: Any, *, principal: ApiP
         if archived_media:
             completed["chat2api"] = {"media_files": archived_media}
         if bool(body.get("store", True)):
-            store: OrderedDict[str, dict[str, Any]] = app.state.responses_v108_store
-            store[response_id] = completed
-            while len(store) > 256:
-                store.popitem(last=False)
+            _store_response(app, response_id, completed, principal.key_id)
         seq += 1
         yield _sse("response.completed", seq, response=completed)
     except asyncio.TimeoutError:
@@ -621,6 +629,7 @@ def install_responses_v108_patch(app: FastAPI) -> FastAPI:
 
     app.openapi_schema = None
     app.state.responses_v108_store = OrderedDict()
+    app.state.responses_v108_owners = {}
     app.state.responses_v108_installed = True
 
     @app.post("/v1/responses")
@@ -688,10 +697,7 @@ def install_responses_v108_patch(app: FastAPI) -> FastAPI:
             if archived_media:
                 response["chat2api"] = {"media_files": archived_media}
             if bool(body.get("store", True)):
-                store: OrderedDict[str, dict[str, Any]] = app.state.responses_v108_store
-                store[response_id] = response
-                while len(store) > 256:
-                    store.popitem(last=False)
+                _store_response(app, response_id, response, principal.key_id)
             return JSONResponse(response)
         except asyncio.TimeoutError:
             try:
@@ -707,9 +713,16 @@ def install_responses_v108_patch(app: FastAPI) -> FastAPI:
 
     @app.get("/v1/responses/{response_id}")
     async def retrieve_response(response_id: str, request: Request):
-        await _authenticate(app, request)
-        value = app.state.responses_v108_store.get(str(response_id))
-        if not value:
+        principal = await _authenticate(app, request)
+        response_key = str(response_id)
+        value = app.state.responses_v108_store.get(response_key)
+        owner_key_id = app.state.responses_v108_owners.get(response_key)
+        if (
+            not value
+            or not owner_key_id
+            or (principal.kind != "master" and owner_key_id != principal.key_id)
+        ):
+            # Do not reveal whether a response exists under another API key.
             return _error("Response not found", status_code=404, code="response_not_found")
         return JSONResponse(value)
 
