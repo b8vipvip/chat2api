@@ -1067,7 +1067,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             or str(row.get("status") or "") != "running"
             or str(row.get("client_id") or "") != client_id
             or not item
-            or str(row.get("api_key_id") or "") != str(item.owner_key_id or "")
+            or (
+                str(row.get("api_key_id") or "") != "master"
+                and str(row.get("api_key_id") or "") != str(item.owner_key_id or "")
+            )
             or not isinstance(allowed_ids, list)
             or file_id not in {str(value) for value in allowed_ids}
         ):
