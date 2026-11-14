@@ -370,8 +370,26 @@ async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], princi
                 "native_tools": native_tools,
             },
         })
-    except Exception:
+    except Exception as error:
         registry.busy_clients.discard(client_id)
+        # A failed socket send is terminal for this dispatch attempt. Mark the
+        # in-memory lease terminal before persisting telemetry so a Worker file
+        # download cannot rely on the earlier "running" row during cleanup.
+        state.completed_mono = time.perf_counter()
+        state.terminal_event_type = "dispatch.failed"
+        try:
+            await app.state.telemetry.upsert({
+                "request_id": request_id,
+                "status": "error",
+                "completion_chars": 0,
+                "error": "Worker dispatch failed (" + type(error).__name__ + ")",
+                "diagnostics": {"responses_v108_dispatch_error_type": type(error).__name__},
+            })
+        except Exception as telemetry_error:
+            logging.getLogger(__name__).warning(
+                "Responses dispatch failure telemetry unavailable request_id=%s error_type=%s",
+                request_id, type(telemetry_error).__name__,
+            )
         await broker.release(request_id)
         raise
     return state, request_id, client_id, timeout
