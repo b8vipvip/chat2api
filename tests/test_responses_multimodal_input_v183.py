@@ -187,3 +187,70 @@ def test_image_generation_tool_passes_image_reference_into_same_existing_executo
     references = records[0]["body"].attachments
     assert len(references) == 1
     assert files.read(references[0].file_id)[1] == _png()
+
+
+def test_responses_dispatch_failure_terminalizes_request_scoped_attachment_grant(tmp_path: Path) -> None:
+    files, _archive = _stores(tmp_path)
+    stored = asyncio.run(files.create(
+        filename="send-failure.png",
+        data_base64=base64.b64encode(_png()).decode(),
+        mime_type="image/png",
+        owner_key_id="key-a",
+    ))
+    specs = attachment_specs(files, [stored.file_id], _key())
+    class FakeBroker:
+        def __init__(self):
+            self.requests = {}
+        async def create(self, request_id, client_id):
+            state = SimpleNamespace(
+                request_id=request_id, client_id=client_id, timings=lambda: {},
+                completed_mono=None, terminal_event_type=None,
+            )
+            self.requests[request_id] = state
+            return state
+        async def release(self, request_id):
+            self.requests.pop(request_id, None)
+
+    class FakeTelemetry:
+        def __init__(self):
+            self.rows = {}
+        def get(self, request_id):
+            return self.rows.get(request_id)
+        async def upsert(self, row):
+            previous = self.rows.get(row["request_id"], {})
+            self.rows[row["request_id"]] = {**previous, **row}
+            return dict(self.rows[row["request_id"]])
+
+    async def fail_send(_client_id, _message):
+        raise ConnectionError("simulated Worker socket send failure")
+
+    registry = SimpleNamespace(
+        set_routing_key=lambda _key: None,
+        resolve_client=lambda _requested: "ext_ready",
+        busy_clients=set(),
+        send=fail_send,
+    )
+    broker = FakeBroker()
+    telemetry = FakeTelemetry()
+    app = SimpleNamespace(state=SimpleNamespace(
+        registry=registry,
+        broker=broker,
+        telemetry=telemetry,
+        settings=SimpleNamespace(request_timeout_seconds=600),
+    ))
+
+    with pytest.raises(ConnectionError, match="socket send failure"):
+        asyncio.run(_dispatch(
+            app, _request(), {"model": "gpt-6"}, _key(),
+            "describe the attached image", [], attachments=specs,
+        ))
+
+    assert len(telemetry.rows) == 1
+    request_id, row = next(iter(telemetry.rows.items()))
+    assert row["status"] == "error"
+    assert row["api_key_id"] == "key-a"
+    assert row["client_id"] == "ext_ready"
+    assert row["input_file_ids"] == [stored.file_id]
+    assert row["diagnostics"]["responses_v108_dispatch_error_type"] == "ConnectionError"
+    assert request_id not in broker.requests
+    assert registry.busy_clients == set()
