@@ -12,6 +12,12 @@ for Worker model discovery, availability, routing or served-model evidence.
   provenance authority.
 - Existing ApiKeyStore.authenticate + v17 routing context identifies the
   authenticated API key; UserAccountStore.owner_for_key resolves user ownership.
+- UserAccountStore owns the end-user `system_role` field. Existing accounts
+  migrate to the least-privileged `user` role; reserved administrator RBAC
+  role names are rejected and cannot be assigned to customers.
+- UserSubscriptionStore owns plan definitions and the subscription lifecycle.
+  BillingStore wallet cents, estimated request charges and payment orders do
+  not imply or grant a subscription plan.
 - This module owns only entitlement policy and the allow/deny decision.
 
 ## Implemented policy scope
@@ -25,14 +31,20 @@ Supported subjects in this slice:
   tenant through TenantMembershipStore.tenant_for_key.
 - tenant_role/{owner|admin|member|viewer}: policy inherited from the actual
   membership role of the user who owns the explicitly bound API key.
+- user_role/{role_slug}: policy inherited from the authoritative
+  UserAccountStore system role. This is distinct from administrator RBAC and
+  workspace membership roles.
+- subscription_plan/{plan_id}: policy inherited from the user's effective
+  active subscription in UserSubscriptionStore. Expired or cancelled
+  subscriptions fall back to the seeded `free` plan.
 
 A request is allowed only if:
 1. no matching deny rule contains the normalized requested model; and
 2. every matching allow rule contains that model.
 
-Therefore global, key and user allowlists intersect; any explicit deny overrides
-all allow rules. With no matching policy, behavior remains backward-compatible
-(default allow).
+Therefore global, key, user, user-role, subscription-plan, tenant and
+tenant-role allowlists intersect; any explicit deny overrides all allow rules.
+With no matching policy, behavior remains backward-compatible (default allow).
 
 Model aliases are canonicalized by the existing normalize_model_id. When
 any policy applies, non-concrete aliases such as default, chatgpt-web and
@@ -86,13 +98,27 @@ This prevents a broad alias from bypassing a concrete allowlist.
   503. It is never treated as an unowned/unbound key and does not silently
   drop or transfer policy scope.
 - Master server API key remains unrestricted for compatibility.
+- Every owned API-key decision reads the current end-user system role and
+  effective subscription plan from their authoritative stores. Identity or
+  subscription lookup failures return 503 rather than silently dropping those
+  policy dimensions. Browser model-catalog filtering applies the same role and
+  plan dimensions; selected-key filtering additionally applies tenant and key
+  policy.
 - Admin policy APIs use the existing administrator Session and same-origin
-  ingress; mutations write to the existing AdminAuditStore.
+  ingress; mutations write to the existing AdminAuditStore. User-role changes
+  require `users:write`; plan catalog and subscription lifecycle changes
+  require `billing:write` in ControlPlane RBAC.
 
 API:
 - GET /api/admin/model-entitlements
-- PUT /api/admin/model-entitlements/{global|key|user|tenant|tenant_role}/{subject_id}
-- DELETE /api/admin/model-entitlements/{global|key|user|tenant|tenant_role}/{subject_id}
+- PUT /api/admin/model-entitlements/{global|key|user|tenant|tenant_role|user_role|subscription_plan}/{subject_id}
+- DELETE /api/admin/model-entitlements/{global|key|user|tenant|tenant_role|user_role|subscription_plan}/{subject_id}
+- PUT /api/admin/users/{user_id}/role (user-admin permission)
+- GET /api/admin/subscription-plans
+- PUT /api/admin/subscription-plans/{plan_id} (billing-admin permission)
+- GET /api/admin/users/{user_id}/subscription
+- PUT /api/admin/users/{user_id}/subscription
+- DELETE /api/admin/users/{user_id}/subscription
 
 ## Explicit gaps
 
@@ -101,10 +127,16 @@ API:
   The tenant policy dimension is not a substitute for resource-level tenant
   authorization: File, Conversation, History, Media and Billing ownership still
   require their own cross-tenant negative tests and explicit owner contracts.
-- End-user system-role and subscription-plan policy dimensions are not
-  implemented: no authoritative end-user role or subscription lifecycle owner
-  exists in the current UserAccountStore/BillingStore contracts. Administrator
-  RBAC roles are not customer entitlements and must not be reused as such.
+- User-role and subscription-plan authorities now exist, but the administrative
+  UI for managing these fields and a complete user-facing subscription
+  lifecycle/renewal/payment reconciliation flow remain incomplete. Subscription
+  assignment is immediate, single-instance and administrator-operated; no
+  self-service purchase, scheduled upgrade/downgrade, proration, refunds or
+  provider-webhook subscription activation is claimed.
+- UserAccountStore remains JSON + process-local lock and UserSubscriptionStore
+  is local SQLite. Multi-instance transactional identity/subscription storage,
+  backup and restore are D/P gates. The subscription store does not claim
+  atomicity with the legacy BillingStore/payment provider.
 - ModeResolverMiddleware marks every unmarked /v1 request as Mode 2; explicit
   `api`/`mode2` aliases remain Mode 2, while Mode 1 selection on /v1 is
   rejected with an entrypoint-conflict error. Mode 1 Cookie proxy is not an
