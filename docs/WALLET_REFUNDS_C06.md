@@ -49,6 +49,10 @@ the Control Plane maps this route to `billing:write`. Caller body:
 - This is not an automatic refund on failed API requests: failures
   release *uncommitted admission holds*. Posted charges need an
   explicit audited administrative correction.
+- Startup validates the ledger's object structure and integer-unit fields.
+  Floating-point, boolean and string balances/amounts fail closed; the
+  existing ledger bytes are preserved for offline recovery. Exact negative
+  integer wallet balances remain valid under the documented debt policy.
 - The internal wallet ledger uses an in-process lock plus atomic
   file replacement under P-01's **single-process** runtime.
   Multi-worker or multi-host wallet transactions are not supported.
