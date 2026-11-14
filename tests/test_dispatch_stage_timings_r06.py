@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -267,3 +268,16 @@ def test_request_v6_reports_browser_readiness_stages_after_content_ack() -> None
                           run_request.index("} finally {")]
     assert "request_v6_dispatch_elapsed_ms" in failure
     assert "request_v6_dispatch_stage_evidence_v1" in failure
+
+def test_request_v6_readiness_continues_when_diagnostic_background_ack_hangs() -> None:
+    source = (ROOT / "chrome_extension/content_request_v6.js").read_text(encoding="utf-8")
+    request_owner = source[source.index("async function runRequest(message)"):]
+    assert 'void diagnostic(active, "dispatch-started", {' in request_owner
+    assert 'await diagnostic(active, "dispatch-started"' not in request_owner
+
+    result = subprocess.run(
+        ["node", "tests/r06_nonblocking_dispatch_probe.mjs"],
+        cwd=ROOT, capture_output=True, text=True, check=False, timeout=10,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "nonblocking browser dispatch diagnostics: pass" in result.stdout
