@@ -211,10 +211,37 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
         }
 
     def sync_user_charges(user_id: str) -> None:
-        owned = accounts.key_ids(user_id)
+        owned = set(accounts.key_ids(user_id))
         if not owned:
             return
-        for row in telemetry.recent(500):
+
+        # Keep the normal recent-history repair path, but do not rely on the
+        # 500-row in-memory window for a wallet hold that survived a process
+        # crash between telemetry persistence and charge/release projection.
+        rows_by_id = {
+            str(row.get("request_id") or ""): row
+            for row in telemetry.recent(500)
+            if str(row.get("request_id") or "")
+        }
+        active_holds = billing.active_reservations_for_user(user_id)
+        active_request_ids = {
+            str(row.get("request_id") or "")
+            for row in active_holds
+            if str(row.get("request_id") or "")
+        }
+        if active_request_ids:
+            persisted_lookup = getattr(telemetry, "get_many_persisted", None)
+            if callable(persisted_lookup):
+                try:
+                    # Exact request IDs are searched in the bounded persisted
+                    # JSONL tail; absent evidence leaves the hold untouched.
+                    rows_by_id.update(persisted_lookup(active_request_ids))
+                except (OSError, ValueError, TypeError):
+                    # Recovery is best effort. Never release funds without a
+                    # durable terminal row proving the request outcome.
+                    pass
+
+        for row in rows_by_id.values():
             if str(row.get("api_key_id") or "") not in owned:
                 continue
             status = str(row.get("status") or "").lower()
