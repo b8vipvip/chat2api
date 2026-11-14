@@ -86,7 +86,7 @@ def test_usdt_manual_confirmation_is_fail_closed() -> None:
     patch = (ROOT / "app" / "payment_channels_v106_patch.py").read_text(encoding="utf-8")
     assert 'order["status"] = "reviewing"' in patch
     assert "用户尚未提交有效交易哈希" in patch
-    assert "billing.settle_order(order_id, txid)" in patch
+    assert "billing.settle_usdt_order(order_id, txid)" in patch
     assert "confirm(" not in patch
 
 
@@ -238,3 +238,58 @@ def test_v106_recharge_api_rejects_non_integer_cent_payloads(tmp_path: Path) -> 
             )
             assert response.status_code == 422, response.text
     assert app.state.user_billing.orders == {}
+
+
+
+def test_payment_channel_config_load_fails_closed_without_overwriting_source(tmp_path: Path) -> None:
+    source = b'{"aggregate":'
+    path = tmp_path / "user_payment_channels_v106.json"
+    path.write_bytes(source)
+    with pytest.raises(RuntimeError, match="Payment channel configuration is unreadable"):
+        PaymentChannelsStore(tmp_path, "local-secret")
+    assert path.read_bytes() == source
+
+
+def test_payment_channel_update_rolls_back_memory_on_save_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = PaymentChannelsStore(tmp_path, "local-secret")
+    store.update({
+        "aggregate": {"zpay": {"enabled": True, "pid": "pid-1", "key": "old-zpay-secret"}},
+        "direct": {"paypal": {"enabled": True, "client_id": "old-client", "client_secret": "old-paypal-secret"}},
+    })
+    previous = copy.deepcopy(store.payload)
+    persisted = (tmp_path / "user_payment_channels_v106.json").read_bytes()
+
+    def fail_save() -> None:
+        raise OSError("simulated payment config fsync failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(store, "_save", fail_save)
+        with pytest.raises(OSError, match="fsync failure"):
+            store.update({
+                "public_origin": "https://changed.example",
+                "aggregate": {"zpay": {"enabled": False, "pid": "new-pid", "key": "new-zpay-secret"}},
+                "direct": {"paypal": {"enabled": False, "client_id": "new-client", "client_secret": "new-paypal-secret"}},
+            })
+    assert store.payload == previous
+    assert (tmp_path / "user_payment_channels_v106.json").read_bytes() == persisted
+    assert store.zpay_key() == "old-zpay-secret"
+    assert store.paypal_secret() == "old-paypal-secret"
+
+
+def test_invalid_payment_channel_update_does_not_partially_mutate_memory(tmp_path: Path) -> None:
+    store = PaymentChannelsStore(tmp_path, "local-secret")
+    store.update({
+        "aggregate": {"zpay": {"enabled": True, "pid": "old-pid", "key": "old-zpay-secret"}},
+        "direct": {"paypal": {"enabled": True, "client_id": "old-client", "client_secret": "old-paypal-secret"}},
+    })
+    previous = copy.deepcopy(store.payload)
+    with pytest.raises(ValueError, match="ZPAY 渠道 ID"):
+        store.update({
+            "aggregate": {"zpay": {"enabled": False, "pid": "new-pid", "alipay_cid": "not-a-number"}},
+            "direct": {"paypal": {"enabled": False, "client_id": "new-client"}},
+        })
+    assert store.payload == previous
+    assert store.zpay_key() == "old-zpay-secret"
+    assert store.paypal_secret() == "old-paypal-secret"
