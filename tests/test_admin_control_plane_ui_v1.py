@@ -14,6 +14,10 @@ def test_admin_console_exposes_c_views_and_one_control_plane_asset():
     assert 'id="view-registration-invitations"' in html
     assert 'value="invite_only"' in html
     assert 'data-view="tenants"' in html
+    assert 'data-view="user-roles"' in html
+    assert 'data-view="subscriptions"' in html
+    assert 'id="view-user-roles"' in html
+    assert 'id="view-subscriptions"' in html
     assert 'data-view="model-entitlements"' in html
     assert 'data-view="plugins"' in html
     assert 'data-view="quota-ledger"' in html
@@ -24,6 +28,10 @@ def test_admin_console_exposes_c_views_and_one_control_plane_asset():
     assert 'id="view-tenants"' in html
     assert 'id="view-model-entitlements"' in html
     assert 'value="tenant_role"' in html
+    assert 'value="user_role"' in html
+    assert 'value="subscription_plan"' in html
+    assert 'id="cUserRoleRows"' in html
+    assert 'id="cSubHistory"' in html
     assert '/assets/chat2api-control-plane-admin-v1.js' in html
     assert 'id="adminSessionPassword"' in html
     assert 'id="adminSessionRotatePassword"' in html
@@ -53,6 +61,14 @@ def test_control_plane_ui_asset_is_served_with_safe_cache_and_content_headers():
         assert "loadQuotaReservations" in response.text
         assert "loadInvitations" in response.text
         assert "/api/admin/control/invitations" in response.text
+        assert '"user-roles": ["super_admin", "user_admin"]' in response.text
+        assert '"subscriptions": ["super_admin", "billing_admin"]' in response.text
+        assert "/api/admin/users/" in response.text
+        assert "/role" in response.text
+        assert "/api/admin/subscription-plans" in response.text
+        assert "/subscription" in response.text
+        assert "loadUserRoles" in response.text
+        assert "loadSubscriptions" in response.text
         assert "cInviteCode" in response.text
         assert "/settings" in response.text
         assert "runtime_integration_enabled" in response.text
