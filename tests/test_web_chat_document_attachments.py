@@ -26,6 +26,18 @@ def _admin_headers() -> dict[str, str]:
     return {"Authorization": "Bearer web-chat-document-master-key"}
 
 
+def _api_error_message(response) -> str:
+    """Mode 2 uses the standard OpenAI error envelope, not FastAPI detail."""
+    payload = response.json()
+    assert "detail" not in payload, payload
+    error = payload["error"]
+    assert error["type"] in {
+        "invalid_request_error", "permission_error", "authentication_error",
+    }, payload
+    assert isinstance(error["message"], str) and error["message"], payload
+    return error["message"]
+
+
 def _pair(client: TestClient) -> tuple[str, str]:
     response = client.post(
         "/api/extensions/register",
@@ -167,7 +179,7 @@ def test_document_content_part_rejects_non_assistants_and_unsupported_mime_files
                 },
             )
             assert response.status_code == 400, response.text
-            assert "assistants document" in response.json()["detail"]
+            assert "assistants document" in _api_error_message(response)
 
 
 def test_document_content_part_rejects_corrupt_size_metadata(tmp_path: Path) -> None:
@@ -189,7 +201,7 @@ def test_document_content_part_rejects_corrupt_size_metadata(tmp_path: Path) -> 
             },
         )
         assert response.status_code == 400, response.text
-        assert "byte count" in response.json()["detail"]
+        assert "byte count" in _api_error_message(response)
 
 def test_chat_completion_enforces_four_combined_file_input_limit(tmp_path: Path) -> None:
     with TestClient(create_app(_settings(tmp_path))) as client:
@@ -211,7 +223,7 @@ def test_chat_completion_enforces_four_combined_file_input_limit(tmp_path: Path)
             },
         )
         assert response.status_code == 400, response.text
-        assert "At most four image/file inputs" in response.json()["detail"]
+        assert "At most four image/file inputs" in _api_error_message(response)
 
 
 def test_document_file_part_is_bound_to_the_uploading_api_key(tmp_path: Path) -> None:
@@ -272,7 +284,7 @@ def test_document_file_part_is_bound_to_the_uploading_api_key(tmp_path: Path) ->
             },
         )
         assert response.status_code == 403, response.text
-        assert "belongs to another API key" in response.json()["detail"]
+        assert "belongs to another API key" in _api_error_message(response)
 
         deleted = client.delete(
             f"/api/user/files/{file_id}",
@@ -303,7 +315,7 @@ def test_chat_completion_preflights_combined_file_and_inline_image_count(tmp_pat
             },
         )
         assert response.status_code == 400, response.text
-        assert "At most four image/file inputs" in response.json()["detail"]
+        assert "At most four image/file inputs" in _api_error_message(response)
         assert set(client.app.state.file_store.items) == before
 
 def test_chat_completion_enforces_twenty_mib_combined_attachment_limit(tmp_path: Path) -> None:
@@ -328,4 +340,4 @@ def test_chat_completion_enforces_twenty_mib_combined_attachment_limit(tmp_path:
             },
         )
         assert response.status_code == 400, response.text
-        assert "20 MiB" in response.json()["detail"]
+        assert "20 MiB" in _api_error_message(response)
