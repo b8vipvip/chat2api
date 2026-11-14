@@ -353,3 +353,67 @@ def test_admin_request_media_rejects_file_owned_by_another_api_key(tmp_path: Pat
             headers=admin_headers(),
         )
         assert response.status_code == 404
+
+
+def test_master_api_can_attach_another_key_owned_file_with_request_scoped_worker_grant(tmp_path: Path) -> None:
+    app = create_app(settings(tmp_path))
+    install_attachment_download_v82_patch(app)
+
+    async def seed_managed_file():
+        managed_key, managed_token = await app.state.api_keys.create("managed attachment owner")
+        item = await app.state.file_store.create(
+            filename="managed-owned.png",
+            data_base64=base64.b64encode(b"managed-private-payload").decode("ascii"),
+            mime_type="image/png",
+            owner_key_id=managed_key["key_id"],
+            purpose="vision",
+        )
+        return managed_token, item
+
+    managed_token, item = asyncio.run(seed_managed_file())
+    client_id = token = None
+
+    with TestClient(app) as client:
+        client_id, token = pair(client)
+        with client.websocket_connect(f"/ws/extensions/{client_id}?token={token}") as websocket:
+            websocket.receive_json()
+
+            def request():
+                return client.post(
+                    "/v1/chat/completions",
+                    headers=admin_headers(),
+                    json={
+                        "model": "default",
+                        "messages": [{"role": "user", "content": "describe the managed file"}],
+                        "attachments": [{"file_id": item.file_id}],
+                        "stream": False,
+                    },
+                )
+
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(request)
+                message = websocket.receive_json()
+                assert message["type"] == "chat.request"
+                assert message["attachments"][0]["file_id"] == item.file_id
+                assert message["attachments"][0]["request_id"] == message["request_id"]
+
+                # Master-key access to files is intentionally cross-key, as
+                # with GET /v1/files and canonical_attachment_specs. The Worker
+                # grant remains bounded by this request, its attached file set,
+                # the exact paired Worker and its live dispatch socket.
+                download = client.get(
+                    f"/api/extensions/files/{item.file_id}?request_id={message['request_id']}"
+                    f"&client_id={client_id}&token={token}"
+                )
+                assert download.status_code == 200
+                assert download.content == b"managed-private-payload"
+
+                websocket.send_json({
+                    "type": "chat.completed",
+                    "request_id": message["request_id"],
+                    "text": "managed image",
+                })
+                response = future.result(timeout=5)
+
+        assert response.status_code == 200
+        assert response.json()["choices"][0]["message"]["content"] == "managed image"
