@@ -221,29 +221,32 @@ class PaymentChannelsStore:
             return ""
 
     def zpay_key(self) -> str:
-        return self._decrypt(self.payload["aggregate"]["zpay"].get("key_ciphertext"))
+        with self.lock:
+            return self._decrypt(self.payload["aggregate"]["zpay"].get("key_ciphertext"))
 
     def paypal_secret(self) -> str:
-        return self._decrypt(self.payload["direct"]["paypal"].get("client_secret_ciphertext"))
+        with self.lock:
+            return self._decrypt(self.payload["direct"]["paypal"].get("client_secret_ciphertext"))
 
     def admin_public(self) -> dict[str, Any]:
-        zpay = dict(self.payload["aggregate"]["zpay"])
-        paypal = dict(self.payload["direct"]["paypal"])
-        usdt = dict(self.payload["direct"]["usdt"])
-        zpay.pop("key_ciphertext", None)
-        paypal.pop("client_secret_ciphertext", None)
-        zpay["key_configured"] = bool(self.zpay_key())
-        zpay["configured"] = bool(zpay.get("pid") and self.zpay_key())
-        paypal["secret_configured"] = bool(self.paypal_secret())
-        paypal["configured"] = bool(paypal.get("client_id") and self.paypal_secret())
-        usdt["configured"] = bool(_valid_tron_address(str(usdt.get("address") or "")))
-        return {
-            "version": 106,
-            "public_origin": str(self.payload.get("public_origin") or ""),
-            "aggregate": {"zpay": zpay},
-            "direct": {"paypal": paypal, "usdt": usdt},
-            "updated_at": self.payload.get("updated_at"),
-        }
+        with self.lock:
+            zpay = dict(self.payload["aggregate"]["zpay"])
+            paypal = dict(self.payload["direct"]["paypal"])
+            usdt = dict(self.payload["direct"]["usdt"])
+            zpay.pop("key_ciphertext", None)
+            paypal.pop("client_secret_ciphertext", None)
+            zpay["key_configured"] = bool(self.zpay_key())
+            zpay["configured"] = bool(zpay.get("pid") and self.zpay_key())
+            paypal["secret_configured"] = bool(self.paypal_secret())
+            paypal["configured"] = bool(paypal.get("client_id") and self.paypal_secret())
+            usdt["configured"] = bool(_valid_tron_address(str(usdt.get("address") or "")))
+            return {
+                "version": 106,
+                "public_origin": str(self.payload.get("public_origin") or ""),
+                "aggregate": {"zpay": zpay},
+                "direct": {"paypal": paypal, "usdt": usdt},
+                "updated_at": self.payload.get("updated_at"),
+            }
 
     def user_public(self) -> dict[str, Any]:
         admin = self.admin_public()
