@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from .admin_audit import AdminAuditError, AdminAuditStore
 from .admin_auth import SESSION_COOKIE
 from .user_commerce import USER_SESSION_COOKIE
+from .user_subscriptions import UserSubscriptionError, UserSubscriptionStore
 from .model_entitlements import (
     ModelEntitlementError,
     ModelEntitlementStore,
@@ -31,12 +32,31 @@ class ModelEntitlementUpdate(BaseModel):
     enabled: bool = True
 
 
+class UserSystemRoleUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    system_role: str = Field(min_length=1, max_length=64)
+
+
+class SubscriptionPlanUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=100)
+    enabled: bool = True
+
+
+class UserSubscriptionAssign(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    plan_id: str = Field(min_length=1, max_length=64)
+    expires_at: str | None = Field(default=None, max_length=64)
+
+
 def install_model_entitlements(app: FastAPI) -> FastAPI:
     if getattr(app.state, "model_entitlements_installed", False):
         return app
     registry = app.state.registry
     store = ModelEntitlementStore(app.state.settings.data_dir)
     accounts = getattr(app.state, "user_accounts", None)
+    subscriptions = UserSubscriptionStore(app.state.settings.data_dir)
+    app.state.user_subscriptions = subscriptions
     tenant_memberships = getattr(app.state, "tenant_memberships", None)
     api_keys = getattr(app.state, "api_keys", None)
     if api_keys is None:
@@ -62,10 +82,13 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=403, detail="Administrator permission denied")
         return str(username)
 
-    def audit_event(actor: str, action: str, subject_type: str, subject_id: str, details: dict[str, Any]) -> None:
+    def audit_event(
+        actor: str, action: str, subject_type: str, subject_id: str,
+        details: dict[str, Any], *, target_type: str = "model_entitlement",
+    ) -> None:
         try:
             audit.append(
-                actor=actor, action=action, target_type="model_entitlement",
+                actor=actor, action=action, target_type=target_type,
                 target_id=f"{subject_type}:{subject_id}", request_id="",
                 details=details,
             )
@@ -97,6 +120,16 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
         if subject_type == "tenant_role":
             if subject_id not in {"owner", "admin", "member", "viewer"}:
                 raise ModelEntitlementError("Unknown tenant membership role")
+            return
+        if subject_type == "user_role":
+            try:
+                accounts.validate_system_role(subject_id)
+            except (AttributeError, ValueError) as exc:
+                raise ModelEntitlementError("Unknown end-user system role") from exc
+            return
+        if subject_type == "subscription_plan":
+            if not subscriptions.plan_exists(subject_id):
+                raise KeyError("Unknown subscription plan")
             return
 
     def _identity(key_id: str | None) -> str | None:
@@ -152,17 +185,36 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
                 detail={"code": "model_entitlement_tenant_context_unavailable"},
             ) from exc
 
+    def _user_policy_context(user_id: str | None) -> tuple[str | None, str | None]:
+        if not user_id:
+            return None, None
+        try:
+            system_role = accounts.system_role_for(str(user_id))
+            subscription = subscriptions.current_plan_for_user(str(user_id))
+            plan_id = str(subscription.get("plan_id") or "")
+            if not plan_id:
+                raise RuntimeError("User subscription has no effective plan")
+            return system_role, plan_id
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "model_entitlement_user_policy_context_unavailable"},
+            ) from exc
+
     def _decision(key_id: str | None, model_id: str | None) -> dict[str, Any]:
         if not key_id or key_id == "master":
             return {"allowed": True, "reason": "master_key", "model": model_id, "matched_rules": []}
         owner_id = _identity(key_id)
         tenant_id, tenant_role = _tenant_context_for_key(key_id, owner_id)
+        user_role, subscription_plan = _user_policy_context(owner_id)
         return store.evaluate(
             str(model_id or ""),
             key_id=str(key_id),
             user_id=owner_id,
             tenant_id=tenant_id,
             tenant_role=tenant_role,
+            user_role=user_role,
+            subscription_plan=subscription_plan,
         )
 
     base_catalog = registry.model_catalog
@@ -240,6 +292,14 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
             )
 
         user_id = str(user.get("user_id") or "")
+        try:
+            user_role, subscription_plan = _user_policy_context(user_id)
+        except HTTPException as exc:
+            return JSONResponse(
+                {"detail": exc.detail},
+                status_code=exc.status_code,
+                headers={"Cache-Control": "private, no-store"},
+            )
         selected_key_id = str(request.query_params.get("key_id") or "").strip()
         if selected_key_id:
             try:
@@ -268,7 +328,10 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
                 decision = (
                     _decision(selected_key_id, model_id)
                     if selected_key_id
-                    else store.evaluate(model_id, key_id=None, user_id=user_id)
+                    else store.evaluate(
+                        model_id, key_id=None, user_id=user_id,
+                        user_role=user_role, subscription_plan=subscription_plan,
+                    )
                 )
                 if decision.get("allowed") is True:
                     filtered.append(row)
@@ -318,6 +381,111 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
             "effect": rule["effect"], "models": rule["models"], "enabled": rule["enabled"],
         })
         return {"rule": rule}
+
+    @app.get("/api/admin/subscription-plans")
+    async def list_subscription_plans(request: Request) -> dict[str, Any]:
+        admin_actor(request)
+        return {"data": subscriptions.list_plans()}
+
+    @app.put("/api/admin/subscription-plans/{plan_id}")
+    async def put_subscription_plan(
+        plan_id: str, body: SubscriptionPlanUpdate, request: Request,
+    ) -> dict[str, Any]:
+        actor = admin_actor(request)
+        audit_event(
+            actor, "subscription.plan_update_requested", "subscription_plan", plan_id,
+            {"name": body.name, "enabled": body.enabled}, target_type="subscription_plan",
+        )
+        try:
+            plan = subscriptions.upsert_plan(plan_id, body.name, enabled=body.enabled)
+        except UserSubscriptionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        audit_event(
+            actor, "subscription.plan_update_completed", "subscription_plan", plan_id,
+            {"name": plan["name"], "enabled": plan["enabled"]},
+            target_type="subscription_plan",
+        )
+        return {"plan": plan}
+
+    @app.put("/api/admin/users/{user_id}/role")
+    async def put_user_system_role(
+        user_id: str, body: UserSystemRoleUpdate, request: Request,
+    ) -> dict[str, Any]:
+        actor = admin_actor(request)
+        if accounts.admin_get(user_id) is None:
+            raise HTTPException(status_code=404, detail="User not found")
+        try:
+            role = accounts.validate_system_role(body.system_role)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        audit_event(
+            actor, "user.system_role_update_requested", "user", user_id,
+            {"system_role": role}, target_type="user",
+        )
+        try:
+            user = accounts.set_system_role(user_id, role)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="User not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        audit_event(
+            actor, "user.system_role_update_completed", "user", user_id,
+            {"system_role": role}, target_type="user",
+        )
+        return {"user": user}
+
+    @app.get("/api/admin/users/{user_id}/subscription")
+    async def get_user_subscription(user_id: str, request: Request) -> dict[str, Any]:
+        admin_actor(request)
+        if accounts.admin_get(user_id) is None:
+            raise HTTPException(status_code=404, detail="User not found")
+        return {
+            "current": subscriptions.current_plan_for_user(user_id),
+            "history": subscriptions.history_for_user(user_id),
+        }
+
+    @app.put("/api/admin/users/{user_id}/subscription")
+    async def put_user_subscription(
+        user_id: str, body: UserSubscriptionAssign, request: Request,
+    ) -> dict[str, Any]:
+        actor = admin_actor(request)
+        if accounts.admin_get(user_id) is None:
+            raise HTTPException(status_code=404, detail="User not found")
+        details = {"plan_id": body.plan_id, "expires_at": body.expires_at}
+        audit_event(
+            actor, "subscription.assignment_requested", "user_subscription", user_id,
+            details, target_type="user_subscription",
+        )
+        try:
+            subscription = subscriptions.assign(
+                user_id, body.plan_id, expires_at=body.expires_at, assigned_by=actor,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except UserSubscriptionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        audit_event(
+            actor, "subscription.assignment_completed", "user_subscription", user_id,
+            {"subscription_id": subscription["subscription_id"], "plan_id": subscription["plan_id"]},
+            target_type="user_subscription",
+        )
+        return {"subscription": subscription}
+
+    @app.delete("/api/admin/users/{user_id}/subscription")
+    async def delete_user_subscription(user_id: str, request: Request) -> dict[str, Any]:
+        actor = admin_actor(request)
+        if accounts.admin_get(user_id) is None:
+            raise HTTPException(status_code=404, detail="User not found")
+        audit_event(
+            actor, "subscription.cancellation_requested", "user_subscription", user_id,
+            {}, target_type="user_subscription",
+        )
+        cancelled = subscriptions.cancel_active(user_id)
+        audit_event(
+            actor, "subscription.cancellation_completed", "user_subscription", user_id,
+            {"cancelled": cancelled}, target_type="user_subscription",
+        )
+        return {"cancelled": bool(cancelled)}
 
     @app.delete("/api/admin/model-entitlements/{subject_type}/{subject_id}")
     async def delete_model_entitlement(subject_type: str, subject_id: str, request: Request) -> dict[str, bool]:
