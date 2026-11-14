@@ -282,3 +282,14 @@ def test_r06_browser_dispatch_stages_are_diagnostic_only_and_precede_response_st
     assert 'type: "chat.started"' in owner
     assert 'type: "chat.completed"' in owner
     assert 'type: "chat.error"' in owner
+
+def test_r06_diagnostic_delivery_cannot_become_a_pre_send_latency_gate():
+    owner = read("chrome_extension/content_request_v6.js")
+    helper = owner[
+        owner.index("function reportDispatchStage(active, elapsed)"):
+        owner.index("function dispatchEnter(element)")
+    ]
+    assert 'void diagnostic(active, "dispatch-stage"' in helper
+    assert 'await diagnostic(active, "dispatch-stage"' not in helper
+    assert 'reportDispatchStage(active, startedElapsed)' in helper
+    assert 'reportDispatchStage(active, dispatchElapsedMs(active, completedAt))' in helper
