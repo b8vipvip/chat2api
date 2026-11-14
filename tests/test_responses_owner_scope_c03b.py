@@ -20,6 +20,11 @@ def test_responses_retrieval_is_scoped_to_owner_and_master_remains_privileged(tm
     with TestClient(app) as client:
         alice_key, alice_token = asyncio.run(app.state.api_keys.create("Alice response key"))
         bob_key, bob_token = asyncio.run(app.state.api_keys.create("Bob response key"))
+        image_key, image_token = asyncio.run(app.state.api_keys.create("Images-only response key"))
+        async def restrict_image_key():
+            app.state.api_keys.keys[image_key["key_id"]].scopes = ["images"]
+            await app.state.api_keys.save()
+        asyncio.run(restrict_image_key())
         response_id = "resp_owner_scope_123456"
         response = {
             "id": response_id,
@@ -53,8 +58,34 @@ def test_responses_retrieval_is_scoped_to_owner_and_master_remains_privileged(tm
         assert master.status_code == 200
         assert master.json()["output_text"] == "Alice private response"
 
+        # Images-only keys may retrieve their own Responses image-generation
+        # artifacts, but the retrieval route must not become a text scope.
+        image_response_id = "resp_image_owner_scope_123456"
+        _store_response(app, image_response_id, {
+            "id": image_response_id,
+            "object": "response",
+            "output": [{"id": "ig_123", "type": "image_generation_call", "status": "completed"}],
+        }, image_key["key_id"])
+        image_result = client.get(
+            f"/v1/responses/{image_response_id}",
+            headers={"Authorization": f"Bearer {image_token}"},
+        )
+        assert image_result.status_code == 200
+        assert image_result.json()["output"][0]["type"] == "image_generation_call"
+
+        text_for_image_key_id = "resp_image_key_text_scope_123456"
+        _store_response(app, text_for_image_key_id, {
+            "id": text_for_image_key_id,
+            "object": "response",
+            "output": [{"id": "msg_123", "type": "message", "status": "completed"}],
+        }, image_key["key_id"])
+        assert client.get(
+            f"/v1/responses/{text_for_image_key_id}",
+            headers={"Authorization": f"Bearer {image_token}"},
+        ).status_code == 404
+
         # Missing ownership metadata must fail closed, not silently become
-        # readable by any authenticated managed key.
+        # readable by any authenticated managed key or master.
         orphan_id = "resp_owner_scope_orphan"
         app.state.responses_v108_store[orphan_id] = {
             "id": orphan_id,
@@ -64,6 +95,10 @@ def test_responses_retrieval_is_scoped_to_owner_and_master_remains_privileged(tm
         assert client.get(
             f"/v1/responses/{orphan_id}",
             headers={"Authorization": f"Bearer {bob_token}"},
+        ).status_code == 404
+        assert client.get(
+            f"/v1/responses/{orphan_id}",
+            headers={"Authorization": "Bearer master-secret"},
         ).status_code == 404
 
 
