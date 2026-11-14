@@ -454,6 +454,13 @@ def test_payment_order_create_checkout_and_settlement_rollback_on_save_failure(
 @pytest.mark.parametrize("invalid_payload", [
     b'{"wallets":',
     b'{"version":1,"wallets":{"usr_existing":"not-integer"},"charges":{}}',
+    b'{"wallets":{"usr_existing":1.5}}',
+    b'{"wallets":{"usr_existing":true}}',
+    b'{"wallets":{"usr_existing":"100"}}',
+    b'{"wallets":[]}',
+    b'{"charges":{"req_existing":[]}}',
+    b'{"reservations":{"req_existing":{"reserved_cny_cents":2.5}}}',
+    b'{"refunds":{"rf_existing":{"amount_cents":-1}}}',
 ])
 def test_wallet_ledger_corruption_fails_closed_without_overwriting_source(
     tmp_path: Path, invalid_payload: bytes,
@@ -466,3 +473,15 @@ def test_wallet_ledger_corruption_fails_closed_without_overwriting_source(
     with pytest.raises(RuntimeError, match="Billing ledger is unreadable"):
         BillingStore(tmp_path)
     assert ledger_path.read_bytes() == invalid_payload
+
+
+def test_wallet_ledger_preserves_valid_negative_integer_debt_balance(tmp_path: Path) -> None:
+    # Negative balances are an explicit post-settlement debt policy; strict
+    # cent validation must not accidentally reject an exact integer debt.
+    ledger_path = tmp_path / "user_billing.json"
+    ledger_path.write_text(
+        '{"wallets":{"usr_debt":-125},"charges":{},"orders":{},'
+        '"reservations":{},"refunds":{}}',
+        encoding="utf-8",
+    )
+    assert BillingStore(tmp_path).balance_cents("usr_debt") == -125
