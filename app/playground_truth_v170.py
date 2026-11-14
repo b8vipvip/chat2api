@@ -70,6 +70,13 @@ async def reconcile_playground_runs(
     else:
         runs = test_runs.recent(limit)
     for run in runs:
+        # A terminal Playground result belongs to its executor and is
+        # immutable. In particular, startup recovery marks interrupted runs
+        # stalled; a later Telemetry read must not upgrade them to passed.
+        if str(run.get("status") or "") in {
+            "passed", "warning", "failed", "skipped", "cancelled", "stalled",
+        }:
+            continue
         if not _is_authoritative_test(run):
             continue
         ids = [str(x) for x in (run.get("request_ids") or []) if x]
