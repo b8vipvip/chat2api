@@ -70,10 +70,16 @@ async def reconcile_playground_runs(
     else:
         runs = test_runs.recent(limit)
     for run in runs:
-        # A terminal Playground result belongs to its executor and is
-        # immutable. In particular, startup recovery marks interrupted runs
-        # stalled; a later Telemetry read must not upgrade them to passed.
-        if str(run.get("status") or "") in {
+        quality_snapshot = run.get("quality")
+        lifecycle_run = (
+            isinstance(quality_snapshot, dict)
+            and quality_snapshot.get("lifecycle") == "playground-lifecycle-v1"
+        )
+        # A terminal lifecycle-managed result belongs to its executor and is
+        # immutable. Manual browser Playground chat runs are different: their
+        # backend request remains the terminal authority and can supersede a
+        # late browser "Failed to fetch" write.
+        if lifecycle_run and str(run.get("status") or "") in {
             "passed", "warning", "failed", "skipped", "cancelled", "stalled",
         }:
             continue
@@ -114,9 +120,9 @@ async def reconcile_playground_runs(
             # model, artifacts, quality). Never upgrade a local failure or
             # cancellation to a backend-only pass.
             local_status = str(entry.get("status") or "")
-            if local_status in {"failed", "cancelled", "stalled"}:
+            if lifecycle_run and local_status in {"failed", "cancelled", "stalled"}:
                 status = local_status
-            elif local_status == "warning" and status == "passed":
+            elif lifecycle_run and local_status == "warning" and status == "passed":
                 status = "warning"
             # A completed Voice call can still have a partial-coverage test
             # warning (e.g. no real PCM microphone input or reverse-proxy
