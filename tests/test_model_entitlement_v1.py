@@ -105,9 +105,9 @@ def build_app(tmp_path: Path):
     @app.get("/api/user/models")
     async def user_models():
         return {"data": [
-            {"id": "gpt-5.5", "enabled": True},
-            {"id": "gpt-5.6-sol", "enabled": True},
-            {"id": "default", "enabled": True},
+            {"model_id": "gpt-5.5", "enabled": True},
+            {"model_id": "gpt-5.6-sol", "enabled": True},
+            {"model_id": "default", "enabled": True},
         ]}
 
     install_model_entitlements(app)
