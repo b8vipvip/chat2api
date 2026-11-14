@@ -17,8 +17,10 @@ def test_dispatch_stage_timing_separates_the_160s_browser_gap() -> None:
     state = RequestState(
         request_id="req_r06_slow_start", client_id="ext_r06",
         created_mono=100.0,
-        dispatch_send_started_mono=101.25,
-        dispatch_send_completed_mono=101.30,
+        dispatch_socket_lock_wait_started_mono=101.0,
+        dispatch_socket_lock_acquired_mono=101.25,
+        dispatch_send_started_mono=101.30,
+        dispatch_send_completed_mono=101.35,
         worker_content_ack_mono=105.0,
         browser_started_mono=264.30,
         completed_mono=268.30,
@@ -26,10 +28,11 @@ def test_dispatch_stage_timing_separates_the_160s_browser_gap() -> None:
     )
     durations = state.timings()
     assert durations["request_admission_wait_ms"] == 1300.0
-    assert durations["server_send_start_after_broker_ms"] == 1250.0
+    assert durations["server_dispatch_socket_lock_wait_ms"] == 250.0
+    assert durations["server_send_start_after_broker_ms"] == 1300.0
     assert durations["server_dispatch_send_ms"] == 50.0
-    assert durations["server_send_start_to_worker_content_ack_ms"] == 3750.0
-    assert durations["server_send_to_worker_content_ack_ms"] == 3700.0
+    assert durations["server_send_start_to_worker_content_ack_ms"] == 3700.0
+    assert durations["server_send_to_worker_content_ack_ms"] == 3650.0
     assert durations["worker_content_ack_to_browser_started_ms"] == 159300.0
     assert durations["server_send_to_browser_started_ms"] == 163000.0
     assert durations["browser_started_ms"] == 164300.0
@@ -45,6 +48,7 @@ def test_dispatch_timing_missing_or_overlapping_events_are_unknown() -> None:
     )
     durations = pending.timings()
     assert durations["request_admission_wait_ms"] is None
+    assert durations["server_dispatch_socket_lock_wait_ms"] is None
     assert durations["server_dispatch_send_ms"] is None
     assert durations["server_send_to_browser_started_ms"] is None
     assert durations["server_send_start_after_broker_ms"] is None
@@ -98,13 +102,14 @@ def test_production_chat_ingress_only_marks_socket_send_not_worker_ack() -> None
         source.index('    @app.post("/v1/chat/completions")'):
         source.index('    @app.post("/v1/images/generations")')
     ]
-    assert "state.dispatch_send_started_mono = time.perf_counter()" in chat
-    assert "state.dispatch_send_completed_mono = time.perf_counter()" in chat
-    before_dispatch = chat.index("state.dispatch_send_started_mono = time.perf_counter()")
-    actual_send = chat.index("await registry.send(", before_dispatch)
-    after_dispatch = chat.index("state.dispatch_send_completed_mono = time.perf_counter()")
-    assert before_dispatch < actual_send < after_dispatch
-    assert "This is not a Worker dispatch ACK." in chat
+    assert "await registry.send(" in chat
+    assert "dispatch_send_started_mono = time.perf_counter()" not in chat
+    registry = (ROOT / "app/registry.py").read_text(encoding="utf-8")
+    assert "dispatch_socket_lock_wait_started_mono = time.perf_counter()" in registry
+    assert "dispatch_socket_lock_acquired_mono = time.perf_counter()" in registry
+    assert "dispatch_send_started_mono = time.perf_counter()" in registry
+    assert "dispatch_send_completed_mono = time.perf_counter()" in registry
+    assert "server_dispatch_socket_lock_wait_ms" in (ROOT / "app/broker.py").read_text(encoding="utf-8")
     # Browser-start truth still comes only from authenticated Worker via Broker,
     # not from a successful socket write or an invented acknowledgement.
     background = (ROOT / "chrome_extension/background.js").read_text(encoding="utf-8")
@@ -220,6 +225,8 @@ def test_registry_send_binds_the_exact_socket_for_every_broker_request_family(tm
         states = {
             f"req_r06_{index}": SimpleNamespace(
                 dispatch_socket=None,
+                dispatch_socket_lock_wait_started_mono=None,
+                dispatch_socket_lock_acquired_mono=None,
                 dispatch_send_started_mono=None,
                 dispatch_send_completed_mono=None,
             )
@@ -233,6 +240,12 @@ def test_registry_send_binds_the_exact_socket_for_every_broker_request_family(tm
             })
 
         assert all(state.dispatch_socket is socket for state in states.values())
+        assert all(state.dispatch_socket_lock_wait_started_mono is not None for state in states.values())
+        assert all(state.dispatch_socket_lock_acquired_mono is not None for state in states.values())
+        assert all(
+            state.dispatch_socket_lock_acquired_mono >= state.dispatch_socket_lock_wait_started_mono
+            for state in states.values()
+        )
         assert all(state.dispatch_send_started_mono is not None for state in states.values())
         assert all(
             state.dispatch_send_completed_mono is not None
@@ -317,5 +330,43 @@ def test_registry_dispatch_timing_is_not_reset_by_followup_control_messages(tmp_
         await registry.send("ext_r06", {"type": "chat.cancel", "request_id": "req_r06_once"})
         assert state.dispatch_send_started_mono == original_started
         assert state.dispatch_send_completed_mono == original_completed
+
+    asyncio.run(exercise())
+
+
+
+def test_registry_measures_socket_lock_wait_separately_from_send(tmp_path) -> None:
+    class FakeSocket:
+        async def send_json(self, _payload) -> None:
+            return None
+
+    async def exercise() -> None:
+        registry = ClientRegistry(tmp_path)
+        socket = FakeSocket()
+        registry.clients["ext_r06"] = SimpleNamespace(connection_enabled=True)
+        registry.sockets["ext_r06"] = socket
+        registry.chatgpt_routing_ready = lambda _client_id: True
+        lock = asyncio.Lock()
+        await lock.acquire()
+        registry.socket_locks["ext_r06"] = lock
+        state = SimpleNamespace(
+            dispatch_socket=None,
+            dispatch_socket_lock_wait_started_mono=None,
+            dispatch_socket_lock_acquired_mono=None,
+            dispatch_send_started_mono=None,
+            dispatch_send_completed_mono=None,
+        )
+        registry.request_broker = SimpleNamespace(requests={"req_r06_lock_wait": state})
+        task = asyncio.create_task(registry.send(
+            "ext_r06", {"type": "chat.request", "request_id": "req_r06_lock_wait"},
+        ))
+        await asyncio.sleep(0)
+        assert state.dispatch_socket_lock_wait_started_mono is not None
+        assert state.dispatch_socket_lock_acquired_mono is None
+        lock.release()
+        await task
+        assert state.dispatch_socket_lock_acquired_mono >= state.dispatch_socket_lock_wait_started_mono
+        assert state.dispatch_send_started_mono >= state.dispatch_socket_lock_acquired_mono
+        assert state.dispatch_send_completed_mono >= state.dispatch_send_started_mono
 
     asyncio.run(exercise())
