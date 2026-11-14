@@ -731,6 +731,7 @@ def test_user_role_and_subscription_plan_are_authoritative_entitlement_dimension
     )
     store.upsert("global", "default", "allow", ["gpt-5.5", "gpt-5.6-sol"])
     store.upsert("user_role", "user", "allow", ["gpt-5.5"])
+    store.upsert("user_role", "trusted", "allow", ["gpt-5.6-sol"])
     store.upsert("subscription_plan", "pro", "allow", ["gpt-5.5"])
 
     app.state.registry.routing_key_context.set("key_1")
@@ -808,9 +809,18 @@ def test_subscription_expiry_falls_back_to_free_and_is_persistent(tmp_path: Path
     app, _ = build_app(tmp_path)
     subscriptions = app.state.user_subscriptions
     subscriptions.upsert_plan("pro", "Pro")
-    subscriptions.assign(
+    assigned = subscriptions.assign(
         "usr_abcdef123", "pro",
-        expires_at="2020-01-01T00:00:00Z",
+        expires_at=None,
         assigned_by="root-admin",
     )
+    # Simulate the clock passing without introducing a sleep-based test.
+    subscriptions.db.execute(
+        "UPDATE user_subscriptions SET expires_at=? WHERE subscription_id=?",
+        ("2020-01-01T00:00:00+00:00", assigned["subscription_id"]),
+    )
+    from app.user_subscriptions import UserSubscriptionStore
+    reopened = UserSubscriptionStore(tmp_path)
+    assert reopened.current_plan_for_user("usr_abcdef123")["plan_id"] == "free"
+    assert reopened.history_for_user("usr_abcdef123")[0]["status"] == "active"
 
