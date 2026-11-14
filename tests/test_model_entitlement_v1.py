@@ -21,6 +21,7 @@ from app.model_capability_routing_patch import install_model_capability_routing_
 from app.model_entitlements import ModelEntitlementError, ModelEntitlementStore
 from app import model_capability_routing_patch as model_routing
 from app import v13_patch
+from app.responses_image_tool_v182 import handle_image_tool
 
 
 class FakeRegistry:
@@ -636,3 +637,58 @@ def test_legacy_v13_catalog_and_completions_bind_authenticated_api_key_context(t
 
     # Manual legacy auth must not leave a key bound to the next request/task.
     assert registry.routing_key_context.get() is None
+
+
+def test_responses_hosted_image_tool_enforces_key_and_server_owned_image_model(tmp_path: Path):
+    app, _ = build_app(tmp_path)
+    app.state.responses_v108_store = {}
+    principal = ApiPrincipal(
+        key_id="key_1",
+        name="image-key",
+        kind="managed",
+        scopes=("chat", "images"),
+    )
+    observed = []
+
+    async def image_executor(**kwargs):
+        observed.append((
+            app.state.registry.routing_key_context.get(),
+            model_routing._MODEL_CONTEXT.get(),
+        ))
+        # This is the same resolver reached by the production Images executor.
+        app.state.registry.resolve_client(None)
+        return {"data": [{"b64_json": "aW1hZ2U="}], "chat2api": {}}
+
+    app.state.image_generation_executor = image_executor
+    request = Request({
+        "type": "http",
+        "method": "POST",
+        "scheme": "https",
+        "path": "/v1/responses",
+        "server": ("chat2api.example", 443),
+        "query_string": b"",
+        "headers": [],
+        "chat2api.responses_trace": {"worker_attempt_ids": []},
+    })
+    body = {
+        "model": "gpt-5.5",
+        "input": "Generate a simple icon",
+        "tools": [{"type": "image_generation"}],
+    }
+
+    app.state.model_entitlements.upsert("key", "key_1", "deny", ["gpt-image"])
+    with pytest.raises(HTTPException) as denied:
+        asyncio.run(handle_image_tool(app, request, body, principal, "Generate a simple icon"))
+    assert denied.value.status_code == 403
+    assert denied.value.detail["code"] == "model_not_entitled"
+    assert observed[0][0] == "key_1"
+    assert observed[0][1]["model"] == "gpt-image"
+    assert app.state.registry.resolve_calls == []
+
+    # Removing the deny makes the same authenticated image tool dispatchable.
+    app.state.model_entitlements.delete("key", "key_1")
+    response = asyncio.run(handle_image_tool(app, request, body, principal, "Generate a simple icon"))
+    assert response.status_code == 200
+    assert app.state.registry.resolve_calls == ["worker_1"]
+    assert observed[1][0] == "key_1"
+    assert observed[1][1]["model"] == "gpt-image"
