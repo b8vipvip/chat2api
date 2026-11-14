@@ -166,3 +166,15 @@ The following remain outside this slice: explicit resource sharing ACLs, token-U
 ### Release compatibility gate
 
 This branch changes the Worker attachment-fetch protocol by requiring `request_id`. The current production release remains `0.22.291`; do not deploy this route change against an older installed Worker bundle. When this stack is approved for release, bump the unified Server/Worker/Bridge release version (next candidate: `0.22.292`), update the manifest and runtime version contract together, and verify that the new Worker bundle is served before enabling the required request-scoped download parameter. This release/version migration is intentionally deferred from the feature branch.
+
+### C-03B request-scoped Worker attachment reads
+
+- A Worker file-read grant is bound to the exact request, assigned client ID,
+  API-key owner, attached file ID, and original dispatch WebSocket. A newly
+  connected socket reusing the same paired client ID cannot inherit a still
+  running request's attachment grant. The Broker lease and current registry
+  socket must still reference the exact socket that received the dispatch.
+- Telemetry marked `running` is not sufficient by itself: a missing Broker
+  lease, terminal Broker state, failed dispatch, detached socket, replacement
+  socket, mismatched owner, or file absent from the request attachment list
+  all fail closed.

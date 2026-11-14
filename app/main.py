@@ -1053,9 +1053,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         item = file_store.get(file_id)
         active = getattr(broker, "requests", {}).get(request_id)
         allowed_ids = row.get("input_file_ids") if isinstance(row, dict) else None
+        dispatch_socket = getattr(active, "dispatch_socket", None)
+        sockets = getattr(registry, "sockets", None)
+        current_socket = sockets.get(client_id) if isinstance(sockets, dict) else None
         if (
             not isinstance(row, dict)
             or active is None
+            or dispatch_socket is None
+            or current_socket is not dispatch_socket
             or str(getattr(active, "client_id", "") or "") != client_id
             or getattr(active, "terminal_event_type", None) is not None
             or getattr(active, "completed_mono", None) is not None

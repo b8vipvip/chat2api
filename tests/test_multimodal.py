@@ -125,6 +125,20 @@ def test_file_upload_is_forwarded_to_chat_and_downloadable_by_extension(tmp_path
                 assert extension_download.content == b"fake-png-payload"
                 assert extension_download.headers["content-type"].startswith("image/png")
                 assert extension_download.headers["x-chat2api-attachment-revision"] == "83"
+
+                # A replacement socket with the same paired client_id must not
+                # inherit the original dispatch's still-running attachment grant.
+                active_state = app.state.broker.requests[message["request_id"]]
+                original_socket = app.state.registry.sockets[client_id]
+                assert active_state.dispatch_socket is original_socket
+                app.state.registry.sockets[client_id] = object()
+                replaced_socket = client.get(
+                    f"/api/extensions/files/{image['id']}?request_id={message['request_id']}"
+                    f"&client_id={client_id}&token={token}"
+                )
+                assert replaced_socket.status_code == 404
+                app.state.registry.sockets[client_id] = original_socket
+
                 websocket.send_json(
                     {
                         "type": "chat.diagnostics",
