@@ -360,7 +360,7 @@ def test_master_api_can_attach_another_key_owned_file_with_request_scoped_worker
     install_attachment_download_v82_patch(app)
 
     async def seed_managed_file():
-        managed_key, managed_token = await app.state.api_keys.create("managed attachment owner")
+        managed_key, _managed_token = await app.state.api_keys.create("managed attachment owner")
         item = await app.state.file_store.create(
             filename="managed-owned.png",
             data_base64=base64.b64encode(b"managed-private-payload").decode("ascii"),
@@ -368,10 +368,9 @@ def test_master_api_can_attach_another_key_owned_file_with_request_scoped_worker
             owner_key_id=managed_key["key_id"],
             purpose="vision",
         )
-        return managed_token, item
+        return item
 
-    managed_token, item = asyncio.run(seed_managed_file())
-    client_id = token = None
+    item = asyncio.run(seed_managed_file())
 
     with TestClient(app) as client:
         client_id, token = pair(client)
