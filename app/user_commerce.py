@@ -400,6 +400,7 @@ class BillingStore:
         self.charges: dict[str, dict[str, Any]] = {}
         self.orders: dict[str, dict[str, Any]] = {}
         self.reservations: dict[str, dict[str, Any]] = {}
+        self.refunds: dict[str, dict[str, Any]] = {}
         self._load()
 
     def _load(self) -> None:
@@ -411,8 +412,9 @@ class BillingStore:
             self.charges = {str(k): dict(v) for k, v in (payload.get("charges") or {}).items() if isinstance(v, dict)}
             self.orders = {str(k): dict(v) for k, v in (payload.get("orders") or {}).items() if isinstance(v, dict)}
             self.reservations = {str(k): dict(v) for k, v in (payload.get("reservations") or {}).items() if isinstance(v, dict)}
+            self.refunds = {str(k): dict(v) for k, v in (payload.get("refunds") or {}).items() if isinstance(v, dict)}
         except (OSError, ValueError, TypeError):
-            self.wallets, self.charges, self.orders, self.reservations = {}, {}, {}, {}
+            self.wallets, self.charges, self.orders, self.reservations, self.refunds = {}, {}, {}, {}, {}
 
     def _save(self) -> None:
         _atomic_json(self.path, {
@@ -421,6 +423,7 @@ class BillingStore:
             "charges": self.charges,
             "orders": self.orders,
             "reservations": self.reservations,
+            "refunds": self.refunds,
         })
 
     def balance_cents(self, user_id: str) -> int:
@@ -508,7 +511,7 @@ class BillingStore:
             self.reservations[request_id] = row
             try:
                 self._save()
-            except OSError:
+            except Exception:
                 # Admission must not expose a non-durable hold as successful
                 # and must not strand the in-memory available balance.
                 self.reservations.pop(request_id, None)
@@ -532,18 +535,32 @@ class BillingStore:
             })
             try:
                 self._save()
-            except OSError:
+            except Exception:
                 self.reservations[str(request_id)] = previous
                 raise
             return True
 
     def credit(self, user_id: str, amount_cents: int) -> int:
-        amount = int(amount_cents)
-        if amount <= 0:
-            raise ValueError("充值金额必须大于 0")
+        # Wallet balances are denominated in integer cents. Do not silently
+        # truncate floats or accept bool (an int subclass) at this accounting
+        # boundary: callers must pass the exact amount already validated by
+        # their payment/order contract.
+        if type(amount_cents) is not int or amount_cents <= 0:
+            raise ValueError("充值金额必须为正整数分")
+        amount = amount_cents
         with self.lock:
-            self.wallets[user_id] = int(self.wallets.get(user_id, 0)) + amount
-            self._save()
+            # A failed durable write must not leave a phantom credit available
+            # to another request in the current process.
+            previous = self.wallets.get(user_id)
+            self.wallets[user_id] = int(previous or 0) + amount
+            try:
+                self._save()
+            except Exception:
+                if previous is None:
+                    self.wallets.pop(user_id, None)
+                else:
+                    self.wallets[user_id] = previous
+                raise
             return self.wallets[user_id]
 
     def record_charge(self, user_id: str, request_row: dict[str, Any], pricing: PricingStore) -> dict[str, Any] | None:
@@ -565,7 +582,7 @@ class BillingStore:
                     })
                     try:
                         self._save()
-                    except OSError:
+                    except Exception:
                         self.reservations[request_id] = previous
                         raise
                 return dict(existing)
@@ -595,15 +612,18 @@ class BillingStore:
                     reservation.update({"state": "released", "release_reason": "pricing_unavailable", "updated_at": _now()})
                     try:
                         self._save()
-                    except OSError:
+                    except Exception:
                         self.reservations[request_id] = previous
                         raise
                 return None
             usage = request_row.get("usage") if isinstance(request_row.get("usage"), dict) else {}
             input_tokens = max(0, int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0))
-            cached_tokens = max(0, int(usage.get("cached_input_tokens") or 0))
+            # Cached tokens are a subset of input tokens. A malformed or
+            # inconsistent upstream usage payload must not charge more cached
+            # input than the entire request contained.
+            cached_tokens = min(input_tokens, max(0, int(usage.get("cached_input_tokens") or 0)))
             output_tokens = max(0, int(usage.get("completion_tokens") or usage.get("output_tokens") or 0))
-            uncached_tokens = max(0, input_tokens - cached_tokens)
+            uncached_tokens = input_tokens - cached_tokens
             usd = (
                 uncached_tokens * float(price.get("input_usd_per_million") or 0)
                 + cached_tokens * float(price.get("cached_input_usd_per_million") or 0)
@@ -641,7 +661,7 @@ class BillingStore:
                 })
             try:
                 self._save()
-            except OSError:
+            except Exception:
                 # The charge and debit are one atomic JSON write. Restore the
                 # in-memory ledger if that write failed, otherwise a later
                 # retry would falsely see a charge that was never durable.
@@ -666,8 +686,80 @@ class BillingStore:
             row = self.charges.get(str(request_id or ""))
             return dict(row) if row else None
 
+    def refunds_for_user(self, user_id: str) -> list[dict[str, Any]]:
+        with self.lock:
+            rows = [dict(row) for row in self.refunds.values() if row.get("user_id") == user_id]
+        return sorted(rows, key=lambda row: str(row.get("created_at") or ""), reverse=True)
+
+    def refund_charge(
+        self, request_id: str, refund_id: str, amount_cents: int, reason: str,
+    ) -> dict[str, Any]:
+        """Credit back an already debited internal wallet charge, exactly once.
+
+        Not a payment-provider refund. The original request charge stays
+        immutable; refund_id is a durable idempotency key in the same JSON
+        transaction as the wallet credit.
+        """
+        request_id = str(request_id or "").strip()
+        refund_id = str(refund_id or "").strip()
+        reason = str(reason or "").strip()
+        if not request_id or not re.fullmatch(r"rf_[A-Za-z0-9_-]{8,100}", refund_id):
+            raise WalletReservationError("A valid request_id and refund_id are required")
+        if type(amount_cents) is not int or amount_cents <= 0:
+            raise WalletReservationError("Refund amount must be positive integer cents")
+        if not 5 <= len(reason) <= 500:
+            raise WalletReservationError("A refund reason of 5-500 characters is required")
+        with self.lock:
+            existing = self.refunds.get(refund_id)
+            if existing is not None:
+                if (
+                    str(existing.get("request_id") or "") != request_id
+                    or int(existing.get("amount_cents") or 0) != amount_cents
+                    or str(existing.get("reason") or "") != reason
+                ):
+                    raise WalletReservationError("refund_id is already used for another refund payload")
+                return dict(existing)
+            charge = self.charges.get(request_id)
+            if not charge or not bool(charge.get("debited")):
+                raise WalletReservationError("Request has no completed debited wallet charge")
+            charged = int(charge.get("cost_cny_cents") or 0)
+            refunded = sum(
+                int(row.get("amount_cents") or 0)
+                for row in self.refunds.values()
+                if str(row.get("request_id") or "") == request_id
+            )
+            if charged <= 0 or amount_cents > charged - refunded:
+                raise WalletReservationError("Refund exceeds the remaining debited charge")
+            user_id = str(charge.get("user_id") or "")
+            if not user_id:
+                raise WalletReservationError("Charge has no owner")
+            old_balance = self.wallets.get(user_id)
+            row = {
+                "refund_id": refund_id,
+                "request_id": request_id,
+                "user_id": user_id,
+                "amount_cents": amount_cents,
+                "reason": reason,
+                "charge_cny_cents": charged,
+                "created_at": _now(),
+            }
+            self.wallets[user_id] = int(old_balance or 0) + amount_cents
+            self.refunds[refund_id] = row
+            try:
+                self._save()
+            except Exception:
+                self.refunds.pop(refund_id, None)
+                if old_balance is None:
+                    self.wallets.pop(user_id, None)
+                else:
+                    self.wallets[user_id] = old_balance
+                raise
+            return dict(row)
+
     def create_order(self, user_id: str, amount_cents: int, channel: str) -> dict[str, Any]:
-        amount = int(amount_cents)
+        if type(amount_cents) is not int:
+            raise ValueError("充值金额必须为整数分")
+        amount = amount_cents
         if amount < 1 or amount > 10_000_000:
             raise ValueError("充值金额需要在 0.01 至 100000.00 元之间")
         if channel not in {"alipay", "wechat"}:
@@ -691,7 +783,11 @@ class BillingStore:
         }
         with self.lock:
             self.orders[order_id] = row
-            self._save()
+            try:
+                self._save()
+            except Exception:
+                self.orders.pop(order_id, None)
+                raise
             return dict(row)
 
     def update_order_checkout(self, order_id: str, *, pay_url: str = "", qr_image_url: str = "", qr_payload: str = "") -> dict[str, Any]:
@@ -699,8 +795,13 @@ class BillingStore:
             row = self.orders.get(order_id)
             if not row:
                 raise KeyError("充值订单不存在")
+            previous = dict(row)
             row.update({"pay_url": pay_url, "qr_image_url": qr_image_url, "qr_payload": qr_payload, "updated_at": _now()})
-            self._save()
+            try:
+                self._save()
+            except Exception:
+                self.orders[order_id] = previous
+                raise
             return dict(row)
 
     def order_by_trade_no(self, trade_no: str) -> dict[str, Any] | None:
@@ -715,13 +816,24 @@ class BillingStore:
                 raise KeyError("充值订单不存在")
             if row.get("status") == "paid":
                 return dict(row)
+            previous_order = dict(row)
             row["status"] = "paid"
             row["provider_trade_no"] = str(provider_trade_no or "")[:160]
             row["paid_at"] = _now()
             row["updated_at"] = _now()
             user_id = str(row.get("user_id") or "")
-            self.wallets[user_id] = int(self.wallets.get(user_id, 0)) + int(row.get("amount_cents") or 0)
-            self._save()
+            previous_balance = self.wallets.get(user_id)
+            had_balance = user_id in self.wallets
+            self.wallets[user_id] = int(previous_balance or 0) + int(row.get("amount_cents") or 0)
+            try:
+                self._save()
+            except Exception:
+                self.orders[order_id] = previous_order
+                if had_balance:
+                    self.wallets[user_id] = int(previous_balance or 0)
+                else:
+                    self.wallets.pop(user_id, None)
+                raise
             return dict(row)
 
     def orders_for_user(self, user_id: str) -> list[dict[str, Any]]:

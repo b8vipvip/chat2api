@@ -1041,14 +1041,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             current["response_generated_files_live_checked"] = True
         return current
 
+    def active_playground_run_ids() -> set[str]:
+        manager = getattr(app.state, "playground_run_manager", None)
+        tasks = getattr(manager, "tasks", None)
+        return set(tasks) if isinstance(tasks, dict) else set()
+
     @app.get("/api/admin/tests", dependencies=[Depends(require_admin_key)])
     async def admin_tests(limit: int = Query(default=50, ge=1, le=200)) -> dict[str, object]:
-        await reconcile_playground_runs(test_runs, telemetry, limit=min(200, limit))
+        await reconcile_playground_runs(
+            test_runs, telemetry, limit=min(200, limit),
+            active_run_ids=active_playground_run_ids(),
+        )
         return {"data": [present_playground_run(row) for row in test_runs.recent(limit)]}
 
     @app.get("/api/admin/tests/{run_id}", dependencies=[Depends(require_admin_key)])
     async def admin_test_detail(run_id: str) -> dict[str, object]:
-        await reconcile_playground_runs(test_runs, telemetry, limit=200)
+        await reconcile_playground_runs(
+            test_runs, telemetry, limit=200,
+            active_run_ids=active_playground_run_ids(),
+        )
         row = test_runs.get(run_id)
         if not row:
             raise HTTPException(status_code=404, detail="Test report not found")
@@ -1576,6 +1587,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             await reconcile_playground_request_terminal(
                 test_runs, telemetry, state.request_id,
+                active_run_ids=active_playground_run_ids(),
             )
         except Exception:
             logger.exception(
@@ -1727,6 +1739,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             await reconcile_playground_request_terminal(
                 test_runs, telemetry, request_id,
+                active_run_ids=active_playground_run_ids(),
             )
         except Exception:
             logger.exception(

@@ -52,6 +52,7 @@ def _is_authoritative_test(run: dict[str, Any]) -> bool:
 async def reconcile_playground_runs(
     test_runs: Any, telemetry: Any, limit: int = 100,
     *, only_run_id: str | None = None,
+    active_run_ids: set[str] | None = None,
 ) -> int:
     """Make test-history statuses reflect backend truth, including browser fetch failures.
 
@@ -59,6 +60,7 @@ async def reconcile_playground_runs(
     media candidate, probe status, HTTP connection lifetime, or client report.
     """
     count = 0
+    active = {str(value) for value in (active_run_ids or set())}
     # On a Broker terminal, update only the one previously-registered
     # chat run instead of waiting for an operator to open the Tests page.
     # Full list reconciliation remains available for old/recovered runs.
@@ -68,12 +70,26 @@ async def reconcile_playground_runs(
     else:
         runs = test_runs.recent(limit)
     for run in runs:
+        quality_snapshot = run.get("quality")
+        lifecycle_run = (
+            isinstance(quality_snapshot, dict)
+            and quality_snapshot.get("lifecycle") == "playground-lifecycle-v1"
+        )
+        # A terminal lifecycle-managed result belongs to its executor and is
+        # immutable. Manual browser Playground chat runs are different: their
+        # backend request remains the terminal authority and can supersede a
+        # late browser "Failed to fetch" write.
+        if lifecycle_run and str(run.get("status") or "") in {
+            "passed", "warning", "failed", "skipped", "cancelled", "stalled",
+        }:
+            continue
         if not _is_authoritative_test(run):
             continue
         ids = [str(x) for x in (run.get("request_ids") or []) if x]
         if not ids:
             continue
         result_rows = [dict(x) for x in (run.get("results") or [])]
+        execution_active = str(run.get("run_id") or "") in active
         # ABCD artifact/quality checks are a separate observer. The production
         # broker remains the only owner of completed/error, while test history
         # must not turn a failed four-file acceptance into "passed" merely
@@ -98,6 +114,16 @@ async def reconcile_playground_runs(
                 statuses.append(str(entry.get("status") or "running"))
                 continue
             status = _test_status(row)
+            # Backend completion is not the same as completion of the
+            # Playground executor. It still has to consume/validate the HTTP
+            # response and persist rich result fields (audio bytes, effective
+            # model, artifacts, quality). Never upgrade a local failure or
+            # cancellation to a backend-only pass.
+            local_status = str(entry.get("status") or "")
+            if lifecycle_run and local_status in {"failed", "cancelled", "stalled"}:
+                status = local_status
+            elif lifecycle_run and local_status == "warning" and status == "passed":
+                status = "warning"
             # A completed Voice call can still have a partial-coverage test
             # warning (e.g. no real PCM microphone input or reverse-proxy
             # Upgrade check). Backend success must not silently turn it
@@ -115,20 +141,33 @@ async def reconcile_playground_runs(
             elif status == "passed" and abcd_warning:
                 status = "warning"
             statuses.append(status)
-            if entry.get("status") != status or entry.get("authoritative_request_status") != row["status"]:
+            # While the executor is live, keep its visible case pending/running
+            # even though the authoritative request has reached terminal. The
+            # executor owns final response parsing and rich result persistence.
+            visible_status = (
+                local_status
+                if execution_active and local_status in {"pending", "running"}
+                else status
+            )
+            if entry.get("status") != visible_status or entry.get("authoritative_request_status") != row["status"]:
+                if execution_active and local_status in {"pending", "running"}:
+                    message = "Worker 已完成；正在等待 Playground 执行器完成响应和媒体验证"
+                elif abcd_failed and row["status"] == "completed":
+                    message = "ABCD 文件/内容验收失败；API 请求本身已完成"
+                elif status == "passed":
+                    message = "已按服务端请求记录同步完成"
+                elif (
+                    status == "warning"
+                    and isinstance(row.get("diagnostics"), dict)
+                    and row["diagnostics"].get("api_stream_closed_before_delivery") is True
+                ):
+                    message = "Worker 已完成但 HTTP 流提前断开；调用方没有完整收到最终回复"
+                else:
+                    message = str(row.get("error") or status)[:300]
                 entry.update({
-                    "status": status,
+                    "status": visible_status,
                     "authoritative_request_status": row["status"],
-                    "message": (
-                        "ABCD 文件/内容验收失败；API 请求本身已完成"
-                        if abcd_failed and row["status"] == "completed"
-                        else "已按服务端请求记录同步完成" if status == "passed"
-                        else "Worker 已完成但 HTTP 流提前断开；调用方没有完整收到最终回复"
-                            if status == "warning"
-                            and isinstance(row.get("diagnostics"), dict)
-                            and row["diagnostics"].get("api_stream_closed_before_delivery") is True
-                        else str(row.get("error") or status)[:300]
-                    ),
+                    "message": message,
                     "request_id": rid,
                     "response_chars": int(row.get("completion_chars") or 0),
                     "image_count": int(row.get("response_media_count") or 0),
@@ -141,6 +180,16 @@ async def reconcile_playground_runs(
             for rid in ids
         )
         if not completed:
+            if changed:
+                await test_runs.update(run["run_id"], {"results": result_rows})
+                count += 1
+            continue
+        # A live Playground task owns the aggregate result. It may still be
+        # parsing an HTTP body or validating media after the Worker/Broker has
+        # reached terminal. Persist backend evidence, but leave the run active
+        # until that executor finalizes its complete result object. After a
+        # process restart there are no active tasks, so reconciliation resumes.
+        if str(run.get("run_id") or "") in active:
             if changed:
                 await test_runs.update(run["run_id"], {"results": result_rows})
                 count += 1
@@ -171,6 +220,7 @@ async def reconcile_playground_runs(
 
 async def reconcile_playground_request_terminal(
     test_runs: Any, telemetry: Any, request_id: str,
+    *, active_run_ids: set[str] | None = None,
 ) -> int:
     """Refresh a known manual Playground run from the persisted Broker terminal.
 
@@ -190,6 +240,7 @@ async def reconcile_playground_request_terminal(
         return 0
     return await reconcile_playground_runs(
         test_runs, telemetry, only_run_id=run_id,
+        active_run_ids=active_run_ids,
     )
 
 
