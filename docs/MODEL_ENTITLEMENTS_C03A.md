@@ -173,7 +173,9 @@ This branch changes the Worker attachment-fetch protocol by requiring `request_i
   API-key owner, attached file ID, and original dispatch WebSocket. A newly
   connected socket reusing the same paired client ID cannot inherit a still
   running request's attachment grant. The Broker lease and current registry
-  socket must still reference the exact socket that received the dispatch.
+  socket must still reference the exact socket that received the dispatch;
+  possession of the paired extension token alone does not preserve a stale
+  dispatch grant after reconnect.
 - Telemetry marked `running` is not sufficient by itself: a missing Broker
   lease, terminal Broker state, failed dispatch, detached socket, replacement
   socket, mismatched owner, or file absent from the request attachment list
