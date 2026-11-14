@@ -413,8 +413,14 @@ class BillingStore:
             self.orders = {str(k): dict(v) for k, v in (payload.get("orders") or {}).items() if isinstance(v, dict)}
             self.reservations = {str(k): dict(v) for k, v in (payload.get("reservations") or {}).items() if isinstance(v, dict)}
             self.refunds = {str(k): dict(v) for k, v in (payload.get("refunds") or {}).items() if isinstance(v, dict)}
-        except (OSError, ValueError, TypeError):
-            self.wallets, self.charges, self.orders, self.reservations, self.refunds = {}, {}, {}, {}, {}
+        except (OSError, ValueError, TypeError) as error:
+            # This is a money ledger, not a disposable cache. Silently treating
+            # unreadable or corrupt persisted balances as an empty store would
+            # let a later credit/charge overwrite the only on-disk record.
+            # Fail closed and preserve the original bytes for offline recovery.
+            raise RuntimeError(
+                "Billing ledger is unreadable; refusing to replace it with empty wallet state"
+            ) from error
 
     def _save(self) -> None:
         _atomic_json(self.path, {

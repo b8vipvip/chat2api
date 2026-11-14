@@ -448,3 +448,21 @@ def test_payment_order_create_checkout_and_settlement_rollback_on_save_failure(
     durable = BillingStore(tmp_path)
     assert durable.balance_cents("usr_order_rollback") == 125
     assert durable.order_by_trade_no(order["merchant_trade_no"])["status"] == "paid"
+
+
+
+@pytest.mark.parametrize("invalid_payload", [
+    b'{"wallets":',
+    b'{"version":1,"wallets":{"usr_existing":"not-integer"},"charges":{}}',
+])
+def test_wallet_ledger_corruption_fails_closed_without_overwriting_source(
+    tmp_path: Path, invalid_payload: bytes,
+) -> None:
+    # Billing JSON is authoritative user money, not a recoverable cache.
+    # A startup parser failure must never silently reset balances and allow
+    # a subsequent recharge to erase an unreadable production ledger.
+    ledger_path = tmp_path / "user_billing.json"
+    ledger_path.write_bytes(invalid_payload)
+    with pytest.raises(RuntimeError, match="Billing ledger is unreadable"):
+        BillingStore(tmp_path)
+    assert ledger_path.read_bytes() == invalid_payload
