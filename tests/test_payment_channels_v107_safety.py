@@ -108,9 +108,19 @@ def test_usdt_duplicate_txid_confirmation_is_atomic_under_concurrency(tmp_path: 
 def test_generic_provider_trade_number_is_unique_and_same_order_retry_is_idempotent(tmp_path: Path) -> None:
     import pytest
 
-    from app.user_commerce import BillingStore, WalletReservationError
+    from app.config import Settings
+    from app.main import create_app
+    from app.user_console_v104_patch import install_user_console_v104_patch
+    from app.payment_channels_v106_patch import install_payment_channels_v106_patch
+    from app.user_commerce import WalletReservationError
 
-    billing = BillingStore(tmp_path)
+    app = create_app(Settings(
+        CHAT2API_DATA_DIR=str(tmp_path),
+        CHAT2API_API_KEY="v107-provider-namespace-master",
+    ))
+    install_user_console_v104_patch(app)
+    install_payment_channels_v106_patch(app)
+    billing = app.state.user_billing
     alipay = billing.create_order("usr_zpay_first", 125, "alipay")
     wechat = billing.create_order("usr_zpay_second", 250, "wechat")
     paypal = billing.create_order("usr_paypal", 300, "paypal")
