@@ -7,6 +7,8 @@
     "client-policy": ["super_admin", "system_admin"],
     "registration-invitations": ["super_admin", "system_admin", "user_admin"],
     "tenants": ["super_admin", "system_admin"],
+    "user-roles": ["super_admin", "user_admin"],
+    "subscriptions": ["super_admin", "billing_admin"],
     "model-entitlements": ["super_admin", "system_admin", "support"],
     "plugins": ["super_admin", "plugin_admin"],
     "quota-ledger": ["super_admin", "system_admin", "api_key_admin", "billing_admin"],
@@ -84,6 +86,12 @@
     }
     const canWriteModels = adminSession && ["super_admin", "system_admin"].includes(adminSession.role);
     ["cEntSave"].forEach((id) => { if ($(id)) $(id).hidden = !canWriteModels; });
+    const canManageUserRoles = adminSession && ["super_admin", "user_admin"].includes(adminSession.role);
+    if ($("cUserRoleReload")) $("cUserRoleReload").disabled = !canManageUserRoles;
+    const canManageSubscriptions = adminSession && ["super_admin", "billing_admin"].includes(adminSession.role);
+    ["cPlanId", "cPlanName", "cPlanEnabled", "cPlanSave", "cPlanReload",
+      "cSubUserId", "cSubPlan", "cSubExpiresAt", "cSubAssign", "cSubLoad", "cSubCancel"]
+      .forEach((id) => { if ($(id)) $(id).disabled = !canManageSubscriptions; });
     const canReconcileQuota = adminSession && ["super_admin", "system_admin", "api_key_admin"].includes(adminSession.role);
     if ($("cQuotaReconcile")) $("cQuotaReconcile").hidden = !canReconcileQuota;
     const canManageInvitations = adminSession && ["super_admin", "user_admin"].includes(adminSession.role);
@@ -217,6 +225,8 @@
     if (view === "client-policy") loadClientPolicy();
     if (view === "registration-invitations") loadInvitations();
     if (view === "tenants") loadTenants();
+    if (view === "user-roles") loadUserRoles();
+    if (view === "subscriptions") loadSubscriptions();
     if (view === "model-entitlements") loadEntitlements();
     if (view === "plugins") loadPlugins();
     if (view === "quota-ledger") loadQuotaReservations();
@@ -515,6 +525,8 @@
       global: "global 使用 default",
       tenant: "ten_...",
       tenant_role: "owner / admin / member / viewer",
+      user_role: "user / trusted / ...",
+      subscription_plan: "free / pro / ...",
       user: "usr_...",
       key: "key_..."
     };
@@ -533,6 +545,137 @@
     } catch (error) { setStatus("cEntStatus", error.message, true); }
   });
   $("cEntReload")?.addEventListener("click", loadEntitlements);
+
+  async function loadUserRoles() {
+    try {
+      const query = $("cUserRoleSearch")?.value.trim() || "";
+      const result = await sessionApi("/api/admin/users?limit=200&offset=0" + (query ? "&q=" + encodeURIComponent(query) : ""));
+      const body = $("cUserRoleRows");
+      body.replaceChildren();
+      (result.data || []).forEach((user) => {
+        const row = document.createElement("tr");
+        cell(row, user.user_id);
+        cell(row, user.email);
+        cell(row, user.display_name);
+        const roleCell = document.createElement("td");
+        const roleInput = document.createElement("input");
+        roleInput.value = user.system_role || "user";
+        roleInput.maxLength = 64;
+        roleInput.setAttribute("aria-label", "End-user system role");
+        roleCell.appendChild(roleInput);
+        row.appendChild(roleCell);
+        const actions = document.createElement("td");
+        actions.appendChild(button("保存角色", "action good", async () => {
+          try {
+            const updated = await sessionApi("/api/admin/users/" + encodeURIComponent(user.user_id) + "/role", {
+              method: "PUT", body: { system_role: roleInput.value.trim() }
+            });
+            roleInput.value = updated.user.system_role;
+            setStatus("cUserRoleStatus", "已更新 " + user.user_id + " → " + updated.user.system_role);
+          } catch (error) { setStatus("cUserRoleStatus", error.message, true); }
+        }));
+        row.appendChild(actions);
+        body.appendChild(row);
+      });
+      setStatus("cUserRoleStatus", "已加载 " + (result.data || []).length + " 个用户");
+    } catch (error) { setStatus("cUserRoleStatus", error.message, true); }
+  }
+  $("cUserRoleReload")?.addEventListener("click", loadUserRoles);
+  $("cUserRoleSearch")?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") loadUserRoles();
+  });
+
+  async function loadSubscriptions() {
+    try {
+      const result = await sessionApi("/api/admin/subscription-plans");
+      const plans = result.data || [];
+      const rows = $("cPlanRows");
+      rows.replaceChildren();
+      const selector = $("cSubPlan");
+      const previous = selector.value;
+      selector.replaceChildren();
+      plans.forEach((plan) => {
+        const option = document.createElement("option");
+        option.value = plan.plan_id;
+        option.textContent = plan.plan_id + " · " + plan.name + (plan.enabled ? "" : "（停用）");
+        option.disabled = !plan.enabled;
+        selector.appendChild(option);
+        const row = document.createElement("tr");
+        cell(row, plan.plan_id);
+        cell(row, plan.name);
+        cell(row, plan.enabled ? "enabled" : "disabled");
+        cell(row, plan.updated_at);
+        rows.appendChild(row);
+      });
+      if (plans.some((plan) => plan.plan_id === previous && plan.enabled)) selector.value = previous;
+      setStatus("cPlanStatus", "已加载 " + plans.length + " 个套餐");
+    } catch (error) { setStatus("cPlanStatus", error.message, true); }
+  }
+
+  $("cPlanSave")?.addEventListener("click", async () => {
+    try {
+      const planId = $("cPlanId").value.trim();
+      const result = await sessionApi("/api/admin/subscription-plans/" + encodeURIComponent(planId), {
+        method: "PUT",
+        body: { name: $("cPlanName").value.trim(), enabled: $("cPlanEnabled").value === "true" }
+      });
+      setStatus("cPlanStatus", "已保存套餐 " + result.plan.plan_id);
+      await loadSubscriptions();
+    } catch (error) { setStatus("cPlanStatus", error.message, true); }
+  });
+  $("cPlanReload")?.addEventListener("click", loadSubscriptions);
+
+  async function loadUserSubscription() {
+    const userId = $("cSubUserId").value.trim();
+    if (!userId) { setStatus("cSubStatus", "请填写 User ID", true); return; }
+    try {
+      const result = await sessionApi("/api/admin/users/" + encodeURIComponent(userId) + "/subscription");
+      const current = result.current || {};
+      $("cSubCurrent").textContent = "当前套餐：" + (current.plan_id || "-") + " · " +
+        (current.name || "-") + " · " + (current.status || "-") +
+        (current.expires_at ? " · 到期 " + current.expires_at : "");
+      const body = $("cSubHistory");
+      body.replaceChildren();
+      (result.history || []).forEach((item) => {
+        const row = document.createElement("tr");
+        cell(row, item.subscription_id);
+        cell(row, item.plan_id);
+        cell(row, item.status);
+        cell(row, item.starts_at);
+        cell(row, item.expires_at || "永久");
+        cell(row, item.assigned_by);
+        body.appendChild(row);
+      });
+      setStatus("cSubStatus", "已加载订阅历史 " + (result.history || []).length + " 条");
+    } catch (error) { setStatus("cSubStatus", error.message, true); }
+  }
+  $("cSubLoad")?.addEventListener("click", loadUserSubscription);
+  $("cSubAssign")?.addEventListener("click", async () => {
+    const userId = $("cSubUserId").value.trim();
+    if (!userId) { setStatus("cSubStatus", "请填写 User ID", true); return; }
+    try {
+      const rawExpiry = $("cSubExpiresAt").value;
+      const expiresAt = rawExpiry ? new Date(rawExpiry).toISOString() : null;
+      const result = await sessionApi("/api/admin/users/" + encodeURIComponent(userId) + "/subscription", {
+        method: "PUT",
+        body: { plan_id: $("cSubPlan").value, expires_at: expiresAt }
+      });
+      setStatus("cSubStatus", "已分配 " + result.subscription.plan_id + " 套餐");
+      await loadUserSubscription();
+    } catch (error) { setStatus("cSubStatus", error.message, true); }
+  });
+  $("cSubCancel")?.addEventListener("click", async () => {
+    const userId = $("cSubUserId").value.trim();
+    if (!userId) { setStatus("cSubStatus", "请填写 User ID", true); return; }
+    if (!confirm("确认取消该用户当前订阅并回退到 free 套餐？")) return;
+    try {
+      const result = await sessionApi("/api/admin/users/" + encodeURIComponent(userId) + "/subscription", {
+        method: "DELETE"
+      });
+      setStatus("cSubStatus", result.cancelled ? "当前订阅已取消" : "没有活动订阅");
+      await loadUserSubscription();
+    } catch (error) { setStatus("cSubStatus", error.message, true); }
+  });
 
   async function loadPlugins() {
     try {
