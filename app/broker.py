@@ -312,7 +312,10 @@ def _worker_dispatch_failure_provenance(event: dict[str, Any]) -> dict[str, Any]
     for key in _WORKER_DISPATCH_FAILURE_TIMINGS:
         value = raw.get(key)
         if isinstance(value, (int, float)) and not isinstance(value, bool):
-            numeric = float(value)
+            try:
+                numeric = float(value)
+            except (OverflowError, ValueError):
+                continue
             if math.isfinite(numeric) and 0 <= numeric <= 900000:
                 result[key] = round(numeric, 1)
     stage = raw.get("worker_dispatch_failure_stage")
@@ -320,7 +323,7 @@ def _worker_dispatch_failure_provenance(event: dict[str, Any]) -> dict[str, Any]
         result["worker_dispatch_failure_stage"] = stage
     if raw.get("request_controller") == "request-v6":
         result["request_controller"] = "request-v6"
-    if raw.get("request_v6_dispatch_timing_version") == 1:
+    if type(raw.get("request_v6_dispatch_timing_version")) is int and raw.get("request_v6_dispatch_timing_version") == 1:
         result["request_v6_dispatch_timing_version"] = 1
 
     evidence = raw.get("request_v6_dispatch_stage_evidence_v1")
@@ -330,13 +333,16 @@ def _worker_dispatch_failure_provenance(event: dict[str, Any]) -> dict[str, Any]
             if stage_name not in _REQUEST_V6_DISPATCH_STAGES or not isinstance(entry, dict):
                 continue
             status = entry.get("status")
-            if status not in {"started", "completed", "failed", "skipped"}:
+            if not isinstance(status, str) or status not in {"started", "completed", "failed", "skipped"}:
                 continue
             safe_entry: dict[str, Any] = {"status": status}
             for key in ("started_elapsed_ms", "duration_ms", "completed_elapsed_ms"):
                 value = entry.get(key)
                 if isinstance(value, (int, float)) and not isinstance(value, bool):
-                    numeric = float(value)
+                    try:
+                        numeric = float(value)
+                    except (OverflowError, ValueError):
+                        continue
                     if math.isfinite(numeric) and 0 <= numeric <= 900000:
                         safe_entry[key] = round(numeric, 1)
             error_type = entry.get("error_type")
