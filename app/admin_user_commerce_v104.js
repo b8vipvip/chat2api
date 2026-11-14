@@ -28,6 +28,9 @@
 
   let currentAdminRole = null;
   let sessionAuthenticated = false;
+  // Only the latest user-list request may write to the DOM. A role change,
+  // logout or concurrent refresh invalidates all older responses.
+  let adminUserLoadGeneration = 0;
   const canWriteUsers = () => ["super_admin", "user_admin"].includes(currentAdminRole);
   const canReadUserKeys = () => ["super_admin", "support"].includes(currentAdminRole);
   const canReadAudit = () => currentAdminRole === "super_admin";
@@ -228,12 +231,23 @@
   const adminUserLimit = 100;
   let adminUserTotal = 0;
   async function loadUsers() {
+    const generation = ++adminUserLoadGeneration;
+    const ownerRole = currentAdminRole;
     const status = document.getElementById("adminUserStatus");
     status.textContent = "正在加载用户…";
     const query = document.getElementById("adminUserSearch").value.trim();
     const params = new URLSearchParams({limit:String(adminUserLimit),offset:String(adminUserOffset)});
     if (query) params.set("q", query);
-    const payload = await adminApi("/api/admin/users?" + params.toString());
+    let payload;
+    try {
+      payload = await adminApi("/api/admin/users?" + params.toString());
+    } catch (error) {
+      // A failed request from the previous administrator must not replace
+      // the current administrator's result with a misleading error.
+      if (generation !== adminUserLoadGeneration || !sessionAuthenticated || currentAdminRole !== ownerRole) return;
+      throw error;
+    }
+    if (generation !== adminUserLoadGeneration || !sessionAuthenticated || currentAdminRole !== ownerRole) return;
     adminUserRows = payload.data || [];
     adminUserTotal = Number(payload.total || 0);
     renderUsers();
@@ -519,8 +533,21 @@
   window.addEventListener("chat2api-admin-session-changed", (event) => {
     adminRoleRefreshGeneration += 1;
     const session = event.detail || {};
-    sessionAuthenticated = !!session.authenticated;
-    currentAdminRole = sessionAuthenticated ? (session.role || "unknown") : null;
+    const nextAuthenticated = !!session.authenticated;
+    const nextRole = nextAuthenticated ? (session.role || "unknown") : null;
+    if (currentAdminRole !== nextRole || sessionAuthenticated !== nextAuthenticated) {
+      adminUserLoadGeneration += 1;
+      // Never display the previous administrator's user list while a new
+      // session is resolving, even if an old fetch finishes after logout.
+      adminUserRows = [];
+      adminUserTotal = 0;
+      const rows = document.getElementById("adminUsersBody");
+      if (rows) rows.replaceChildren();
+      const userStatus = document.getElementById("adminUserStatus");
+      if (userStatus) userStatus.textContent = "";
+    }
+    sessionAuthenticated = nextAuthenticated;
+    currentAdminRole = nextRole;
     adminRoleResolved = true;
     applyAdminRole();
     activateRoleDefault();
