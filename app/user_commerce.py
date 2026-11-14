@@ -726,6 +726,31 @@ class BillingStore:
                         raise
                 return None
             usage = request_row.get("usage") if isinstance(request_row.get("usage"), dict) else {}
+            if reservation and reservation.get("state") == "reserved":
+                # A completed status alone is not usage evidence. In
+                # particular, int(None)/int("bad") fallbacks and int(1.5)
+                # truncation must never turn a missing or malformed usage
+                # payload into a zero-cost settlement that releases a hold.
+                raw_input = (
+                    usage.get("prompt_tokens")
+                    if "prompt_tokens" in usage else usage.get("input_tokens")
+                )
+                raw_output = (
+                    usage.get("completion_tokens")
+                    if "completion_tokens" in usage else usage.get("output_tokens")
+                )
+                raw_total = usage.get("total_tokens")
+                raw_cached = usage.get("cached_input_tokens", 0)
+                if (
+                    type(raw_input) is not int or raw_input < 0
+                    or type(raw_output) is not int or raw_output < 0
+                    or type(raw_total) is not int or raw_total <= 0
+                    or raw_total != raw_input + raw_output
+                    or type(raw_cached) is not int or raw_cached < 0 or raw_cached > raw_input
+                ):
+                    # Keep the original admission hold. A later terminal
+                    # replay with valid usage can settle the same request.
+                    return None
             input_tokens = max(0, int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0))
             # Cached tokens are a subset of input tokens. A malformed or
             # inconsistent upstream usage payload must not charge more cached
