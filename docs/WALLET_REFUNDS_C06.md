@@ -94,6 +94,8 @@ the Control Plane maps this route to `billing:write`. Caller body:
   prices, validates persisted rates at startup, and restores the previous
   in-memory pricing state if a config write fails. Corrupt pricing data is
   never replaced silently with default rates while billing continues.
+  Disabled price rows cannot admit new paid requests; intentional free use
+  requires an enabled, explicit zero-rate row.
 - When wallet billing is enabled for a managed user, every dispatched
   model must have an explicit pricing row. An unpriced model is rejected
   before Worker dispatch; administrators may add an explicit zero-rate row
