@@ -76,3 +76,24 @@ def test_backend_success_never_overwrites_a_local_executor_failure(tmp_path: Pat
         assert current["status"] == "failed"
 
     asyncio.run(scenario())
+
+
+def test_recovered_stalled_run_is_not_upgraded_by_later_backend_success(tmp_path: Path) -> None:
+    async def scenario():
+        store = TestRunStore(tmp_path)
+        run_id, request_id = "testrun_recovered_stalled", "voicereq_recovered_stalled"
+        row = _run(run_id, request_id, "running")
+        row["status"] = "stalled"
+        await store.upsert(row)
+        telemetry = FakeTelemetry({request_id: {
+            "request_id": request_id,
+            "status": "completed",
+            "completion_chars": 12,
+        }})
+
+        await reconcile_playground_runs(store, telemetry)
+        current = store.get(run_id)
+        assert current["status"] == "stalled"
+        assert current["results"][0]["status"] == "running"
+
+    asyncio.run(scenario())
