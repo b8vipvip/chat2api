@@ -330,18 +330,64 @@ class PricingStore:
         }
         self._load()
 
+    @staticmethod
+    def _validate_payload(payload: dict[str, Any]) -> None:
+        version = payload.get("version", USER_COMMERCE_VERSION)
+        if type(version) is not int or version != USER_COMMERCE_VERSION:
+            raise ValueError("pricing configuration version is unsupported")
+        if type(payload.get("billing_enabled")) is not bool:
+            raise ValueError("pricing billing_enabled must be boolean")
+        raw_rate = payload.get("usd_cny_rate")
+        if isinstance(raw_rate, bool):
+            raise ValueError("pricing USD/CNY rate must be numeric")
+        try:
+            rate = float(raw_rate)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("pricing USD/CNY rate must be numeric") from exc
+        if not math.isfinite(rate) or rate <= 0 or rate > 100:
+            raise ValueError("pricing USD/CNY rate must be finite and between 0 and 100")
+        models = payload.get("models")
+        if not isinstance(models, list) or not models:
+            raise ValueError("pricing models must be a non-empty list")
+        seen: set[str] = set()
+        for row in models:
+            if not isinstance(row, dict):
+                raise ValueError("pricing model row must be an object")
+            model_id = row.get("model_id")
+            if not isinstance(model_id, str) or not model_id.strip() or len(model_id) > 120 or model_id in seen:
+                raise ValueError("pricing model identity is invalid or duplicated")
+            seen.add(model_id)
+            if type(row.get("enabled", True)) is not bool:
+                raise ValueError("pricing model enabled must be boolean")
+            for field in ("input_usd_per_million", "cached_input_usd_per_million", "output_usd_per_million"):
+                raw_value = row.get(field, 0)
+                if isinstance(raw_value, bool):
+                    raise ValueError(f"pricing {field} must be numeric")
+                try:
+                    value = float(raw_value or 0)
+                except (TypeError, ValueError, OverflowError) as exc:
+                    raise ValueError(f"pricing {field} must be numeric") from exc
+                if not math.isfinite(value) or value < 0 or value > 100000:
+                    raise ValueError(f"pricing {field} must be finite and within range")
+
     def _load(self) -> None:
         if not self.path.exists():
             self._save()
             return
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
-            if isinstance(raw, dict):
-                self.payload.update(raw)
-            if not isinstance(self.payload.get("models"), list):
-                self.payload["models"] = [dict(row) for row in DEFAULT_MODEL_PRICING]
-        except (OSError, ValueError, TypeError):
-            self.payload["models"] = [dict(row) for row in DEFAULT_MODEL_PRICING]
+            if not isinstance(raw, dict):
+                raise ValueError("pricing configuration root must be an object")
+            candidate = copy.deepcopy(self.payload)
+            candidate.update(raw)
+            self._validate_payload(candidate)
+            self.payload = candidate
+        except (OSError, ValueError, TypeError, OverflowError) as error:
+            # Pricing is an accounting input, not a disposable cache. Never
+            # replace unreadable rates with defaults and continue billing.
+            raise RuntimeError(
+                "Pricing configuration is unreadable; refusing to use fallback rates"
+            ) from error
 
     def _save(self) -> None:
         _atomic_json(self.path, self.payload)
@@ -351,33 +397,62 @@ class PricingStore:
             return json.loads(json.dumps(self.payload, ensure_ascii=False))
 
     def update(self, *, billing_enabled: bool, usd_cny_rate: float, models: list[dict[str, Any]]) -> dict[str, Any]:
-        rate = float(usd_cny_rate)
-        if rate <= 0 or rate > 100:
-            raise ValueError("美元兑人民币计费换算率必须大于 0 且不超过 100")
+        if type(billing_enabled) is not bool or isinstance(usd_cny_rate, bool):
+            raise ValueError("计费开关必须为布尔值，美元兑人民币汇率必须为数字")
+        try:
+            rate = float(usd_cny_rate)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("美元兑人民币计费换算率必须为数字") from exc
+        if not math.isfinite(rate) or rate <= 0 or rate > 100:
+            raise ValueError("美元兑人民币计费换算率必须为有限正数且不超过 100")
         cleaned: list[dict[str, Any]] = []
         seen: set[str] = set()
         for raw in models:
+            if not isinstance(raw, dict):
+                raise ValueError("模型价格配置必须为对象")
             model_id = str(raw.get("model_id") or "").strip()
             if not model_id or len(model_id) > 120 or model_id in seen:
                 continue
+            enabled = raw.get("enabled", True)
+            if type(enabled) is not bool:
+                raise ValueError(f"模型 {model_id} 的启用状态必须为布尔值")
             values: dict[str, float] = {}
             for key in ("input_usd_per_million", "cached_input_usd_per_million", "output_usd_per_million"):
-                value = float(raw.get(key) or 0)
-                if value < 0 or value > 100000:
-                    raise ValueError(f"模型 {model_id} 的价格超出允许范围")
+                raw_value = raw.get(key) or 0
+                if isinstance(raw_value, bool):
+                    raise ValueError(f"模型 {model_id} 的价格必须为数字")
+                try:
+                    value = float(raw_value)
+                except (TypeError, ValueError, OverflowError) as exc:
+                    raise ValueError(f"模型 {model_id} 的价格必须为数字") from exc
+                if not math.isfinite(value) or value < 0 or value > 100000:
+                    raise ValueError(f"模型 {model_id} 的价格必须为有限非负数且不超过 100000")
                 values[key] = value
             seen.add(model_id)
             cleaned.append({
                 "model_id": model_id,
                 "name": str(raw.get("name") or model_id).strip()[:120],
-                "enabled": bool(raw.get("enabled", True)),
+                "enabled": enabled,
                 **values,
             })
         if not cleaned:
             raise ValueError("至少需要保留一个模型价格配置")
+        candidate = {
+            "billing_enabled": billing_enabled,
+            "usd_cny_rate": rate,
+            "models": cleaned,
+        }
+        validation = copy.deepcopy(self.payload)
+        validation.update(candidate)
+        self._validate_payload(validation)
         with self.lock:
-            self.payload.update({"billing_enabled": bool(billing_enabled), "usd_cny_rate": rate, "models": cleaned, "updated_at": _now()})
-            self._save()
+            previous = copy.deepcopy(self.payload)
+            try:
+                self.payload.update({**candidate, "updated_at": _now()})
+                self._save()
+            except Exception:
+                self.payload = previous
+                raise
             return self.public()
 
     def model(self, model_id: str) -> dict[str, Any] | None:
