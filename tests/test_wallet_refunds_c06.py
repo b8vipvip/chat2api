@@ -460,7 +460,14 @@ def test_payment_order_create_checkout_and_settlement_rollback_on_save_failure(
     b'{"wallets":[]}',
     b'{"charges":{"req_existing":[]}}',
     b'{"reservations":{"req_existing":{"reserved_cny_cents":2.5}}}',
-    b'{"refunds":{"rf_existing":{"amount_cents":-1}}}',
+    b'{"refunds":{"rf_existing":{"refund_id":"rf_existing","user_id":"usr_existing","amount_cents":-1}}}',
+    b'{"version":2,"wallets":{}}',
+    b'{"version":true,"wallets":{}}',
+    b'{"charges":{"req_key":{"request_id":"req_other","user_id":"usr_existing"}}}',
+    b'{"charges":{"req_key":{"request_id":"req_key"}}}',
+    b'{"refunds":{"rf_orphan":{"refund_id":"rf_orphan","request_id":"req_missing","user_id":"usr_existing","amount_cents":1,"charge_cny_cents":1}}}',
+    b'{"charges":{"req_key":{"request_id":"req_key","user_id":"usr_a","debited":true,"cost_cny_cents":10}},"refunds":{"rf_over":{"refund_id":"rf_over","request_id":"req_key","user_id":"usr_a","amount_cents":11,"charge_cny_cents":10}}}',
+    b'{"charges":{"req_key":{"request_id":"req_key","user_id":"usr_a","debited":true,"cost_cny_cents":10}},"refunds":{"rf_cross":{"refund_id":"rf_cross","request_id":"req_key","user_id":"usr_b","amount_cents":1,"charge_cny_cents":10}}}',
 ])
 def test_wallet_ledger_corruption_fails_closed_without_overwriting_source(
     tmp_path: Path, invalid_payload: bytes,
