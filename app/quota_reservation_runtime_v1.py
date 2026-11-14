@@ -48,6 +48,21 @@ def reserve_wallet_charge(
                 status_code=503,
                 detail="Wallet price is not configured for this model",
             )
+        # Image and realtime Voice costs are not represented by text-token
+        # usage in the current Worker protocol. A positive per-token price
+        # would therefore undercharge these endpoints; only an explicit
+        # all-zero row may opt them into intentionally free use.
+        if str(model_id or "").strip().lower() in {"gpt-image", "gpt-live", "gpt-live-mini"}:
+            rate_fields = (
+                "input_usd_per_million",
+                "cached_input_usd_per_million",
+                "output_usd_per_million",
+            )
+            if any(float(price.get(field) or 0) > 0 for field in rate_fields):
+                raise HTTPException(
+                    status_code=503,
+                    detail="Provider usage for this model is not metered for wallet billing",
+                )
         fx = float(config.get("usd_cny_rate") or 0)
         if fx <= 0:
             raise ValueError("Invalid USD/CNY billing rate")
