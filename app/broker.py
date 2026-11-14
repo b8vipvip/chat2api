@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import re
 import time
 from urllib.parse import urlsplit
@@ -282,6 +283,71 @@ def _terminal_provenance(event: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+_WORKER_DISPATCH_FAILURE_TIMINGS = (
+    "worker_dispatch_queue_wait_ms",
+    "worker_route_resolve_ms",
+    "worker_target_tab_lookup_ms",
+    "worker_ensure_content_ms",
+    "worker_tabs_send_message_ms",
+    "worker_tab_handler_to_content_ack_ms",
+    "worker_tab_handler_to_failure_ms",
+    "request_v6_dispatch_elapsed_ms",
+    "request_v6_dispatch_submit_click_elapsed_ms",
+    "request_v6_dispatch_to_response_started_ms",
+)
+_WORKER_DISPATCH_FAILURE_STAGES = frozenset({
+    "target-tab-lookup", "ensure-content", "content-script-message",
+})
+_REQUEST_V6_DISPATCH_STAGES = frozenset({
+    "resolve_blocking_interruption", "write_prompt", "submit_and_confirm",
+})
+
+
+def _worker_dispatch_failure_provenance(event: dict[str, Any]) -> dict[str, Any]:
+    """Keep bounded dispatch diagnostics from terminal errors, never raw page data."""
+    raw = event.get("diagnostics")
+    if not isinstance(raw, dict):
+        return {}
+    result: dict[str, Any] = {}
+    for key in _WORKER_DISPATCH_FAILURE_TIMINGS:
+        value = raw.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            numeric = float(value)
+            if math.isfinite(numeric) and 0 <= numeric <= 900000:
+                result[key] = round(numeric, 1)
+    stage = raw.get("worker_dispatch_failure_stage")
+    if isinstance(stage, str) and stage in _WORKER_DISPATCH_FAILURE_STAGES:
+        result["worker_dispatch_failure_stage"] = stage
+    if raw.get("request_controller") == "request-v6":
+        result["request_controller"] = "request-v6"
+    if raw.get("request_v6_dispatch_timing_version") == 1:
+        result["request_v6_dispatch_timing_version"] = 1
+
+    evidence = raw.get("request_v6_dispatch_stage_evidence_v1")
+    if isinstance(evidence, dict):
+        safe_evidence: dict[str, dict[str, Any]] = {}
+        for stage_name, entry in evidence.items():
+            if stage_name not in _REQUEST_V6_DISPATCH_STAGES or not isinstance(entry, dict):
+                continue
+            status = entry.get("status")
+            if status not in {"started", "completed", "failed", "skipped"}:
+                continue
+            safe_entry: dict[str, Any] = {"status": status}
+            for key in ("started_elapsed_ms", "duration_ms", "completed_elapsed_ms"):
+                value = entry.get(key)
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    numeric = float(value)
+                    if math.isfinite(numeric) and 0 <= numeric <= 900000:
+                        safe_entry[key] = round(numeric, 1)
+            error_type = entry.get("error_type")
+            if isinstance(error_type, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_.]{0,59}", error_type):
+                safe_entry["error_type"] = error_type
+            safe_evidence[stage_name] = safe_entry
+        if safe_evidence:
+            result["request_v6_dispatch_stage_evidence_v1"] = safe_evidence
+    return result
+
+
 class RequestBroker:
     def __init__(self) -> None:
         self.requests: dict[str, RequestState] = {}
@@ -378,6 +444,10 @@ class RequestBroker:
             state.terminal_event_type = str(event_type)
             state.completed_mono = now
         elif event_type in {"chat.error", "chat.cancelled", "image.error", "image.cancelled"}:
+            # Worker dispatch failures carry the only evidence of which
+            # pre-browser stage stalled. Preserve a strict, bounded allowlist
+            # before this terminal event closes the request.
+            state.diagnostics.update(_worker_dispatch_failure_provenance(event))
             state.terminal_event_type = str(event_type)
             state.completed_mono = now
             message = str(event.get("error") or event.get("reason") or "Request failed")
