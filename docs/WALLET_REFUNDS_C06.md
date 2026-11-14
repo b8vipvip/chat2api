@@ -74,6 +74,11 @@ the Control Plane maps this route to `billing:write`. Caller body:
   before Worker dispatch; administrators may add an explicit zero-rate row
   only when free use is intentional. Disabling wallet billing preserves the
   existing unmetered-wallet behavior.
+- Image generation and realtime Voice are not token-metered by the current
+  Worker protocol. Positive text-token prices for `gpt-image`, `gpt-live`
+  or `gpt-live-mini` are rejected while wallet billing is enabled; an
+  explicit all-zero row is the only opt-in to intentionally free use until
+  provider-verified image/audio metering is implemented.
 - This does not solve payment provider callbacks, chargebacks,
   payment disputes, cash payouts, tax or reconciled provider usage.
 - G0 DataKeyring migration remains deferred. Do not infer
