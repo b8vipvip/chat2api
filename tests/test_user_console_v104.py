@@ -99,7 +99,7 @@ def test_pricing_rejects_non_finite_or_non_numeric_exchange_rates(
     assert pricing.public()["billing_enabled"] is False
 
 
-@pytest.mark.parametrize("bad_price", [float("nan"), float("inf"), True, -1.0])
+@pytest.mark.parametrize("bad_price", [float("nan"), float("inf"), True, False, -1.0])
 def test_pricing_rejects_non_finite_or_invalid_model_rates(
     tmp_path: Path, bad_price: float,
 ) -> None:
