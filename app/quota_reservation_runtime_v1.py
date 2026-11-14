@@ -38,9 +38,27 @@ def reserve_wallet_charge(
         raise HTTPException(status_code=503, detail="Wallet reservation is unavailable")
     try:
         config = pricing.public()
+        fx = float(config.get("usd_cny_rate") or 0)
+        if not math.isfinite(fx) or fx <= 0:
+            raise ValueError("Invalid USD/CNY billing rate")
+        normalized_model_id = str(model_id or "").strip() or "unknown"
         if not bool(config.get("billing_enabled")):
+            price = pricing.model(normalized_model_id) or {
+                "model_id": normalized_model_id,
+                "enabled": False,
+                "input_usd_per_million": 0.0,
+                "cached_input_usd_per_million": 0.0,
+                "output_usd_per_million": 0.0,
+            }
+            billing.record_unbilled_admission(
+                str(owner), str(request_id), model_id=normalized_model_id,
+                input_tokens=max(0, int(prompt_tokens)),
+                output_tokens=max(0, int(output_tokens)),
+                reason="billing_disabled_at_admission",
+                price_snapshot=price, usd_cny_rate=fx,
+            )
             return None
-        price = pricing.model(model_id)
+        price = pricing.model(normalized_model_id)
         if not price or price.get("enabled", True) is not True:
             # Disabled and unpriced rows are both closed to new paid requests.
             # An intentional free model must have an explicit enabled zero-rate
@@ -64,9 +82,6 @@ def reserve_wallet_charge(
                     status_code=503,
                     detail="Provider usage for this model is not metered for wallet billing",
                 )
-        fx = float(config.get("usd_cny_rate") or 0)
-        if fx <= 0:
-            raise ValueError("Invalid USD/CNY billing rate")
         usd = (
             max(0, int(prompt_tokens)) * float(price.get("input_usd_per_million") or 0)
             + max(0, int(output_tokens)) * float(price.get("output_usd_per_million") or 0)
@@ -77,11 +92,18 @@ def reserve_wallet_charge(
             "output_usd_per_million",
         )
         has_positive_rate = any(float(price.get(field) or 0) > 0 for field in rate_fields)
+        if not has_positive_rate:
+            billing.record_unbilled_admission(
+                str(owner), str(request_id), model_id=normalized_model_id,
+                input_tokens=max(0, int(prompt_tokens)),
+                output_tokens=max(0, int(output_tokens)),
+                reason="zero_price_at_admission",
+                price_snapshot=price, usd_cny_rate=fx,
+            )
+            return None
         # A positive-rate request always gets a durable admission snapshot and
         # at least a one-cent hold, even when nearest-cent rounding would be 0.
-        estimated_cny_cents = max(1, int(math.ceil(usd * fx * 100))) if has_positive_rate else 0
-        if estimated_cny_cents <= 0:
-            return None
+        estimated_cny_cents = max(1, int(math.ceil(usd * fx * 100)))
         catalog_snapshot: dict[str, dict[str, Any]] = {}
         for row in config.get("models") or []:
             if not isinstance(row, dict):

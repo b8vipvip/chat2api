@@ -126,6 +126,86 @@ def test_reserved_charge_falls_back_to_requested_admission_price_not_live_price(
     assert charge["cost_cny_cents"] == 700
 
 
+def _runtime_wallet(tmp_path: Path, *, billing_enabled: bool, models: list[dict[str, object]]):
+    from types import SimpleNamespace
+
+    pricing = PricingStore(tmp_path)
+    pricing.update(billing_enabled=billing_enabled, usd_cny_rate=7.0, models=models)
+    billing = BillingStore(tmp_path)
+    billing.credit("usr_admission_snapshot", 20_000)
+    accounts = SimpleNamespace(owner_for_key=lambda _key_id: "usr_admission_snapshot")
+    app = SimpleNamespace(state=SimpleNamespace(
+        user_accounts=accounts, user_billing=billing, user_pricing=pricing,
+    ))
+    return app, billing, pricing
+
+
+def test_billing_disabled_at_admission_cannot_become_a_retroactive_charge(tmp_path: Path) -> None:
+    from app.quota_reservation_runtime_v1 import reserve_wallet_charge
+
+    pricing_seed = PricingStore(tmp_path).public()["models"]
+    app, billing, pricing = _runtime_wallet(
+        tmp_path, billing_enabled=False, models=pricing_seed,
+    )
+    result = reserve_wallet_charge(
+        app, "req_unbilled_toggle", SimpleNamespace(kind="managed", key_id="key-managed"),
+        "gpt-5.6-sol", 100, 4096,
+    )
+    assert result is None
+    marker = billing.reservations["req_unbilled_toggle"]
+    assert marker["state"] == "released"
+    assert marker["reserved_cny_cents"] == 0
+    assert marker["release_reason"] == "billing_disabled_at_admission"
+
+    changed_models = [dict(row) for row in pricing.public()["models"]]
+    changed_models[1]["input_usd_per_million"] = 10_000.0
+    pricing.update(billing_enabled=True, usd_cny_rate=9.0, models=changed_models)
+    restarted = BillingStore(tmp_path)
+    charge = restarted.record_charge("usr_admission_snapshot", {
+        "request_id": "req_unbilled_toggle",
+        "status": "completed",
+        "requested_model": "gpt-5.6-sol",
+        "usage": {
+            "prompt_tokens": 100_000, "completion_tokens": 0,
+            "total_tokens": 100_000, "cached_input_tokens": 0,
+        },
+    }, pricing)
+    assert charge is None
+    assert restarted.charge_for_request("req_unbilled_toggle") is None
+    assert restarted.balance_cents("usr_admission_snapshot") == 20_000
+
+
+def test_explicit_free_model_stays_free_after_price_edit(tmp_path: Path) -> None:
+    from app.quota_reservation_runtime_v1 import reserve_wallet_charge
+
+    free_model = _price_row("free-model", 0.0)
+    app, billing, pricing = _runtime_wallet(
+        tmp_path, billing_enabled=True, models=[free_model],
+    )
+    result = reserve_wallet_charge(
+        app, "req_free_snapshot", SimpleNamespace(kind="managed", key_id="key-managed"),
+        "free-model", 100, 4096,
+    )
+    assert result is None
+    assert billing.reservations["req_free_snapshot"]["release_reason"] == "zero_price_at_admission"
+
+    pricing.update(
+        billing_enabled=True, usd_cny_rate=9.0,
+        models=[_price_row("free-model", 10_000.0)],
+    )
+    charge = BillingStore(tmp_path).record_charge("usr_admission_snapshot", {
+        "request_id": "req_free_snapshot",
+        "status": "completed",
+        "requested_model": "free-model",
+        "usage": {
+            "prompt_tokens": 100, "completion_tokens": 0,
+            "total_tokens": 100, "cached_input_tokens": 0,
+        },
+    }, pricing)
+    assert charge is None
+    assert BillingStore(tmp_path).balance_cents("usr_admission_snapshot") == 20_000
+
+
 def test_refund_is_idempotent_partial_and_never_over_refunds(tmp_path: Path) -> None:
     billing, _pricing = _charged_wallet(tmp_path)
     first = billing.refund_charge("req_refundable", "rf_partial0001", 3, "billing correction")

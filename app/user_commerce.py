@@ -642,13 +642,22 @@ class BillingStore:
             for reservation in reservations.values():
                 if reservation.get("state") not in {"reserved", "settled", "released"}:
                     raise ValueError("billing ledger reservations.state is unsupported")
+                reserved_amount = reservation["reserved_cny_cents"]
                 if (
                     not isinstance(reservation.get("model_id"), str) or not reservation["model_id"]
-                    or reservation["reserved_cny_cents"] <= 0
+                    or reserved_amount < 0
+                    or (reservation["state"] == "reserved" and reserved_amount <= 0)
                     or not isinstance(reservation.get("created_at"), str) or not reservation["created_at"]
                     or not isinstance(reservation.get("updated_at"), str) or not reservation["updated_at"]
                 ):
                     raise ValueError("billing ledger reservation metadata is invalid")
+                if reserved_amount == 0 and (
+                    reservation["state"] != "released"
+                    or reservation.get("release_reason") not in {
+                        "billing_disabled_at_admission", "zero_price_at_admission",
+                    }
+                ):
+                    raise ValueError("zero-value wallet reservation must be a known unbilled admission marker")
                 validate_price_snapshot(reservation.get("price_snapshot"), "reservations", reservation["model_id"])
                 rate = reservation.get("usd_cny_rate")
                 if type(rate) not in {int, float} or not math.isfinite(float(rate)) or rate < 0:
@@ -839,6 +848,75 @@ class BillingStore:
             except Exception:
                 # Admission must not expose a non-durable hold as successful
                 # and must not strand the in-memory available balance.
+                self.reservations.pop(request_id, None)
+                raise
+            return dict(row)
+
+    def record_unbilled_admission(
+        self, user_id: str, request_id: str, *, model_id: str,
+        input_tokens: int, output_tokens: int, reason: str,
+        price_snapshot: dict[str, Any], usd_cny_rate: float,
+    ) -> dict[str, Any]:
+        """Persist that this request was intentionally unbilled at admission.
+
+        A zero-value terminal marker prevents a later pricing/billing toggle
+        from retroactively charging a request that was admitted as free.
+        """
+        allowed_reasons = {"billing_disabled_at_admission", "zero_price_at_admission"}
+        normalized_model = str(model_id or "").strip()
+        if not user_id or not request_id or not normalized_model:
+            raise WalletReservationError("user_id, request_id and model_id are required")
+        if reason not in allowed_reasons:
+            raise WalletReservationError("Unsupported unbilled admission reason")
+        if type(input_tokens) is not int or input_tokens < 0 or type(output_tokens) is not int or output_tokens < 0:
+            raise WalletReservationError("unbilled admission token estimates must be non-negative integers")
+        if not isinstance(price_snapshot, dict) or _pricing_model_key(price_snapshot.get("model_id")) != _pricing_model_key(normalized_model):
+            raise WalletReservationError("unbilled admission price snapshot does not match the model")
+        if type(usd_cny_rate) not in {int, float} or not math.isfinite(float(usd_cny_rate)) or usd_cny_rate < 0:
+            raise WalletReservationError("unbilled admission FX rate must be finite and non-negative")
+        if "enabled" in price_snapshot and type(price_snapshot["enabled"]) is not bool:
+            raise WalletReservationError("unbilled admission price enabled flag must be boolean")
+        for field in ("input_usd_per_million", "cached_input_usd_per_million", "output_usd_per_million"):
+            value = price_snapshot.get(field, 0)
+            if type(value) not in {int, float} or not math.isfinite(float(value)) or value < 0 or value > 100000:
+                raise WalletReservationError("unbilled admission price snapshot contains an invalid rate")
+
+        now = _now()
+        with self.lock:
+            if request_id in self.charges:
+                raise WalletReservationError("request_id already has a wallet charge")
+            existing = self.reservations.get(request_id)
+            if existing:
+                if (
+                    str(existing.get("user_id") or "") == user_id
+                    and str(existing.get("model_id") or "") == normalized_model
+                    and existing.get("state") == "released"
+                    and existing.get("release_reason") == reason
+                    and int(existing.get("estimated_input_tokens") or 0) == input_tokens
+                    and int(existing.get("estimated_output_tokens") or 0) == output_tokens
+                ):
+                    return dict(existing)
+                raise WalletReservationError("request_id already has a different wallet admission")
+            row = {
+                "request_id": request_id,
+                "user_id": user_id,
+                "model_id": normalized_model,
+                "estimated_input_tokens": input_tokens,
+                "estimated_output_tokens": output_tokens,
+                "reserved_cny_cents": 0,
+                "actual_cny_cents": 0,
+                "price_snapshot": dict(price_snapshot),
+                "price_catalog_snapshot": {},
+                "usd_cny_rate": float(usd_cny_rate),
+                "state": "released",
+                "release_reason": reason,
+                "created_at": now,
+                "updated_at": now,
+            }
+            self.reservations[request_id] = row
+            try:
+                self._save()
+            except Exception:
                 self.reservations.pop(request_id, None)
                 raise
             return dict(row)

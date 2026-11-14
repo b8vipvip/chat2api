@@ -66,6 +66,10 @@ the Control Plane maps this route to `billing:write`. Caller body:
   `model_id` (served model) and `priced_model_id` (price source). Positive-rate
   requests reserve at least one cent using upward cent rounding, so tiny
   estimates still retain their admission snapshot.
+- Requests admitted while wallet billing is disabled, or against an explicit
+  enabled zero-rate model, persist a zero-value terminal admission marker.
+  A later billing toggle or price edit cannot retroactively turn those
+  completed requests into debits; the marker also prevents request-ID reuse.
 - Startup validates the supported v1 ledger schema, collection/row
   structure, required charge/order/reservation/refund fields, owner IDs,
   row-key identity, integer-unit fields, finite exchange rates and
