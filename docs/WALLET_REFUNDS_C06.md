@@ -49,6 +49,10 @@ the Control Plane maps this route to `billing:write`. Caller body:
 - This is not an automatic refund on failed API requests: failures
   release *uncommitted admission holds*. Posted charges need an
   explicit audited administrative correction.
+- Startup recovery enumerates durable active wallet holds and looks up
+  their exact request IDs in the persisted telemetry tail before serving
+  requests. A missing/unreadable terminal record leaves the hold reserved;
+  it is never released from absence of evidence.
 - Startup validates the supported v1 ledger schema, collection/row
   structure, owner IDs, row-key identity and integer-unit fields.
   Unknown schema versions, floating-point, boolean and string balances/
