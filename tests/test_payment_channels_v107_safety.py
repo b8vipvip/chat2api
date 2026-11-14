@@ -486,9 +486,8 @@ def test_usdt_txid_submission_cannot_reopen_terminal_orders(
     assert billing.balance_cents(user_id) == 0
 
 
-@pytest.mark.parametrize("initial_status", ["pending", "reviewing"])
-def test_usdt_txid_submission_keeps_open_orders_reviewable(
-    tmp_path: Path, initial_status: str,
+def test_usdt_txid_submission_moves_pending_order_to_reviewing(
+    tmp_path: Path,
 ) -> None:
     from fastapi.testclient import TestClient
 
@@ -506,18 +505,9 @@ def test_usdt_txid_submission_keeps_open_orders_reviewable(
     install_payment_channels_v106_patch(app)
     accounts = app.state.user_accounts
     billing = app.state.user_billing
-    user = accounts.register(
-        f"usdt-open-{initial_status}@example.com",
-        "valid-password-123",
-    )
+    user = accounts.register("usdt-open-pending@example.com", "valid-password-123")
     user_id = str(user["user_id"])
     order = billing.create_order(user_id, 125, "usdt")
-    with billing.lock:
-        row = billing.orders[order["order_id"]]
-        row["status"] = initial_status
-        if initial_status == "reviewing":
-            row["txid"] = "e" * 64
-        billing._save()
 
     session = accounts.create_session(user_id)
     with TestClient(app, raise_server_exceptions=False) as client:
@@ -531,3 +521,45 @@ def test_usdt_txid_submission_keeps_open_orders_reviewable(
     assert response.json()["order"]["status"] == "reviewing"
     assert response.json()["order"]["txid"] == "d" * 64
 
+
+def test_usdt_txid_submission_cannot_replace_hash_under_admin_review(
+    tmp_path: Path,
+) -> None:
+    from fastapi.testclient import TestClient
+
+    from app.config import Settings
+    from app.main import create_app
+    from app.user_commerce import USER_SESSION_COOKIE
+    from app.user_console_v104_patch import install_user_console_v104_patch
+    from app.payment_channels_v106_patch import install_payment_channels_v106_patch
+
+    app = create_app(Settings(
+        CHAT2API_DATA_DIR=str(tmp_path),
+        CHAT2API_API_KEY="v107-usdt-review-lock-master",
+    ))
+    install_user_console_v104_patch(app)
+    install_payment_channels_v106_patch(app)
+    accounts = app.state.user_accounts
+    billing = app.state.user_billing
+    user = accounts.register("usdt-review-lock@example.com", "valid-password-123")
+    user_id = str(user["user_id"])
+    order = billing.create_order(user_id, 125, "usdt")
+    original_txid = "e" * 64
+    with billing.lock:
+        row = billing.orders[order["order_id"]]
+        row["status"] = "reviewing"
+        row["txid"] = original_txid
+        billing._save()
+
+    session = accounts.create_session(user_id)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        client.cookies.set(USER_SESSION_COOKIE, session)
+        response = client.post(
+            f"/api/user/payments/v106/usdt/{order['order_id']}/txid",
+            json={"txid": "d" * 64},
+        )
+
+    assert response.status_code == 409, response.text
+    assert billing.orders[order["order_id"]]["status"] == "reviewing"
+    assert billing.orders[order["order_id"]]["txid"] == original_txid
+    assert billing.balance_cents(user_id) == 0
