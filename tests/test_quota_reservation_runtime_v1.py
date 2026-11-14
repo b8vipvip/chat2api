@@ -10,6 +10,16 @@ from app.quota_reservations import QuotaReservationStore
 from app.quota_reservation_runtime_v1 import install_quota_reservation_runtime_v1, reserve_request_quota
 
 
+def _assert_mode2_quota_error(response) -> None:
+    """Quota denials must retain the standard Mode 2/OpenAI HTTP envelope."""
+    assert response.status_code == 429, response.text
+    payload = response.json()
+    assert "detail" not in payload, payload
+    error = payload["error"]
+    assert error["type"] == "rate_limit_error", payload
+    assert isinstance(error["message"], str) and error["message"], payload
+
+
 class FakeKey:
     def __init__(self, token_quota: int | None = 10000) -> None:
         self.token_quota = token_quota
@@ -419,7 +429,7 @@ def test_chat_completions_rejects_over_quota_before_worker_dispatch(tmp_path: Pa
             },
         )
 
-    assert response.status_code == 429, response.text
+    _assert_mode2_quota_error(response)
     assert sent == []
     assert app.state.api_keys.keys[public["key_id"]].tokens_used == 0
     assert app.state.quota_reservations.list_reservations(key_id=public["key_id"]) == []
@@ -488,7 +498,7 @@ def test_images_api_rejects_over_quota_before_worker_dispatch(tmp_path: Path) ->
             json={"model": "gpt-image", "prompt": "quota image"},
         )
 
-    assert response.status_code == 429, response.text
+    _assert_mode2_quota_error(response)
     assert sent == []
     assert app.state.api_keys.keys[public["key_id"]].tokens_used == 0
     assert app.state.quota_reservations.list_reservations(key_id=public["key_id"]) == []
@@ -794,7 +804,7 @@ def test_audio_conversation_rejects_over_quota_before_worker_dispatch(tmp_path: 
             json={"model": "gpt-live", "audio_file_id": audio_file.file_id},
         )
 
-    assert response.status_code == 429, response.text
+    _assert_mode2_quota_error(response)
     assert sent == []
     assert app.state.api_keys.keys[public["key_id"]].tokens_used == 0
     assert app.state.quota_reservations.list_reservations(key_id=public["key_id"]) == []
@@ -827,7 +837,7 @@ def test_audio_speech_rejects_over_quota_before_worker_dispatch(tmp_path: Path) 
             json={"model": "gpt-live", "input": "say quota test"},
         )
 
-    assert response.status_code == 429, response.text
+    _assert_mode2_quota_error(response)
     assert sent == []
     assert app.state.api_keys.keys[public["key_id"]].tokens_used == 0
     assert app.state.quota_reservations.list_reservations(key_id=public["key_id"]) == []
