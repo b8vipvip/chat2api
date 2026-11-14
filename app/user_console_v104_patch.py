@@ -12,7 +12,7 @@ from urllib.parse import urlencode, urlsplit
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt
 
 from .admin_auth import SESSION_COOKIE as ADMIN_SESSION_COOKIE
 from .admin_audit import AdminAuditError, AdminAuditStore
@@ -92,7 +92,7 @@ class PaymentBody(BaseModel):
 
 
 class RechargeBody(BaseModel):
-    amount_cents: int = Field(ge=1, le=10_000_000)
+    amount_cents: StrictInt = Field(ge=1, le=10_000_000)
     channel: str = Field(pattern=r"^(alipay|wechat)$")
 
 
