@@ -848,7 +848,7 @@ def test_subscription_expiry_falls_back_to_free_and_is_persistent(tmp_path: Path
     from app.user_subscriptions import UserSubscriptionStore
     reopened = UserSubscriptionStore(tmp_path)
     assert reopened.current_plan_for_user("usr_abcdef123")["plan_id"] == "free"
-    assert reopened.history_for_user("usr_abcdef123")[0]["status"] == "active"
+    assert reopened.history_for_user("usr_abcdef123")[0]["status"] == "expired"
 
 
 
