@@ -400,7 +400,7 @@ def install_payment_channels_v106_patch(app: FastAPI) -> FastAPI:
         order_id = "pay_" + secrets.token_urlsafe(10).replace("-", "").replace("_", "")
         row = {
             "order_id": order_id,
-            "merchant_trade_no": (str(int(time.time() * 1000)) + f"{secrets.randbelow(10**12):012d}")[:32],
+            "merchant_trade_no": "",
             "user_id": user_id,
             "amount_cents": amount,
             "channel": channel,
@@ -416,6 +416,7 @@ def install_payment_channels_v106_patch(app: FastAPI) -> FastAPI:
             "created_at": _now(), "paid_at": None, "updated_at": _now(),
         }
         with self.lock:
+            row["merchant_trade_no"] = self._new_merchant_trade_no_locked()
             self.orders[order_id] = row
             try:
                 self._save()
