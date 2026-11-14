@@ -175,6 +175,7 @@ def test_image_generation_tool_passes_image_reference_into_same_existing_executo
     app = SimpleNamespace(state=SimpleNamespace(
         file_store=files, media_archive=archive, image_generation_executor=generate,
         responses_v108_store=OrderedDict(),
+        responses_v108_owners={},
     ))
     body = {"model": "gpt-6", "input": [{"role":"user","content":[
         {"type":"input_text","text":"以此图片为参考生成插画"},
@@ -184,6 +185,7 @@ def test_image_generation_tool_passes_image_reference_into_same_existing_executo
     result = asyncio.run(handle_image_tool(app, _request(), body, _key(), "以此图片为参考生成插画"))
     assert result.status_code == 200
     assert len(records) == 1
+    assert app.state.responses_v108_owners[result.json()["id"]] == "key-a"
     references = records[0]["body"].attachments
     assert len(references) == 1
     assert files.read(references[0].file_id)[1] == _png()
