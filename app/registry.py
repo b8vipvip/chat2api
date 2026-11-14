@@ -318,7 +318,24 @@ class ClientRegistry:
                 state = getattr(broker, "requests", {}).get(request_id) if broker else None
                 if state is not None:
                     state.dispatch_socket = websocket
-            await websocket.send_json(payload)
+                    # Centralize send clocks at the transport boundary so
+                    # Chat Completions, Responses, Images, Voice and legacy
+                    # dictation all expose the same dispatch evidence. The
+                    # Chat Completions route may already have opened the
+                    # outer clock; preserve its earlier timestamp.
+                    if getattr(state, "dispatch_send_started_mono", None) is None:
+                        state.dispatch_send_started_mono = time.perf_counter()
+            else:
+                state = None
+            try:
+                await websocket.send_json(payload)
+            except Exception:
+                if state is not None and getattr(state, "dispatch_send_completed_mono", None) is None:
+                    state.dispatch_send_completed_mono = time.perf_counter()
+                raise
+            else:
+                if state is not None and getattr(state, "dispatch_send_completed_mono", None) is None:
+                    state.dispatch_send_completed_mono = time.perf_counter()
 
     def online_client_ids(self) -> list[str]:
         return sorted(
