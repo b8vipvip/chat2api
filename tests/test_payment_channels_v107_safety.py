@@ -129,3 +129,54 @@ def test_usdt_confirmation_rejects_pending_order_even_with_txid(tmp_path: Path) 
     assert response.status_code == 409
     assert billing.orders[order["order_id"]]["status"] == "pending"
     assert billing.balance_cents("usr_usdt_pending") == 0
+
+
+
+def test_usdt_paid_order_cannot_be_rejected_or_make_txid_reusable(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    from app.config import Settings
+    from app.main import create_app
+    from app.user_console_v104_patch import install_user_console_v104_patch
+    from app.payment_channels_v106_patch import install_payment_channels_v106_patch
+    from app.payment_channels_v107_safety_patch import install_payment_channels_v107_safety_patch
+
+    master_key = "v107-usdt-paid-reject-master"
+    app = create_app(Settings(
+        CHAT2API_DATA_DIR=str(tmp_path),
+        CHAT2API_API_KEY=master_key,
+    ))
+    install_user_console_v104_patch(app)
+    install_payment_channels_v106_patch(app)
+    install_payment_channels_v107_safety_patch(app)
+    billing = app.state.user_billing
+    txid = "c" * 64
+    paid_order = billing.create_order("usr_usdt_paid_reject", 125, "usdt")
+    duplicate_order = billing.create_order("usr_usdt_paid_reject", 125, "usdt")
+    with billing.lock:
+        for order in (paid_order, duplicate_order):
+            row = billing.orders[order["order_id"]]
+            row["status"] = "reviewing"
+            row["txid"] = txid
+        billing._save()
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        confirmed = client.post(
+            f"/api/admin/payment-channels-v106/usdt-orders/{paid_order['order_id']}/confirm",
+            headers={"x-api-key": master_key},
+        )
+        assert confirmed.status_code == 200
+        rejected = client.post(
+            f"/api/admin/payment-channels-v106/usdt-orders/{paid_order['order_id']}/reject",
+            headers={"x-api-key": master_key},
+        )
+        assert rejected.status_code == 409
+        duplicate = client.post(
+            f"/api/admin/payment-channels-v106/usdt-orders/{duplicate_order['order_id']}/confirm",
+            headers={"x-api-key": master_key},
+        )
+        assert duplicate.status_code == 409
+
+    assert billing.orders[paid_order["order_id"]]["status"] == "paid"
+    assert billing.balance_cents("usr_usdt_paid_reject") == 125
+    assert billing.orders[duplicate_order["order_id"]]["status"] == "reviewing"
