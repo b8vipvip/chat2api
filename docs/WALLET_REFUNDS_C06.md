@@ -114,6 +114,17 @@ the Control Plane maps this route to `billing:write`. Caller body:
   of the already-paid same order remains idempotent. Rejection is limited to
   pending/reviewing orders and cannot downgrade a paid order or make its TXID
   reusable for another credit.
+- Merchant callback identifiers are allocated while holding the wallet
+  ledger lock and are unique across all payment channels. A random collision
+  is retried before the order is persisted; startup rejects duplicate or
+  malformed merchant trade numbers, and callback lookup fails closed if an
+  in-memory ambiguity is detected.
+- A user may submit a USDT TXID only while the order is `pending`. The first
+  accepted submission atomically moves it to `reviewing` and freezes that
+  TXID while an administrator verifies the proof. A user cannot replace a
+  hash during review or reopen a rejected, failed, cancelled or expired
+  order. The checkout UI disables the input and submit button after success;
+  a rejected order requires a new recharge order and a new TXID.
 - The internal wallet ledger uses an in-process lock plus atomic
   file replacement under P-01's **single-process** runtime.
   Multi-worker or multi-host wallet transactions are not supported.
