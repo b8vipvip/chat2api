@@ -56,6 +56,9 @@ class FakeRegistry:
 
 
 class FakeAccounts:
+    def __init__(self):
+        self.roles = {"usr_abcdef123": "user"}
+
     def owner_for_key(self, key_id):
         return {"key_1": "usr_abcdef123"}.get(key_id)
 
@@ -63,10 +66,33 @@ class FakeAccounts:
         return user_id == "usr_abcdef123" and key_id == "key_1"
 
     def authenticate(self, token):
-        return {"user_id": "usr_abcdef123"} if token == "valid-user-session" else None
+        return {"user_id": "usr_abcdef123", "system_role": self.roles["usr_abcdef123"]} if token == "valid-user-session" else None
 
     def admin_get(self, user_id):
-        return {"user_id": user_id} if user_id == "usr_abcdef123" else None
+        return {"user_id": user_id, "system_role": self.roles.get(user_id)} if user_id == "usr_abcdef123" else None
+
+    @staticmethod
+    def validate_system_role(system_role):
+        role = str(system_role or "").strip().lower()
+        if not role or len(role) > 64 or not role[0].isalpha() or any(
+            not (char.islower() or char.isdigit() or char in "_-") for char in role
+        ):
+            raise ValueError("system_role must be a non-admin role slug")
+        if role in {"super_admin", "system_admin", "user_admin", "api_key_admin", "billing_admin", "plugin_admin", "support"}:
+            raise ValueError("system_role must be a non-admin role slug")
+        return role
+
+    def system_role_for(self, user_id):
+        if user_id not in self.roles:
+            raise KeyError("User not found")
+        return self.roles[user_id]
+
+    def set_system_role(self, user_id, system_role):
+        role = self.validate_system_role(system_role)
+        if user_id not in self.roles:
+            raise KeyError("User not found")
+        self.roles[user_id] = role
+        return {"user_id": user_id, "system_role": role}
 
 
 class FakeTenantMemberships:
@@ -693,3 +719,98 @@ def test_responses_hosted_image_tool_enforces_key_and_server_owned_image_model(t
     assert app.state.registry.resolve_calls == ["worker_1"]
     assert observed[1][0] == "key_1"
     assert observed[1][1]["model"] == "gpt-image"
+
+
+def test_user_role_and_subscription_plan_are_authoritative_entitlement_dimensions(tmp_path: Path):
+    app, _ = build_app(tmp_path)
+    store = app.state.model_entitlements
+    subscriptions = app.state.user_subscriptions
+    subscriptions.upsert_plan("pro", "Pro")
+    subscriptions.assign(
+        "usr_abcdef123", "pro", expires_at=None, assigned_by="root-admin",
+    )
+    store.upsert("global", "default", "allow", ["gpt-5.5", "gpt-5.6-sol"])
+    store.upsert("user_role", "user", "allow", ["gpt-5.5"])
+    store.upsert("subscription_plan", "pro", "allow", ["gpt-5.5"])
+
+    app.state.registry.routing_key_context.set("key_1")
+    tokens = set_model_context("gpt-5.5")
+    try:
+        assert app.state.registry.resolve_client(None) == "worker_1"
+    finally:
+        reset_model_context(tokens)
+
+    tokens = set_model_context("gpt-5.6-sol")
+    try:
+        with pytest.raises(HTTPException) as denied:
+            app.state.registry.resolve_client(None)
+        assert denied.value.status_code == 403
+        assert denied.value.detail["code"] == "model_not_entitled"
+    finally:
+        reset_model_context(tokens)
+
+    # A role change takes effect on the next request without editing policy.
+    app.state.user_accounts.set_system_role("usr_abcdef123", "trusted")
+    tokens = set_model_context("gpt-5.5")
+    try:
+        with pytest.raises(HTTPException):
+            app.state.registry.resolve_client(None)
+    finally:
+        reset_model_context(tokens)
+
+
+def test_user_role_and_subscription_plan_admin_routes_are_audited_and_separated(tmp_path: Path):
+    app, token = build_app(tmp_path)
+    with TestClient(app) as client:
+        role = client.put(
+            "/api/admin/users/usr_abcdef123/role",
+            cookies={"chat2api_admin_session": token},
+            json={"system_role": "trusted"},
+        )
+        assert role.status_code == 200
+        assert role.json()["user"]["system_role"] == "trusted"
+
+        plan = client.put(
+            "/api/admin/subscription-plans/pro",
+            cookies={"chat2api_admin_session": token},
+            json={"name": "Pro", "enabled": True},
+        )
+        assert plan.status_code == 200
+        assert plan.json()["plan"]["plan_id"] == "pro"
+
+        assigned = client.put(
+            "/api/admin/users/usr_abcdef123/subscription",
+            cookies={"chat2api_admin_session": token},
+            json={"plan_id": "pro"},
+        )
+        assert assigned.status_code == 200
+        assert assigned.json()["subscription"]["plan_id"] == "pro"
+
+        current = client.get(
+            "/api/admin/users/usr_abcdef123/subscription",
+            cookies={"chat2api_admin_session": token},
+        )
+        assert current.status_code == 200
+        assert current.json()["current"]["plan_id"] == "pro"
+
+        cancelled = client.delete(
+            "/api/admin/users/usr_abcdef123/subscription",
+            cookies={"chat2api_admin_session": token},
+        )
+        assert cancelled.status_code == 200
+        assert cancelled.json()["cancelled"] is True
+        assert app.state.user_subscriptions.current_plan_for_user(
+            "usr_abcdef123"
+        )["plan_id"] == "free"
+
+
+def test_subscription_expiry_falls_back_to_free_and_is_persistent(tmp_path: Path):
+    app, _ = build_app(tmp_path)
+    subscriptions = app.state.user_subscriptions
+    subscriptions.upsert_plan("pro", "Pro")
+    subscriptions.assign(
+        "usr_abcdef123", "pro",
+        expires_at="2020-01-01T00:00:00Z",
+        assigned_by="root-admin",
+    )
+
