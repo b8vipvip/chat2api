@@ -40,13 +40,13 @@ def reserve_wallet_charge(
         if not bool(config.get("billing_enabled")):
             return None
         price = pricing.model(model_id)
-        if not price:
-            # Billing-enabled managed accounts must never dispatch an
-            # unpriced model for free. Configure an explicit price (including
-            # an intentional zero-rate row) or disable wallet billing.
+        if not price or price.get("enabled", True) is not True:
+            # Disabled and unpriced rows are both closed to new paid requests.
+            # An intentional free model must have an explicit enabled zero-rate
+            # row; merely disabling its price must not bypass wallet admission.
             raise HTTPException(
                 status_code=503,
-                detail="Wallet price is not configured for this model",
+                detail="Wallet price is not configured or enabled for this model",
             )
         # Image and realtime Voice costs are not represented by text-token
         # usage in the current Worker protocol. A positive per-token price
