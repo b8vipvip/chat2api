@@ -347,7 +347,10 @@ def test_wallet_ledger_mutations_roll_back_non_os_save_failures(
         "request_id": "req_non_os_charge",
         "status": "completed",
         "requested_model": "gpt-5.6-sol",
-        "usage": {"prompt_tokens": 1000, "completion_tokens": 500, "estimated": True},
+        "usage": {
+            "prompt_tokens": 1000, "completion_tokens": 500,
+            "total_tokens": 1500, "estimated": True,
+        },
     }
     with monkeypatch.context() as patch:
         patch.setattr(billing, "_save", fail_save)
