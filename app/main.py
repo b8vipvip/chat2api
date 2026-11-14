@@ -2152,6 +2152,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             quota_reservation = reserve_request_quota(
                 app, request_id, principal, prompt, output_budget,
+                model_id=body.model,
             )
         except HTTPException as quota_error:
             await record_early_error(
@@ -2491,6 +2492,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             quota_reservation = reserve_image_generation_quota(
                 app, request_id, principal, body.prompt, body.n,
+                model_id="gpt-image",
             )
         except HTTPException as quota_error:
             state.completed_mono = time.perf_counter()
