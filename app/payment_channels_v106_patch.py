@@ -620,6 +620,13 @@ def install_payment_channels_v106_patch(app: FastAPI) -> FastAPI:
             row = billing.orders.get(order_id)
             if not row or row.get("channel") != "usdt":
                 raise HTTPException(status_code=404, detail="USDT 订单不存在")
+            if row.get("status") == "rejected":
+                return {"ok": True, "order": dict(row)}
+            if row.get("status") not in {"pending", "reviewing"}:
+                # A paid order has already credited the wallet. Never allow a
+                # later reject action to downgrade its status, because that
+                # would make its TXID appear reusable to duplicate detection.
+                raise HTTPException(status_code=409, detail="该 USDT 订单已完成或处于不可拒绝状态")
             previous = dict(row)
             row["status"] = "rejected"
             row["updated_at"] = _now()
