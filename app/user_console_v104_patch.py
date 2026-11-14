@@ -12,7 +12,7 @@ from urllib.parse import urlencode, urlsplit
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt
 
 from .admin_auth import SESSION_COOKIE as ADMIN_SESSION_COOKIE
 from .admin_audit import AdminAuditError, AdminAuditStore
@@ -94,7 +94,7 @@ class PaymentBody(BaseModel):
 
 
 class RechargeBody(BaseModel):
-    amount_cents: int = Field(ge=1, le=10_000_000)
+    amount_cents: StrictInt = Field(ge=1, le=10_000_000)
     channel: str = Field(pattern=r"^(alipay|wechat)$")
 
 
@@ -211,10 +211,37 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
         }
 
     def sync_user_charges(user_id: str) -> None:
-        owned = accounts.key_ids(user_id)
+        owned = set(accounts.key_ids(user_id))
         if not owned:
             return
-        for row in telemetry.recent(500):
+
+        # Keep the normal recent-history repair path, but do not rely on the
+        # 500-row in-memory window for a wallet hold that survived a process
+        # crash between telemetry persistence and charge/release projection.
+        rows_by_id = {
+            str(row.get("request_id") or ""): row
+            for row in telemetry.recent(500)
+            if str(row.get("request_id") or "")
+        }
+        active_holds = billing.active_reservations_for_user(user_id)
+        active_request_ids = {
+            str(row.get("request_id") or "")
+            for row in active_holds
+            if str(row.get("request_id") or "")
+        }
+        if active_request_ids:
+            persisted_lookup = getattr(telemetry, "get_many_persisted", None)
+            if callable(persisted_lookup):
+                try:
+                    # Exact request IDs are searched in the bounded persisted
+                    # JSONL tail; absent evidence leaves the hold untouched.
+                    rows_by_id.update(persisted_lookup(active_request_ids))
+                except (OSError, ValueError, TypeError):
+                    # Recovery is best effort. Never release funds without a
+                    # durable terminal row proving the request outcome.
+                    pass
+
+        for row in rows_by_id.values():
             if str(row.get("api_key_id") or "") not in owned:
                 continue
             status = str(row.get("status") or "").lower()
@@ -225,6 +252,11 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
                     str(row.get("request_id") or ""), user_id,
                     reason="reconciled_terminal_" + status,
                 )
+
+    # The production lifespan invokes this after TelemetryStore has loaded,
+    # so a process restart can reconcile every durable active wallet hold
+    # before the first authenticated request arrives.
+    app.state.wallet_charge_reconciler = sync_user_charges
 
     def public_request(row: dict[str, Any]) -> dict[str, Any]:
         diagnostics = row.get("diagnostics") if isinstance(row.get("diagnostics"), dict) else {}
@@ -624,8 +656,11 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
         user_id = str(user["user_id"])
         sync_user_charges(user_id)
         charge_rows = billing.charges_for_user(user_id)
+        refund_rows = billing.refunds_for_user(user_id)
         order_rows = billing.orders_for_user(user_id)
         payload = pricing.public()
+        debited_cents = sum(int(row.get("cost_cny_cents") or 0) for row in charge_rows if row.get("debited"))
+        refunded_cents = sum(int(row.get("amount_cents") or 0) for row in refund_rows)
         return {
             "balance_cents": billing.balance_cents(user_id),
             "reserved_cents": billing.reserved_cents(user_id),
@@ -633,8 +668,11 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
             "billing_enabled": bool(payload.get("billing_enabled")),
             "usd_cny_rate": float(payload.get("usd_cny_rate") or 0),
             "estimated_spend_cents": sum(int(row.get("cost_cny_cents") or 0) for row in charge_rows),
-            "debited_spend_cents": sum(int(row.get("cost_cny_cents") or 0) for row in charge_rows if row.get("debited")),
+            "debited_spend_cents": debited_cents,
+            "refunded_cents": refunded_cents,
+            "net_debited_spend_cents": max(0, debited_cents - refunded_cents),
             "charges": charge_rows[:100],
+            "refunds": refund_rows[:100],
             "orders": order_rows[:50],
             "payment": {
                 "enabled": bool(payments.public().get("enabled") and payments.public().get("configured")),

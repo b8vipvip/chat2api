@@ -85,6 +85,59 @@ def test_admin_user_session_revoke_is_idempotent_and_scoped(tmp_path: Path) -> N
     assert store.authenticate(bob_session)["user_id"] == bob["user_id"]
 
 
+@pytest.mark.parametrize("bad_rate", [float("nan"), float("inf"), True, -1.0])
+def test_pricing_rejects_non_finite_or_non_numeric_exchange_rates(
+    tmp_path: Path, bad_rate: float,
+) -> None:
+    pricing = PricingStore(tmp_path)
+    with pytest.raises(ValueError):
+        pricing.update(
+            billing_enabled=True,
+            usd_cny_rate=bad_rate,
+            models=pricing.public()["models"],
+        )
+    assert pricing.public()["billing_enabled"] is False
+
+
+@pytest.mark.parametrize("bad_price", [float("nan"), float("inf"), True, False, -1.0])
+def test_pricing_rejects_non_finite_or_invalid_model_rates(
+    tmp_path: Path, bad_price: float,
+) -> None:
+    pricing = PricingStore(tmp_path)
+    models = pricing.public()["models"]
+    models[0]["input_usd_per_million"] = bad_price
+    with pytest.raises(ValueError):
+        pricing.update(billing_enabled=True, usd_cny_rate=7.0, models=models)
+    assert pricing.public()["billing_enabled"] is False
+
+
+def test_pricing_config_load_fails_closed_on_non_finite_saved_rates(tmp_path: Path) -> None:
+    path = tmp_path / "user_pricing.json"
+    source = b'{"version":1,"billing_enabled":true,"usd_cny_rate":NaN,"models":[]}'
+    path.write_bytes(source)
+    with pytest.raises(RuntimeError, match="Pricing configuration is unreadable"):
+        PricingStore(tmp_path)
+    assert path.read_bytes() == source
+
+
+def test_pricing_update_rolls_back_memory_when_persistence_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pricing = PricingStore(tmp_path)
+    previous = pricing.public()
+    models = [dict(row) for row in previous["models"]]
+    models[0]["input_usd_per_million"] = 9.0
+
+    def fail_save() -> None:
+        raise OSError("simulated pricing config write failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(pricing, "_save", fail_save)
+        with pytest.raises(OSError, match="write failure"):
+            pricing.update(billing_enabled=True, usd_cny_rate=8.0, models=models)
+    assert pricing.public() == previous
+
+
 def test_default_model_prices_follow_current_reference_rate_card(tmp_path: Path) -> None:
     pricing = PricingStore(tmp_path)
     assert pricing.model("gpt-5.6-sol") == {
@@ -413,6 +466,74 @@ def test_wallet_reservation_settles_actual_charge_once_and_persists(tmp_path: Pa
         )
 
 
+@pytest.mark.parametrize(
+    "usage",
+    [
+        {},
+        {"prompt_tokens": 10, "completion_tokens": 5},
+        {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 0},
+        {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": True},
+        {"prompt_tokens": 10.5, "completion_tokens": 5, "total_tokens": 15},
+        {"prompt_tokens": 10, "completion_tokens": "5", "total_tokens": 15},
+        {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 16},
+        {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15, "cached_input_tokens": 11},
+    ],
+)
+def test_wallet_completed_request_without_valid_usage_keeps_reservation(
+    tmp_path: Path, usage: dict[str, object],
+) -> None:
+    pricing = PricingStore(tmp_path)
+    pricing_payload = pricing.public()
+    models = [dict(row) for row in pricing_payload["models"]]
+    for model_price in models:
+        if model_price["model_id"] == "gpt-5.6-sol":
+            model_price["input_usd_per_million"] = 1000.0
+            model_price["cached_input_usd_per_million"] = 100.0
+            model_price["output_usd_per_million"] = 1000.0
+    pricing.update(billing_enabled=True, usd_cny_rate=7.0, models=models)
+    billing = BillingStore(tmp_path)
+    billing.credit("usr_usage_pending", 1000)
+    billing.reserve_for_request(
+        "usr_usage_pending", "req_wallet_usage_pending",
+        model_id="gpt-5.6-sol", estimated_cny_cents=100,
+        input_tokens=100, output_tokens=4096,
+        price_snapshot=pricing.model("gpt-5.6-sol"), usd_cny_rate=7.0,
+    )
+
+    result = billing.record_charge(
+        "usr_usage_pending",
+        {
+            "request_id": "req_wallet_usage_pending",
+            "status": "completed",
+            "requested_model": "gpt-5.6-sol",
+            "usage": usage,
+        },
+        pricing,
+    )
+
+    assert result is None
+    assert billing.charge_for_request("req_wallet_usage_pending") is None
+    assert billing.reservations["req_wallet_usage_pending"]["state"] == "reserved"
+    assert billing.reserved_cents("usr_usage_pending") == 100
+    assert billing.balance_cents("usr_usage_pending") == 1000
+
+    # A replay with valid, internally consistent usage settles exactly once.
+    result = billing.record_charge(
+        "usr_usage_pending",
+        {
+            "request_id": "req_wallet_usage_pending",
+            "status": "completed",
+            "requested_model": "gpt-5.6-sol",
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        },
+        pricing,
+    )
+    assert result is not None and result["cost_cny_cents"] > 0
+    assert billing.reservations["req_wallet_usage_pending"]["state"] == "settled"
+    assert billing.reserved_cents("usr_usage_pending") == 0
+    assert billing.balance_cents("usr_usage_pending") == 1000 - result["cost_cny_cents"]
+
+
 def test_wallet_reservations_are_serialized_under_concurrent_admission(tmp_path: Path) -> None:
     billing = BillingStore(tmp_path)
     billing.credit("usr_wallet", 1000)
@@ -518,6 +639,113 @@ def test_wallet_reservation_rejects_user_request_before_worker_dispatch(tmp_path
     app.state.quota_reservations.close()
 
 
+
+
+def test_wallet_enabled_rejects_unpriced_model_and_releases_token_hold(tmp_path: Path) -> None:
+    import asyncio
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+    from app.config import Settings
+    from app.main import create_app
+    from app.quota_reservations import QuotaReservationStore
+    from app.quota_reservation_runtime_v1 import install_quota_reservation_runtime_v1, reserve_request_quota
+    from app.user_console_v104_patch import install_user_console_v104_patch
+
+    app = create_app(Settings(
+        CHAT2API_API_KEY="wallet-unpriced-master-key",
+        CHAT2API_DATA_DIR=str(tmp_path),
+    ))
+    install_user_console_v104_patch(app)
+    user = app.state.user_accounts.register("wallet-unpriced@example.com", "long-enough-password")
+    public, _token = asyncio.run(app.state.api_keys.create("wallet-unpriced"))
+    app.state.user_accounts.attach_key(user["user_id"], public["key_id"])
+    pricing = app.state.user_pricing
+    config = pricing.public()
+    pricing.update(
+        billing_enabled=True,
+        usd_cny_rate=7.0,
+        models=[row for row in config["models"] if row["model_id"] not in {"gpt-5.6-sol", "gpt-5.6"}],
+    )
+    billing = app.state.user_billing
+    billing.credit(user["user_id"], 1000)
+    app.state.quota_reservations = QuotaReservationStore(tmp_path)
+    install_quota_reservation_runtime_v1(app)
+
+    with pytest.raises(HTTPException) as error:
+        reserve_request_quota(
+            app, "req_wallet_unpriced_0001",
+            SimpleNamespace(kind="api_key", key_id=public["key_id"]),
+            "unpriced model request", 4096, model_id="gpt-5.6-sol",
+        )
+
+    assert error.value.status_code == 503
+    assert "not configured" in str(error.value.detail)
+    assert billing.balance_cents(user["user_id"]) == 1000
+    assert billing.reserved_cents(user["user_id"]) == 0
+    assert billing.charge_for_request("req_wallet_unpriced_0001") is None
+    token_rows = app.state.quota_reservations.list_reservations(key_id=public["key_id"])
+    assert len(token_rows) == 1
+    assert token_rows[0]["state"] == "released"
+    app.state.quota_reservations.close()
+
+
+@pytest.mark.parametrize("model_id", ["gpt-image", "gpt-live", "gpt-live-mini"])
+def test_wallet_billing_rejects_positive_text_rates_for_unmetered_media_models(
+    tmp_path: Path, model_id: str,
+) -> None:
+    import asyncio
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+    from app.config import Settings
+    from app.main import create_app
+    from app.quota_reservations import QuotaReservationStore
+    from app.quota_reservation_runtime_v1 import install_quota_reservation_runtime_v1, reserve_request_quota
+    from app.user_console_v104_patch import install_user_console_v104_patch
+
+    app = create_app(Settings(
+        CHAT2API_API_KEY="wallet-media-master-key",
+        CHAT2API_DATA_DIR=str(tmp_path),
+    ))
+    install_user_console_v104_patch(app)
+    user = app.state.user_accounts.register(f"{model_id}@example.com", "long-enough-password")
+    public, _token = asyncio.run(app.state.api_keys.create("wallet-media"))
+    app.state.user_accounts.attach_key(user["user_id"], public["key_id"])
+    pricing = app.state.user_pricing
+    config = pricing.public()
+    media_price = {
+        "model_id": model_id,
+        "name": model_id,
+        "enabled": True,
+        "input_usd_per_million": 1.0,
+        "cached_input_usd_per_million": 0.1,
+        "output_usd_per_million": 5.0,
+    }
+    pricing.update(
+        billing_enabled=True,
+        usd_cny_rate=7.0,
+        models=[*config["models"], media_price],
+    )
+    billing = app.state.user_billing
+    billing.credit(user["user_id"], 1000)
+    app.state.quota_reservations = QuotaReservationStore(tmp_path)
+    install_quota_reservation_runtime_v1(app)
+
+    with pytest.raises(HTTPException) as error:
+        reserve_request_quota(
+            app, f"req_wallet_{model_id.replace('-', '_')}_0001",
+            SimpleNamespace(kind="api_key", key_id=public["key_id"]),
+            "media request", 4096, model_id=model_id,
+        )
+
+    assert error.value.status_code == 503
+    assert "not metered" in str(error.value.detail)
+    assert billing.balance_cents(user["user_id"]) == 1000
+    assert billing.reserved_cents(user["user_id"]) == 0
+    token_rows = app.state.quota_reservations.list_reservations(key_id=public["key_id"])
+    assert len(token_rows) == 1 and token_rows[0]["state"] == "released"
+    app.state.quota_reservations.close()
 
 
 def test_wallet_storage_outage_rejects_dispatch_and_releases_token_hold(
@@ -754,3 +982,209 @@ def test_wallet_actual_overrun_posts_debt_and_blocks_new_reservations(tmp_path: 
             input_tokens=1, output_tokens=1,
             price_snapshot=price, usd_cny_rate=7.0,
         )
+
+
+
+def test_wallet_recovery_uses_persisted_request_id_beyond_telemetry_memory_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+
+    from fastapi.testclient import TestClient
+
+    from app.config import Settings
+    from app.main import create_app
+    from app.user_console_v104_patch import install_user_console_v104_patch
+
+    app = create_app(Settings(
+        CHAT2API_API_KEY="wallet-recovery-master-key",
+        CHAT2API_DATA_DIR=str(tmp_path),
+    ))
+    install_user_console_v104_patch(app)
+    user = app.state.user_accounts.register(
+        "wallet-recovery@example.com", "long-enough-password",
+    )
+    public, _token = asyncio.run(app.state.api_keys.create("wallet-recovery"))
+    app.state.user_accounts.attach_key(user["user_id"], public["key_id"])
+    pricing = app.state.user_pricing
+    config = pricing.public()
+    pricing.update(billing_enabled=True, usd_cny_rate=7.0, models=config["models"])
+    billing = app.state.user_billing
+    billing.credit(user["user_id"], 1000)
+    billing.reserve_for_request(
+        user["user_id"], "req_wallet_recovery_old",
+        model_id="gpt-5.6-sol", estimated_cny_cents=100,
+        input_tokens=100, output_tokens=4096,
+        price_snapshot=pricing.model("gpt-5.6-sol"), usd_cny_rate=7.0,
+    )
+
+    # Simulate a process interruption after the terminal telemetry row was
+    # durably appended but before BillingStore could project its charge.
+    def fail_charge(*_args, **_kwargs):
+        raise OSError("simulated crash between telemetry and billing projection")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(billing, "record_charge", fail_charge)
+        with pytest.raises(OSError, match="simulated crash"):
+            asyncio.run(app.state.telemetry.append({
+                "request_id": "req_wallet_recovery_old",
+                "api_key_id": public["key_id"],
+                "requested_model": "gpt-5.6-sol",
+                "status": "completed",
+                "usage": {
+                    "prompt_tokens": 1000, "completion_tokens": 500,
+                    "total_tokens": 1500, "estimated": True,
+                },
+                "diagnostics": {},
+            }))
+
+    # Evict the terminal row from TelemetryStore's maxlen=500 memory cache.
+    async def append_noise() -> None:
+        for index in range(501):
+            await app.state.telemetry.append({
+                "request_id": f"req_wallet_recovery_noise_{index}",
+                "status": "running",
+                "usage": {},
+            })
+
+    asyncio.run(append_noise())
+    assert len(app.state.telemetry.recent(1000)) == 500
+    assert all(
+        row.get("request_id") != "req_wallet_recovery_old"
+        for row in app.state.telemetry.recent(1000)
+    )
+    assert billing.reserved_cents(user["user_id"]) == 100
+    assert billing.charge_for_request("req_wallet_recovery_old") is None
+
+    session = app.state.user_accounts.create_session(user["user_id"])
+    with TestClient(app) as client:
+        # Lifespan startup loads persisted telemetry and runs wallet recovery
+        # before serving the first request, despite the row being outside the
+        # 500-item in-memory history window.
+        assert billing.charge_for_request("req_wallet_recovery_old") is not None
+        client.cookies.set("chat2api_user_session", session)
+        response = client.get("/api/user/billing")
+
+    assert response.status_code == 200, response.text
+    charge = billing.charge_for_request("req_wallet_recovery_old")
+    assert charge is not None and charge["debited"] is True
+    assert billing.reservations["req_wallet_recovery_old"]["state"] == "settled"
+    assert billing.reserved_cents(user["user_id"]) == 0
+    assert billing.balance_cents(user["user_id"]) == 1000 - charge["cost_cny_cents"]
+
+
+
+def test_wallet_enabled_rejects_disabled_model_price_and_releases_token_hold(tmp_path: Path) -> None:
+    import asyncio
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+    from app.config import Settings
+    from app.main import create_app
+    from app.quota_reservations import QuotaReservationStore
+    from app.quota_reservation_runtime_v1 import install_quota_reservation_runtime_v1, reserve_request_quota
+    from app.user_console_v104_patch import install_user_console_v104_patch
+
+    app = create_app(Settings(
+        CHAT2API_API_KEY="wallet-disabled-price-master-key",
+        CHAT2API_DATA_DIR=str(tmp_path),
+    ))
+    install_user_console_v104_patch(app)
+    user = app.state.user_accounts.register("wallet-disabled-price@example.com", "long-enough-password")
+    public, _token = asyncio.run(app.state.api_keys.create("wallet-disabled-price"))
+    app.state.user_accounts.attach_key(user["user_id"], public["key_id"])
+    pricing = app.state.user_pricing
+    config = pricing.public()
+    models = [dict(row) for row in config["models"]]
+    for row in models:
+        if row["model_id"] in {"gpt-5.6-sol", "gpt-5.6"}:
+            row["enabled"] = False
+    pricing.update(billing_enabled=True, usd_cny_rate=7.0, models=models)
+    billing = app.state.user_billing
+    billing.credit(user["user_id"], 1000)
+    app.state.quota_reservations = QuotaReservationStore(tmp_path)
+    install_quota_reservation_runtime_v1(app)
+
+    with pytest.raises(HTTPException) as error:
+        reserve_request_quota(
+            app, "req_wallet_disabled_price_0001",
+            SimpleNamespace(kind="api_key", key_id=public["key_id"]),
+            "disabled model price request", 4096, model_id="gpt-5.6-sol",
+        )
+
+    assert error.value.status_code == 503
+    assert "not configured or enabled" in str(error.value.detail)
+    assert billing.balance_cents(user["user_id"]) == 1000
+    assert billing.reserved_cents(user["user_id"]) == 0
+    assert billing.charge_for_request("req_wallet_disabled_price_0001") is None
+    token_rows = app.state.quota_reservations.list_reservations(key_id=public["key_id"])
+    assert len(token_rows) == 1 and token_rows[0]["state"] == "released"
+    app.state.quota_reservations.close()
+
+def test_legacy_payment_config_corruption_fails_closed_without_overwrite(tmp_path: Path) -> None:
+    path = tmp_path / "user_payment_config.json"
+    original = b'{"version":'
+    path.write_bytes(original)
+
+    with pytest.raises(RuntimeError, match="existing file was preserved"):
+        PaymentConfigStore(tmp_path, "server-local-data-secret")
+    assert path.read_bytes() == original
+
+
+def test_legacy_payment_config_cipher_mismatch_fails_closed_without_overwrite(tmp_path: Path) -> None:
+    store = PaymentConfigStore(tmp_path, "original-server-data-secret")
+    store.update({
+        "enabled": True,
+        "pid": "1234567890",
+        "key": "legacy-zpay-secret",
+        "alipay_enabled": True,
+        "wechat_enabled": True,
+        "alipay_cid": "1",
+        "wechat_cid": "2",
+        "public_origin": "https://api.example.com",
+    })
+    original = (tmp_path / "user_payment_config.json").read_bytes()
+
+    with pytest.raises(RuntimeError, match="cannot be decrypted"):
+        PaymentConfigStore(tmp_path, "rotated-or-missing-server-data-secret")
+    assert (tmp_path / "user_payment_config.json").read_bytes() == original
+
+
+def test_legacy_payment_config_update_rolls_back_memory_when_persistence_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = PaymentConfigStore(tmp_path, "server-local-data-secret")
+    store.update({
+        "enabled": True,
+        "pid": "1234567890",
+        "key": "existing-zpay-secret",
+        "alipay_enabled": True,
+        "wechat_enabled": True,
+        "alipay_cid": "1",
+        "wechat_cid": "2",
+        "public_origin": "https://api.example.com",
+    })
+    previous_payload = dict(store.payload)
+    previous_public = store.public()
+    original_file = store.path.read_bytes()
+
+    def fail_save() -> None:
+        raise OSError("simulated payment config disk failure")
+
+    monkeypatch.setattr(store, "_save", fail_save)
+    with pytest.raises(OSError, match="simulated payment config disk failure"):
+        store.update({
+            "enabled": False,
+            "pid": "different-pid",
+            "key": "replacement-secret",
+            "alipay_enabled": False,
+            "wechat_enabled": False,
+            "alipay_cid": "3",
+            "wechat_cid": "4",
+            "public_origin": "https://other.example.com",
+        })
+
+    assert store.payload == previous_payload
+    assert store.public() == previous_public
+    assert store.path.read_bytes() == original_file
+

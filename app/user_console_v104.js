@@ -191,6 +191,7 @@
     $("balance").textContent = money(payload.available_balance_cents ?? payload.balance_cents);
     $("reservedBalance").textContent = money(payload.reserved_cents);
     $("billingSpend").textContent = money(payload.estimated_spend_cents);
+    $("refundedSpend").textContent = money(payload.refunded_cents);
     $("billingState").textContent = payload.billing_enabled ? "已启用" : "统计中";
     $("fxRate").textContent = Number(payload.usd_cny_rate || 0).toFixed(4);
     const payment = payload.payment || {};
