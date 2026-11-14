@@ -84,7 +84,9 @@ the Control Plane maps this route to `billing:write`. Caller body:
   write. The V107 middleware check is only an early rejection; concurrent
   confirmations cannot both credit the same TRON transaction. Manual
   confirmation requires the order to be in `reviewing` state, while a retry
-  of the already-paid same order remains idempotent.
+  of the already-paid same order remains idempotent. Rejection is limited to
+  pending/reviewing orders and cannot downgrade a paid order or make its TXID
+  reusable for another credit.
 - The internal wallet ledger uses an in-process lock plus atomic
   file replacement under P-01's **single-process** runtime.
   Multi-worker or multi-host wallet transactions are not supported.
