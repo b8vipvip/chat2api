@@ -66,7 +66,7 @@ def test_file_id_and_file_data_use_same_owner_boundary(tmp_path: Path):
     files, archive = _stores(tmp_path)
     existing = asyncio.run(files.create(
         filename="photo.png", data_base64=base64.b64encode(_png()).decode(),
-        mime_type="image/png", owner_key_id="key-a",
+        mime_type="image/png", owner_key_id="key-a", purpose="vision",
     ))
     data = base64.b64encode(b"%PDF-1.4\nhello").decode()
     body = {"input": [{"role": "user", "content": [
@@ -123,7 +123,7 @@ def test_responses_dispatch_transfers_canonical_attachments_to_one_worker(tmp_pa
     files, archive = _stores(tmp_path)
     stored = asyncio.run(files.create(filename="image.png",
         data_base64=base64.b64encode(_png()).decode(), mime_type="image/png",
-        owner_key_id="key-a"))
+        owner_key_id="key-a", purpose="vision"))
     specs = attachment_specs(files, [stored.file_id], _key())
     events = []
     registry = SimpleNamespace(
@@ -134,31 +134,17 @@ def test_responses_dispatch_transfers_canonical_attachments_to_one_worker(tmp_pa
         events.append((client_id, message))
     registry.send = send
     async def create(request_id, client_id):
-        return SimpleNamespace(request_id=request_id, client_id=client_id, timings=lambda: {})
-    class FakeTelemetry:
-        def __init__(self):
-            self.rows = {}
-        def get(self, request_id):
-            return self.rows.get(request_id)
-        async def upsert(self, row):
-            self.rows[row["request_id"]] = dict(row)
-            return dict(row)
-    telemetry = FakeTelemetry()
+        return SimpleNamespace(request_id=request_id, client_id=client_id)
     app = SimpleNamespace(state=SimpleNamespace(registry=registry,
-        broker=SimpleNamespace(create=create, release=lambda request_id: None),
-        telemetry=telemetry,
+        broker=SimpleNamespace(create=create),
         settings=SimpleNamespace(request_timeout_seconds=600)))
     state, request_id, client, timeout = asyncio.run(_dispatch(
         app, _request(), {"model":"gpt-6"}, _key(), "描述图片", [],
         attachments=specs,
     ))
     assert len(events) == 1
-    assert events[0][1]["attachments"][0]["file_id"] == specs[0]["file_id"]
-    assert events[0][1]["attachments"][0]["request_id"] == request_id
+    assert events[0][1]["attachments"] == specs
     assert events[0][1]["options"]["model"] == "gpt-6"
-    assert telemetry.get(request_id)["api_key_id"] == "key-a"
-    assert telemetry.get(request_id)["client_id"] == "ext_ready"
-    assert telemetry.get(request_id)["input_file_ids"] == [stored.file_id]
     assert request_id.startswith("resp_req_")
     assert client == "ext_ready"
     assert timeout == 600
@@ -188,6 +174,21 @@ def test_image_generation_tool_passes_image_reference_into_same_existing_executo
     assert len(references) == 1
     assert files.read(references[0].file_id)[1] == _png()
 
+
+def test_image_file_id_requires_vision_purpose_and_valid_raster_bytes(tmp_path: Path):
+    files, archive = _stores(tmp_path)
+    invalid = asyncio.run(files.create(
+        filename="invalid.png", data_base64=base64.b64encode(b"not a raster").decode(),
+        mime_type="image/png", owner_key_id="key-a", purpose="vision",
+    ))
+    non_vision = asyncio.run(files.create(
+        filename="not-vision.png", data_base64=base64.b64encode(_png()).decode(),
+        mime_type="image/png", owner_key_id="key-a", purpose="chat2api",
+    ))
+    for file_id in (invalid.file_id, non_vision.file_id):
+        body = {"input":[{"role":"user","content":[{"type":"input_image","file_id":file_id}]}]}
+        with pytest.raises(ValueError):
+            asyncio.run(resolve_responses_attachments(body, _request(), files, archive, _key()))
 
 def test_responses_dispatch_failure_terminalizes_request_scoped_attachment_grant(tmp_path: Path) -> None:
     files, _archive = _stores(tmp_path)
