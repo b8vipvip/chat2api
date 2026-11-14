@@ -1067,6 +1067,39 @@ class BillingStore:
                 raise
             return dict(row)
 
+    def settle_usdt_order(self, order_id: str, txid: str) -> dict[str, Any]:
+        """Atomically enforce one-TRON-TXID/one-USDT-order wallet settlement."""
+        normalized_txid = str(txid or "").strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", normalized_txid):
+            raise WalletReservationError("A valid 64-character TRON transaction hash is required")
+        with self.lock:
+            row = self.orders.get(str(order_id or ""))
+            if not row or row.get("channel") != "usdt":
+                raise KeyError("USDT order does not exist")
+            stored_txid = str(row.get("txid") or "").strip().lower()
+            if stored_txid != normalized_txid:
+                raise WalletReservationError("Submitted TRON transaction hash does not match the order")
+            if row.get("status") == "paid":
+                return dict(row)
+            if row.get("status") != "reviewing":
+                raise WalletReservationError("USDT order is not awaiting manual review")
+            duplicate = next(
+                (
+                    item for other_id, item in self.orders.items()
+                    if other_id != order_id
+                    and item.get("channel") == "usdt"
+                    and item.get("status") == "paid"
+                    and secrets.compare_digest(str(item.get("txid") or "").strip().lower(), normalized_txid)
+                ),
+                None,
+            )
+            if duplicate:
+                raise WalletReservationError("TRON transaction hash has already credited another USDT order")
+            # RLock keeps the duplicate check and the underlying atomic ledger
+            # write in one critical section. settle_order also rolls back its
+            # in-memory mutation if persistence fails.
+            return self.settle_order(order_id, normalized_txid)
+
     def orders_for_user(self, user_id: str) -> list[dict[str, Any]]:
         with self.lock:
             rows = [dict(row) for row in self.orders.values() if row.get("user_id") == user_id]
