@@ -122,7 +122,7 @@ class FakeApiKeys:
         return {"key_id": key_id} if key_id in {"key_1", "key_2"} else None
 
 
-def build_app(tmp_path: Path):
+def build_app(tmp_path: Path, *, image_executor=None):
     app = FastAPI()
     app.state.settings = SimpleNamespace(data_dir=tmp_path, admin_username="owner")
     app.state.registry = FakeRegistry()
@@ -133,6 +133,8 @@ def build_app(tmp_path: Path):
         "owner", "strong-admin-password", storage_path=tmp_path / "admin_sessions.json"
     )
     token = app.state.admin_sessions.create()
+    if image_executor is not None:
+        app.state.image_generation_executor = image_executor
 
     @app.get("/api/user/models")
     async def user_models():
@@ -668,17 +670,11 @@ def test_legacy_v13_catalog_and_completions_bind_authenticated_api_key_context(t
 
 
 def test_responses_hosted_image_tool_enforces_key_and_server_owned_image_model(tmp_path: Path):
-    app, _ = build_app(tmp_path)
-    app.state.responses_v108_store = {}
-    principal = ApiPrincipal(
-        key_id="key_1",
-        name="image-key",
-        kind="managed",
-        scopes=("chat", "images"),
-    )
+    holder = {}
     observed = []
 
     async def image_executor(**kwargs):
+        app = holder["app"]
         observed.append((
             app.state.registry.routing_key_context.get(),
             model_routing._MODEL_CONTEXT.get(),
@@ -687,7 +683,15 @@ def test_responses_hosted_image_tool_enforces_key_and_server_owned_image_model(t
         app.state.registry.resolve_client(None)
         return {"data": [{"b64_json": "aW1hZ2U="}], "chat2api": {}}
 
-    app.state.image_generation_executor = image_executor
+    app, _ = build_app(tmp_path, image_executor=image_executor)
+    holder["app"] = app
+    app.state.responses_v108_store = {}
+    principal = ApiPrincipal(
+        key_id="key_1",
+        name="image-key",
+        kind="managed",
+        scopes=("chat", "images"),
+    )
     request = Request({
         "type": "http",
         "method": "POST",
@@ -720,6 +724,8 @@ def test_responses_hosted_image_tool_enforces_key_and_server_owned_image_model(t
     assert app.state.registry.resolve_calls == ["worker_1"]
     assert observed[1][0] == "key_1"
     assert observed[1][1]["model"] == "gpt-image"
+    assert app.state.registry.routing_key_context.get() is None
+    assert model_routing._MODEL_CONTEXT.get() is None
 
 
 def test_user_role_and_subscription_plan_are_authoritative_entitlement_dimensions(tmp_path: Path):
