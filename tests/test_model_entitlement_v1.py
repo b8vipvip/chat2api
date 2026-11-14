@@ -6,11 +6,13 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from app.admin_auth import AdminSessionStore
 from app.api_keys import ApiPrincipal
+from app.models import ChatCompletionRequest
 from app.live_voice_patch import install_live_voice_patch
 from app.voice_patch import install_voice_patch
 from app.model_entitlement_v1_patch import install_model_entitlements
@@ -526,3 +528,107 @@ def test_tenant_allowlist_applies_only_through_explicit_api_key_binding(tmp_path
     # An unbound key does not inherit another tenant's policy.
     registry.routing_key_context.set("key_2")
     assert [row["id"] for row in registry.model_catalog()] == ["gpt-5.5", "gpt-5.6-sol"]
+
+
+def test_legacy_v13_catalog_and_completions_bind_authenticated_api_key_context(tmp_path: Path):
+    app = FastAPI()
+    app.state.settings = SimpleNamespace(
+        data_dir=tmp_path,
+        admin_username="owner",
+        api_key="master-test-secret",
+    )
+    registry = FakeRegistry()
+
+    async def send(_client_id, _payload):
+        return None
+
+    registry.send = send
+    app.state.registry = registry
+    app.state.user_accounts = FakeAccounts()
+    app.state.tenant_memberships = FakeTenantMemberships()
+
+    class LegacyApiKeys:
+        async def authenticate(self, token):
+            scopes = {
+                "chat-token": ("chat",),
+                "models-token": ("models",),
+            }.get(token)
+            if scopes is None:
+                return None
+            return ApiPrincipal(
+                key_id="key_1",
+                name="legacy-test",
+                kind="managed",
+                scopes=scopes,
+            )
+
+        def get_public(self, key_id):
+            return {"key_id": key_id} if key_id == "key_1" else None
+
+    app.state.api_keys = LegacyApiKeys()
+    app.state.admin_sessions = AdminSessionStore(
+        "owner", "strong-admin-password", storage_path=tmp_path / "admin_sessions.json"
+    )
+
+    @app.post("/v1/chat/completions")
+    async def chat_endpoint(
+        body: ChatCompletionRequest,
+        request: Request,
+        x_chat2api_client: str | None = None,
+        x_chat2api_request_id: str | None = None,
+        principal: Any = None,
+    ):
+        # v13 calls this adapter directly rather than through FastAPI's
+        # require_api_key dependency. The entitlement check must still see
+        # the principal authenticated by the outer legacy route.
+        client_id = registry.resolve_client(body.client_id or x_chat2api_client)
+        return JSONResponse({
+            "id": "chatcmpl_legacy_test",
+            "choices": [{"message": {"content": "allowed"}, "finish_reason": "stop"}],
+            "usage": {},
+            "chat2api": {"client_id": client_id},
+        })
+
+    # Production order: the legacy route/catalog decorators are installed
+    # first, then C-03A wraps their final resolver/catalog boundary.
+    v13_patch.install_v13_patch(app)
+    install_model_entitlements(app)
+    app.state.model_entitlements.upsert("key", "key_1", "deny", ["gpt-5.5"])
+
+    with TestClient(app) as client:
+        denied_catalog_item = client.get(
+            "/v1/models/gpt-5.5",
+            headers={"Authorization": "Bearer models-token"},
+        )
+        assert denied_catalog_item.status_code == 404
+
+        allowed_catalog_item = client.get(
+            "/v1/models/gpt-5.6-sol",
+            headers={"Authorization": "Bearer models-token"},
+        )
+        assert allowed_catalog_item.status_code == 200
+        assert allowed_catalog_item.json()["id"] == "gpt-5.6-sol"
+
+        wrong_scope = client.get(
+            "/v1/models/gpt-5.6-sol",
+            headers={"Authorization": "Bearer chat-token"},
+        )
+        assert wrong_scope.status_code == 403
+
+        denied_completion = client.post(
+            "/v1/completions",
+            headers={"Authorization": "Bearer chat-token"},
+            json={"model": "gpt-5.5", "prompt": "must be denied"},
+        )
+        assert denied_completion.status_code == 403
+        assert denied_completion.json()["detail"]["code"] == "model_not_entitled"
+        assert registry.resolve_calls == []
+
+        allowed_completion = client.post(
+            "/v1/completions",
+            headers={"Authorization": "Bearer chat-token"},
+            json={"model": "gpt-5.6-sol", "prompt": "must be allowed"},
+        )
+        assert allowed_completion.status_code == 200
+        assert allowed_completion.json()["choices"][0]["text"] == "allowed"
+        assert registry.resolve_calls == ["worker_1"]
