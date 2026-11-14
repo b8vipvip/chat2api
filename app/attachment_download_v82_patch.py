@@ -37,6 +37,7 @@ def install_attachment_download_v82_patch(app: FastAPI) -> FastAPI:
     registry = app.state.registry
     file_store = app.state.file_store
     telemetry = app.state.telemetry
+    broker = app.state.broker
 
     # app.main owns the historical route. Replace it rather than adding a
     # duplicate route because Starlette resolves the first matching route.
@@ -63,9 +64,14 @@ def install_attachment_download_v82_patch(app: FastAPI) -> FastAPI:
         # explicitly attached to that request, and the request API key owns it.
         row = telemetry.get(request_id)
         item = file_store.get(file_id)
+        active = getattr(broker, "requests", {}).get(request_id)
         allowed_ids = row.get("input_file_ids") if isinstance(row, dict) else None
         if (
             not isinstance(row, dict)
+            or active is None
+            or str(getattr(active, "client_id", "") or "") != client_id
+            or getattr(active, "terminal_event_type", None) is not None
+            or getattr(active, "completed_mono", None) is not None
             or str(row.get("status") or "") != "running"
             or str(row.get("client_id") or "") != client_id
             or not item
