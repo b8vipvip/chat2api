@@ -61,12 +61,12 @@ This prevents a broad alias from bypassing a concrete allowlist.
   explicitly binds and restores the authenticated key context rather than
   relying on the main API dependency.
 - GET /api/user/models: filter the production pricing catalog by its
-  `model_id` field. Without `key_id`, apply global/user policy only; the
-  browser session is not enough to infer one tenant when the user belongs to
-  multiple workspaces. The Playground supplies its selected `key_id`; the
-  server first verifies that the key belongs to the authenticated user, then
-  applies the complete global/tenant/tenant-role/user/key intersection. A
-  foreign or unowned key returns 404.
+  `model_id` field. Without `key_id`, apply global/user/user-role/subscription-
+  plan policy; the browser session is not enough to infer one tenant when the
+  user belongs to multiple workspaces. The Playground supplies its selected
+  `key_id`; the server first verifies that the key belongs to the authenticated
+  user, then applies the complete global/tenant/tenant-role/user-role/
+  subscription-plan/user/key intersection. A foreign or unowned key returns 404.
 - The shared registry.resolve_client boundary rejects unauthorized requests
   with HTTP 403 before the existing Worker resolver.
 - Request model context is owned by the existing routing adapters:
