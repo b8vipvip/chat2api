@@ -135,8 +135,17 @@ def test_responses_dispatch_transfers_canonical_attachments_to_one_worker(tmp_pa
     registry.send = send
     async def create(request_id, client_id):
         return SimpleNamespace(request_id=request_id, client_id=client_id)
+    class FakeTelemetry:
+        def __init__(self):
+            self.rows = {}
+        def get(self, request_id):
+            return self.rows.get(request_id)
+        async def upsert(self, row):
+            self.rows[row["request_id"]] = dict(row)
+            return dict(row)
+    telemetry = FakeTelemetry()
     app = SimpleNamespace(state=SimpleNamespace(registry=registry,
-        broker=SimpleNamespace(create=create),
+        broker=SimpleNamespace(create=create), telemetry=telemetry,
         settings=SimpleNamespace(request_timeout_seconds=600)))
     state, request_id, client, timeout = asyncio.run(_dispatch(
         app, _request(), {"model":"gpt-6"}, _key(), "描述图片", [],
