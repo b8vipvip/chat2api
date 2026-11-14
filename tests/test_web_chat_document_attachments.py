@@ -100,7 +100,11 @@ def test_chat_completion_file_content_part_is_forwarded_to_worker(tmp_path: Path
                 # extension endpoint after receiving the scoped attachment spec.
                 downloaded = client.get(
                     f"/api/extensions/files/{document['id']}",
-                    params={"client_id": client_id, "token": token},
+                    params={
+                        "request_id": message["request_id"],
+                        "client_id": client_id,
+                        "token": token,
+                    },
                 )
                 assert downloaded.status_code == 200, downloaded.text
                 assert downloaded.content == payload

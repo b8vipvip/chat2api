@@ -106,7 +106,16 @@ def validate_document_file(file_store: FileStore, file_id: str, principal: ApiPr
         raise ValueError("file content part must reference an assistants document with a supported MIME type")
     try:
         stored, payload = file_store.read(file_id)
-    except (KeyError, FileNotFoundError, OSError) as error:
+    except (KeyError, FileNotFoundError) as error:
+        raise ValueError("file content part document bytes are unavailable") from error
+    except OSError as error:
+        # FileStore distinguishes size and digest integrity failures from
+        # ordinary missing/unreadable payloads. Preserve that distinction
+        # without exposing filesystem paths or raw storage exceptions.
+        if "size integrity" in str(error).lower():
+            raise ValueError("file content part document byte count does not match its metadata") from error
+        if "sha-256 integrity" in str(error).lower():
+            raise ValueError("file content part document SHA-256 integrity check failed") from error
         raise ValueError("file content part document bytes are unavailable") from error
     if not payload or stored.size != len(payload):
         raise ValueError("file content part document byte count does not match its metadata")
