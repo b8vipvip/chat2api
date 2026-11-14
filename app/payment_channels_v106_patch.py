@@ -15,7 +15,7 @@ import httpx
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt
 
 from .admin_auth import SESSION_COOKIE as ADMIN_SESSION_COOKIE
 from .timezone_utils import beijing_now_iso
@@ -243,7 +243,7 @@ class PaymentChannelsBody(BaseModel):
 
 
 class RechargeV106Body(BaseModel):
-    amount_cents: int = Field(ge=1, le=10_000_000)
+    amount_cents: StrictInt = Field(ge=1, le=10_000_000)
     channel: str = Field(pattern=r"^(alipay|wechat|paypal|usdt)$")
 
 
@@ -285,9 +285,11 @@ def install_payment_channels_v106_patch(app: FastAPI) -> FastAPI:
     original_create_order = billing.create_order
 
     def create_order_extended(self: Any, user_id: str, amount_cents: int, channel: str) -> dict[str, Any]:
+        if type(amount_cents) is not int:
+            raise ValueError("充值金额必须为整数分")
         if channel in {"alipay", "wechat"}:
             return original_create_order(user_id, amount_cents, channel)
-        amount = int(amount_cents)
+        amount = amount_cents
         if amount < 1 or amount > 10_000_000 or channel not in {"paypal", "usdt"}:
             raise ValueError("不支持的充值订单")
         order_id = "pay_" + secrets.token_urlsafe(10).replace("-", "").replace("_", "")
@@ -310,7 +312,11 @@ def install_payment_channels_v106_patch(app: FastAPI) -> FastAPI:
         }
         with self.lock:
             self.orders[order_id] = row
-            self._save()
+            try:
+                self._save()
+            except Exception:
+                self.orders.pop(order_id, None)
+                raise
         return dict(row)
 
     billing.create_order = MethodType(create_order_extended, billing)
@@ -339,9 +345,14 @@ def install_payment_channels_v106_patch(app: FastAPI) -> FastAPI:
             row = billing.orders.get(order_id)
             if not row:
                 raise KeyError("充值订单不存在")
+            previous = dict(row)
             row.update(values)
             row["updated_at"] = _now()
-            billing._save()
+            try:
+                billing._save()
+            except Exception:
+                billing.orders[order_id] = previous
+                raise
             return dict(row)
 
     async def paypal_token() -> tuple[str, str]:
@@ -474,10 +485,15 @@ def install_payment_channels_v106_patch(app: FastAPI) -> FastAPI:
                 raise HTTPException(status_code=404, detail="USDT 充值订单不存在")
             if order.get("status") == "paid":
                 return {"ok": True, "order": dict(order)}
+            previous = dict(order)
             order["txid"] = txid.lower()
             order["status"] = "reviewing"
             order["updated_at"] = _now()
-            billing._save()
+            try:
+                billing._save()
+            except Exception:
+                billing.orders[order_id] = previous
+                raise
             return {"ok": True, "order": dict(order)}
 
     @app.api_route("/api/user/payments/v106/zpay/notify", methods=["GET", "POST"], include_in_schema=False)
@@ -591,9 +607,14 @@ def install_payment_channels_v106_patch(app: FastAPI) -> FastAPI:
             if action == "confirm" and not re.fullmatch(r"[0-9a-f]{64}", txid):
                 raise HTTPException(status_code=409, detail="用户尚未提交有效交易哈希")
             if action == "reject":
+                previous = dict(row)
                 row["status"] = "rejected"
                 row["updated_at"] = _now()
-                billing._save()
+                try:
+                    billing._save()
+                except Exception:
+                    billing.orders[order_id] = previous
+                    raise
                 return {"ok": True, "order": dict(row)}
         return {"ok": True, "order": billing.settle_order(order_id, txid)}
 
