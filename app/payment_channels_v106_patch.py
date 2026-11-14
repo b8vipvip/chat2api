@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field, StrictInt
 
 from .admin_auth import SESSION_COOKIE as ADMIN_SESSION_COOKIE
 from .timezone_utils import beijing_now_iso
-from .user_commerce import USER_SESSION_COOKIE
+from .user_commerce import USER_SESSION_COOKIE, WalletReservationError
 from .user_console_v104_patch import _parse_json_maybe_wrapped, _safe_url, _verify_zpay, _zpay_sign
 
 
@@ -599,36 +599,27 @@ def install_payment_channels_v106_patch(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=401, detail="Administrator login required")
         if action not in {"confirm", "reject"}:
             raise HTTPException(status_code=400, detail="不支持的审核动作")
+        if action == "confirm":
+            with billing.lock:
+                row = billing.orders.get(order_id)
+                if not row or row.get("channel") != "usdt":
+                    raise HTTPException(status_code=404, detail="USDT 订单不存在")
+                txid = str(row.get("txid") or "").lower()
+                if not re.fullmatch(r"[0-9a-f]{64}", txid):
+                    raise HTTPException(status_code=409, detail="用户尚未提交有效交易哈希")
+                try:
+                    # The BillingStore owns the atomic duplicate-check + credit
+                    # transaction; middleware is only an early rejection.
+                    settled = billing.settle_usdt_order(order_id, txid)
+                except KeyError as exc:
+                    raise HTTPException(status_code=404, detail="USDT 订单不存在") from exc
+                except WalletReservationError as exc:
+                    raise HTTPException(status_code=409, detail=str(exc)) from exc
+                return {"ok": True, "order": settled}
         with billing.lock:
             row = billing.orders.get(order_id)
             if not row or row.get("channel") != "usdt":
                 raise HTTPException(status_code=404, detail="USDT 订单不存在")
-            txid = str(row.get("txid") or "").lower()
-            if action == "confirm":
-                if not re.fullmatch(r"[0-9a-f]{64}", txid):
-                    raise HTTPException(status_code=409, detail="用户尚未提交有效交易哈希")
-                # Keep the duplicate-proof check and wallet credit under the
-                # same BillingStore lock. The v107 middleware check is only an
-                # early rejection optimization; it is not the transaction
-                # boundary because another request may pass it concurrently.
-                if row.get("status") != "paid" and row.get("status") != "reviewing":
-                    raise HTTPException(status_code=409, detail="USDT 订单尚未进入人工审核状态")
-                duplicate = next(
-                    (
-                        item for other_id, item in billing.orders.items()
-                        if other_id != order_id
-                        and item.get("channel") == "usdt"
-                        and item.get("status") == "paid"
-                        and txid
-                        and secrets.compare_digest(str(item.get("txid") or "").lower(), txid)
-                    ),
-                    None,
-                )
-                if duplicate:
-                    raise HTTPException(status_code=409, detail="该 TRON 交易哈希已经用于其他已入账订单，禁止重复入账")
-                # settle_order uses the same re-entrant lock and atomically
-                # persists the paid state and wallet credit before unlock.
-                return {"ok": True, "order": billing.settle_order(order_id, txid)}
             previous = dict(row)
             row["status"] = "rejected"
             row["updated_at"] = _now()
