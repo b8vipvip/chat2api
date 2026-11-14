@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextvars
+from contextlib import contextmanager
 import json
 import secrets
 import time
@@ -277,7 +278,9 @@ def install_v13_patch(app: FastAPI) -> FastAPI:
             supplied = authorization[7:].strip()
         return supplied
 
-    async def require_chat_principal(request: Request) -> ApiPrincipal:
+    async def require_chat_principal(
+        request: Request, *, required_scope: str = "chat",
+    ) -> ApiPrincipal:
         supplied = supplied_token(request)
         if not supplied:
             raise HTTPException(status_code=401, detail="Missing API key")
@@ -289,9 +292,24 @@ def install_v13_patch(app: FastAPI) -> FastAPI:
         principal = await api_keys.authenticate(supplied)
         if not principal:
             raise HTTPException(status_code=401, detail="Invalid or disabled API key")
-        if "chat" not in principal.scopes:
-            raise HTTPException(status_code=403, detail="API key does not have 'chat' permission")
+        if required_scope not in principal.scopes:
+            raise HTTPException(
+                status_code=403,
+                detail=f"API key does not have '{required_scope}' permission",
+            )
         return principal
+
+    @contextmanager
+    def bind_authenticated_routing_key(principal: ApiPrincipal):
+        # The legacy v13 adapters authenticate manually and call the shared
+        # Chat endpoint directly, bypassing main.require_api_key's dependency.
+        # Bind the same authenticated principal while model catalog filtering
+        # or Worker resolution runs, then restore the previous context.
+        token = registry.routing_key_context.set(principal.key_id)
+        try:
+            yield
+        finally:
+            registry.routing_key_context.reset(token)
 
     async def response_bytes(response) -> bytes:
         body = getattr(response, "body", None)
@@ -354,9 +372,11 @@ def install_v13_patch(app: FastAPI) -> FastAPI:
 
     @app.get("/v1/models/{model_id}")
     async def retrieve_model(model_id: str, request: Request) -> dict[str, Any]:
-        await require_chat_principal(request)
-        catalog = {row["id"]: row for row in registry.model_catalog(online_only=True)}
+        principal = await require_chat_principal(request, required_scope="models")
+        with bind_authenticated_routing_key(principal):
+            catalog = {row["id"]: row for row in registry.model_catalog(online_only=True)}
         if model_id not in catalog:
+            # Conceal models excluded by the caller's key/user/tenant policy.
             raise HTTPException(status_code=404, detail="Model not found")
         return catalog[model_id]
 
@@ -376,13 +396,14 @@ def install_v13_patch(app: FastAPI) -> FastAPI:
             timeout=body.timeout,
             reasoning_effort=target.get("reasoning_effort"),
         )
-        chat_response = await chat_endpoint(
-            body=chat_body,
-            request=request,
-            x_chat2api_client=request.headers.get("x-chat2api-client"),
-            x_chat2api_request_id=request.headers.get("x-chat2api-request-id"),
-            principal=principal,
-        )
+        with bind_authenticated_routing_key(principal):
+            chat_response = await chat_endpoint(
+                body=chat_body,
+                request=request,
+                x_chat2api_client=request.headers.get("x-chat2api-client"),
+                x_chat2api_request_id=request.headers.get("x-chat2api-request-id"),
+                principal=principal,
+            )
         ignored = _ignored_parameters(body, {"metadata", "store", "previous_response_id", "temperature", "top_p"})
         response_id = "resp_" + uuid.uuid4().hex
 
@@ -481,13 +502,14 @@ def install_v13_patch(app: FastAPI) -> FastAPI:
             timeout=body.timeout,
             reasoning_effort=target.get("reasoning_effort"),
         )
-        chat_response = await chat_endpoint(
-            body=chat_body,
-            request=request,
-            x_chat2api_client=request.headers.get("x-chat2api-client"),
-            x_chat2api_request_id=request.headers.get("x-chat2api-request-id"),
-            principal=principal,
-        )
+        with bind_authenticated_routing_key(principal):
+            chat_response = await chat_endpoint(
+                body=chat_body,
+                request=request,
+                x_chat2api_client=request.headers.get("x-chat2api-client"),
+                x_chat2api_request_id=request.headers.get("x-chat2api-request-id"),
+                principal=principal,
+            )
         completion_id = "cmpl_" + uuid.uuid4().hex
         if not body.stream:
             raw = await response_bytes(chat_response)
