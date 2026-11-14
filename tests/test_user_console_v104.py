@@ -413,6 +413,68 @@ def test_wallet_reservation_settles_actual_charge_once_and_persists(tmp_path: Pa
         )
 
 
+@pytest.mark.parametrize(
+    "usage",
+    [
+        {},
+        {"prompt_tokens": 10, "completion_tokens": 5},
+        {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 0},
+        {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": True},
+        {"prompt_tokens": 10.5, "completion_tokens": 5, "total_tokens": 15},
+        {"prompt_tokens": 10, "completion_tokens": "5", "total_tokens": 15},
+        {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 16},
+        {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15, "cached_input_tokens": 11},
+    ],
+)
+def test_wallet_completed_request_without_valid_usage_keeps_reservation(
+    tmp_path: Path, usage: dict[str, object],
+) -> None:
+    pricing = PricingStore(tmp_path)
+    pricing_payload = pricing.public()
+    pricing.update(billing_enabled=True, usd_cny_rate=7.0, models=pricing_payload["models"])
+    billing = BillingStore(tmp_path)
+    billing.credit("usr_usage_pending", 1000)
+    billing.reserve_for_request(
+        "usr_usage_pending", "req_wallet_usage_pending",
+        model_id="gpt-5.6-sol", estimated_cny_cents=100,
+        input_tokens=100, output_tokens=4096,
+        price_snapshot=pricing.model("gpt-5.6-sol"), usd_cny_rate=7.0,
+    )
+
+    result = billing.record_charge(
+        "usr_usage_pending",
+        {
+            "request_id": "req_wallet_usage_pending",
+            "status": "completed",
+            "requested_model": "gpt-5.6-sol",
+            "usage": usage,
+        },
+        pricing,
+    )
+
+    assert result is None
+    assert billing.charge_for_request("req_wallet_usage_pending") is None
+    assert billing.reservations["req_wallet_usage_pending"]["state"] == "reserved"
+    assert billing.reserved_cents("usr_usage_pending") == 100
+    assert billing.balance_cents("usr_usage_pending") == 1000
+
+    # A replay with valid, internally consistent usage settles exactly once.
+    result = billing.record_charge(
+        "usr_usage_pending",
+        {
+            "request_id": "req_wallet_usage_pending",
+            "status": "completed",
+            "requested_model": "gpt-5.6-sol",
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        },
+        pricing,
+    )
+    assert result is not None and result["cost_cny_cents"] > 0
+    assert billing.reservations["req_wallet_usage_pending"]["state"] == "settled"
+    assert billing.reserved_cents("usr_usage_pending") == 0
+    assert billing.balance_cents("usr_usage_pending") == 1000 - result["cost_cny_cents"]
+
+
 def test_wallet_reservations_are_serialized_under_concurrent_admission(tmp_path: Path) -> None:
     billing = BillingStore(tmp_path)
     billing.credit("usr_wallet", 1000)
