@@ -34,7 +34,7 @@ def test_dispatch_stage_timing_separates_the_160s_browser_gap() -> None:
     assert durations["server_send_start_to_worker_content_ack_ms"] == 3700.0
     assert durations["server_send_to_worker_content_ack_ms"] == 3650.0
     assert durations["worker_content_ack_to_browser_started_ms"] == 159300.0
-    assert durations["server_send_to_browser_started_ms"] == 163000.0
+    assert durations["server_send_to_browser_started_ms"] == 162950.0
     assert durations["browser_started_ms"] == 164300.0
     assert durations["total_ms"] == 168300.0
     # Browser startup latency is not incorrectly charged to the socket send.
