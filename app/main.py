@@ -1051,9 +1051,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=401, detail="Invalid extension token")
         row = telemetry.get(request_id)
         item = file_store.get(file_id)
+        active = getattr(broker, "requests", {}).get(request_id)
         allowed_ids = row.get("input_file_ids") if isinstance(row, dict) else None
         if (
             not isinstance(row, dict)
+            or active is None
+            or str(getattr(active, "client_id", "") or "") != client_id
+            or getattr(active, "terminal_event_type", None) is not None
+            or getattr(active, "completed_mono", None) is not None
             or str(row.get("status") or "") != "running"
             or str(row.get("client_id") or "") != client_id
             or not item
