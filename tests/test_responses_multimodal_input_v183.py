@@ -168,8 +168,9 @@ def test_image_generation_tool_passes_image_reference_into_same_existing_executo
                 "chat2api": {"request_id": kwargs["x_chat2api_request_id"], "owned_media": []}}
     app = SimpleNamespace(state=SimpleNamespace(
         file_store=files, media_archive=archive, image_generation_executor=generate,
-        responses_v108_store=OrderedDict(), registry=registry,
+        responses_v108_store=OrderedDict(),
     ))
+    app.state.registry = registry
     body = {"model": "gpt-6", "input": [{"role":"user","content":[
         {"type":"input_text","text":"以此图片为参考生成插画"},
         {"type":"input_image","image_url":"data:image/png;base64," +
