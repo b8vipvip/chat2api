@@ -905,6 +905,17 @@
   // the subsequent browser-side readiness/submit stages visible so a long gap
   // before chat.started can be attributed without creating another dispatcher
   // or terminal authority.
+  // Stage probes are evidence-only. Never await the extension/background
+  // diagnostic round trip before writing or submitting a user's prompt.
+  // Each published stage is a snapshot, so later updates cannot mutate it.
+  function reportDispatchStage(active, elapsed) {
+    void diagnostic(active, "dispatch-stage", {
+      request_v6_dispatch_timing_version: 1,
+      request_v6_dispatch_elapsed_ms: elapsed,
+      request_v6_dispatch_stage_evidence_v1: { ...(active.dispatchStageEvidence || {}) },
+    }).catch(() => {});
+  }
+
   async function runDispatchStage(active, stage, task) {
     const startedAt = performance.now();
     const startedElapsed = dispatchElapsedMs(active, startedAt);
@@ -916,11 +927,7 @@
         duration_ms: null,
         completed_elapsed_ms: dispatchElapsedMs(active),
       };
-      await diagnostic(active, "dispatch-stage", {
-        request_v6_dispatch_timing_version: 1,
-        request_v6_dispatch_elapsed_ms: dispatchElapsedMs(active),
-        request_v6_dispatch_stage_evidence_v1: { ...evidence },
-      });
+      reportDispatchStage(active, dispatchElapsedMs(active));
       return;
     }
 
@@ -930,11 +937,7 @@
       duration_ms: null,
       completed_elapsed_ms: null,
     };
-    await diagnostic(active, "dispatch-stage", {
-      request_v6_dispatch_timing_version: 1,
-      request_v6_dispatch_elapsed_ms: startedElapsed,
-      request_v6_dispatch_stage_evidence_v1: { ...evidence },
-    });
+    reportDispatchStage(active, startedElapsed);
     try {
       const result = await task();
       const completedAt = performance.now();
@@ -944,11 +947,7 @@
         duration_ms: Math.max(0, Math.round((completedAt - startedAt) * 10) / 10),
         completed_elapsed_ms: dispatchElapsedMs(active, completedAt),
       };
-      await diagnostic(active, "dispatch-stage", {
-        request_v6_dispatch_timing_version: 1,
-        request_v6_dispatch_elapsed_ms: dispatchElapsedMs(active, completedAt),
-        request_v6_dispatch_stage_evidence_v1: { ...evidence },
-      });
+      reportDispatchStage(active, dispatchElapsedMs(active, completedAt));
       return result;
     } catch (error) {
       const failedAt = performance.now();
@@ -959,11 +958,7 @@
         completed_elapsed_ms: dispatchElapsedMs(active, failedAt),
         error_type: String(error?.name || "Error").slice(0, 60),
       };
-      await diagnostic(active, "dispatch-stage", {
-        request_v6_dispatch_timing_version: 1,
-        request_v6_dispatch_elapsed_ms: dispatchElapsedMs(active, failedAt),
-        request_v6_dispatch_stage_evidence_v1: { ...evidence },
-      });
+      reportDispatchStage(active, dispatchElapsedMs(active, failedAt));
       throw error;
     }
   }
@@ -3702,11 +3697,11 @@
     try { probeSupervisor?.begin?.(active); } catch (_) {}
 
     try {
-      await diagnostic(active, "dispatch-started", {
+      void diagnostic(active, "dispatch-started", {
         request_v6_dispatch_timing_version: 1,
         request_v6_dispatch_elapsed_ms: 0,
         request_v6_dispatch_stage_evidence_v1: {},
-      });
+      }).catch(() => {});
       // UI interruption resolution is readiness work owned by the request
       // controller, not a separate message listener with its own ACK/terminal.
       const interruption = globalThis.__CHAT2API_INTERRUPTION_GUARD_V72__;
