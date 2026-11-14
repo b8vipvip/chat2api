@@ -1120,3 +1120,71 @@ def test_wallet_enabled_rejects_disabled_model_price_and_releases_token_hold(tmp
     token_rows = app.state.quota_reservations.list_reservations(key_id=public["key_id"])
     assert len(token_rows) == 1 and token_rows[0]["state"] == "released"
     app.state.quota_reservations.close()
+
+def test_legacy_payment_config_corruption_fails_closed_without_overwrite(tmp_path: Path) -> None:
+    path = tmp_path / "user_payment_config.json"
+    original = b'{"version":'
+    path.write_bytes(original)
+
+    with pytest.raises(RuntimeError, match="existing file was preserved"):
+        PaymentConfigStore(tmp_path, "server-local-data-secret")
+    assert path.read_bytes() == original
+
+
+def test_legacy_payment_config_cipher_mismatch_fails_closed_without_overwrite(tmp_path: Path) -> None:
+    store = PaymentConfigStore(tmp_path, "original-server-data-secret")
+    store.update({
+        "enabled": True,
+        "pid": "1234567890",
+        "key": "legacy-zpay-secret",
+        "alipay_enabled": True,
+        "wechat_enabled": True,
+        "alipay_cid": "1",
+        "wechat_cid": "2",
+        "public_origin": "https://api.example.com",
+    })
+    original = (tmp_path / "user_payment_config.json").read_bytes()
+
+    with pytest.raises(RuntimeError, match="cannot be decrypted"):
+        PaymentConfigStore(tmp_path, "rotated-or-missing-server-data-secret")
+    assert (tmp_path / "user_payment_config.json").read_bytes() == original
+
+
+def test_legacy_payment_config_update_rolls_back_memory_when_persistence_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = PaymentConfigStore(tmp_path, "server-local-data-secret")
+    store.update({
+        "enabled": True,
+        "pid": "1234567890",
+        "key": "existing-zpay-secret",
+        "alipay_enabled": True,
+        "wechat_enabled": True,
+        "alipay_cid": "1",
+        "wechat_cid": "2",
+        "public_origin": "https://api.example.com",
+    })
+    previous_payload = dict(store.payload)
+    previous_public = store.public()
+    original_file = store.path.read_bytes()
+
+    def fail_save() -> None:
+        raise OSError("simulated payment config disk failure")
+
+    monkeypatch.setattr(store, "_save", fail_save)
+    with pytest.raises(OSError, match="simulated payment config disk failure"):
+        store.update({
+            "enabled": False,
+            "pid": "different-pid",
+            "key": "replacement-secret",
+            "alipay_enabled": False,
+            "wechat_enabled": False,
+            "alipay_cid": "3",
+            "wechat_cid": "4",
+            "public_origin": "https://other.example.com",
+        })
+
+    assert store.payload == previous_payload
+    assert store.public() == previous_public
+    assert store.path.read_bytes() == original_file
+
