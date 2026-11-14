@@ -172,17 +172,22 @@
       " · 图片生成：" + label("image_generation");
   }
 
-  async function loadModels() {
-    const payload = await api("/api/user/models");
+  async function loadModels(keyId = "") {
+    const query = keyId ? `?key_id=${encodeURIComponent(keyId)}` : "";
+    const payload = await api(`/api/user/models${query}`);
     state.models = payload.data || [];
-    $("modelsGrid").innerHTML = state.models.length ? state.models.map((row) => `<article class="model"><h3>${esc(row.name || row.model_id)}</h3><code>${esc(row.model_id)}</code><div class="price"><div><span class="muted">输入</span><br><b>$${Number(row.input_usd_per_million || 0).toFixed(3)}</b></div><div><span class="muted">缓存输入</span><br><b>$${Number(row.cached_input_usd_per_million || 0).toFixed(3)}</b></div><div><span class="muted">输出</span><br><b>$${Number(row.output_usd_per_million || 0).toFixed(3)}</b></div></div><div class="muted" style="margin-top:9px">每 1M Token · 管理员可调整</div><div class="muted" style="margin-top:7px" title="模型选项验证、Worker 上报与图片生成的真实成功是不同等级的证据">${esc(modelCapabilityDescription(row))}</div></article>`).join("") : `<div class="notice">管理员尚未开放模型。</div>`;
+    $("modelsGrid").innerHTML = state.models.length ? state.models.map((row) => `<article class="model"><h3>${esc(row.name || row.model_id)}</h3><code>${esc(row.model_id)}</code><div class="price"><div><span class="muted">输入</span><br><b>${Number(row.input_usd_per_million || 0).toFixed(3)}</b></div><div><span class="muted">缓存输入</span><br><b>${Number(row.cached_input_usd_per_million || 0).toFixed(3)}</b></div><div><span class="muted">输出</span><br><b>${Number(row.output_usd_per_million || 0).toFixed(3)}</b></div></div><div class="muted" style="margin-top:9px">每 1M Token · 管理员可调整</div><div class="muted" style="margin-top:7px" title="模型选项验证、Worker 上报与图片生成的真实成功是不同等级的证据">${esc(modelCapabilityDescription(row))}</div></article>`).join("") : `<div class="notice">当前 API Key 没有可用模型。</div>`;
     syncPlayOptions();
   }
 
   function syncPlayOptions() {
+    const selectedKey = $("playKey").value;
+    const selectedModel = $("playModel").value;
     const availableKeys = state.keys.filter((row) => row.enabled && !row.revoked_at && !row.expired);
     $("playKey").innerHTML = availableKeys.length ? availableKeys.map((row) => `<option value="${esc(row.key_id)}">${esc(row.name)} · ${esc(row.prefix)}</option>`).join("") : `<option value="">请先创建 API Key</option>`;
+    if (availableKeys.some((row) => row.key_id === selectedKey)) $("playKey").value = selectedKey;
     $("playModel").innerHTML = state.models.length ? state.models.map((row) => `<option value="${esc(row.model_id)}">${esc(row.name || row.model_id)}</option>`).join("") : `<option value="">暂无模型</option>`;
+    if (state.models.some((row) => row.model_id === selectedModel)) $("playModel").value = selectedModel;
   }
 
   async function loadBilling() {
@@ -264,7 +269,7 @@
     if (view === "requests") return loadRequests();
     if (view === "billing") return loadBilling();
     if (view === "models") return loadModels();
-    if (view === "playground") { await Promise.all([loadKeys(), loadModels()]); return; }
+    if (view === "playground") { await loadKeys(); return loadModels($("playKey").value); }
     if (view === "docs") return loadDocs();
   }
 
@@ -291,6 +296,9 @@
   $("saveProfile").onclick = () => saveProfile().catch((error) => alert(error.message));
   $("recharge").onclick = () => recharge().catch((error) => alert(error.message));
   $("runTest").onclick = runPlayground;
+  $("playKey").onchange = () => loadModels($("playKey").value).catch((error) => {
+    $("modelsGrid").innerHTML = `<div class="notice">${esc(error.message || "模型权限加载失败")}</div>`;
+  });
   $("refresh").onclick = () => refreshView((location.hash || "#dashboard").slice(1)).catch((error) => alert(error.message));
   $("logout").onclick = async () => { await fetch("/api/user/logout", {method:"POST", credentials:"same-origin"}); state.user=null; showAuth(); };
   window.addEventListener("hashchange", () => state.user && navigate(location.hash.slice(1)));
