@@ -381,7 +381,7 @@ def test_broker_preserves_bounded_worker_dispatch_failure_diagnostics() -> None:
             "request_id": "req_r06_failure_evidence",
             "error": "Content script readiness timed out",
             "diagnostics": {
-                "worker_dispatch_queue_wait_ms": 160000.25,
+                "worker_dispatch_queue_wait_ms": 160000.36,
                 "worker_route_resolve_ms": 12.34,
                 "worker_target_tab_lookup_ms": 4,
                 "worker_ensure_content_ms": 900001,
@@ -389,7 +389,7 @@ def test_broker_preserves_bounded_worker_dispatch_failure_diagnostics() -> None:
                 "worker_dispatch_failure_stage": "ensure-content",
                 "request_controller": "request-v6",
                 "request_v6_dispatch_timing_version": 1,
-                "request_v6_dispatch_elapsed_ms": 160123.45,
+                "request_v6_dispatch_elapsed_ms": 160123.46,
                 "request_v6_dispatch_stage_evidence_v1": {
                     "write_prompt": {
                         "status": "completed",
@@ -409,6 +409,10 @@ def test_broker_preserves_bounded_worker_dispatch_failure_diagnostics() -> None:
                         "status": "failed",
                         "duration_ms": 1,
                     },
+                    "malformed_stage": {
+                        "status": [],
+                        "duration_ms": 1,
+                    },
                 },
                 "raw_page_text": "must not be persisted",
                 "secret": "must not be persisted",
@@ -417,7 +421,7 @@ def test_broker_preserves_bounded_worker_dispatch_failure_diagnostics() -> None:
 
         assert accepted is True
         assert state.terminal_event_type == "chat.error"
-        assert state.diagnostics["worker_dispatch_queue_wait_ms"] == 160000.2
+        assert state.diagnostics["worker_dispatch_queue_wait_ms"] == 160000.3
         assert state.diagnostics["worker_route_resolve_ms"] == 12.3
         assert "worker_ensure_content_ms" not in state.diagnostics
         assert "worker_tabs_send_message_ms" not in state.diagnostics
