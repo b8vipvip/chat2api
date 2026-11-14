@@ -757,7 +757,9 @@ class BillingStore:
             return dict(row)
 
     def create_order(self, user_id: str, amount_cents: int, channel: str) -> dict[str, Any]:
-        amount = int(amount_cents)
+        if type(amount_cents) is not int:
+            raise ValueError("充值金额必须为整数分")
+        amount = amount_cents
         if amount < 1 or amount > 10_000_000:
             raise ValueError("充值金额需要在 0.01 至 100000.00 元之间")
         if channel not in {"alipay", "wechat"}:
