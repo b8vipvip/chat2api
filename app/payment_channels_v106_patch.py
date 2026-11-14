@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import json
 import re
@@ -178,19 +179,33 @@ class PaymentChannelsStore:
             return
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, TypeError):
-            return
-        if not isinstance(raw, dict):
-            return
-        self.payload["public_origin"] = str(raw.get("public_origin") or "")
-        for group in ("aggregate", "direct"):
-            incoming = raw.get(group)
-            if not isinstance(incoming, dict):
-                continue
-            for provider, values in incoming.items():
-                if provider in self.payload[group] and isinstance(values, dict):
-                    self.payload[group][provider].update(values)
-        self.payload["updated_at"] = raw.get("updated_at") or self.payload["updated_at"]
+            if not isinstance(raw, dict):
+                raise ValueError("payment channel configuration root must be an object")
+            version = raw.get("version", 106)
+            if type(version) is not int or version != 106:
+                raise ValueError("payment channel configuration version is unsupported")
+            origin = raw.get("public_origin", "")
+            updated_at = raw.get("updated_at", self.payload["updated_at"])
+            if not isinstance(origin, str) or not isinstance(updated_at, str):
+                raise ValueError("payment channel configuration metadata is invalid")
+            loaded = copy.deepcopy(self.payload)
+            loaded["public_origin"] = origin
+            loaded["updated_at"] = updated_at
+            for group in ("aggregate", "direct"):
+                incoming = raw.get(group, {})
+                if not isinstance(incoming, dict):
+                    raise ValueError(f"payment channel configuration {group} must be an object")
+                for provider, values in incoming.items():
+                    if provider not in loaded[group] or not isinstance(values, dict):
+                        raise ValueError(f"payment channel configuration {group}.{provider} is unsupported")
+                    loaded[group][provider].update(values)
+            self.payload = loaded
+        except (OSError, ValueError, TypeError) as error:
+            # Provider credentials are not a disposable cache. Do not turn an
+            # unreadable config into empty settings that a later save can erase.
+            raise RuntimeError(
+                "Payment channel configuration is unreadable; refusing to replace it"
+            ) from error
 
     def _save(self) -> None:
         _atomic_json(self.path, self.payload)
@@ -261,33 +276,17 @@ class PaymentChannelsStore:
         p_in = direct.get("paypal") if isinstance(direct.get("paypal"), dict) else {}
         u_in = direct.get("usdt") if isinstance(direct.get("usdt"), dict) else {}
 
-        zpay = self.payload["aggregate"]["zpay"]
-        zpay.update({
+        zpay_values = {
             "enabled": bool(z_in.get("enabled")),
             "pid": str(z_in.get("pid") or "").strip()[:80],
             "alipay_enabled": bool(z_in.get("alipay_enabled")),
             "wechat_enabled": bool(z_in.get("wechat_enabled")),
             "alipay_cid": str(z_in.get("alipay_cid") or "").strip().replace(" ", "")[:240],
             "wechat_cid": str(z_in.get("wechat_cid") or "").strip().replace(" ", "")[:240],
-        })
-        for cid in (zpay["alipay_cid"], zpay["wechat_cid"]):
+        }
+        for cid in (zpay_values["alipay_cid"], zpay_values["wechat_cid"]):
             if cid and not re.fullmatch(r"\d+(?:,\d+)*", cid):
                 raise ValueError("ZPAY 渠道 ID 只能填写数字，多个 ID 使用英文逗号分隔")
-        if z_in.get("key"):
-            zpay["key_ciphertext"] = self.cipher.encrypt(str(z_in["key"]).encode()).decode("ascii")
-        if z_in.get("clear_key"):
-            zpay["key_ciphertext"] = ""
-
-        paypal = self.payload["direct"]["paypal"]
-        paypal.update({
-            "enabled": bool(p_in.get("enabled")),
-            "sandbox": bool(p_in.get("sandbox")),
-            "client_id": str(p_in.get("client_id") or "").strip()[:240],
-        })
-        if p_in.get("client_secret"):
-            paypal["client_secret_ciphertext"] = self.cipher.encrypt(str(p_in["client_secret"]).encode()).decode("ascii")
-        if p_in.get("clear_secret"):
-            paypal["client_secret_ciphertext"] = ""
 
         address = str(u_in.get("address") or "").strip()
         if address and not _valid_tron_address(address):
@@ -298,17 +297,42 @@ class PaymentChannelsStore:
             raise ValueError("USDT 二维码图片地址必须是 https:// URL")
         if link and not _safe_url(link):
             raise ValueError("USDT 地址链接必须是 https:// URL")
-        self.payload["direct"]["usdt"].update({
-            "enabled": bool(u_in.get("enabled")),
-            "network": "TRON (TRC20)",
-            "address": address,
-            "qr_image_url": qr,
-            "address_link": link,
-        })
-        self.payload["public_origin"] = origin
-        self.payload["updated_at"] = _now()
-        self._save()
-        return self.admin_public()
+
+        with self.lock:
+            previous = copy.deepcopy(self.payload)
+            try:
+                zpay = self.payload["aggregate"]["zpay"]
+                zpay.update(zpay_values)
+                if z_in.get("key"):
+                    zpay["key_ciphertext"] = self.cipher.encrypt(str(z_in["key"]).encode()).decode("ascii")
+                if z_in.get("clear_key"):
+                    zpay["key_ciphertext"] = ""
+
+                paypal = self.payload["direct"]["paypal"]
+                paypal.update({
+                    "enabled": bool(p_in.get("enabled")),
+                    "sandbox": bool(p_in.get("sandbox")),
+                    "client_id": str(p_in.get("client_id") or "").strip()[:240],
+                })
+                if p_in.get("client_secret"):
+                    paypal["client_secret_ciphertext"] = self.cipher.encrypt(str(p_in["client_secret"]).encode()).decode("ascii")
+                if p_in.get("clear_secret"):
+                    paypal["client_secret_ciphertext"] = ""
+
+                self.payload["direct"]["usdt"].update({
+                    "enabled": bool(u_in.get("enabled")),
+                    "network": "TRON (TRC20)",
+                    "address": address,
+                    "qr_image_url": qr,
+                    "address_link": link,
+                })
+                self.payload["public_origin"] = origin
+                self.payload["updated_at"] = _now()
+                self._save()
+            except Exception:
+                self.payload = previous
+                raise
+            return self.admin_public()
 
 
 class PaymentChannelsBody(BaseModel):
