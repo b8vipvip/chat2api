@@ -633,3 +633,6 @@ def test_legacy_v13_catalog_and_completions_bind_authenticated_api_key_context(t
         assert allowed_completion.status_code == 200
         assert allowed_completion.json()["choices"][0]["text"] == "allowed"
         assert registry.resolve_calls == ["worker_1"]
+
+    # Manual legacy auth must not leave a key bound to the next request/task.
+    assert registry.routing_key_context.get() is None
