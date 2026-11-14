@@ -541,9 +541,13 @@ class BillingStore:
             return True
 
     def credit(self, user_id: str, amount_cents: int) -> int:
-        amount = int(amount_cents)
-        if amount <= 0:
-            raise ValueError("充值金额必须大于 0")
+        # Wallet balances are denominated in integer cents. Do not silently
+        # truncate floats or accept bool (an int subclass) at this accounting
+        # boundary: callers must pass the exact amount already validated by
+        # their payment/order contract.
+        if type(amount_cents) is not int or amount_cents <= 0:
+            raise ValueError("充值金额必须为正整数分")
+        amount = amount_cents
         with self.lock:
             # A failed durable write must not leave a phantom credit available
             # to another request in the current process.
@@ -551,7 +555,7 @@ class BillingStore:
             self.wallets[user_id] = int(previous or 0) + amount
             try:
                 self._save()
-            except OSError:
+            except Exception:
                 if previous is None:
                     self.wallets.pop(user_id, None)
                 else:
