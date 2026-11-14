@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import re
 import time
 from urllib.parse import urlsplit
@@ -16,16 +17,82 @@ class RequestState:
     final_future: asyncio.Future[str] | None = None
     text: str = ""
     created_mono: float = field(default_factory=time.perf_counter)
+    # The exact authenticated socket used to dispatch this request. Events
+    # arriving on another/reconnected Worker socket must not publish into it.
+    dispatch_socket: Any | None = field(default=None, repr=False, compare=False)
+    # Server-side dispatch clocks only. A successful registry.send is not
+    # proof that the Worker acknowledged or started the browser request.
+    dispatch_socket_lock_wait_started_mono: float | None = None
+    dispatch_socket_lock_acquired_mono: float | None = None
+    dispatch_send_started_mono: float | None = None
+    dispatch_send_completed_mono: float | None = None
+    # Server timestamp of the authenticated Worker's request-v6 content ACK.
+    # This is dispatch evidence only; it does not own request finality.
+    worker_content_ack_mono: float | None = None
     browser_started_mono: float | None = None
     first_token_mono: float | None = None
     completed_mono: float | None = None
     terminal_event_type: str | None = None
     diagnostics: dict[str, Any] = field(default_factory=dict)
 
+    def owns_dispatch_socket(self, client_id: str, websocket: Any, current_socket: Any) -> bool:
+        """Require the exact request, Worker identity and dispatch socket."""
+        return bool(
+            client_id
+            and websocket is not None
+            and self.client_id == str(client_id)
+            and self.dispatch_socket is websocket
+            and current_socket is websocket
+        )
+
     def timings(self) -> dict[str, float | None]:
         end = self.completed_mono or time.perf_counter()
         return {
             "browser_started_ms": round((self.browser_started_mono - self.created_mono) * 1000, 1) if self.browser_started_mono else None,
+            # Stage durations are for diagnostics, never Broker finality.
+            # Missing/overlapping clocks return unknown, not a made-up zero.
+            "request_admission_wait_ms": self.diagnostics.get("request_admission_wait_ms"),
+            "server_dispatch_socket_lock_wait_ms": (
+                round((self.dispatch_socket_lock_acquired_mono - self.dispatch_socket_lock_wait_started_mono) * 1000, 1)
+                if self.dispatch_socket_lock_wait_started_mono is not None
+                and self.dispatch_socket_lock_acquired_mono is not None
+                and self.dispatch_socket_lock_acquired_mono >= self.dispatch_socket_lock_wait_started_mono else None
+            ),
+            "server_send_start_after_broker_ms": (
+                round((self.dispatch_send_started_mono - self.created_mono) * 1000, 1)
+                if self.dispatch_send_started_mono is not None
+                and self.dispatch_send_started_mono >= self.created_mono else None
+            ),
+            "server_dispatch_send_ms": (
+                round((self.dispatch_send_completed_mono - self.dispatch_send_started_mono) * 1000, 1)
+                if self.dispatch_send_started_mono is not None
+                and self.dispatch_send_completed_mono is not None
+                and self.dispatch_send_completed_mono >= self.dispatch_send_started_mono else None
+            ),
+            "server_send_start_to_worker_content_ack_ms": (
+                round((self.worker_content_ack_mono - self.dispatch_send_started_mono) * 1000, 1)
+                if self.worker_content_ack_mono is not None
+                and self.dispatch_send_started_mono is not None
+                and self.worker_content_ack_mono >= self.dispatch_send_started_mono else None
+            ),
+            "server_send_to_worker_content_ack_ms": (
+                round((self.worker_content_ack_mono - self.dispatch_send_completed_mono) * 1000, 1)
+                if self.worker_content_ack_mono is not None
+                and self.dispatch_send_completed_mono is not None
+                and self.worker_content_ack_mono >= self.dispatch_send_completed_mono else None
+            ),
+            "worker_content_ack_to_browser_started_ms": (
+                round((self.browser_started_mono - self.worker_content_ack_mono) * 1000, 1)
+                if self.browser_started_mono is not None
+                and self.worker_content_ack_mono is not None
+                and self.browser_started_mono >= self.worker_content_ack_mono else None
+            ),
+            "server_send_to_browser_started_ms": (
+                round((self.browser_started_mono - self.dispatch_send_completed_mono) * 1000, 1)
+                if self.browser_started_mono is not None
+                and self.dispatch_send_completed_mono is not None
+                and self.browser_started_mono >= self.dispatch_send_completed_mono else None
+            ),
             "first_token_ms": round((self.first_token_mono - self.created_mono) * 1000, 1) if self.first_token_mono else None,
             "generation_ms": round((end - self.first_token_mono) * 1000, 1) if self.first_token_mono else None,
             "total_ms": round((end - self.created_mono) * 1000, 1),
@@ -216,6 +283,90 @@ def _terminal_provenance(event: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+_WORKER_DISPATCH_FAILURE_TIMINGS = (
+    "worker_dispatch_queue_wait_ms",
+    "worker_route_resolve_ms",
+    "worker_target_tab_lookup_ms",
+    "worker_ensure_content_ms",
+    "worker_tabs_send_message_ms",
+    "worker_tab_handler_to_content_ack_ms",
+    "worker_tab_handler_to_failure_ms",
+    "request_v6_dispatch_elapsed_ms",
+    "request_v6_dispatch_submit_click_elapsed_ms",
+    "request_v6_dispatch_to_response_started_ms",
+    "retry_after_ms",
+)
+_WORKER_DISPATCH_FAILURE_STAGES = frozenset({
+    "target-tab-lookup", "ensure-content", "content-script-message",
+})
+_REQUEST_V6_DISPATCH_STAGES = (
+    "resolve_blocking_interruption", "write_prompt", "submit_and_confirm",
+)
+
+
+def _worker_dispatch_failure_provenance(event: dict[str, Any]) -> dict[str, Any]:
+    """Keep bounded dispatch diagnostics from terminal errors, never raw page data."""
+    raw = event.get("diagnostics")
+    if not isinstance(raw, dict):
+        return {}
+    result: dict[str, Any] = {}
+    for key in _WORKER_DISPATCH_FAILURE_TIMINGS:
+        value = raw.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            try:
+                numeric = float(value)
+            except (OverflowError, ValueError):
+                continue
+            if math.isfinite(numeric) and 0 <= numeric <= 900000:
+                result[key] = round(numeric, 1)
+    stage = raw.get("worker_dispatch_failure_stage")
+    if isinstance(stage, str) and stage in _WORKER_DISPATCH_FAILURE_STAGES:
+        result["worker_dispatch_failure_stage"] = stage
+    # Routed Worker allocation failures use the same terminal event but a
+    # separate route-stage vocabulary from background.js tab handoff errors.
+    for key in ("route_failure_stage", "route_failure_code"):
+        value = raw.get(key)
+        if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,60}", value):
+            result[key] = value
+    for key in ("routed_dispatch_terminal_v58", "route_retired_by_authority_v30", "rate_limit_terminal"):
+        if isinstance(raw.get(key), bool):
+            result[key] = raw[key]
+    if raw.get("request_controller") == "request-v6":
+        result["request_controller"] = "request-v6"
+    if type(raw.get("request_v6_dispatch_timing_version")) is int and raw.get("request_v6_dispatch_timing_version") == 1:
+        result["request_v6_dispatch_timing_version"] = 1
+
+    evidence = raw.get("request_v6_dispatch_stage_evidence_v1")
+    if isinstance(evidence, dict):
+        safe_evidence: dict[str, dict[str, Any]] = {}
+        # Iterate only the three known stages. Do not scan an untrusted
+        # Worker-supplied mapping with an arbitrary number of keys.
+        for stage_name in _REQUEST_V6_DISPATCH_STAGES:
+            entry = evidence.get(stage_name)
+            if not isinstance(entry, dict):
+                continue
+            status = entry.get("status")
+            if not isinstance(status, str) or status not in {"started", "completed", "failed", "skipped"}:
+                continue
+            safe_entry: dict[str, Any] = {"status": status}
+            for key in ("started_elapsed_ms", "duration_ms", "completed_elapsed_ms"):
+                value = entry.get(key)
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    try:
+                        numeric = float(value)
+                    except (OverflowError, ValueError):
+                        continue
+                    if math.isfinite(numeric) and 0 <= numeric <= 900000:
+                        safe_entry[key] = round(numeric, 1)
+            error_type = entry.get("error_type")
+            if isinstance(error_type, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_.]{0,59}", error_type):
+                safe_entry["error_type"] = error_type
+            safe_evidence[stage_name] = safe_entry
+        if safe_evidence:
+            result["request_v6_dispatch_stage_evidence_v1"] = safe_evidence
+    return result
+
+
 class RequestBroker:
     def __init__(self) -> None:
         self.requests: dict[str, RequestState] = {}
@@ -277,6 +428,12 @@ class RequestBroker:
             diagnostics = event.get("diagnostics")
             if isinstance(diagnostics, dict):
                 state.diagnostics.update(diagnostics)
+                if (event_type == "chat.diagnostics"
+                        and diagnostics.get("worker_content_dispatch_ack_v1") is True
+                        and diagnostics.get("worker_content_dispatch_ack_source")
+                        == "background-tabs-sendMessage-request-v6"):
+                    state.worker_content_ack_mono = state.worker_content_ack_mono or now
+                    state.diagnostics["worker_content_dispatch_ack_received"] = True
         elif event_type in {"chat.started", "image.started"}:
             state.browser_started_mono = state.browser_started_mono or now
             diagnostics = event.get("diagnostics")
@@ -306,6 +463,10 @@ class RequestBroker:
             state.terminal_event_type = str(event_type)
             state.completed_mono = now
         elif event_type in {"chat.error", "chat.cancelled", "image.error", "image.cancelled"}:
+            # Worker dispatch failures carry the only evidence of which
+            # pre-browser stage stalled. Preserve a strict, bounded allowlist
+            # before this terminal event closes the request.
+            state.diagnostics.update(_worker_dispatch_failure_provenance(event))
             state.terminal_event_type = str(event_type)
             state.completed_mono = now
             message = str(event.get("error") or event.get("reason") or "Request failed")

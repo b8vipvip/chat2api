@@ -274,5 +274,27 @@ jobs:
 
       - name: Responses bridge generation regression
         run: pytest -q tests/test_responses_bridge_regeneration_v154.py --timeout=120
+      - name: R06 focused request-socket ownership regressions
+        run: pytest -q tests/test_dispatch_stage_timings_r06.py tests/test_transport_origin_socket_v171.py --timeout=30
+      - name: R06 preserves GPT Live voice request socket lifecycle
+        run: pytest -vv --tb=short tests/test_live_voice_browser_error_v184.py tests/test_live_voice_v17.py tests/test_voice_call_multimodal_v195.py tests/test_voice_v6.py tests/test_v7.py --timeout=30
+
+      - name: R06 map full-suite collection around prior timeout positions
+        run: |
+          pytest --collect-only -q > /tmp/chat2api-pytest-collection.txt
+          python - <<'PY'
+          from pathlib import Path
+          items = [
+              line.strip() for line in Path("/tmp/chat2api-pytest-collection.txt").read_text().splitlines()
+              if line.strip().startswith("tests/") and "::" in line
+          ]
+          print(f"collected_test_count={len(items)}")
+          for percent in (24, 27, 51.5, 52, 53, 55, 89, 92):
+              center = max(0, min(len(items) - 1, round(len(items) * percent / 100)))
+              print(f"--- collection window {percent}% index={center} ---")
+              for index in range(max(0, center - 8), min(len(items), center + 9)):
+                  print(f"{index}: {items[index]}")
+          PY
+
       - name: Tests
         run: pytest -q --timeout=120

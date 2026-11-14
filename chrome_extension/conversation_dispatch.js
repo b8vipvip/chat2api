@@ -6,6 +6,10 @@
   const baseResolveTargetTab = resolveTargetTab;
   const state = { currentTab: null, chain: Promise.resolve(), requestTabs: new Map() };
   globalThis[KEY] = state;
+  const monotonicNow = () => globalThis.performance?.now?.() ?? Date.now();
+  const elapsedMs = started => Math.max(0, Math.round((monotonicNow() - started) * 10) / 10);
+  const timingValue = value => typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.round(value * 10) / 10 : null;
 
   resolveTargetTab = async function resolveCurrentConversationTarget() {
     if (state.currentTab?.id) {
@@ -91,6 +95,8 @@
         routed_dispatch_terminal_v58: true,
         route_failure_code: String(error?.code || "route_dispatch_failed"),
         route_failure_stage: String(error?.stage || "dispatch"),
+        worker_dispatch_queue_wait_ms: timingValue(message.__chat2api_worker_dispatch_queue_wait_ms),
+        worker_route_resolve_ms: timingValue(message.__chat2api_worker_route_resolve_ms),
         route_retired_by_authority_v30: routeRetired,
         rate_limit_terminal: rateLimited,
         retry_after_ms: retryAfterMs,
@@ -108,7 +114,13 @@
   };
 
   async function routedDispatch(message) {
-    const tab = await resolveRoutedTab(message);
+    const routeStarted = monotonicNow();
+    let tab;
+    try {
+      tab = await resolveRoutedTab(message);
+    } finally {
+      message.__chat2api_worker_route_resolve_ms = elapsedMs(routeStarted);
+    }
     try {
       return await withCurrentTab(tab, () => baseHandleServerMessage(message));
     } catch (error) {
@@ -173,7 +185,11 @@
 
     // This chain serializes only brief route allocation/page hand-off operations.
     // Same-logical-API request admission is exclusively server scheduler v58.
+    const dispatchEnqueuedAt = isRoutedRequest ? monotonicNow() : null;
     return enqueueDispatch(async () => {
+      if (dispatchEnqueuedAt !== null) {
+        message.__chat2api_worker_dispatch_queue_wait_ms = elapsedMs(dispatchEnqueuedAt);
+      }
       try {
         return isRoutedRequest ? await routedDispatch(message) : await dispatchKnownRequest(message);
       } catch (error) {
