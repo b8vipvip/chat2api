@@ -473,6 +473,35 @@ class BillingStore:
             )
             refunds = read_rows("refunds", "refund_id", ("amount_cents", "charge_cny_cents"))
 
+            # These fields control money movement and reservation accounting;
+            # accepting truthy strings or unknown states would let corrupted
+            # records masquerade as paid/debited or disappear from active holds.
+            for charge in charges.values():
+                if type(charge.get("debited")) is not bool:
+                    raise ValueError("billing ledger charges.debited must be boolean")
+            allowed_order_states = {
+                "pending", "reviewing", "rejected", "paid",
+                "failed", "cancelled", "expired",
+            }
+            allowed_order_channels = {"alipay", "wechat", "paypal", "usdt"}
+            for order in orders.values():
+                if order.get("status") not in allowed_order_states:
+                    raise ValueError("billing ledger orders.status is unsupported")
+                if order.get("channel") not in allowed_order_channels:
+                    raise ValueError("billing ledger orders.channel is unsupported")
+            for reservation in reservations.values():
+                if reservation.get("state") not in {"reserved", "settled", "released"}:
+                    raise ValueError("billing ledger reservations.state is unsupported")
+                if not isinstance(reservation.get("price_snapshot"), dict):
+                    raise ValueError("billing ledger reservations.price_snapshot must be an object")
+            for refund in refunds.values():
+                if (
+                    not re.fullmatch(r"rf_[A-Za-z0-9_-]{8,100}", str(refund.get("refund_id") or ""))
+                    or not isinstance(refund.get("reason"), str)
+                    or not 5 <= len(refund["reason"]) <= 500
+                ):
+                    raise ValueError("billing ledger refund identity or reason is invalid")
+
             # A refund is a derived credit against one immutable, debited
             # charge. Reject orphaned, cross-owner or cumulatively excessive
             # journal entries instead of silently accepting inconsistent money.
