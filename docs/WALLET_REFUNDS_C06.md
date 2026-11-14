@@ -102,8 +102,15 @@ the Control Plane maps this route to `billing:write`. Caller body:
   provider-verified image/audio metering is implemented.
 - This does not solve payment provider callbacks, chargebacks,
   payment disputes, cash payouts, tax or reconciled provider usage.
-- G0 DataKeyring migration remains deferred. Do not infer
-  encrypted-at-rest wallet records or production migration approval.
+- G0 DataKeyring migration remains deferred. Payment-channel V106
+  credentials therefore keep their existing V106 cipher until an approved
+  backup/readback/rollback migration exists. V106 pins the selected legacy
+  payment key in a local 0600 `.chat2api_data_secret` file and fails startup
+  if existing ZPAY/PayPal ciphertext cannot be decrypted; V107 must not
+  silently replace that cipher with `data_secret.key`. This is a narrow
+  compatibility safeguard, not a DataKeyring migration or a claim that the
+  legacy payment key has been rotated. Do not infer encrypted-at-rest wallet
+  records or production migration approval.
 - Keep this PR Draft until exact-head CI, image smoke, SDK contract,
   admin review, stacked dependency resolution and production
   acceptance are explicitly complete.
