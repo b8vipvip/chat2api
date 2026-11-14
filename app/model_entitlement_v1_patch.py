@@ -128,7 +128,11 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
                 raise ModelEntitlementError("Unknown end-user system role") from exc
             return
         if subject_type == "subscription_plan":
-            if not subscriptions.plan_exists(subject_id):
+            try:
+                exists = subscriptions.plan_exists(subject_id)
+            except UserSubscriptionError as exc:
+                raise ModelEntitlementError("Invalid subscription plan ID") from exc
+            if not exists:
                 raise KeyError("Unknown subscription plan")
             return
 
