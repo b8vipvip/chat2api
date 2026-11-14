@@ -10,7 +10,6 @@ import base64
 import json
 import time
 import uuid
-from collections import OrderedDict
 from typing import Any, AsyncIterator
 
 from fastapi import FastAPI, HTTPException, Request
@@ -19,7 +18,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from .api_keys import ApiPrincipal
 from .models import AttachmentRef, ImageGenerationRequest
 from .responses_multimodal_input_v183 import needs_multimodal, resolve_responses_attachments
-from .responses_v108_patch import _error, _response, _sse
+from .responses_v108_patch import _error, _response, _sse, _store_response
 
 
 def is_image_generation_request(body: dict[str, Any]) -> bool:
@@ -56,13 +55,10 @@ def validate_image_tool(body: dict[str, Any]) -> dict[str, Any]:
     return tool
 
 
-def _store(app: FastAPI, response: dict[str, Any], body: dict[str, Any]) -> None:
+def _store(app: FastAPI, response: dict[str, Any], body: dict[str, Any], owner_key_id: str) -> None:
     if not bool(body.get("store", True)):
         return
-    store: OrderedDict[str, dict[str, Any]] = app.state.responses_v108_store
-    store[response["id"]] = response
-    while len(store) > 256:
-        store.popitem(last=False)
+    _store_response(app, str(response["id"]), response, owner_key_id)
 
 
 async def _run_existing_image_request(app: FastAPI, request: Request, body: dict[str, Any],
@@ -151,7 +147,7 @@ async def handle_image_tool(app: FastAPI, request: Request, body: dict[str, Any]
             return _error(str(error), status_code=502, code="image_generation_error")
         item = {"id": item_id, "type": "image_generation_call", "status": "completed", "result": encoded}
         response = _result_response(response_id, body, prompt, created_at, item, meta)
-        _store(app, response, body)
+        _store(app, response, body, principal.key_id)
         return JSONResponse(response)
 
     async def stream() -> AsyncIterator[str]:
@@ -170,7 +166,7 @@ async def handle_image_tool(app: FastAPI, request: Request, body: dict[str, Any]
             item = {"id": item_id, "type": "image_generation_call", "status": "completed", "result": encoded}
             yield _sse("response.output_item.done", seq, output_index=0, item=item)
             response = _result_response(response_id, body, prompt, created_at, item, meta)
-            _store(app, response, body)
+            _store(app, response, body, principal.key_id)
             seq += 1
             yield _sse("response.completed", seq, response=response)
         except Exception as error:
