@@ -26,6 +26,25 @@ pipeline or the W-02 plaintext SQLite conversation prototype.
 - File download cards use the W-05A same-origin endpoint, which independently
   verifies the user session, API-key ownership and stored file bytes.
 
+## Inherited security boundaries from C-03B
+
+This PR is now stacked on the C-03B resource-ownership branch (PR #830).
+The combined production tree must retain these independent server-side checks:
+
+- Tenant membership is not an implicit grant to another user's personal API
+  keys, request history, billing, files, archived media or native-content
+  sidecars. Shared-workspace access requires a separately implemented and
+  reviewed resource-sharing contract.
+- A paired Worker attachment download is scoped to the exact live request,
+  assigned Worker, API-key owner and file IDs explicitly attached to that
+  request. A Worker token alone is not a global FileStore read capability.
+- Administrator request-media retrieval verifies that the archived file's
+  owner matches the API key recorded on the request.
+
+The #830 test suite is inherited through the base branch and must remain in
+the full production-entry CI run; do not rebase this Web Chat integration back
+to the pre-C-03B base and silently drop those protections.
+
 ## Deliberately excluded
 
 - W-01 image upload/preview is not installed. The renderer's structured image
