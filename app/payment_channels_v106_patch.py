@@ -52,6 +52,81 @@ def _valid_tron_address(value: str) -> bool:
     return bool(re.fullmatch(r"T[1-9A-HJ-NP-Za-km-z]{33}", str(value or "").strip()))
 
 
+def _payment_channels_secret_candidate(data_dir: Path, settings: Any) -> tuple[str, bool]:
+    """Select the legacy payment cipher key without silently changing it.
+
+    Existing V106 ciphertext is still encrypted with .chat2api_data_secret (or
+    the original API-key fallback). Full DataKeyring migration is deferred, so
+    V107 must not replace this key before an approved, reversible migration.
+    """
+    path = data_dir / ".chat2api_data_secret"
+    if path.is_symlink():
+        raise RuntimeError("Payment channel secret file must not be a symlink")
+    try:
+        value = path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        value = ""
+        config_path = data_dir / "user_payment_channels_v106.json"
+        if config_path.exists():
+            try:
+                raw = json.loads(config_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, TypeError) as exc:
+                raise RuntimeError(
+                    "Payment channel configuration is unreadable; refusing to replace its secret"
+                ) from exc
+            zpay = ((raw.get("aggregate") or {}).get("zpay") or {}) if isinstance(raw, dict) else {}
+            paypal = ((raw.get("direct") or {}).get("paypal") or {}) if isinstance(raw, dict) else {}
+            has_ciphertext = bool(
+                (isinstance(zpay, dict) and zpay.get("key_ciphertext"))
+                or (isinstance(paypal, dict) and paypal.get("client_secret_ciphertext"))
+            )
+            # Preserve the exact V106 fallback for an existing encrypted file.
+            value = str(getattr(settings, "api_key", "") or "chat2api") if has_ciphertext else secrets.token_urlsafe(48)
+        else:
+            value = secrets.token_urlsafe(48)
+        return value, True
+    except OSError as exc:
+        raise RuntimeError("Unable to read the payment channel secret file") from exc
+    if not value:
+        # PaymentChannelsStore historically used this fallback when the file
+        # existed but contained only whitespace.
+        return "chat2api-payment-v106", True
+    return value, False
+
+
+def _persist_payment_channels_secret(data_dir: Path, value: str) -> None:
+    path = data_dir / ".chat2api_data_secret"
+    temporary = path.with_name(f".{path.name}.{secrets.token_hex(6)}.tmp")
+    temporary.write_text(value, encoding="utf-8")
+    try:
+        temporary.chmod(0o600)
+    except OSError:
+        pass
+    temporary.replace(path)
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+
+
+def _validate_payment_channel_ciphertexts(channels: "PaymentChannelsStore") -> None:
+    fields = (
+        (channels.payload["aggregate"]["zpay"], "key_ciphertext", "ZPAY"),
+        (channels.payload["direct"]["paypal"], "client_secret_ciphertext", "PayPal"),
+    )
+    for row, field, label in fields:
+        ciphertext = str(row.get(field) or "")
+        if not ciphertext:
+            continue
+        try:
+            channels.cipher.decrypt(ciphertext.encode("ascii"))
+        except (InvalidToken, ValueError, UnicodeEncodeError) as exc:
+            raise RuntimeError(
+                f"{label} credential cannot be decrypted with the configured legacy payment key; "
+                "preserving the existing payment configuration"
+            ) from exc
+
+
 class PaymentChannelsStore:
     """Provider-separated payment configuration.
 
@@ -274,12 +349,13 @@ def install_payment_channels_v106_patch(app: FastAPI) -> FastAPI:
     pricing = app.state.user_pricing
     admin_sessions = getattr(app.state, "admin_sessions", None)
     data_dir = Path(settings.data_dir)
-    secret_path = data_dir / ".chat2api_data_secret"
-    try:
-        data_secret = secret_path.read_text(encoding="utf-8").strip()
-    except OSError:
-        data_secret = str(getattr(settings, "api_key", "") or "chat2api")
+    data_secret, persist_secret = _payment_channels_secret_candidate(data_dir, settings)
     channels = PaymentChannelsStore(data_dir, data_secret)
+    # Never let _decrypt()'s legacy empty-string fallback hide an unreadable
+    # credential. Validate before pinning a fallback key or serving admin UI.
+    _validate_payment_channel_ciphertexts(channels)
+    if persist_secret:
+        _persist_payment_channels_secret(data_dir, data_secret)
     app.state.user_payment_channels_v106 = channels
 
     original_create_order = billing.create_order
