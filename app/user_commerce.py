@@ -97,11 +97,11 @@ class UserAccountStore:
     def _load(self) -> None:
         if not self.path.exists():
             return
+        migrated = False
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
             users = payload.get("users") if isinstance(payload, dict) else None
             sessions = payload.get("sessions") if isinstance(payload, dict) else None
-            migrated = False
             if isinstance(users, list):
                 loaded: dict[str, dict[str, Any]] = {}
                 for raw in users:
@@ -121,11 +121,15 @@ class UserAccountStore:
             if isinstance(sessions, dict):
                 self.sessions = {str(key): dict(value) for key, value in sessions.items() if isinstance(value, dict)}
             self._cleanup_sessions(save=False)
-            if migrated:
-                self._save()
         except (OSError, ValueError, TypeError):
             self.users = {}
             self.sessions = {}
+            return
+        # A migration write failure must abort startup; never reinterpret a
+        # readable legacy account file as an empty store because disk is full
+        # or permissions changed during the atomic save.
+        if migrated:
+            self._save()
 
     def _save(self) -> None:
         _atomic_json(self.path, {"version": USER_ACCOUNT_SCHEMA_VERSION, "users": list(self.users.values()), "sessions": self.sessions})
