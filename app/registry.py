@@ -304,38 +304,43 @@ class ClientRegistry:
         websocket = self.sockets.get(client_id)
         if not websocket:
             raise RuntimeError("Chrome extension is offline")
+        dispatch_types = {
+            "chat.request", "image.request", "voice.request",
+            "voice.live.start", "voice.live.request", "dictation.request",
+        }
+        dispatch_state = None
+        if request_type in dispatch_types:
+            request_id = str(payload.get("request_id") or "")
+            broker = getattr(self, "request_broker", None)
+            dispatch_state = getattr(broker, "requests", {}).get(request_id) if broker else None
+            if dispatch_state is not None and getattr(
+                dispatch_state, "dispatch_socket_lock_wait_started_mono", None,
+            ) is None:
+                dispatch_state.dispatch_socket_lock_wait_started_mono = time.perf_counter()
+
         lock = self.socket_locks.setdefault(client_id, asyncio.Lock())
         async with lock:
-            if request_type in {
-                "chat.request", "image.request", "voice.request",
-                "voice.live.start", "voice.live.request", "dictation.request",
-            }:
+            if dispatch_state is not None:
+                if getattr(dispatch_state, "dispatch_socket_lock_acquired_mono", None) is None:
+                    dispatch_state.dispatch_socket_lock_acquired_mono = time.perf_counter()
                 # Bind the same original authenticated socket for every
                 # Broker-backed request family. Voice and legacy dictation
                 # reuse image.* events as their Worker-to-server transport.
-                request_id = str(payload.get("request_id") or "")
-                broker = getattr(self, "request_broker", None)
-                state = getattr(broker, "requests", {}).get(request_id) if broker else None
-                if state is not None:
-                    state.dispatch_socket = websocket
-                    # Centralize send clocks at the transport boundary so
-                    # Chat Completions, Responses, Images, Voice and legacy
-                    # dictation all expose the same dispatch evidence. The
-                    # Chat Completions route may already have opened the
-                    # outer clock; preserve its earlier timestamp.
-                    if getattr(state, "dispatch_send_started_mono", None) is None:
-                        state.dispatch_send_started_mono = time.perf_counter()
-            else:
-                state = None
+                dispatch_state.dispatch_socket = websocket
+                # Centralize send clocks at the transport boundary so Chat
+                # Completions, Responses, Images, Voice and legacy dictation
+                # all expose the same dispatch evidence.
+                if getattr(dispatch_state, "dispatch_send_started_mono", None) is None:
+                    dispatch_state.dispatch_send_started_mono = time.perf_counter()
             try:
                 await websocket.send_json(payload)
             except Exception:
-                if state is not None and getattr(state, "dispatch_send_completed_mono", None) is None:
-                    state.dispatch_send_completed_mono = time.perf_counter()
+                if dispatch_state is not None and getattr(dispatch_state, "dispatch_send_completed_mono", None) is None:
+                    dispatch_state.dispatch_send_completed_mono = time.perf_counter()
                 raise
             else:
-                if state is not None and getattr(state, "dispatch_send_completed_mono", None) is None:
-                    state.dispatch_send_completed_mono = time.perf_counter()
+                if dispatch_state is not None and getattr(dispatch_state, "dispatch_send_completed_mono", None) is None:
+                    dispatch_state.dispatch_send_completed_mono = time.perf_counter()
 
     def online_client_ids(self) -> list[str]:
         return sorted(
