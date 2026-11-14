@@ -17,6 +17,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from .api_keys import ApiPrincipal
+from . import model_capability_routing_patch as model_routing
 from .models import AttachmentRef, ImageGenerationRequest
 from .responses_multimodal_input_v183 import needs_multimodal, resolve_responses_attachments
 from .responses_v108_patch import _error, _response, _sse
@@ -90,11 +91,29 @@ async def _run_existing_image_request(app: FastAPI, request: Request, body: dict
         size=tool.get("size"), timeout=timeout, n=1,
         attachments=[AttachmentRef(file_id=str(item["file_id"])) for item in image_inputs],
     )
-    result = await executor(
-        body=image_body, request=request,
-        x_chat2api_client=body.get("client_id") or request.headers.get("x-chat2api-client"),
-        x_chat2api_request_id=request_id, principal=principal,
-    )
+    registry = getattr(app.state, "registry", None)
+    routing_context = getattr(registry, "routing_key_context", None)
+    if registry is None or not callable(getattr(routing_context, "set", None)) or not callable(
+        getattr(routing_context, "reset", None)
+    ):
+        raise RuntimeError("The canonical image entitlement context is unavailable")
+
+    # Responses calls the Images executor directly, so the main FastAPI
+    # require_api_key dependency does not run here. Bind the already-authenticated
+    # principal and the server-owned gpt-image target explicitly for the entire
+    # synchronous admission/Worker-selection phase, then restore both contexts.
+    routing_token = routing_context.set(principal.key_id)
+    try:
+        with model_routing.model_target_context(
+            "gpt-image", needs_multimodal=bool(image_inputs)
+        ):
+            result = await executor(
+                body=image_body, request=request,
+                x_chat2api_client=body.get("client_id") or request.headers.get("x-chat2api-client"),
+                x_chat2api_request_id=request_id, principal=principal,
+            )
+    finally:
+        routing_context.reset(routing_token)
     records = result.get("data") if isinstance(result, dict) else None
     if not isinstance(records, list) or not records or not isinstance(records[0], dict):
         raise RuntimeError("Image engine completed without a standard image payload")
