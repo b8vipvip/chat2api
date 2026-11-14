@@ -631,6 +631,64 @@ def test_wallet_enabled_rejects_unpriced_model_and_releases_token_hold(tmp_path:
     app.state.quota_reservations.close()
 
 
+@pytest.mark.parametrize("model_id", ["gpt-image", "gpt-live", "gpt-live-mini"])
+def test_wallet_billing_rejects_positive_text_rates_for_unmetered_media_models(
+    tmp_path: Path, model_id: str,
+) -> None:
+    import asyncio
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+    from app.config import Settings
+    from app.main import create_app
+    from app.quota_reservations import QuotaReservationStore
+    from app.quota_reservation_runtime_v1 import install_quota_reservation_runtime_v1, reserve_request_quota
+    from app.user_console_v104_patch import install_user_console_v104_patch
+
+    app = create_app(Settings(
+        CHAT2API_API_KEY="wallet-media-master-key",
+        CHAT2API_DATA_DIR=str(tmp_path),
+    ))
+    install_user_console_v104_patch(app)
+    user = app.state.user_accounts.register(f"{model_id}@example.com", "long-enough-password")
+    public, _token = asyncio.run(app.state.api_keys.create("wallet-media"))
+    app.state.user_accounts.attach_key(user["user_id"], public["key_id"])
+    pricing = app.state.user_pricing
+    config = pricing.public()
+    media_price = {
+        "model_id": model_id,
+        "name": model_id,
+        "enabled": True,
+        "input_usd_per_million": 1.0,
+        "cached_input_usd_per_million": 0.1,
+        "output_usd_per_million": 5.0,
+    }
+    pricing.update(
+        billing_enabled=True,
+        usd_cny_rate=7.0,
+        models=[*config["models"], media_price],
+    )
+    billing = app.state.user_billing
+    billing.credit(user["user_id"], 1000)
+    app.state.quota_reservations = QuotaReservationStore(tmp_path)
+    install_quota_reservation_runtime_v1(app)
+
+    with pytest.raises(HTTPException) as error:
+        reserve_request_quota(
+            app, f"req_wallet_{model_id.replace('-', '_')}_0001",
+            SimpleNamespace(kind="api_key", key_id=public["key_id"]),
+            "media request", 4096, model_id=model_id,
+        )
+
+    assert error.value.status_code == 503
+    assert "not metered" in str(error.value.detail)
+    assert billing.balance_cents(user["user_id"]) == 1000
+    assert billing.reserved_cents(user["user_id"]) == 0
+    token_rows = app.state.quota_reservations.list_reservations(key_id=public["key_id"])
+    assert len(token_rows) == 1 and token_rows[0]["state"] == "released"
+    app.state.quota_reservations.close()
+
+
 def test_wallet_storage_outage_rejects_dispatch_and_releases_token_hold(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
