@@ -96,7 +96,7 @@ def test_server_exposes_multimodal_diagnostics_and_admin_routes() -> None:
     assert '@app.get("/api/admin/overview"' in source
     assert '@app.get("/api/admin/keys"' in source
     assert '@app.get("/api/admin/requests/{request_id}"' in source
-    assert '@app.post("/v1/files")' in source
+    assert '@app.post(\n        "/v1/files",' in source
     assert '@app.post("/v1/images/generations")' in source
     assert '@app.post("/api/admin/tests"' in source
     assert '"chat.diagnostics"' in source

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.api_keys import ApiPrincipal
+from app.chat_request_service import ChatRequestService
 from app.responses_model_routing_v108_patch import (
     _ResponsesModelContextMiddleware,
     _SSEStreamObserver,
@@ -235,11 +236,19 @@ def test_dispatch_correlates_worker_and_protocol_repair_attempts() -> None:
         headers={"x-chat2api-request-id": "resp_req_original"},
         scope={"chat2api.responses_trace": trace},
     )
+    requests = {}
     async def create(request_id, client_id):
-        return SimpleNamespace(request_id=request_id, timings=lambda: {})
+        state = SimpleNamespace(
+            request_id=request_id,
+            client_id=client_id,
+            final_future=asyncio.get_running_loop().create_future(),
+            timings=lambda: {},
+        )
+        requests[request_id] = state
+        return state
 
     async def release(request_id):
-        return None
+        requests.pop(request_id, None)
 
     async def send(client_id, message):
         return None
@@ -250,9 +259,10 @@ def test_dispatch_correlates_worker_and_protocol_repair_attempts() -> None:
         busy_clients=set(),
         send=send,
     )
-    broker = SimpleNamespace(create=create, release=release)
+    broker = SimpleNamespace(create=create, release=release, requests=requests)
     app = SimpleNamespace(state=SimpleNamespace(
         registry=registry, broker=broker,
+        chat_request_service=ChatRequestService(registry, broker),
         settings=SimpleNamespace(request_timeout_seconds=120),
         telemetry=_Telemetry(),
     ))

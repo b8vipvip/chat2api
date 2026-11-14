@@ -1,0 +1,615 @@
+{
+  "schema_version": 1,
+  "baseline": "b682e1d445008df57e4de9675e2952ae040b8027",
+  "ingress": {
+    "default": "mode2",
+    "mode_header": "X-Chat2API-Mode",
+    "accepted": [
+      "api",
+      "mode2"
+    ],
+    "forbidden_on_v1": [
+      "chat",
+      "mode1"
+    ],
+    "credentials": [
+      "Authorization: Bearer <api_key>",
+      "X-API-Key: <api_key>"
+    ]
+  },
+  "endpoints": [
+    {
+      "method": "POST",
+      "path": "/v1/audio/conversations",
+      "owner": "app.voice_patch",
+      "status": "extension_only",
+      "python_sdk": null,
+      "javascript_sdk": null,
+      "notes": "Chat2API audio conversation extension; consumes an owner-scoped audio_file_id and returns JSON audio/transcript data.",
+      "protocol": "http",
+      "openapi": true
+    },
+    {
+      "method": "WEBSOCKET",
+      "path": "/v1/audio/realtime",
+      "owner": "app.live_voice_patch",
+      "status": "extension_only",
+      "python_sdk": null,
+      "javascript_sdk": null,
+      "notes": "Custom chat2api-live-v1 full-duplex PCM/WebSocket protocol; not OpenAI Realtime WebSocket wire compatibility.",
+      "protocol": "websocket",
+      "openapi": false
+    },
+    {
+      "method": "POST",
+      "path": "/v1/audio/realtime/sessions",
+      "owner": "app.live_voice_patch",
+      "status": "extension_only",
+      "python_sdk": null,
+      "javascript_sdk": null,
+      "notes": "Issues a one-time 60-second Chat2API realtime session token; this is not the standard OpenAI client_secrets route.",
+      "protocol": "http",
+      "openapi": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/audio/speech",
+      "owner": "app.voice_patch",
+      "status": "extension_only",
+      "python_sdk": null,
+      "javascript_sdk": null,
+      "notes": "GPT-Live speech generation returns JSON containing base64 audio and diagnostics; it does not implement the standard binary audio/speech response contract.",
+      "protocol": "http",
+      "openapi": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "owner": "app.main",
+      "status": "compatible_subset",
+      "python_sdk": "client.chat.completions.create()",
+      "javascript_sdk": "client.chat.completions.create()",
+      "notes": "Text and supported uploaded image/file references. Default prompt_mode=full preserves the ordered multi-turn transcript. Client extension fields may appear in output.",
+      "protocol": "http",
+      "openapi": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/completions",
+      "owner": "app.v13_patch",
+      "status": "compatible_subset",
+      "python_sdk": "client.completions.create()",
+      "javascript_sdk": "client.completions.create()",
+      "notes": "Legacy text completions adapter over Chat Completions; prompt is converted to one user turn and usage remains estimated.",
+      "protocol": "http",
+      "openapi": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/files",
+      "owner": "app.main",
+      "status": "compatible_subset",
+      "python_sdk": "client.files.create(file=..., purpose=...)",
+      "javascript_sdk": "client.files.create({file, purpose})",
+      "notes": "Supports standard multipart file upload for assistants, vision and user_data purposes, plus the legacy Chat2API JSON/base64 extension. batch/fine-tune/evals purposes are unsupported.",
+      "protocol": "http",
+      "openapi": true
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/files/{file_id}",
+      "owner": "app.main",
+      "status": "compatible_subset",
+      "python_sdk": "client.files.delete()",
+      "javascript_sdk": "client.files.del()",
+      "notes": "Returns standard FileDeleted {id, object, deleted}; owner-scoped.",
+      "protocol": "http",
+      "openapi": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/files/{file_id}",
+      "owner": "app.main",
+      "status": "compatible_subset",
+      "python_sdk": "client.files.retrieve()",
+      "javascript_sdk": "client.files.retrieve()",
+      "notes": "Returns standard FileObject metadata (created_at Unix seconds, status=processed) with Chat2API mime_type extension; owner scoped.",
+      "protocol": "http",
+      "openapi": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/files/{file_id}/content",
+      "owner": "app.main",
+      "status": "compatible_subset",
+      "python_sdk": "client.files.content(file_id)",
+      "javascript_sdk": "client.files.content(file_id)",
+      "notes": "Returns owner-scoped binary file bytes; no list endpoint is currently implemented.",
+      "protocol": "http",
+      "openapi": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/generated-files/{file_id}",
+      "owner": "app.main",
+      "status": "extension_only",
+      "python_sdk": null,
+      "javascript_sdk": null,
+      "notes": "Returns owner-scoped Chat2API generated-file metadata and signed download URL.",
+      "protocol": "http",
+      "openapi": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/images/generations",
+      "owner": "app.main",
+      "status": "compatible_subset",
+      "python_sdk": "client.images.generate()",
+      "javascript_sdk": "client.images.generate()",
+      "notes": "gpt-image only; requires active image-capable Worker and images scope.",
+      "protocol": "http",
+      "openapi": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/media/{media_id}",
+      "owner": "app.main",
+      "status": "extension_only",
+      "python_sdk": null,
+      "javascript_sdk": null,
+      "notes": "Returns owner-scoped Chat2API media metadata and signed asset URLs; binary assets are served by /api/media capability URLs.",
+      "protocol": "http",
+      "openapi": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/models",
+      "owner": "app.main",
+      "status": "compatible_subset",
+      "python_sdk": "client.models.list()",
+      "javascript_sdk": "client.models.list()",
+      "notes": "Only currently online model catalog; requires models scope.",
+      "protocol": "http",
+      "openapi": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/models/{model_id}",
+      "owner": "app.v13_patch",
+      "status": "compatible_subset",
+      "python_sdk": "client.models.retrieve(model_id)",
+      "javascript_sdk": "client.models.retrieve(model_id)",
+      "notes": "Retrieves an online model from the current browser-backed catalog; offline or unknown models return not-found.",
+      "protocol": "http",
+      "openapi": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/native-content/{request_id}",
+      "owner": "app.main",
+      "status": "extension_only",
+      "python_sdk": null,
+      "javascript_sdk": null,
+      "notes": "Owner-scoped native page snapshot sidecar; not an OpenAI Responses resource.",
+      "protocol": "http",
+      "openapi": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/native-content/{request_id}/events",
+      "owner": "app.main",
+      "status": "extension_only",
+      "python_sdk": null,
+      "javascript_sdk": null,
+      "notes": "Owner-scoped native snapshot update SSE; presentation-only stream and not a generation terminal authority.",
+      "protocol": "http",
+      "openapi": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/responses",
+      "owner": "app.responses_v108_patch",
+      "status": "compatible_subset",
+      "python_sdk": "client.responses.create()",
+      "javascript_sdk": "client.responses.create()",
+      "notes": "Text, native web search, hosted images and selected emulated tools via later patch layers; do not infer complete Responses feature parity.",
+      "protocol": "http",
+      "openapi": true
+    },
+    {
+      "method": "GET",
+      "path": "/v1/responses/{response_id}",
+      "owner": "app.responses_v108_patch",
+      "status": "compatible_subset",
+      "python_sdk": "client.responses.retrieve()",
+      "javascript_sdk": "client.responses.retrieve()",
+      "notes": "Best-effort bounded in-process response store, not durable OpenAI storage semantics.",
+      "protocol": "http",
+      "openapi": true
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "chat.non_stream",
+      "status": "supported",
+      "evidence": "Chat completion response with assistant message, stop, estimated usage."
+    },
+    {
+      "id": "chat.stream",
+      "status": "supported_with_extensions",
+      "evidence": "SSE data frames; final stop chunk with usage, then [DONE]; extra status/reasoning deltas may occur."
+    },
+    {
+      "id": "chat.multi_turn",
+      "status": "supported_transcript_bridge",
+      "evidence": "system/developer/user/assistant/tool history converted into ordered prompt blocks; not native token/role handling by the upstream model."
+    },
+    {
+      "id": "chat.tool_calls",
+      "status": "not_guaranteed",
+      "evidence": "Chat Completions tools/tool_choice are not guaranteed to yield OpenAI-native tool_calls; Responses emulation is separate."
+    },
+    {
+      "id": "chat.structured_outputs",
+      "status": "not_guaranteed",
+      "evidence": "Unknown Chat extras are accepted by Pydantic but JSON schema/response_format is not enforced at transport layer."
+    },
+    {
+      "id": "chat.usage",
+      "status": "estimated",
+      "evidence": "token_usage.usage_for estimator, not authoritative upstream OpenAI billing."
+    },
+    {
+      "id": "chat.model_provenance",
+      "status": "requested_only",
+      "evidence": "model in standard envelope is requested model; actual served-model evidence is tracked separately."
+    },
+    {
+      "id": "responses.stream",
+      "status": "supported_with_extensions",
+      "evidence": "Typed response.created/response.completed/response.failed SSE; not Chat Completions [DONE]."
+    },
+    {
+      "id": "responses.tools",
+      "status": "partial",
+      "evidence": "Web search and image_generation with specific emulated function tools; arbitrary hosted tool compatibility not asserted."
+    },
+    {
+      "id": "files.multipart",
+      "status": "supported_subset",
+      "evidence": "Standard multipart files.create supported for assistants, vision and user_data; batch/fine-tune/evals unsupported; legacy JSON/base64 extension remains."
+    },
+    {
+      "id": "errors",
+      "status": "openai_envelope_for_http_exceptions_and_validation",
+      "evidence": "HTTPException and FastAPI request-validation failures under /v1 use {error:{message,type,param,code}}; endpoint-specific direct error responses still require contract tests."
+    },
+    {
+      "id": "auth.scope",
+      "status": "supported",
+      "evidence": "Managed API-key scopes chat/models/files/images enforced by endpoints."
+    },
+    {
+      "id": "mode2.default",
+      "status": "supported",
+      "evidence": "ModeResolverMiddleware defaults /v1 to mode2; mode1 rejected."
+    },
+    {
+      "id": "files.content",
+      "status": "supported_subset",
+      "evidence": "GET /v1/files/{file_id}/content returns owner-scoped binary content."
+    },
+    {
+      "id": "files.list",
+      "status": "unsupported",
+      "evidence": "GET /v1/files list is not implemented."
+    },
+    {
+      "id": "audio.standard",
+      "status": "extension_only",
+      "evidence": "Speech and realtime routes use Chat2API-specific request/response/wire formats; the legacy audio transcription route is not exposed by the composed app."
+    },
+    {
+      "id": "legacy.completions",
+      "status": "supported_subset",
+      "evidence": "POST /v1/completions maps a prompt to the Chat Completions worker bridge."
+    },
+    {
+      "id": "audio.transcriptions",
+      "status": "unsupported",
+      "evidence": "The legacy v7 route is explicitly removed by v9 from the composed production app; no /v1/audio/transcriptions route is exposed."
+    },
+    {
+      "id": "images.generation",
+      "status": "supported_subset",
+      "evidence": "Official Python and Node SDKs exercise POST /v1/images/generations against the real ASGI route with deterministic image.completed Worker output; real Chrome image generation remains an external release gate."
+    },
+    {
+      "id": "model.aliases",
+      "status": "supported_subset",
+      "evidence": "Model catalog aliases are normalized by app/model_catalog.py and applied to Worker dispatch; Python and Node SDK regression uses gpt-5-6-thinking -> gpt-5.6-sol."
+    },
+    {
+      "id": "responses.retrieve",
+      "status": "supported_subset",
+      "evidence": "Official Python and Node SDK retrieve a just-created stored Response; store is bounded in-process (256 records), not durable."
+    }
+  ],
+  "boundary": {
+    "single_broker_owner": "app.broker.RequestBroker",
+    "sse_owner": "existing API adapters",
+    "shared_request_service": "M-02; no duplicate Worker terminal, auth, accounting, or media finality",
+    "out_of_scope": [
+      "G0 DataKeyring migration",
+      "R native fidelity and Worker transport",
+      "W chat session store",
+      "C RBAC",
+      "D/P production rollout"
+    ]
+  },
+  "request_parameters": {
+    "POST /v1/chat/completions": [
+      {
+        "name": "model",
+        "status": "supported_with_aliases",
+        "evidence": "Canonical model IDs and app/model_catalog.py aliases are normalized before Worker dispatch; the response retains the requested model ID."
+      },
+      {
+        "name": "messages",
+        "status": "supported_subset",
+        "evidence": "Ordered role/content transcript bridge; text and supported uploaded image/file references are converted to the browser prompt."
+      },
+      {
+        "name": "stream",
+        "status": "supported",
+        "evidence": "Chat Completions SSE chunks, finish_reason and [DONE]; optional Chat2API status/reasoning extensions may also appear."
+      },
+      {
+        "name": "reasoning_effort",
+        "status": "chat2api_extension",
+        "evidence": "v13 normalizes low/medium/high and documented aliases and adds the Worker reasoning options."
+      },
+      {
+        "name": "reasoning.effort",
+        "status": "chat2api_extension",
+        "evidence": "v13 accepts the nested effort form and rejects conflicting direct/nested values."
+      },
+      {
+        "name": "timeout",
+        "status": "chat2api_extension",
+        "evidence": "Chat2API request deadline extension, not an OpenAI standard parameter."
+      },
+      {
+        "name": "client_id",
+        "status": "chat2api_extension",
+        "evidence": "Optional explicit Worker selection, subject to Registry routing and API-key binding."
+      },
+      {
+        "name": "prompt_mode",
+        "status": "chat2api_extension",
+        "evidence": "Controls full transcript versus last-user prompt bridge."
+      },
+      {
+        "name": "attachments",
+        "status": "chat2api_extension",
+        "evidence": "Owner-scoped Chat2API FileStore references."
+      },
+      {
+        "name": "max_tokens",
+        "status": "accepted_but_ignored",
+        "evidence": "Pydantic accepts the field (declared or extra), but the Chat Completions Worker options builder does not forward or enforce it; do not rely on its OpenAI semantics."
+      },
+      {
+        "name": "max_completion_tokens",
+        "status": "accepted_but_ignored",
+        "evidence": "Pydantic accepts the field (declared or extra), but the Chat Completions Worker options builder does not forward or enforce it; do not rely on its OpenAI semantics."
+      },
+      {
+        "name": "temperature",
+        "status": "accepted_but_ignored",
+        "evidence": "Pydantic accepts the field (declared or extra), but the Chat Completions Worker options builder does not forward or enforce it; do not rely on its OpenAI semantics."
+      },
+      {
+        "name": "top_p",
+        "status": "accepted_but_ignored",
+        "evidence": "Pydantic accepts the field (declared or extra), but the Chat Completions Worker options builder does not forward or enforce it; do not rely on its OpenAI semantics."
+      },
+      {
+        "name": "n",
+        "status": "accepted_but_ignored",
+        "evidence": "Pydantic accepts the field (declared or extra), but the Chat Completions Worker options builder does not forward or enforce it; do not rely on its OpenAI semantics."
+      },
+      {
+        "name": "stop",
+        "status": "accepted_but_ignored",
+        "evidence": "Pydantic accepts the field (declared or extra), but the Chat Completions Worker options builder does not forward or enforce it; do not rely on its OpenAI semantics."
+      },
+      {
+        "name": "frequency_penalty",
+        "status": "accepted_but_ignored",
+        "evidence": "Pydantic accepts the field (declared or extra), but the Chat Completions Worker options builder does not forward or enforce it; do not rely on its OpenAI semantics."
+      },
+      {
+        "name": "presence_penalty",
+        "status": "accepted_but_ignored",
+        "evidence": "Pydantic accepts the field (declared or extra), but the Chat Completions Worker options builder does not forward or enforce it; do not rely on its OpenAI semantics."
+      },
+      {
+        "name": "logit_bias",
+        "status": "accepted_but_ignored",
+        "evidence": "Pydantic accepts the field (declared or extra), but the Chat Completions Worker options builder does not forward or enforce it; do not rely on its OpenAI semantics."
+      },
+      {
+        "name": "seed",
+        "status": "accepted_but_ignored",
+        "evidence": "Pydantic accepts the field (declared or extra), but the Chat Completions Worker options builder does not forward or enforce it; do not rely on its OpenAI semantics."
+      },
+      {
+        "name": "response_format",
+        "status": "accepted_but_ignored",
+        "evidence": "Pydantic accepts the field (declared or extra), but the Chat Completions Worker options builder does not forward or enforce it; do not rely on its OpenAI semantics."
+      },
+      {
+        "name": "tools",
+        "status": "accepted_but_ignored",
+        "evidence": "Pydantic accepts the field (declared or extra), but the Chat Completions Worker options builder does not forward or enforce it; do not rely on its OpenAI semantics."
+      },
+      {
+        "name": "tool_choice",
+        "status": "accepted_but_ignored",
+        "evidence": "Pydantic accepts the field (declared or extra), but the Chat Completions Worker options builder does not forward or enforce it; do not rely on its OpenAI semantics."
+      },
+      {
+        "name": "stream_options",
+        "status": "accepted_but_ignored",
+        "evidence": "Pydantic accepts the field (declared or extra), but the Chat Completions Worker options builder does not forward or enforce it; do not rely on its OpenAI semantics."
+      },
+      {
+        "name": "user",
+        "status": "accepted_but_ignored",
+        "evidence": "Pydantic accepts the field (declared or extra), but the Chat Completions Worker options builder does not forward or enforce it; do not rely on its OpenAI semantics."
+      }
+    ],
+    "POST /v1/responses": [
+      {
+        "name": "model",
+        "status": "supported_with_aliases",
+        "evidence": "v13 model alias normalization is applied to Worker dispatch; response model reports the requested ID."
+      },
+      {
+        "name": "input",
+        "status": "supported_subset",
+        "evidence": "String and selected input item/message forms are converted to an ordered Chat transcript; unsupported item shapes are rejected or ignored according to the parser."
+      },
+      {
+        "name": "instructions",
+        "status": "supported_subset",
+        "evidence": "String/list instructions are converted to a developer prompt section."
+      },
+      {
+        "name": "stream",
+        "status": "supported",
+        "evidence": "Typed response.* SSE lifecycle events including response.created, output deltas and response.completed/failed."
+      },
+      {
+        "name": "tools",
+        "status": "supported_subset",
+        "evidence": "Native web_search/web_search_preview and the explicitly implemented image_generation tool path; unsupported tool types are rejected."
+      },
+      {
+        "name": "tool_choice",
+        "status": "supported_subset",
+        "evidence": "Only supported native tool selection/force behavior; arbitrary hosted tool choice is not guaranteed."
+      },
+      {
+        "name": "include",
+        "status": "supported_subset",
+        "evidence": "web_search_call.action.sources controls source inclusion; other include values are not guaranteed."
+      },
+      {
+        "name": "store",
+        "status": "supported_subset",
+        "evidence": "Controls a bounded in-process response store (maximum 256 records); not durable OpenAI storage."
+      },
+      {
+        "name": "timeout",
+        "status": "chat2api_extension",
+        "evidence": "Chat2API request deadline extension."
+      },
+      {
+        "name": "client_id",
+        "status": "chat2api_extension",
+        "evidence": "Optional explicit Worker selection, subject to Registry routing and API-key binding."
+      },
+      {
+        "name": "max_output_tokens",
+        "status": "echo_only",
+        "evidence": "Returned in the Response object but not enforced as a Worker output-token limit."
+      },
+      {
+        "name": "temperature",
+        "status": "echo_only",
+        "evidence": "Returned in the Response object but not forwarded as a Worker generation control."
+      },
+      {
+        "name": "top_p",
+        "status": "echo_only",
+        "evidence": "Returned in the Response object but not forwarded as a Worker generation control."
+      },
+      {
+        "name": "previous_response_id",
+        "status": "echo_only",
+        "evidence": "Returned in the Response object but does not load or append a previous response to the prompt."
+      },
+      {
+        "name": "parallel_tool_calls",
+        "status": "echo_only",
+        "evidence": "Returned in the Response object but does not enable parallel hosted tool execution."
+      },
+      {
+        "name": "text",
+        "status": "echo_only",
+        "evidence": "Returned in the Response object; JSON schema/format enforcement is not implemented by the browser bridge."
+      },
+      {
+        "name": "truncation",
+        "status": "echo_only",
+        "evidence": "Returned in the Response object but does not control transcript truncation."
+      },
+      {
+        "name": "metadata",
+        "status": "echo_only",
+        "evidence": "Returned in the Response object; not a durable metadata store or execution control."
+      }
+    ],
+    "POST /v1/images/generations": [
+      {
+        "name": "model",
+        "status": "fixed_to_gpt_image",
+        "evidence": "The route only admits gpt-image."
+      },
+      {
+        "name": "prompt",
+        "status": "supported",
+        "evidence": "Prompt is dispatched to an image-capable Worker."
+      },
+      {
+        "name": "n",
+        "status": "fixed_to_one",
+        "evidence": "Schema accepts only n=1."
+      },
+      {
+        "name": "size",
+        "status": "worker_dependent",
+        "evidence": "Passed through to Worker options; actual size support depends on the connected Worker."
+      },
+      {
+        "name": "response_format",
+        "status": "supported_subset",
+        "evidence": "url and b64_json are accepted; URL mode uses Chat2API-owned media URLs."
+      },
+      {
+        "name": "timeout",
+        "status": "chat2api_extension",
+        "evidence": "Chat2API image request deadline."
+      },
+      {
+        "name": "attachments",
+        "status": "chat2api_extension",
+        "evidence": "Owner-scoped FileStore references used as image context."
+      }
+    ],
+    "POST /v1/files": [
+      {
+        "name": "file",
+        "status": "supported_subset",
+        "evidence": "Standard multipart upload; metadata/content/delete are owner-scoped."
+      },
+      {
+        "name": "purpose",
+        "status": "supported_subset",
+        "evidence": "Standard multipart purposes assistants, vision and user_data; batch/fine-tune/evals are rejected."
+      }
+    ]
+  }
+}
