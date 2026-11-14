@@ -14,6 +14,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from .api_keys import ApiPrincipal
+from . import model_capability_routing_patch as model_routing
 from .token_usage import usage_for
 from .prompt_config import build_speech_prompt
 
@@ -176,7 +177,13 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
         # business key, or bypass the sole Worker-list enable switch.
         route_token = registry.routing_key_context.set(principal.key_id)
         try:
-            selected_client = resolve_client(client_id)
+            # Audio endpoints carry their model in SpeechRequest/
+            # VoiceConversationRequest, not in the shared HTTP model middleware.
+            # Bind that exact request model before the entitlement resolver runs.
+            with model_routing.model_target_context(
+                model, needs_multimodal=bool(audio_spec)
+            ):
+                selected_client = resolve_client(client_id)
         finally:
             registry.routing_key_context.reset(route_token)
         try:

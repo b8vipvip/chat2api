@@ -6,7 +6,7 @@
   const usd = (micros) => `$${(Number(micros || 0) / 1_000_000).toFixed(6)}`;
   const num = (value) => Number(value || 0).toLocaleString("zh-CN");
   const time = (value) => value ? new Date(value).toLocaleString("zh-CN", {hour12:false}) : "-";
-  const state = { user: null, keys: [], models: [], billing: null };
+  const state = { user: null, keys: [], models: [], billing: null, registrationMode: "open" };
   const titles = {
     dashboard:["数据看板","账户 API 使用概览"], keys:["API 密钥","创建和管理访问密钥"], requests:["请求记录","当前账户的 API 请求"],
     profile:["账户资料","管理账户基础资料"], billing:["费用中心","余额、充值和估算费用"], models:["模型广场","可用模型与当前价格"],
@@ -25,11 +25,18 @@
   }
 
   function showAuth(message = "") {
+    // Invitation codes are one-time credentials; never retain them across
+    // logout, session expiry or a return to the unauthenticated view.
+    const inviteInput = $("registerInviteCode");
+    if (inviteInput) inviteInput.value = "";
     $("authShell").classList.remove("hidden");
     $("appShell").classList.add("hidden");
     $("authError").textContent = message;
   }
   function showApp(user) {
+    // Successful registration/login must clear the one-time code from the DOM.
+    const inviteInput = $("registerInviteCode");
+    if (inviteInput) inviteInput.value = "";
     state.user = user;
     $("authShell").classList.add("hidden");
     $("appShell").classList.remove("hidden");
@@ -38,6 +45,43 @@
     $("profileName").value = user.display_name || "";
     $("profileId").value = user.user_id || "";
     navigate((location.hash || "#dashboard").slice(1));
+  }
+
+  async function loadRegistrationPolicy() {
+    try {
+      const response = await fetch("/api/client/config", {
+        credentials: "same-origin",
+        cache: "no-store",
+        headers: {"Accept":"application/json"}
+      });
+      if (!response.ok) return;
+      const policy = await response.json();
+      const mode = ["open", "closed", "invite_only"].includes(policy.registration_mode)
+        ? policy.registration_mode : "closed";
+      state.registrationMode = mode;
+      // Public announcements are untrusted administrator text; never inject HTML.
+      $("publicAnnouncement").textContent = String(policy.announcement || "").slice(0, 500);
+      const inviteField = $("registerInviteField");
+      const inviteInput = $("registerInviteCode");
+      const registerTab = $("registerTab");
+      const notice = $("registrationNotice");
+      if (mode === "closed") {
+        registerTab.classList.add("hidden");
+        inviteField.classList.add("hidden");
+        inviteInput.required = false;
+        notice.textContent = "当前暂未开放新用户注册。";
+        if (!$("registerForm").classList.contains("hidden")) $("loginTab").click();
+      } else {
+        registerTab.classList.remove("hidden");
+        const inviteOnly = mode === "invite_only";
+        inviteField.classList.toggle("hidden", !inviteOnly);
+        inviteInput.required = inviteOnly;
+        notice.textContent = inviteOnly ? "当前为邀请注册，请填写管理员提供的邀请代码。" : "";
+      }
+    } catch (_) {
+      // The server remains authoritative. If public policy cannot be loaded,
+      // leave the form visible and let the registration endpoint reject safely.
+    }
   }
 
   async function loadMe() {
@@ -227,7 +271,19 @@
   $("loginTab").onclick = () => { $("loginTab").classList.add("active"); $("registerTab").classList.remove("active"); $("loginForm").classList.remove("hidden"); $("registerForm").classList.add("hidden"); $("authError").textContent=""; };
   $("registerTab").onclick = () => { $("registerTab").classList.add("active"); $("loginTab").classList.remove("active"); $("registerForm").classList.remove("hidden"); $("loginForm").classList.add("hidden"); $("authError").textContent=""; };
   $("loginForm").onsubmit = async (event) => { event.preventDefault(); try { const payload = await api("/api/user/login", {method:"POST", body:JSON.stringify({email:$("loginEmail").value,password:$("loginPassword").value})}); showApp(payload.user); } catch(error) { $("authError").textContent=error.message; } };
-  $("registerForm").onsubmit = async (event) => { event.preventDefault(); try { const payload = await api("/api/user/register", {method:"POST", body:JSON.stringify({display_name:$("registerName").value,email:$("registerEmail").value,password:$("registerPassword").value})}); showApp(payload.user); } catch(error) { $("authError").textContent=error.message; } };
+  $("registerForm").onsubmit = async (event) => {
+    event.preventDefault();
+    const body = {
+      display_name:$("registerName").value,
+      email:$("registerEmail").value,
+      password:$("registerPassword").value
+    };
+    if (state.registrationMode === "invite_only") body.invite_code = $("registerInviteCode").value.trim();
+    try {
+      const payload = await api("/api/user/register", {method:"POST", body:JSON.stringify(body)});
+      showApp(payload.user);
+    } catch(error) { $("authError").textContent=error.message; }
+  };
   $("nav").onclick = (event) => { const button = event.target.closest("button[data-view]"); if (button) navigate(button.dataset.view); };
   $("createKey").onclick = () => createKey().catch((error) => alert(error.message));
   $("copyToken").onclick = () => navigator.clipboard.writeText($("newToken").textContent || "").catch(() => {});
@@ -239,5 +295,6 @@
   $("logout").onclick = async () => { await fetch("/api/user/logout", {method:"POST", credentials:"same-origin"}); state.user=null; showAuth(); };
   window.addEventListener("hashchange", () => state.user && navigate(location.hash.slice(1)));
   loadDocs();
+  loadRegistrationPolicy();
   loadMe().catch(() => showAuth());
 })();

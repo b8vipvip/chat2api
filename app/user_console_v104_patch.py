@@ -37,6 +37,7 @@ class RegisterBody(BaseModel):
     email: str = Field(min_length=3, max_length=254)
     password: str = Field(min_length=8, max_length=256)
     display_name: str = Field(default="", max_length=80)
+    invite_code: str | None = Field(default=None, min_length=32, max_length=128)
 
 
 class LoginBody(BaseModel):
@@ -172,7 +173,8 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
     telemetry = app.state.telemetry
     admin_sessions = getattr(app.state, "admin_sessions", None)
 
-    admin_audit = AdminAuditStore(data_dir)
+    # Reuse one hash-chain writer/lock across administrator modules.
+    admin_audit = getattr(app.state, "admin_audit", None) or AdminAuditStore(data_dir)
     app.state.admin_audit = admin_audit
     app.state.user_accounts = accounts
     app.state.user_pricing = pricing
@@ -279,6 +281,9 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
 
     @app.get("/chat", include_in_schema=False)
     async def chat_client() -> HTMLResponse:
+        control = getattr(app.state, "control_plane", None)
+        if control is not None and not control.public_client()["web_chat_enabled"]:
+            raise HTTPException(status_code=403, detail="Web Chat is disabled by administrator policy")
         template = Path(__file__).with_name("chat_client_v1.html").read_text(encoding="utf-8")
         return HTMLResponse(
             template,
@@ -324,12 +329,56 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
 
     @app.post("/api/user/register")
     async def user_register(body: RegisterBody, request: Request) -> JSONResponse:
+        control = getattr(app.state, "control_plane", None)
+        registration_mode = (
+            control.public_client()["registration_mode"] if control is not None else "open"
+        )
+        if registration_mode == "closed":
+            raise HTTPException(status_code=403, detail="New user registration is disabled")
+
+        invitations = getattr(app.state, "invitations", None)
+        reservation_id = None
+        if registration_mode == "invite_only":
+            if invitations is None:
+                raise HTTPException(status_code=503, detail="Invitation registration is unavailable")
+            if not body.invite_code:
+                raise HTTPException(status_code=403, detail="A valid invitation code is required")
+            try:
+                reservation_id = invitations.reserve(body.invite_code, body.email)
+            except ValueError as error:
+                raise HTTPException(status_code=403, detail="Invitation code is invalid or unavailable") from error
+        def release_invitation_after_failure() -> None:
+            if not reservation_id:
+                return
+            try:
+                invitations.release(reservation_id)
+            except Exception:
+                import logging
+                logging.getLogger(__name__).exception(
+                    "Invitation reservation release failed after registration error"
+                )
+
         try:
             user = accounts.register(body.email, body.password, body.display_name)
             token = accounts.create_session(str(user["user_id"]))
         except ValueError as error:
+            release_invitation_after_failure()
             raise HTTPException(status_code=409, detail=str(error)) from error
-        response = JSONResponse({"ok": True, "user": user})
+        except Exception:
+            release_invitation_after_failure()
+            raise
+
+        if reservation_id:
+            # A failed finalize leaves a non-reusable reserved invitation; it
+            # must be reconciled by an administrator rather than silently reused.
+            try:
+                invitations.consume(reservation_id)
+            except Exception:
+                import logging
+                logging.getLogger(__name__).exception(
+                    "Invitation finalization failed after account creation"
+                )
+        response = JSONResponse({"ok": True, "user": user}, headers={"Cache-Control": "no-store"})
         response.set_cookie(USER_SESSION_COOKIE, token, httponly=True, secure=request.url.scheme == "https", samesite="lax", max_age=accounts.session_ttl_seconds, path="/")
         return response
 
@@ -650,8 +699,15 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
             ]
         total = len(rows)
         page = rows[offset:offset + limit]
-        for row in page:
-            row["balance_cents"] = billing.balance_cents(str(row["user_id"]))
+        control = getattr(app.state, "control_plane", None)
+        actor = getattr(request.state, "admin_username", None)
+        role = control.role_for(actor) if control is not None else "super_admin"
+        # User/support/system roles may inspect account status but not wallet
+        # balances. Keep financial data restricted to the root administrator
+        # until a reviewed billing-scoped user projection exists.
+        if role == "super_admin":
+            for row in page:
+                row["balance_cents"] = billing.balance_cents(str(row["user_id"]))
         return {"data": page, "total": total, "limit": limit, "offset": offset}
 
     @app.patch("/api/admin/users/{user_id}")
