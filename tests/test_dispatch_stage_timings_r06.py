@@ -387,6 +387,12 @@ def test_broker_preserves_bounded_worker_dispatch_failure_diagnostics() -> None:
                 "worker_ensure_content_ms": 900001,
                 "worker_tabs_send_message_ms": -1,
                 "worker_dispatch_failure_stage": "ensure-content",
+                "route_failure_stage": "tab-dispatch",
+                "route_failure_code": "routed_tab_disappeared_before_ack",
+                "routed_dispatch_terminal_v58": True,
+                "route_retired_by_authority_v30": True,
+                "rate_limit_terminal": False,
+                "retry_after_ms": 2500,
                 "request_controller": "request-v6",
                 "request_v6_dispatch_timing_version": 1,
                 "request_v6_dispatch_elapsed_ms": 160123.46,
@@ -426,6 +432,12 @@ def test_broker_preserves_bounded_worker_dispatch_failure_diagnostics() -> None:
         assert "worker_ensure_content_ms" not in state.diagnostics
         assert "worker_tabs_send_message_ms" not in state.diagnostics
         assert state.diagnostics["worker_dispatch_failure_stage"] == "ensure-content"
+        assert state.diagnostics["route_failure_stage"] == "tab-dispatch"
+        assert state.diagnostics["route_failure_code"] == "routed_tab_disappeared_before_ack"
+        assert state.diagnostics["routed_dispatch_terminal_v58"] is True
+        assert state.diagnostics["route_retired_by_authority_v30"] is True
+        assert state.diagnostics["rate_limit_terminal"] is False
+        assert state.diagnostics["retry_after_ms"] == 2500.0
         assert state.diagnostics["request_v6_dispatch_elapsed_ms"] == 160123.5
         evidence = state.diagnostics["request_v6_dispatch_stage_evidence_v1"]
         assert evidence["submit_and_confirm"]["status"] == "failed"
