@@ -54,10 +54,37 @@ def test_usdt_duplicate_txid_confirmation_is_atomic_under_concurrency(tmp_path: 
             )
             return response.status_code
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        statuses = list(pool.map(confirm, [first["order_id"], second["order_id"]]))
+    # Exercise the authoritative store boundary with both contenders released
+    # from a barrier at the same time; this deterministically covers the race
+    # that a middleware-only pre-check cannot serialize.
+    from threading import Barrier
+    from app.user_commerce import WalletReservationError
 
-    assert sorted(statuses) == [200, 409]
+    barrier = Barrier(2)
+
+    def settle(order_id: str) -> str:
+        barrier.wait(timeout=5)
+        try:
+            billing.settle_usdt_order(order_id, txid)
+            return "paid"
+        except WalletReservationError:
+            return "duplicate"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(settle, [first["order_id"], second["order_id"]]))
+
+    assert sorted(outcomes) == ["duplicate", "paid"]
+    paid = [
+        row for row in billing.orders.values()
+        if row.get("channel") == "usdt" and row.get("status") == "paid"
+    ]
+    assert len(paid) == 1
+    assert paid[0]["txid"] == txid
+    assert billing.balance_cents("usr_usdt_race") == 125
+
+    # The HTTP path uses the same atomic owner and a paid-order retry is idempotent.
+    assert confirm(paid[0]["order_id"]) == 200
+    assert billing.balance_cents("usr_usdt_race") == 125
     paid = [
         row for row in billing.orders.values()
         if row.get("channel") == "usdt" and row.get("status") == "paid"
