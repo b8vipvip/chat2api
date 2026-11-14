@@ -1,4 +1,23 @@
-from .main import app
+from .config import get_settings
+from .runtime_single_process_guard import (
+    SingleProcessRuntimeGuard,
+    install_single_process_runtime_guard,
+)
+
+# Acquire ownership BEFORE importing app.main: its module-level create_app()
+# constructs persistent stores. A second process must fail before any store
+# constructor can read or mutate the shared data directory.
+_runtime_guard = SingleProcessRuntimeGuard(get_settings().data_dir)
+_runtime_guard.acquire()
+try:
+    from .main import app
+except BaseException:
+    _runtime_guard.release()
+    raise
+
+# Reuse the pre-acquired lock for the full ASGI lifespan; acquire() is
+# idempotent on this guard and release happens after the existing lifespan.
+install_single_process_runtime_guard(app, guard=_runtime_guard)
 from .voice_patch import install_voice_patch
 from .live_voice_patch import install_live_voice_patch
 from .v7_patch import install_v7_patch
