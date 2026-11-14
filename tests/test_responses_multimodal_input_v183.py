@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import base64
 import io
 import time
@@ -14,6 +15,7 @@ from fastapi import HTTPException, Request
 from PIL import Image
 
 from app.api_keys import ApiPrincipal
+from app import model_capability_routing_patch as model_routing
 from app.file_store import FileStore
 from app.media_archive_v173 import MediaArchive
 from app.responses_multimodal_input_v183 import (
@@ -154,13 +156,19 @@ def test_responses_dispatch_transfers_canonical_attachments_to_one_worker(tmp_pa
 def test_image_generation_tool_passes_image_reference_into_same_existing_executor(tmp_path: Path):
     files, archive = _stores(tmp_path)
     records = []
+    registry = SimpleNamespace(
+        routing_key_context=contextvars.ContextVar("responses_multimodal_image_test_key", default=None)
+    )
     async def generate(**kwargs):
         records.append(kwargs)
+        assert registry.routing_key_context.get() == kwargs["principal"].key_id
+        target = model_routing._MODEL_CONTEXT.get()
+        assert isinstance(target, dict) and target.get("model") == "gpt-image"
         return {"data": [{"b64_json": base64.b64encode(_png()).decode()}],
                 "chat2api": {"request_id": kwargs["x_chat2api_request_id"], "owned_media": []}}
     app = SimpleNamespace(state=SimpleNamespace(
         file_store=files, media_archive=archive, image_generation_executor=generate,
-        responses_v108_store=OrderedDict(),
+        responses_v108_store=OrderedDict(), registry=registry,
     ))
     body = {"model": "gpt-6", "input": [{"role":"user","content":[
         {"type":"input_text","text":"以此图片为参考生成插画"},
