@@ -614,9 +614,12 @@ class BillingStore:
                 return None
             usage = request_row.get("usage") if isinstance(request_row.get("usage"), dict) else {}
             input_tokens = max(0, int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0))
-            cached_tokens = max(0, int(usage.get("cached_input_tokens") or 0))
+            # Cached tokens are a subset of input tokens. A malformed or
+            # inconsistent upstream usage payload must not charge more cached
+            # input than the entire request contained.
+            cached_tokens = min(input_tokens, max(0, int(usage.get("cached_input_tokens") or 0)))
             output_tokens = max(0, int(usage.get("completion_tokens") or usage.get("output_tokens") or 0))
-            uncached_tokens = max(0, input_tokens - cached_tokens)
+            uncached_tokens = input_tokens - cached_tokens
             usd = (
                 uncached_tokens * float(price.get("input_usd_per_million") or 0)
                 + cached_tokens * float(price.get("cached_input_usd_per_million") or 0)
