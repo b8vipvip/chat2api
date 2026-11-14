@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import json
+import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -824,3 +825,52 @@ def test_subscription_expiry_falls_back_to_free_and_is_persistent(tmp_path: Path
     assert reopened.current_plan_for_user("usr_abcdef123")["plan_id"] == "free"
     assert reopened.history_for_user("usr_abcdef123")[0]["status"] == "active"
 
+
+
+def test_model_entitlement_schema_migrates_existing_rules_for_role_and_plan_subjects(tmp_path: Path):
+    database = tmp_path / "model_entitlements_v3.sqlite3"
+    connection = sqlite3.connect(database)
+    connection.execute("""
+        CREATE TABLE model_entitlement_rules(
+          subject_type TEXT NOT NULL CHECK(subject_type IN ('global','tenant','tenant_role','key','user')),
+          subject_id TEXT NOT NULL,
+          effect TEXT NOT NULL CHECK(effect IN ('allow','deny')),
+          models_json TEXT NOT NULL,
+          enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY(subject_type,subject_id)
+        )
+    """)
+    connection.execute(
+        """INSERT INTO model_entitlement_rules
+           (subject_type,subject_id,effect,models_json,enabled,updated_at)
+           VALUES ('global','default','allow','["gpt-5.5"]',1,'2026-01-01T00:00:00+00:00')"""
+    )
+    connection.commit()
+    connection.close()
+
+    store = ModelEntitlementStore(tmp_path)
+    assert store.rules_for(
+        key_id="key_1", user_id="usr_abcdef123",
+    )[0]["subject_type"] == "global"
+    store.upsert("user_role", "trusted", "allow", ["gpt-5.5"])
+    store.upsert("subscription_plan", "pro", "allow", ["gpt-5.5"])
+    allowed = store.evaluate(
+        "gpt-5.5",
+        key_id="key_1",
+        user_id="usr_abcdef123",
+        user_role="trusted",
+        subscription_plan="pro",
+    )
+    assert allowed["allowed"] is True
+    denied = store.evaluate(
+        "gpt-5.6-sol",
+        key_id="key_1",
+        user_id="usr_abcdef123",
+        user_role="trusted",
+        subscription_plan="pro",
+    )
+    assert denied["allowed"] is False
+    assert {row["subject_type"] for row in store.list_rules()} == {
+        "global", "user_role", "subscription_plan",
+    }
