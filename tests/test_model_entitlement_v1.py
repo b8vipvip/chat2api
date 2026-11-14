@@ -780,6 +780,31 @@ def test_user_role_and_subscription_plan_admin_routes_are_audited_and_separated(
         assert plan.status_code == 200
         assert plan.json()["plan"]["plan_id"] == "pro"
 
+        role_policy = client.put(
+            "/api/admin/model-entitlements/user_role/trusted",
+            cookies={"chat2api_admin_session": token},
+            json={"effect": "allow", "models": ["gpt-5.5"]},
+        )
+        assert role_policy.status_code == 200
+        reserved_admin_role = client.put(
+            "/api/admin/model-entitlements/user_role/support",
+            cookies={"chat2api_admin_session": token},
+            json={"effect": "allow", "models": ["gpt-5.5"]},
+        )
+        assert reserved_admin_role.status_code == 400
+        unknown_plan_policy = client.put(
+            "/api/admin/model-entitlements/subscription_plan/missing",
+            cookies={"chat2api_admin_session": token},
+            json={"effect": "allow", "models": ["gpt-5.5"]},
+        )
+        assert unknown_plan_policy.status_code == 404
+        plan_policy = client.put(
+            "/api/admin/model-entitlements/subscription_plan/pro",
+            cookies={"chat2api_admin_session": token},
+            json={"effect": "allow", "models": ["gpt-5.5"]},
+        )
+        assert plan_policy.status_code == 200
+
         assigned = client.put(
             "/api/admin/users/usr_abcdef123/subscription",
             cookies={"chat2api_admin_session": token},
