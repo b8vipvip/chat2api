@@ -879,6 +879,8 @@ class BillingStore:
                 fx = float(reservation.get("usd_cny_rate") or 0)
             else:
                 price = pricing.model(model_id)
+                if price and price.get("enabled", True) is not True:
+                    price = None
                 fx = float(pricing.public().get("usd_cny_rate") or 0)
                 if not price and reservation and reservation.get("state") == "reserved":
                     # If served_model is unknown or has no configured price,
