@@ -21,7 +21,7 @@ def test_unicode_attachment_headers_are_http_safe_and_keep_extension() -> None:
     for value in headers.values():
         value.encode("latin-1")
     response = Response(b"png", media_type="image/png", headers=headers)
-    assert response.headers["x-chat2api-attachment-revision"] == "82"
+    assert response.headers["x-chat2api-attachment-revision"] == "83"
     assert response.headers["x-chat2api-filename-encoding"] == "percent-utf8"
     assert response.headers["x-chat2api-filename"].endswith(".png")
     assert "%" in response.headers["x-chat2api-filename"]

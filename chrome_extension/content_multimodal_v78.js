@@ -36,8 +36,16 @@
     return bytes;
   }
 
-  async function fetchAttachment(spec) {
-    const response = await chrome.runtime.sendMessage({ type: "chat2api.attachment.fetch", fileId: spec.file_id });
+  async function fetchAttachment(spec, requestId) {
+    const scopedRequestId = String(requestId || spec.request_id || "");
+    if (!/^[a-zA-Z0-9_-]{6,120}$/.test(scopedRequestId)) {
+      throw new Error("Attachment fetch requires its original request ID");
+    }
+    const response = await chrome.runtime.sendMessage({
+      type: "chat2api.attachment.fetch",
+      fileId: spec.file_id,
+      requestId: scopedRequestId,
+    });
     if (!response?.ok) throw new Error(response?.error || `Unable to download ${spec.file_id}`);
     const data = response.data || {};
     const name = String(data.filename || spec.filename || spec.file_id || "attachment");
@@ -352,12 +360,16 @@
     );
   }
 
-  async function attach(specs = []) {
+  async function attach(specs = [], options = {}) {
     const started = performance.now();
     if (!Array.isArray(specs) || !specs.length) return { attachments_count: 0, attachment_prepare_ms: 0 };
     if (specs.length > 4) throw new Error("A maximum of 4 attachments is supported per request");
+    const requestId = String(options.request_id || specs[0]?.request_id || "");
+    if (!/^[a-zA-Z0-9_-]{6,120}$/.test(requestId)) {
+      throw new Error("Attachment preparation requires its original request ID");
+    }
     const items = [];
-    for (const spec of specs) items.push(await fetchAttachment(spec));
+    for (const spec of specs) items.push(await fetchAttachment(spec, requestId));
     const uploaded = [];
     for (const item of items) {
       uploaded.push(await uploadOne(item));
@@ -405,7 +417,7 @@
       return false;
     }
     if (message.type === "chat2api.attach.prepare.v4") {
-      attach(message.attachments || [])
+      attach(message.attachments || [], { request_id: message.request_id })
         .then(data => sendResponse({ ok: true, data, controller: CONTROLLER, revision: REVISION }))
         .catch(error => sendResponse({ ok: false, error: String(error?.message || error), controller: CONTROLLER, revision: REVISION }));
       return true;

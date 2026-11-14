@@ -236,7 +236,10 @@ def test_dispatch_correlates_worker_and_protocol_repair_attempts() -> None:
         scope={"chat2api.responses_trace": trace},
     )
     async def create(request_id, client_id):
-        return SimpleNamespace(request_id=request_id)
+        return SimpleNamespace(request_id=request_id, timings=lambda: {})
+
+    async def release(request_id):
+        return None
 
     async def send(client_id, message):
         return None
@@ -247,7 +250,7 @@ def test_dispatch_correlates_worker_and_protocol_repair_attempts() -> None:
         busy_clients=set(),
         send=send,
     )
-    broker = SimpleNamespace(create=create)
+    broker = SimpleNamespace(create=create, release=release)
     app = SimpleNamespace(state=SimpleNamespace(
         registry=registry, broker=broker,
         settings=SimpleNamespace(request_timeout_seconds=120),

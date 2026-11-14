@@ -35,6 +35,7 @@ def principal(scopes=("chat", "images")):
 def app_with_fake_engine():
     app = FastAPI()
     app.state.responses_v108_store = OrderedDict()
+    app.state.responses_v108_owners = {}
     calls = []
 
     async def execute(**kwargs):

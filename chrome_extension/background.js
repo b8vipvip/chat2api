@@ -145,7 +145,7 @@ function rejectPendingNativeAcks(reason) {
 function awaitNativeAck(event) {
   if (!socketReady()) return Promise.resolve({ok:false,committed:false,error:"socket-disconnected"});
   if (!["chat.native.snapshot","chat.native.chunk"].includes(event?.type)
-      || !/^(?:req|resp|imgreq)_[a-zA-Z0-9_-]{6,100}$/.test(String(event?.request_id || ""))
+      || !/^[a-zA-Z0-9_-]{6,120}$/.test(String(event?.request_id || ""))
       || !Number.isInteger(nativeAckRevision(event)) || nativeAckRevision(event) < 1
       || (event.type === "chat.native.chunk"
           && (!Number.isInteger(event.index) || event.index < 0)))
@@ -428,10 +428,14 @@ function arrayBufferToBase64(buffer) {
   for (let i = 0; i < bytes.length; i += chunk) binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
   return btoa(binary);
 }
-async function fetchAttachment(fileId) {
+async function fetchAttachment(fileId, requestId) {
   const settings = await config();
   if (!settings.clientId || !settings.clientToken) throw new Error("Extension is not paired");
-  const url = `${String(settings.serverUrl).replace(/\/$/, "")}/api/extensions/files/${encodeURIComponent(fileId)}?client_id=${encodeURIComponent(settings.clientId)}&token=${encodeURIComponent(settings.clientToken)}`;
+  const request = String(requestId || "");
+  if (!/^[A-Za-z0-9_-]{6,120}$/.test(request)) {
+    throw new Error("Attachment download requires its original request ID");
+  }
+  const url = `${String(settings.serverUrl).replace(/\/$/, "")}/api/extensions/files/${encodeURIComponent(fileId)}?request_id=${encodeURIComponent(request)}&client_id=${encodeURIComponent(settings.clientId)}&token=${encodeURIComponent(settings.clientToken)}`;
   const response = await fetch(url, { cache: "no-store" });
   if (!response.ok) throw new Error(`Attachment ${fileId} download failed: HTTP ${response.status}`);
   const filename = response.headers.get("X-Chat2API-Filename") || fileId;
@@ -453,7 +457,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   if (message.type === "chat2api.event") { trySendSocket(message.event).then(sent => sendResponse({ ok: sent })); return true; }
   if (message.type === "chat2api.attachment.fetch") {
-    fetchAttachment(message.fileId).then(data => sendResponse({ ok: true, data })).catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));
+    fetchAttachment(message.fileId, message.requestId).then(data => sendResponse({ ok: true, data })).catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));
     return true;
   }
   if (message.type === "popup.status") { Promise.all([config(), chatTabs()]).then(([settings, tabs]) => sendResponse({ ok: true, settings, tabs })); return true; }

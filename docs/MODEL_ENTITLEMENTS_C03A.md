@@ -113,3 +113,72 @@ tenant-store outages, orphaned tenant memberships, the server-owned gpt-image
 target, Speech/Conversation request model context, and Realtime session.start
 model context including deny behavior. Exact-head full CI and production image
 smoke remain required.
+
+
+## C-03B — tenant/resource authorization audit (2026-11-13)
+
+Status: **implementation and regression coverage added on a stacked branch; exact-head CI and review pending**.
+
+### Authorization invariant
+
+Tenant membership and API-key tenant binding are organizational metadata. They do **not** implicitly grant access to another user's personal resources. Until an explicit resource-sharing ACL is designed, approved and audited, each resource remains scoped to its actual owner. This applies both across tenants and between different members of the same tenant.
+
+### Resource boundary matrix
+
+| Resource | Owner authority | Cross-user behavior |
+|---|---|---|
+| Uploaded Files | FileStore `owner_key_id` | API-key owner only; master admin remains privileged |
+| Request History | UserAccountStore-owned API-key IDs | User session sees only requests from its own keys |
+| Billing / charges | BillingStore `user_id` | User sees only its own wallet, charges and orders |
+| Archived Media metadata | MediaArchive `owner` | `/v1/media/{id}` only returns metadata/token to the owning key |
+| Generated-file metadata | GeneratedFileArchive `owner` | `/v1/generated-files/{id}` only returns metadata/token to the owning key |
+| Native content sidecar | Telemetry request `api_key_id` + NativeContentStore owner | Exact owning key only |
+| Worker attachment download | Active telemetry request + Worker `client_id` + `input_file_ids` + FileStore owner | Only the Worker assigned to the active request can fetch the exact attached file |
+| Admin archived request media | Telemetry request owner + FileStore `owner_key_id` | Refuses a file whose owner does not match the request row |
+
+### Worker file-read hardening
+
+The former `/api/extensions/files/{file_id}` boundary authenticated a paired Worker but treated that Worker as a global reader. It did not bind the requested file to the active request, assigned Worker, or API-key owner.
+
+The revised route requires `request_id` and checks all of the following before reading bytes:
+
+1. The extension token is valid for the supplied `client_id`.
+2. The request exists and is still `running`.
+3. The request's persisted `client_id` equals the authenticated Worker.
+4. The requested file ID is in that request's persisted `input_file_ids`.
+5. The request's `api_key_id` equals the FileStore item's `owner_key_id`.
+
+Unknown, stale, unattached, wrong-Worker and wrong-owner combinations return 404. The request ID and exact file set are persisted before Worker dispatch for Chat Completions, Images and Responses. The Chrome extension forwards the request ID with the file fetch.
+
+### Capability URL exception
+
+Archived Media and Generated Files also expose opaque bearer-token download URLs in API output. Possession of the exact token remains a read capability by design; these URLs are not equivalent to authenticated metadata endpoints and are not revoked merely because a user is not a tenant member. Do not describe token URLs as session-bound or tenant-bound. A future requirement for non-shareable downloads needs a separate authenticated download/session design and migration of clients.
+
+### Regression coverage
+
+- Cross-tenant user sessions cannot read another user's request history, billing rows or API-key secret.
+- Cross-tenant API keys cannot read/delete another key's FileStore item or read Media/Generated File metadata.
+- A tenant member cannot access another member's personal resources merely by sharing the same tenant.
+- Native sidecar access is checked against the authoritative telemetry owner.
+- Worker attachment downloads reject missing request IDs, unknown requests, wrong Workers and files not attached to the active request.
+- Responses dispatch persists its request owner, Worker and exact attachment set before sending the Worker message.
+
+The following remain outside this slice: explicit resource sharing ACLs, token-URL revocation/session binding, full W-01/W-05 browser E2E, and production deployment acceptance.
+
+### Release compatibility gate
+
+This branch changes the Worker attachment-fetch protocol by requiring `request_id`. The current production release remains `0.22.291`; do not deploy this route change against an older installed Worker bundle. When this stack is approved for release, bump the unified Server/Worker/Bridge release version (next candidate: `0.22.292`), update the manifest and runtime version contract together, and verify that the new Worker bundle is served before enabling the required request-scoped download parameter. This release/version migration is intentionally deferred from the feature branch.
+
+### C-03B request-scoped Worker attachment reads
+
+- A Worker file-read grant is bound to the exact request, assigned client ID,
+  API-key owner, attached file ID, and original dispatch WebSocket. A newly
+  connected socket reusing the same paired client ID cannot inherit a still
+  running request's attachment grant. The Broker lease and current registry
+  socket must still reference the exact socket that received the dispatch;
+  possession of the paired extension token alone does not preserve a stale
+  dispatch grant after reconnect.
+- Telemetry marked `running` is not sufficient by itself: a missing Broker
+  lease, terminal Broker state, failed dispatch, detached socket, replacement
+  socket, mismatched owner, or file absent from the request attachment list
+  all fail closed.

@@ -1043,9 +1043,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"deleted": True}
 
     @app.get("/api/extensions/files/{file_id}")
-    async def extension_file(file_id: str, client_id: str = Query(...), token: str = Query(...)) -> Response:
+    async def extension_file(
+        file_id: str, request_id: str = Query(..., min_length=6, max_length=120),
+        client_id: str = Query(...), token: str = Query(...),
+    ) -> Response:
         if not await registry.authenticate(client_id, token):
             raise HTTPException(status_code=401, detail="Invalid extension token")
+        row = telemetry.get(request_id)
+        item = file_store.get(file_id)
+        active = getattr(broker, "requests", {}).get(request_id)
+        allowed_ids = row.get("input_file_ids") if isinstance(row, dict) else None
+        dispatch_socket = getattr(active, "dispatch_socket", None)
+        sockets = getattr(registry, "sockets", None)
+        current_socket = sockets.get(client_id) if isinstance(sockets, dict) else None
+        if (
+            not isinstance(row, dict)
+            or active is None
+            or dispatch_socket is None
+            or current_socket is not dispatch_socket
+            or str(getattr(active, "client_id", "") or "") != client_id
+            or getattr(active, "terminal_event_type", None) is not None
+            or getattr(active, "completed_mono", None) is not None
+            or str(row.get("status") or "") != "running"
+            or str(row.get("client_id") or "") != client_id
+            or not item
+            or (
+                str(row.get("api_key_id") or "") != "master"
+                and str(row.get("api_key_id") or "") != str(item.owner_key_id or "")
+            )
+            or not isinstance(allowed_ids, list)
+            or file_id not in {str(value) for value in allowed_ids}
+        ):
+            raise HTTPException(status_code=404, detail="Unknown attachment")
         try:
             item, payload = file_store.read(file_id)
         except KeyError as error:
@@ -1119,8 +1148,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             {"estimated": usage.estimated, "estimator": usage.estimator},
         )
 
-    def attachment_specs(file_ids: list[str], principal: ApiPrincipal) -> list[dict[str, object]]:
-        return canonical_attachment_specs(file_store, file_ids, principal)
+    def attachment_specs(
+        file_ids: list[str], principal: ApiPrincipal, *, request_id: str | None = None,
+    ) -> list[dict[str, object]]:
+        rows = canonical_attachment_specs(file_store, file_ids, principal)
+        if not request_id:
+            return rows
+        # The worker download grant is bound to the exact request, API-key owner
+        # and assigned Worker. It is not a reusable file-id capability.
+        return [{**row, "request_id": request_id} for row in rows]
 
     async def inline_image_files(body: ChatCompletionRequest, principal: ApiPrincipal) -> list[str]:
         result: list[str] = []
@@ -1343,7 +1379,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def record_request_queued(
         *, request_id: str, response_id: str, requested_model: str, prompt: str,
         principal: ApiPrincipal, stream: bool, prompt_mode: str,
-        request_type: str, attachments_count: int,
+        request_type: str, attachments_count: int, input_file_ids: list[str],
     ) -> None:
         """Persist request visibility before Worker selection/capacity admission.
 
@@ -1362,6 +1398,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "requested_model": requested_model,
             "request_type": request_type,
             "attachments_count": attachments_count,
+            "input_file_ids": list(dict.fromkeys(str(value) for value in input_file_ids if value)),
             "stream": stream,
             "prompt_mode": prompt_mode,
             "prompt_chars": len(prompt),
@@ -1389,6 +1426,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response_id: str,
         request_type: str,
         attachments_count: int,
+        input_file_ids: list[str],
     ) -> None:
         usage, token_meta = standard_usage(prompt, "")
         await telemetry.upsert(
@@ -1402,6 +1440,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "requested_model": requested_model,
                 "request_type": request_type,
                 "attachments_count": attachments_count,
+                "input_file_ids": list(dict.fromkeys(str(value) for value in input_file_ids if value)),
                 "stream": stream,
                 "prompt_mode": prompt_mode,
                 "prompt_chars": len(prompt),
@@ -1851,8 +1890,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         prompt = build_prompt(body.messages, body.prompt_mode)
         inline_ids = await inline_image_files(body, principal)
         file_ids = list(dict.fromkeys(body.all_file_ids() + inline_ids))
-        attachments = attachment_specs(file_ids, principal)
         request_id = accepted_request_id(x_chat2api_request_id, "req_")
+        attachments = attachment_specs(file_ids, principal, request_id=request_id)
         response_id = completion_id()
         request_started = time.perf_counter()
         requested_client = body.client_id or x_chat2api_client
@@ -1865,6 +1904,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             prompt=prompt, principal=principal, stream=body.stream,
             prompt_mode=body.prompt_mode, request_type=request_type,
             attachments_count=len(attachments),
+            input_file_ids=[str(item["file_id"]) for item in attachments],
         )
         # Read-only version identity for browser-origin Playground calls.
         # ABCD may legitimately use real SSE even if its final report never
@@ -1992,6 +2032,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 response_id=response_id,
                 request_type=request_type,
                 attachments_count=len(attachments),
+                input_file_ids=[str(item["file_id"]) for item in attachments],
             )
             await registry.send(
                 client_id,
@@ -2175,8 +2216,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         principal: ApiPrincipal = Depends(require_api_key),
     ) -> dict[str, object]:
         require_scope(principal, "images")
-        attachments = attachment_specs([item.file_id for item in body.attachments], principal)
         request_id = accepted_request_id(x_chat2api_request_id, "imgreq_")
+        attachments = attachment_specs(
+            [item.file_id for item in body.attachments], principal, request_id=request_id,
+        )
         response_id = "img_" + uuid.uuid4().hex
         started = time.perf_counter()
         client_id = resolve_client_now(body.client_id or x_chat2api_client)
@@ -2193,7 +2236,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "request_id": request_id, "response_id": response_id, "client_id": client_id,
                     "api_key_id": principal.key_id, "api_key_name": principal.name, "auth_kind": principal.kind,
                     "requested_model": "gpt-image", "request_type": "image_generation",
-                    "attachments_count": len(attachments), "stream": False, "prompt_mode": "image",
+                    "attachments_count": len(attachments),
+                    "input_file_ids": [str(item["file_id"]) for item in attachments],
+                    "stream": False, "prompt_mode": "image",
                     "prompt_chars": len(body.prompt), "completion_chars": 0, "status": "running",
                     "usage": {}, "timings": state.timings(), "diagnostics": dict(state.diagnostics), "error": None,
                 }
@@ -2384,14 +2429,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             isinstance(item, dict) and item.get("file_id") == file_id for item in media
         ):
             raise HTTPException(status_code=404, detail="No archived image for this request")
-        try:
-            item, payload = file_store.read(file_id)
-        except (KeyError, FileNotFoundError) as error:
-            raise HTTPException(status_code=404, detail="Archived image is no longer available") from error
+        item = file_store.get(file_id)
+        if not item or str(item.owner_key_id) != str(row.get("api_key_id") or ""):
+            raise HTTPException(status_code=404, detail="Archived image is no longer available")
         if item.purpose != "generated-output" or item.mime_type not in {
             "image/png", "image/jpeg", "image/webp", "image/gif"
         }:
             raise HTTPException(status_code=404, detail="Invalid request media")
+        try:
+            item, payload = file_store.read(file_id)
+        except (KeyError, FileNotFoundError) as error:
+            raise HTTPException(status_code=404, detail="Archived image is no longer available") from error
         return Response(
             content=payload, media_type=item.mime_type,
             headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},

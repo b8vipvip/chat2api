@@ -151,7 +151,11 @@ class FileStore:
         item = self.get(file_id)
         if not item:
             raise KeyError("Unknown file_id")
-        if owner_key_id and item.owner_key_id not in {owner_key_id, "master"} and owner_key_id != "master":
+        # "master" is a privileged owner namespace, not a shared-file marker.
+        # Only an explicitly privileged caller (None or "master" at this
+        # boundary) may delete master-owned files; ordinary API keys must own
+        # the exact file, matching the read/metadata endpoint contract.
+        if owner_key_id is not None and owner_key_id != "master" and item.owner_key_id != owner_key_id:
             raise PermissionError("File belongs to another API key")
         try:
             (self.root / item.path).unlink(missing_ok=True)
