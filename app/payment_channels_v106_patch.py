@@ -591,6 +591,11 @@ def install_payment_channels_v106_patch(app: FastAPI) -> FastAPI:
                 raise HTTPException(status_code=404, detail="USDT 充值订单不存在")
             if order.get("status") == "paid":
                 return {"ok": True, "order": dict(order)}
+            if order.get("status") not in {"pending", "reviewing"}:
+                raise HTTPException(
+                    status_code=409,
+                    detail="该 USDT 订单已结束，不能再提交交易哈希",
+                )
             previous = dict(order)
             order["txid"] = txid.lower()
             order["status"] = "reviewing"
