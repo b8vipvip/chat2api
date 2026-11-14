@@ -1446,7 +1446,7 @@ class PaymentConfigStore:
                 if not isinstance(value, str) or len(value) > limit:
                     raise ValueError(f"payment configuration {field} is invalid")
             for field in ("alipay_cid", "wechat_cid"):
-                if candidate[field] and not re.fullmatch(r"\\d+(?:,\\d+)*", candidate[field]):
+                if candidate[field] and not re.fullmatch(r"\d+(?:,\d+)*", candidate[field]):
                     raise ValueError(f"payment configuration {field} is invalid")
             origin = candidate["public_origin"]
             if origin and not origin.startswith("https://"):
