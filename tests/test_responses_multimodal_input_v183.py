@@ -154,7 +154,9 @@ def test_responses_dispatch_transfers_canonical_attachments_to_one_worker(tmp_pa
         attachments=specs,
     ))
     assert len(events) == 1
-    assert events[0][1]["attachments"] == specs
+    expected_specs = [{**item, "request_id": request_id} for item in specs]
+    assert events[0][1]["attachments"] == expected_specs
+    assert all(item["request_id"] == request_id for item in events[0][1]["attachments"])
     assert events[0][1]["options"]["model"] == "gpt-6"
     assert request_id.startswith("resp_req_")
     assert client == "ext_ready"
