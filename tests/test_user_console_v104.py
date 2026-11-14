@@ -754,3 +754,85 @@ def test_wallet_actual_overrun_posts_debt_and_blocks_new_reservations(tmp_path: 
             input_tokens=1, output_tokens=1,
             price_snapshot=price, usd_cny_rate=7.0,
         )
+
+
+
+def test_wallet_recovery_uses_persisted_request_id_beyond_telemetry_memory_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+
+    from fastapi.testclient import TestClient
+
+    from app.config import Settings
+    from app.main import create_app
+    from app.user_console_v104_patch import install_user_console_v104_patch
+
+    app = create_app(Settings(
+        CHAT2API_API_KEY="wallet-recovery-master-key",
+        CHAT2API_DATA_DIR=str(tmp_path),
+    ))
+    install_user_console_v104_patch(app)
+    user = app.state.user_accounts.register(
+        "wallet-recovery@example.com", "long-enough-password",
+    )
+    public, _token = asyncio.run(app.state.api_keys.create("wallet-recovery"))
+    app.state.user_accounts.attach_key(user["user_id"], public["key_id"])
+    pricing = app.state.user_pricing
+    config = pricing.public()
+    pricing.update(billing_enabled=True, usd_cny_rate=7.0, models=config["models"])
+    billing = app.state.user_billing
+    billing.credit(user["user_id"], 1000)
+    billing.reserve_for_request(
+        user["user_id"], "req_wallet_recovery_old",
+        model_id="gpt-5.6-sol", estimated_cny_cents=100,
+        input_tokens=100, output_tokens=4096,
+        price_snapshot=pricing.model("gpt-5.6-sol"), usd_cny_rate=7.0,
+    )
+
+    # Simulate a process interruption after the terminal telemetry row was
+    # durably appended but before BillingStore could project its charge.
+    def fail_charge(*_args, **_kwargs):
+        raise OSError("simulated crash between telemetry and billing projection")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(billing, "record_charge", fail_charge)
+        with pytest.raises(OSError, match="simulated crash"):
+            asyncio.run(app.state.telemetry.append({
+                "request_id": "req_wallet_recovery_old",
+                "api_key_id": public["key_id"],
+                "requested_model": "gpt-5.6-sol",
+                "status": "completed",
+                "usage": {
+                    "prompt_tokens": 1000, "completion_tokens": 500,
+                    "total_tokens": 1500, "estimated": True,
+                },
+                "diagnostics": {},
+            }))
+
+    # Evict the terminal row from TelemetryStore's maxlen=500 memory cache.
+    for index in range(501):
+        asyncio.run(app.state.telemetry.append({
+            "request_id": f"req_wallet_recovery_noise_{index}",
+            "status": "running",
+            "usage": {},
+        }))
+    assert len(app.state.telemetry.recent(1000)) == 500
+    assert all(
+        row.get("request_id") != "req_wallet_recovery_old"
+        for row in app.state.telemetry.recent(1000)
+    )
+    assert billing.reserved_cents(user["user_id"]) == 100
+    assert billing.charge_for_request("req_wallet_recovery_old") is None
+
+    session = app.state.user_accounts.create_session(user["user_id"])
+    with TestClient(app) as client:
+        client.cookies.set("chat2api_user_session", session)
+        response = client.get("/api/user/billing")
+
+    assert response.status_code == 200, response.text
+    charge = billing.charge_for_request("req_wallet_recovery_old")
+    assert charge is not None and charge["debited"] is True
+    assert billing.reservations["req_wallet_recovery_old"]["state"] == "settled"
+    assert billing.reserved_cents(user["user_id"]) == 0
+    assert billing.balance_cents(user["user_id"]) == 1000 - charge["cost_cny_cents"]
