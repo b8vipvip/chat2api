@@ -118,6 +118,11 @@ class ModelEntitlementStore:
             if subject_id != "default":
                 raise ModelEntitlementError("Global policy subject_id must be 'default'")
             return subject_type, subject_id
+        if subject_type in {"user_role", "subscription_plan"}:
+            # These identities are canonical lowercase slugs in their owning
+            # stores. Normalize policy writes/deletes the same way so mixed-case
+            # admin input cannot create a rule that never matches a live subject.
+            subject_id = str(subject_id or "").strip().lower()
         if not isinstance(subject_id, str) or not SUBJECT_ID.fullmatch(subject_id):
             raise ModelEntitlementError("Invalid subject_id")
         return subject_type, subject_id
