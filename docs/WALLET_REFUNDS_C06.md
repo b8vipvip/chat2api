@@ -59,8 +59,12 @@ the Control Plane maps this route to `billing:write`. Caller body:
   bounded subset. Missing or inconsistent usage leaves the hold reserved
   for later terminal replay.
 - Startup validates the supported v1 ledger schema, collection/row
-  structure, owner IDs, row-key identity, integer-unit fields and
-  money-moving booleans/enums. Charge debit flags must be actual booleans;
+  structure, required charge/order/reservation/refund fields, owner IDs,
+  row-key identity, integer-unit fields, finite exchange rates and
+  money-moving booleans/enums. In particular, a `reserved` row without a
+  positive `reserved_cny_cents` amount is rejected instead of silently
+  disappearing from available-balance calculations; missing charge costs,
+  recharge amounts or refund amounts also fail closed. Charge debit flags must be actual booleans;
   payment order states/channels and wallet reservation states must be known
   values. Corrupt truthy strings cannot be treated as paid/debited, and an
   unknown reservation state cannot silently disappear from available-balance
