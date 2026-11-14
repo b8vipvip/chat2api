@@ -103,6 +103,107 @@ def test_usdt_duplicate_txid_confirmation_is_atomic_under_concurrency(tmp_path: 
     assert billing.balance_cents("usr_usdt_race") == 125
 
 
+def test_generic_provider_trade_number_is_unique_and_same_order_retry_is_idempotent(tmp_path: Path) -> None:
+    import pytest
+
+    from app.user_commerce import BillingStore, WalletReservationError
+
+    billing = BillingStore(tmp_path)
+    alipay = billing.create_order("usr_zpay_first", 125, "alipay")
+    wechat = billing.create_order("usr_zpay_second", 250, "wechat")
+    paypal = billing.create_order("usr_paypal", 300, "paypal")
+
+    paid = billing.settle_order(alipay["order_id"], "zpay-trade-shared")
+    assert billing.settle_order(alipay["order_id"], "zpay-trade-shared") == paid
+    assert billing.balance_cents("usr_zpay_first") == 125
+
+    # Alipay and WeChat share one ZPAY merchant transaction namespace.
+    with pytest.raises(WalletReservationError, match="already credited"):
+        billing.settle_order(wechat["order_id"], "zpay-trade-shared")
+    assert billing.orders[wechat["order_id"]]["status"] == "pending"
+    assert billing.balance_cents("usr_zpay_second") == 0
+
+    # The same opaque string is allowed under a different provider namespace.
+    paypal_paid = billing.settle_order(paypal["order_id"], "zpay-trade-shared")
+    assert paypal_paid["status"] == "paid"
+    assert billing.balance_cents("usr_paypal") == 300
+
+    with pytest.raises(WalletReservationError, match="another provider transaction"):
+        billing.settle_order(alipay["order_id"], "different-trade-number")
+    assert billing.balance_cents("usr_zpay_first") == 125
+
+
+def test_generic_provider_trade_number_duplicate_race_is_atomic(tmp_path: Path) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    import pytest
+
+    from app.user_commerce import BillingStore, WalletReservationError
+
+    billing = BillingStore(tmp_path)
+    first = billing.create_order("usr_zpay_race_a", 125, "alipay")
+    second = billing.create_order("usr_zpay_race_b", 250, "wechat")
+    barrier = Barrier(2)
+
+    def settle(order_id: str) -> str:
+        barrier.wait(timeout=5)
+        try:
+            billing.settle_order(order_id, "zpay-trade-race")
+            return "paid"
+        except WalletReservationError:
+            return "duplicate"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(settle, [first["order_id"], second["order_id"]]))
+
+    assert sorted(outcomes) == ["duplicate", "paid"]
+    paid = [row for row in billing.orders.values() if row.get("status") == "paid"]
+    assert len(paid) == 1
+    assert sum(billing.balance_cents(user_id) for user_id in (
+        "usr_zpay_race_a", "usr_zpay_race_b",
+    )) == int(paid[0]["amount_cents"])
+
+
+@pytest.mark.parametrize("terminal_status", ["rejected", "failed", "cancelled", "expired"])
+def test_terminal_unpaid_order_cannot_be_credited_by_a_late_provider_callback(
+    tmp_path: Path, terminal_status: str,
+) -> None:
+    import pytest
+
+    from app.user_commerce import BillingStore, WalletReservationError
+
+    billing = BillingStore(tmp_path)
+    order = billing.create_order("usr_late_callback", 125, "alipay")
+    with billing.lock:
+        billing.orders[order["order_id"]]["status"] = terminal_status
+        billing._save()
+
+    with pytest.raises(WalletReservationError, match="not eligible"):
+        billing.settle_order(order["order_id"], "late-provider-trade")
+    assert billing.orders[order["order_id"]]["status"] == terminal_status
+    assert billing.balance_cents("usr_late_callback") == 0
+
+
+def test_billing_ledger_rejects_duplicate_paid_provider_transactions(tmp_path: Path) -> None:
+    import pytest
+
+    from app.user_commerce import BillingStore
+
+    billing = BillingStore(tmp_path)
+    first = billing.create_order("usr_duplicate_ledger_a", 125, "alipay")
+    second = billing.create_order("usr_duplicate_ledger_b", 250, "wechat")
+    billing.settle_order(first["order_id"], "zpay-trade-unique-a")
+    billing.settle_order(second["order_id"], "zpay-trade-unique-b")
+    with billing.lock:
+        billing.orders[second["order_id"]]["provider_trade_no"] = "zpay-trade-unique-a"
+        billing._save()
+    source = billing.path.read_bytes()
+
+    with pytest.raises(RuntimeError, match="Billing ledger is unreadable"):
+        BillingStore(tmp_path)
+    assert billing.path.read_bytes() == source
+
+
 def test_usdt_confirmation_rejects_pending_order_even_with_txid(tmp_path: Path) -> None:
     from fastapi.testclient import TestClient
 

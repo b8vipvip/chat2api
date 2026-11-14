@@ -27,6 +27,13 @@ def _pricing_model_key(value: Any) -> str:
     return {"gpt-5.6": "gpt-5.6-sol"}.get(model_id, model_id)
 
 
+def _payment_transaction_scope(channel: Any) -> str:
+    value = str(channel or "").strip().lower()
+    # Alipay and WeChat are both settled by the same ZPAY merchant account;
+    # their provider trade numbers share one namespace.
+    return "zpay" if value in {"alipay", "wechat"} else value
+
+
 class WalletReservationError(RuntimeError):
     pass
 
@@ -622,6 +629,7 @@ class BillingStore:
                 "failed", "cancelled", "expired",
             }
             allowed_order_channels = {"alipay", "wechat", "paypal", "usdt"}
+            paid_provider_transactions: set[tuple[str, str]] = set()
             for order in orders.values():
                 if order.get("status") not in allowed_order_states:
                     raise ValueError("billing ledger orders.status is unsupported")
@@ -633,12 +641,19 @@ class BillingStore:
                     or not isinstance(order.get("merchant_trade_no"), str)
                     or not order["merchant_trade_no"]
                     or not isinstance(order.get("provider_trade_no"), str)
+                    or len(order["provider_trade_no"]) > 160
                     or any(not isinstance(order.get(field), str) for field in ("pay_url", "qr_image_url", "qr_payload"))
                     or not isinstance(order.get("created_at"), str) or not order["created_at"]
                     or not isinstance(order.get("updated_at"), str) or not order["updated_at"]
                     or (order.get("paid_at") is not None and not isinstance(order.get("paid_at"), str))
                 ):
                     raise ValueError("billing ledger payment order metadata is invalid")
+                provider_trade_no = str(order.get("provider_trade_no") or "").strip()
+                if order.get("status") == "paid" and provider_trade_no:
+                    identity = (_payment_transaction_scope(order.get("channel")), provider_trade_no)
+                    if identity in paid_provider_transactions:
+                        raise ValueError("billing ledger contains a duplicate paid provider transaction")
+                    paid_provider_transactions.add(identity)
             for reservation in reservations.values():
                 if reservation.get("state") not in {"reserved", "settled", "released"}:
                     raise ValueError("billing ledger reservations.state is unsupported")
@@ -1262,15 +1277,41 @@ class BillingStore:
             return dict(row) if row else None
 
     def settle_order(self, order_id: str, provider_trade_no: str) -> dict[str, Any]:
+        normalized_trade_no = str(provider_trade_no or "").strip()
         with self.lock:
             row = self.orders.get(order_id)
             if not row:
                 raise KeyError("充值订单不存在")
             if row.get("status") == "paid":
-                return dict(row)
+                existing_trade_no = str(row.get("provider_trade_no") or "").strip()
+                # Preserve idempotent reads for legacy paid rows that predate
+                # persisted provider IDs; never credit them a second time.
+                if not existing_trade_no or (
+                    normalized_trade_no
+                    and secrets.compare_digest(existing_trade_no, normalized_trade_no)
+                ):
+                    return dict(row)
+                raise WalletReservationError("Payment order was already settled with another provider transaction")
+            if row.get("status") not in {"pending", "reviewing"}:
+                raise WalletReservationError("Payment order is not eligible for settlement")
+            if not normalized_trade_no or len(normalized_trade_no) > 160:
+                raise WalletReservationError("A non-empty provider transaction number is required")
+            scope = _payment_transaction_scope(row.get("channel"))
+            for other_id, other in self.orders.items():
+                if other_id == order_id or other.get("status") != "paid":
+                    continue
+                other_trade_no = str(other.get("provider_trade_no") or "").strip()
+                if (
+                    other_trade_no
+                    and _payment_transaction_scope(other.get("channel")) == scope
+                    and secrets.compare_digest(other_trade_no, normalized_trade_no)
+                ):
+                    raise WalletReservationError(
+                        "Provider transaction number has already credited another order"
+                    )
             previous_order = dict(row)
             row["status"] = "paid"
-            row["provider_trade_no"] = str(provider_trade_no or "")[:160]
+            row["provider_trade_no"] = normalized_trade_no
             row["paid_at"] = _now()
             row["updated_at"] = _now()
             user_id = str(row.get("user_id") or "")

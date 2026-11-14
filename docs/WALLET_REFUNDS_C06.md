@@ -99,6 +99,13 @@ the Control Plane maps this route to `billing:write`. Caller body:
   ledger (PayPal/USDT order creation, checkout metadata, USDT txid submission
   and administrator rejection) restore the prior in-memory row if persistence
   fails. V106 recharge amount boundaries also require strict integer cents.
+  Generic provider settlement accepts only pending/reviewing orders, requires
+  a non-empty provider transaction number, and enforces one paid transaction
+  per provider namespace under the ledger lock. Alipay and WeChat share the
+  ZPAY namespace; PayPal and USDT are separate. A same-order callback retry
+  with the same provider ID is idempotent, while a different ID or a transaction
+  already credited to another order is rejected. Startup rejects duplicate
+  paid provider transaction IDs already present in the persisted ledger.
 - USDT duplicate-TXID detection and wallet credit are owned by
   `BillingStore.settle_usdt_order()` under one lock and one atomic ledger
   write. The V107 middleware check is only an early rejection; concurrent
