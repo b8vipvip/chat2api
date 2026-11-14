@@ -606,7 +606,7 @@ def test_wallet_enabled_rejects_unpriced_model_and_releases_token_hold(tmp_path:
     pricing.update(
         billing_enabled=True,
         usd_cny_rate=7.0,
-        models=[row for row in config["models"] if row["model_id"] != "gpt-5.6-sol"],
+        models=[row for row in config["models"] if row["model_id"] not in {"gpt-5.6-sol", "gpt-5.6"}],
     )
     billing = app.state.user_billing
     billing.credit(user["user_id"], 1000)
