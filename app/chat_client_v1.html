@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="/assets/chat2api-chat-client-v1.css">
   <script defer src="/assets/chat2api-chat-renderer-v2.js"></script>
   <script defer src="/assets/chat2api-chat-stream-recovery-v1.js"></script>
+  <script defer src="/assets/chat2api-image-drop-v1.js"></script>
   <script defer src="/assets/chat2api-chat-client-v1.js"></script>
 </head>
 <body>
@@ -107,10 +108,13 @@
       <footer class="composer-area" id="composerArea">
         <div class="composer-wrap">
           <div class="composer" id="composer">
+            <div class="attachment-preview hidden" id="pendingImages" aria-label="待发送图片"></div>
+            <input id="imageInput" class="sr-only" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple>
             <textarea id="messageInput" rows="1" maxlength="8000" placeholder="向 Chat2API 发送消息" aria-label="输入消息"></textarea>
             <div class="composer-bottom">
               <div class="composer-hint">Enter 发送 · Shift + Enter 换行</div>
               <div class="composer-controls">
+                <button class="attach-button" id="attachButton" type="button" title="添加图片（PNG、JPEG、WebP、GIF）" aria-label="添加图片">＋ 图片</button>
                 <button class="stop-button hidden" id="stopButton" type="button">停止生成</button>
                 <button class="send-button" id="sendButton" type="button" aria-label="发送消息" disabled>
                   <span>↑</span>
@@ -118,7 +122,7 @@
               </div>
             </div>
           </div>
-          <div class="composer-disclaimer" id="composerDisclaimer">聊天记录保存在当前浏览器；API Key 仅在本页面运行期间保留在内存中。</div>
+          <div class="composer-disclaimer" id="composerDisclaimer">聊天记录保存在当前浏览器；图片通过你的 API Key 上传并按账户权限读取；API Key 仅在本页面运行期间保留在内存中。</div>
         </div>
       </footer>
     </main>

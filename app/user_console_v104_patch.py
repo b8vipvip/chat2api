@@ -7,7 +7,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -17,6 +17,8 @@ from pydantic import BaseModel, Field
 from .admin_auth import SESSION_COOKIE as ADMIN_SESSION_COOKIE
 from .admin_audit import AdminAuditError, AdminAuditStore
 from .api_keys import load_or_create_data_secret, token_hash
+from .responses_multimodal_input_v183 import verify_raster_image
+
 from .user_commerce import (
     BillingStore,
     PaymentConfigStore,
@@ -29,6 +31,7 @@ from .user_commerce import (
 PATCH_REVISION = 104
 USER_JS_ASSET = "/assets/chat2api-user-console-v104.js"
 ADMIN_JS_ASSET = "/assets/chat2api-admin-commerce-v104.js"
+CHAT_IMAGE_DROP_JS_ASSET = "/assets/chat2api-image-drop-v1.js"
 CHAT_CLIENT_JS_ASSET = "/assets/chat2api-chat-client-v1.js"
 CHAT_CLIENT_CSS_ASSET = "/assets/chat2api-chat-client-v1.css"
 
@@ -295,6 +298,13 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
             },
         )
 
+    @app.get(CHAT_IMAGE_DROP_JS_ASSET, include_in_schema=False)
+    async def chat_image_drop_v1_js() -> Response:
+        return Response(
+            Path(__file__).with_name("chat_image_drop_v1.js").read_text(encoding="utf-8"),
+            media_type="application/javascript",
+            headers={"Cache-Control": "no-store, no-cache, must-revalidate", "X-Content-Type-Options": "nosniff"},
+        )
     @app.get(CHAT_CLIENT_JS_ASSET, include_in_schema=False)
     async def chat_client_js() -> Response:
         return Response(
@@ -446,6 +456,88 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
         except (KeyError, ValueError) as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
 
+    @app.get("/api/user/files/{file_id}/content")
+    async def user_file_content(file_id: str, request: Request) -> Response:
+        """Serve account-owned image attachments through the HttpOnly session."""
+        user = current_user(request)
+        file_store = app.state.file_store
+        item = file_store.get(file_id)
+        allowed_image_types = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+        if (
+            not item or item.purpose != "vision" or item.mime_type not in allowed_image_types
+            or not accounts.owns_key(str(user["user_id"]), str(item.owner_key_id or ""))
+        ):
+            raise HTTPException(status_code=404, detail="图片附件不存在")
+        try:
+            stored, payload = file_store.read(file_id)
+        except (KeyError, FileNotFoundError) as error:
+            raise HTTPException(
+                status_code=404, detail="图片附件内容不存在",
+                headers={"Cache-Control": "private, no-store", "Vary": "Cookie"},
+            ) from error
+        except OSError as error:
+            raise HTTPException(
+                status_code=503, detail="图片附件暂时不可用",
+                headers={"Cache-Control": "private, no-store", "Vary": "Cookie"},
+            ) from error
+        try:
+            verify_raster_image(payload, stored.mime_type)
+        except ValueError as error:
+            raise HTTPException(
+                status_code=415, detail="图片附件内容无效",
+                headers={"Cache-Control": "private, no-store", "Vary": "Cookie"},
+            ) from error
+        return Response(
+            payload,
+            media_type=stored.mime_type,
+            headers={
+                "Cache-Control": "private, no-store",
+                "Vary": "Cookie",
+                "Content-Disposition": "inline",
+                "Content-Security-Policy": "default-src 'none'; sandbox",
+                "X-Content-Type-Options": "nosniff",
+                "Cross-Origin-Resource-Policy": "same-origin",
+                "Referrer-Policy": "no-referrer",
+                "ETag": f'"sha256-{stored.sha256}"',
+                "X-Chat2API-Content-SHA256": stored.sha256,
+            },
+        )
+
+    @app.delete("/api/user/files/{file_id}")
+    async def user_delete_image(file_id: str, request: Request, response: Response) -> dict[str, bool]:
+        response.headers["Cache-Control"] = "private, no-store"
+        response.headers["Vary"] = "Cookie"
+        origin = str(request.headers.get("origin") or "").strip()
+        try:
+            parsed_origin = urlsplit(origin)
+        except ValueError as error:
+            raise HTTPException(status_code=403, detail="图片删除必须使用同源用户会话请求") from error
+        request_host = str(request.headers.get("host") or "").strip().lower()
+        forwarded_proto = str(request.headers.get("x-forwarded-proto") or "").split(",", 1)[0].strip().lower()
+        expected_scheme = forwarded_proto if forwarded_proto in {"http", "https"} else request.url.scheme.lower()
+        fetch_site = str(request.headers.get("sec-fetch-site") or "").strip().lower()
+        if (
+            parsed_origin.scheme.lower() != expected_scheme or not parsed_origin.netloc
+            or parsed_origin.netloc.lower() != request_host or parsed_origin.path not in {"", "/"}
+            or parsed_origin.query or parsed_origin.fragment or fetch_site not in {"", "same-origin"}
+        ):
+            raise HTTPException(status_code=403, detail="图片删除必须使用同源用户会话请求")
+        user = current_user(request)
+        file_store = app.state.file_store
+        item = file_store.get(file_id)
+        allowed_image_types = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+        if (
+            not item or item.purpose != "vision" or item.mime_type not in allowed_image_types
+            or not accounts.owns_key(str(user["user_id"]), str(item.owner_key_id or ""))
+        ):
+            raise HTTPException(status_code=404, detail="图片附件不存在")
+        try:
+            await file_store.delete(file_id, str(item.owner_key_id))
+        except (KeyError, PermissionError) as error:
+            raise HTTPException(status_code=404, detail="图片附件不存在") from error
+        except OSError as error:
+            raise HTTPException(status_code=503, detail="图片附件暂时不可用") from error
+        return {"deleted": True}
     @app.patch("/api/user/keys/{key_id}/quota")
     async def user_update_key_quota(key_id: str, body: UserKeyQuotaBody, request: Request) -> dict[str, Any]:
         user = current_user(request)
