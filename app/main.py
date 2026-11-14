@@ -117,6 +117,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await registry.load()
         await telemetry.load()
         await api_keys.load()
+        wallet_reconciler = getattr(app.state, "wallet_charge_reconciler", None)
+        billing_store = getattr(app.state, "user_billing", None)
+        if callable(wallet_reconciler) and billing_store is not None:
+            for user_id in billing_store.active_reservation_user_ids():
+                try:
+                    wallet_reconciler(user_id)
+                except Exception as error:
+                    # An unresolved hold remains reserved; startup must not
+                    # invent a release or prevent unrelated users from serving.
+                    logger.warning(
+                        "Wallet reservation startup recovery deferred error_type=%s",
+                        type(error).__name__,
+                    )
         quota_store = getattr(app.state, "quota_reservations", None)
         if quota_store is not None and getattr(app.state, "quota_reservation_runtime_enabled", False):
             # Recover terminal telemetry before expiring old reservations.
