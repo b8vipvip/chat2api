@@ -141,7 +141,7 @@ class UserAccountStore:
                 key_ids = raw.get("key_ids", [])
                 created_at = raw.get("created_at")
                 updated_at = raw.get("updated_at")
-                if not isinstance(user_id, str) or not user_id or len(user_id) > 128:
+                if not isinstance(user_id, str) or not user_id or user_id != user_id.strip() or len(user_id) > 128:
                     raise ValueError("user account ID is invalid")
                 if (
                     not isinstance(email, str) or len(email) > 254
@@ -205,7 +205,7 @@ class UserAccountStore:
             self.users = users
             self.sessions = sessions
             self._cleanup_sessions(save=False)
-        except (OSError, ValueError, TypeError, UnicodeError) as error:
+        except (OSError, ValueError, TypeError, UnicodeError, OverflowError) as error:
             raise RuntimeError(
                 "User account store is unreadable; existing file was preserved"
             ) from error
