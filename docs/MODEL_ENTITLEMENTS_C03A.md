@@ -44,9 +44,13 @@ This prevents a broad alias from bypassing a concrete allowlist.
 - GET /v1/models: filter the existing live model catalog using the current
   authenticated API-key context. Global, tenant, tenant-role, user and key policies apply.
   Admin model inventory remains unfiltered.
-- GET /api/user/models: filter the user-console pricing/model list using the
-  authenticated user plus global/user policy. A browser user session is not
-  enough to infer one tenant when the user belongs to multiple workspaces.
+- GET /api/user/models: filter the production pricing catalog by its
+  `model_id` field. Without `key_id`, apply global/user policy only; the
+  browser session is not enough to infer one tenant when the user belongs to
+  multiple workspaces. The Playground supplies its selected `key_id`; the
+  server first verifies that the key belongs to the authenticated user, then
+  applies the complete global/tenant/tenant-role/user/key intersection. A
+  foreign or unowned key returns 404.
 - The shared registry.resolve_client boundary rejects unauthorized requests
   with HTTP 403 before the existing Worker resolver.
 - Request model context is owned by the existing routing adapters:
@@ -106,7 +110,8 @@ API:
 ## Tests
 
 Covers default compatibility, alias normalization, global/key/user/tenant/role
-intersection, deny precedence, non-concrete alias denial, catalog filtering,
+intersection, deny precedence, non-concrete alias denial, production `model_id`
+catalog filtering, selected-key catalog intersection and foreign-key rejection,
 pre-dispatch 403, master-key compatibility, API session auth, subject
 validation, audit and restart persistence. Additional tests cover identity and
 tenant-store outages, orphaned tenant memberships, the server-owned gpt-image
