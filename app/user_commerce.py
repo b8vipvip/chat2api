@@ -511,7 +511,7 @@ class BillingStore:
             self.reservations[request_id] = row
             try:
                 self._save()
-            except OSError:
+            except Exception:
                 # Admission must not expose a non-durable hold as successful
                 # and must not strand the in-memory available balance.
                 self.reservations.pop(request_id, None)
@@ -535,7 +535,7 @@ class BillingStore:
             })
             try:
                 self._save()
-            except OSError:
+            except Exception:
                 self.reservations[str(request_id)] = previous
                 raise
             return True
@@ -582,7 +582,7 @@ class BillingStore:
                     })
                     try:
                         self._save()
-                    except OSError:
+                    except Exception:
                         self.reservations[request_id] = previous
                         raise
                 return dict(existing)
@@ -612,7 +612,7 @@ class BillingStore:
                     reservation.update({"state": "released", "release_reason": "pricing_unavailable", "updated_at": _now()})
                     try:
                         self._save()
-                    except OSError:
+                    except Exception:
                         self.reservations[request_id] = previous
                         raise
                 return None
@@ -661,7 +661,7 @@ class BillingStore:
                 })
             try:
                 self._save()
-            except OSError:
+            except Exception:
                 # The charge and debit are one atomic JSON write. Restore the
                 # in-memory ledger if that write failed, otherwise a later
                 # retry would falsely see a charge that was never durable.
@@ -747,7 +747,7 @@ class BillingStore:
             self.refunds[refund_id] = row
             try:
                 self._save()
-            except OSError:
+            except Exception:
                 self.refunds.pop(refund_id, None)
                 if old_balance is None:
                     self.wallets.pop(user_id, None)
