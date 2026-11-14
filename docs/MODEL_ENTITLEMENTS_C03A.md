@@ -78,10 +78,10 @@ This prevents a broad alias from bypassing a concrete allowlist.
   - POST /v1/images/generations uses the server-owned gpt-image target. A
     client-supplied model field cannot change the entitlement target.
   - Responses `image_generation` delegates to that same Images executor.
-    Because the adapter calls the route function directly, it explicitly binds
-    the authenticated API key and server-owned `gpt-image` model context around
-    the executor call; it does not inherit the outer Responses text model or
-    rely on a FastAPI dependency that is not executed by a direct function call.
+    The entitlement composition layer wraps the shared executor and, only for
+    `/v1/responses`, explicitly binds the authenticated API key and server-owned
+    `gpt-image` model context. The C-03B adapter remains the resource-ownership
+    boundary; C-03A does not patch its storage or attachment ownership behavior.
   - POST /v1/audio/speech and POST /v1/audio/conversations bind the model from
     their validated request body before the shared resolver runs.
   - WEBSOCKET /v1/audio/realtime binds the requested model from the first
