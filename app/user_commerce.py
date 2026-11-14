@@ -545,8 +545,18 @@ class BillingStore:
         if amount <= 0:
             raise ValueError("充值金额必须大于 0")
         with self.lock:
-            self.wallets[user_id] = int(self.wallets.get(user_id, 0)) + amount
-            self._save()
+            # A failed durable write must not leave a phantom credit available
+            # to another request in the current process.
+            previous = self.wallets.get(user_id)
+            self.wallets[user_id] = int(previous or 0) + amount
+            try:
+                self._save()
+            except OSError:
+                if previous is None:
+                    self.wallets.pop(user_id, None)
+                else:
+                    self.wallets[user_id] = previous
+                raise
             return self.wallets[user_id]
 
     def record_charge(self, user_id: str, request_row: dict[str, Any], pricing: PricingStore) -> dict[str, Any] | None:
