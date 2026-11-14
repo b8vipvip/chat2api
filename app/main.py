@@ -1134,12 +1134,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise HTTPException(status_code=400, detail="Uploaded file is empty")
             if len(payload) > file_store.max_file_bytes:
                 raise HTTPException(status_code=413, detail="Uploaded file exceeds the configured size limit")
-            body = FileUploadRequest(
-                filename=filename,
-                data_base64=base64.b64encode(payload).decode("ascii"),
-                mime_type=mime_type,
-                purpose=purpose,
-            )
+            try:
+                body = FileUploadRequest(
+                    filename=filename,
+                    data_base64=base64.b64encode(payload).decode("ascii"),
+                    mime_type=mime_type,
+                    purpose=purpose,
+                )
+            except ValidationError as error:
+                # Multipart form metadata must fail like any other /v1 input,
+                # not bubble out as an unhandled Pydantic exception / HTTP 500.
+                # Do not include arbitrary uploaded filenames in error text.
+                raise HTTPException(status_code=422, detail="Invalid multipart file upload metadata") from error
             standard_response = True
         elif content_type.startswith("application/json"):
             try:

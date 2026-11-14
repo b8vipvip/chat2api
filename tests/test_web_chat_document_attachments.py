@@ -341,3 +341,24 @@ def test_chat_completion_enforces_twenty_mib_combined_attachment_limit(tmp_path:
         )
         assert response.status_code == 400, response.text
         assert "20 MiB" in _api_error_message(response)
+
+
+def test_mode2_multipart_rejects_invalid_metadata_without_creating_file(tmp_path: Path) -> None:
+    # The multipart form branch uses explicit Pydantic validation; reject bad
+    # metadata with an OpenAI-compatible 422 instead of leaking a server 500.
+    with TestClient(create_app(_settings(tmp_path))) as client:
+        before = set(client.app.state.file_store.items)
+        for filename, mime in (
+            ("x" * 181 + ".txt", "text/plain"),
+            ("report.txt", "application/" + "x" * 170),
+        ):
+            response = client.post(
+                "/v1/files",
+                headers=_admin_headers(),
+                files={"file": (filename, b"private multipart bytes", mime)},
+                data={"purpose": "assistants"},
+            )
+            assert response.status_code == 422, response.text
+            assert "Invalid multipart file upload metadata" in _api_error_message(response)
+            assert filename not in response.text
+            assert set(client.app.state.file_store.items) == before
