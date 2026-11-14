@@ -4,10 +4,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_payment_safety_uses_canonical_data_secret_and_blocks_txid_reuse() -> None:
+def test_payment_safety_keeps_v106_cipher_stable_until_data_keyring_migration() -> None:
     source = (ROOT / "app" / "payment_channels_v107_safety_patch.py").read_text(encoding="utf-8")
+    legacy = (ROOT / "app" / "payment_channels_v106_patch.py").read_text(encoding="utf-8")
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
-    assert "load_or_create_data_secret" in source
+    assert "load_or_create_data_secret" not in source
+    assert "channels.cipher =" not in source
+    assert "_payment_channels_secret_candidate" in legacy
+    assert "_validate_payment_channel_ciphertexts(channels)" in legacy
+    assert "_persist_payment_channels_secret(data_dir, data_secret)" in legacy
     assert "禁止重复入账" in source
     assert 'item.get("status") == "paid"' in source
     assert "/console?payment=success#billing" in source
@@ -180,3 +185,88 @@ def test_usdt_paid_order_cannot_be_rejected_or_make_txid_reusable(tmp_path: Path
     assert billing.orders[paid_order["order_id"]]["status"] == "paid"
     assert billing.balance_cents("usr_usdt_paid_reject") == 125
     assert billing.orders[duplicate_order["order_id"]]["status"] == "reviewing"
+
+
+
+def test_payment_credentials_remain_decryptable_after_v107_and_admin_key_rotation(tmp_path: Path) -> None:
+    from app.config import Settings
+    from app.main import create_app
+    from app.user_console_v104_patch import install_user_console_v104_patch
+    from app.payment_channels_v106_patch import install_payment_channels_v106_patch
+    from app.payment_channels_v107_safety_patch import install_payment_channels_v107_safety_patch
+
+    def install(api_key: str):
+        app = create_app(Settings(
+            CHAT2API_DATA_DIR=str(tmp_path),
+            CHAT2API_API_KEY=api_key,
+        ))
+        install_user_console_v104_patch(app)
+        install_payment_channels_v106_patch(app)
+        install_payment_channels_v107_safety_patch(app)
+        return app
+
+    first = install("initial-admin-key")
+    channels = first.state.user_payment_channels_v106
+    channels.update({
+        "public_origin": "https://payments.example",
+        "aggregate": {
+            "zpay": {
+                "enabled": True,
+                "pid": "zpay-pid",
+                "alipay_enabled": True,
+                "wechat_enabled": True,
+                "key": "zpay-private-secret",
+            },
+        },
+        "direct": {
+            "paypal": {
+                "enabled": True,
+                "sandbox": False,
+                "client_id": "paypal-client",
+                "client_secret": "paypal-private-secret",
+            },
+            "usdt": {},
+        },
+    })
+    assert channels.zpay_key() == "zpay-private-secret"
+    assert channels.paypal_secret() == "paypal-private-secret"
+    secret_path = tmp_path / ".chat2api_data_secret"
+    assert secret_path.is_file()
+    assert secret_path.stat().st_mode & 0o077 == 0
+
+    # A second app install simulates process restart after administrator API
+    # key rotation. The payment-specific key remains stable and both secrets
+    # still decrypt; V107 must not silently swap the cipher underneath V106.
+    second = install("rotated-admin-key")
+    restarted = second.state.user_payment_channels_v106
+    assert restarted.zpay_key() == "zpay-private-secret"
+    assert restarted.paypal_secret() == "paypal-private-secret"
+
+
+def test_payment_cipher_mismatch_fails_closed_without_rewriting_existing_config(tmp_path: Path) -> None:
+    import json
+    import pytest
+
+    from app.config import Settings
+    from app.main import create_app
+    from app.payment_channels_v106_patch import PaymentChannelsStore, install_payment_channels_v106_patch
+    from app.user_console_v104_patch import install_user_console_v104_patch
+
+    config = PaymentChannelsStore(tmp_path, "original-secret")
+    config.update({
+        "aggregate": {"zpay": {"enabled": True, "pid": "pid", "key": "zpay-secret"}},
+        "direct": {"paypal": {"enabled": True, "client_id": "client", "client_secret": "paypal-secret"}},
+    })
+    original = (tmp_path / "user_payment_channels_v106.json").read_bytes()
+    # No pinned secret file exists; the current administrator key is not the
+    # key that encrypted this legacy config. Startup must fail, not report the
+    # credentials as empty and permit an accidental overwrite.
+    app = create_app(Settings(
+        CHAT2API_DATA_DIR=str(tmp_path),
+        CHAT2API_API_KEY="different-secret",
+    ))
+    install_user_console_v104_patch(app)
+    with pytest.raises(RuntimeError, match="cannot be decrypted"):
+        install_payment_channels_v106_patch(app)
+    assert (tmp_path / "user_payment_channels_v106.json").read_bytes() == original
+    assert not (tmp_path / ".chat2api_data_secret").exists()
