@@ -408,11 +408,63 @@ class BillingStore:
             return
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
-            self.wallets = {str(k): int(v) for k, v in (payload.get("wallets") or {}).items()}
-            self.charges = {str(k): dict(v) for k, v in (payload.get("charges") or {}).items() if isinstance(v, dict)}
-            self.orders = {str(k): dict(v) for k, v in (payload.get("orders") or {}).items() if isinstance(v, dict)}
-            self.reservations = {str(k): dict(v) for k, v in (payload.get("reservations") or {}).items() if isinstance(v, dict)}
-            self.refunds = {str(k): dict(v) for k, v in (payload.get("refunds") or {}).items() if isinstance(v, dict)}
+            if not isinstance(payload, dict):
+                raise ValueError("billing ledger root must be an object")
+
+            raw_wallets = payload.get("wallets", {})
+            if not isinstance(raw_wallets, dict):
+                raise ValueError("billing ledger wallets must be an object")
+            wallets: dict[str, int] = {}
+            for user_id, balance in raw_wallets.items():
+                # bool is an int subclass and int(1.5) silently truncates.
+                # Neither is an acceptable representation of integer cents.
+                if not isinstance(user_id, str) or not user_id or type(balance) is not int:
+                    raise ValueError("billing ledger wallet balance must be integer cents")
+                wallets[user_id] = balance
+
+            def read_rows(
+                name: str,
+                integer_fields: tuple[str, ...],
+                nullable_integer_fields: tuple[str, ...] = (),
+            ) -> dict[str, dict[str, Any]]:
+                raw_rows = payload.get(name, {})
+                if not isinstance(raw_rows, dict):
+                    raise ValueError(f"billing ledger {name} must be an object")
+                rows: dict[str, dict[str, Any]] = {}
+                for row_id, raw_row in raw_rows.items():
+                    if not isinstance(row_id, str) or not row_id or not isinstance(raw_row, dict):
+                        raise ValueError(f"billing ledger {name} contains an invalid row")
+                    row = dict(raw_row)
+                    for field in integer_fields:
+                        if field in row and (type(row[field]) is not int or row[field] < 0):
+                            raise ValueError(f"billing ledger {name}.{field} must be non-negative integer units")
+                    for field in nullable_integer_fields:
+                        value = row.get(field)
+                        if field in row and value is not None and (type(value) is not int or value < 0):
+                            raise ValueError(f"billing ledger {name}.{field} must be null or non-negative integer units")
+                    rows[row_id] = row
+                return rows
+
+            # Parse and validate every collection into locals before mutating
+            # the store. A malformed secondary row must not leave a partially
+            # loaded wallet projection available to callers.
+            charges = read_rows(
+                "charges",
+                ("input_tokens", "cached_input_tokens", "output_tokens", "cost_usd_micros", "cost_cny_cents"),
+            )
+            orders = read_rows("orders", ("amount_cents",))
+            reservations = read_rows(
+                "reservations",
+                ("estimated_input_tokens", "estimated_output_tokens", "reserved_cny_cents"),
+                ("actual_cny_cents",),
+            )
+            refunds = read_rows("refunds", ("amount_cents", "charge_cny_cents"))
+
+            self.wallets = wallets
+            self.charges = charges
+            self.orders = orders
+            self.reservations = reservations
+            self.refunds = refunds
         except (OSError, ValueError, TypeError) as error:
             # This is a money ledger, not a disposable cache. Silently treating
             # unreadable or corrupt persisted balances as an empty store would
