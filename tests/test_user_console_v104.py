@@ -1220,7 +1220,7 @@ def test_user_account_store_rejects_duplicate_persisted_key_owners_without_overw
     next(row for row in payload["users"] if row["user_id"] == bob["user_id"])["key_ids"] = [
         "key_shared_account"
     ]
-    corrupt_payload = (json.dumps(payload, ensure_ascii=False, indent=2) + "\\n").encode("utf-8")
+    corrupt_payload = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     store.path.write_bytes(corrupt_payload)
 
     with pytest.raises(RuntimeError, match="existing file was preserved"):
