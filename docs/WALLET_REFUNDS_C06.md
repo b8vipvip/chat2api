@@ -53,6 +53,11 @@ the Control Plane maps this route to `billing:write`. Caller body:
   their exact request IDs in the persisted telemetry tail before serving
   requests. A missing/unreadable terminal record leaves the hold reserved;
   it is never released from absence of evidence.
+- A completed status alone is not sufficient to settle a reserved
+  wallet hold: input, output and total usage must be non-negative integral
+  values, total must equal input plus output, and cached input must be a
+  bounded subset. Missing or inconsistent usage leaves the hold reserved
+  for later terminal replay.
 - Startup validates the supported v1 ledger schema, collection/row
   structure, owner IDs, row-key identity and integer-unit fields.
   Unknown schema versions, floating-point, boolean and string balances/
