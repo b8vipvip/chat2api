@@ -370,3 +370,66 @@ def test_registry_measures_socket_lock_wait_separately_from_send(tmp_path) -> No
         assert state.dispatch_send_completed_mono >= state.dispatch_send_started_mono
 
     asyncio.run(exercise())
+
+
+def test_broker_preserves_bounded_worker_dispatch_failure_diagnostics() -> None:
+    async def exercise() -> None:
+        broker = RequestBroker()
+        state = await broker.create("req_r06_failure_evidence", "ext_r06")
+        accepted = await broker.publish("req_r06_failure_evidence", {
+            "type": "chat.error",
+            "request_id": "req_r06_failure_evidence",
+            "error": "Content script readiness timed out",
+            "diagnostics": {
+                "worker_dispatch_queue_wait_ms": 160000.25,
+                "worker_route_resolve_ms": 12.34,
+                "worker_target_tab_lookup_ms": 4,
+                "worker_ensure_content_ms": 900001,
+                "worker_tabs_send_message_ms": -1,
+                "worker_dispatch_failure_stage": "ensure-content",
+                "request_controller": "request-v6",
+                "request_v6_dispatch_timing_version": 1,
+                "request_v6_dispatch_elapsed_ms": 160123.45,
+                "request_v6_dispatch_stage_evidence_v1": {
+                    "write_prompt": {
+                        "status": "completed",
+                        "started_elapsed_ms": 10,
+                        "duration_ms": 25.5,
+                        "completed_elapsed_ms": 35.5,
+                    },
+                    "submit_and_confirm": {
+                        "status": "failed",
+                        "started_elapsed_ms": 36,
+                        "duration_ms": 6000,
+                        "completed_elapsed_ms": 6036,
+                        "error_type": "TimeoutError",
+                        "raw_page_text": "must not be persisted",
+                    },
+                    "untrusted_stage": {
+                        "status": "failed",
+                        "duration_ms": 1,
+                    },
+                },
+                "raw_page_text": "must not be persisted",
+                "secret": "must not be persisted",
+            },
+        })
+
+        assert accepted is True
+        assert state.terminal_event_type == "chat.error"
+        assert state.diagnostics["worker_dispatch_queue_wait_ms"] == 160000.2
+        assert state.diagnostics["worker_route_resolve_ms"] == 12.3
+        assert "worker_ensure_content_ms" not in state.diagnostics
+        assert "worker_tabs_send_message_ms" not in state.diagnostics
+        assert state.diagnostics["worker_dispatch_failure_stage"] == "ensure-content"
+        assert state.diagnostics["request_v6_dispatch_elapsed_ms"] == 160123.5
+        evidence = state.diagnostics["request_v6_dispatch_stage_evidence_v1"]
+        assert evidence["submit_and_confirm"]["status"] == "failed"
+        assert evidence["submit_and_confirm"]["error_type"] == "TimeoutError"
+        assert "raw_page_text" not in evidence["submit_and_confirm"]
+        assert "untrusted_stage" not in evidence
+        assert "raw_page_text" not in state.diagnostics
+        assert "secret" not in state.diagnostics
+        await broker.release("req_r06_failure_evidence")
+
+    asyncio.run(exercise())
