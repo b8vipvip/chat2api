@@ -275,3 +275,32 @@ def test_wallet_accounting_caps_inconsistent_cached_input_to_total_input(tmp_pat
     assert other["cached_input_tokens"] == 0
     assert other["cost_cny_cents"] == 2_800  # 4.00 USD per 1M * 7 CNY/USD
     assert billing.balance_cents("usr_cache_guard") == 6_920
+
+
+@pytest.mark.parametrize("invalid_amount", [True, 1.5, "10", 0, -1, None])
+def test_wallet_credit_requires_exact_positive_integer_cents(
+    tmp_path: Path, invalid_amount: object,
+) -> None:
+    billing = BillingStore(tmp_path)
+    with pytest.raises(ValueError, match="正整数分"):
+        billing.credit("usr_strict_credit", invalid_amount)  # type: ignore[arg-type]
+    assert billing.balance_cents("usr_strict_credit") == 0
+    assert BillingStore(tmp_path).balance_cents("usr_strict_credit") == 0
+
+
+def test_wallet_credit_rolls_back_on_non_os_serialization_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    billing = BillingStore(tmp_path)
+    assert billing.credit("usr_serialization_credit", 125) == 125
+
+    def fail_save() -> None:
+        raise TypeError("simulated serialization failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(billing, "_save", fail_save)
+        with pytest.raises(TypeError, match="serialization failure"):
+            billing.credit("usr_serialization_credit", 25)
+    assert billing.balance_cents("usr_serialization_credit") == 125
+    assert billing.available_balance_cents("usr_serialization_credit") == 125
+    assert BillingStore(tmp_path).balance_cents("usr_serialization_credit") == 125
