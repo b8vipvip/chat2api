@@ -156,6 +156,8 @@ def test_wallet_refund_route_is_csrf_gated_session_scoped_and_audited(tmp_path: 
         changed = client.post(endpoint, json={**data, "amount_cents": 6}, headers=ORIGIN)
         assert changed.status_code == 409
         assert client.post(endpoint, json={**data, "refund_id": "not-valid"}, headers=ORIGIN).status_code == 422
+        assert client.post(endpoint, json={**data, "amount_cents": 5.5}, headers=ORIGIN).status_code == 422
+        assert client.post(endpoint, json={**data, "amount_cents": True}, headers=ORIGIN).status_code == 422
     events = app.state.admin_audit.recent(30)
     assert any(e["action"] == "billing.wallet_refund_requested" for e in events)
     assert any(e["action"] == "billing.wallet_refund_completed" for e in events)
@@ -370,3 +372,34 @@ def test_wallet_ledger_mutations_roll_back_non_os_save_failures(
     assert reopened.balance_cents("usr_non_os") == 990
     assert reopened.charge_for_request("req_non_os_charge") == charge
     assert reopened.refunds_for_user("usr_non_os") == []
+
+
+def test_wallet_recharge_api_and_order_store_require_strict_integer_cents(tmp_path: Path) -> None:
+    billing = BillingStore(tmp_path)
+    with pytest.raises(ValueError, match="整数分"):
+        billing.create_order("usr_strict_cents", 1.5, "alipay")
+    with pytest.raises(ValueError, match="整数分"):
+        billing.create_order("usr_strict_cents", True, "alipay")
+    order = billing.create_order("usr_strict_cents", 125, "alipay")
+    assert order["amount_cents"] == 125
+
+    app = create_app(Settings(
+        CHAT2API_DATA_DIR=str(tmp_path / "api"),
+        CHAT2API_API_KEY="strict-recharge-master-key",
+    ))
+    install_user_console_v104_patch(app)
+    account = app.state.user_accounts.register(
+        "strict-recharge@example.com", "long-enough-password",
+    )
+    with TestClient(app) as client:
+        client.cookies.set(
+            "chat2api_user_session",
+            app.state.user_accounts.create_session(account["user_id"]),
+        )
+        for amount in (1.5, True, "125"):
+            response = client.post(
+                "/api/user/billing/recharge",
+                json={"amount_cents": amount, "channel": "alipay"},
+                headers=ORIGIN,
+            )
+            assert response.status_code == 422, response.text
