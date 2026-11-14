@@ -79,11 +79,12 @@ the Control Plane maps this route to `billing:write`. Caller body:
   ledger (PayPal/USDT order creation, checkout metadata, USDT txid submission
   and administrator rejection) restore the prior in-memory row if persistence
   fails. V106 recharge amount boundaries also require strict integer cents.
-- USDT duplicate-TXID detection and wallet credit execute under the same
-  BillingStore lock. The V107 middleware check is only an early rejection;
-  concurrent confirmations cannot both credit the same TRON transaction.
-  Manual confirmation also requires the order to be in `reviewing` state,
-  while a retry of the already-paid same order remains idempotent.
+- USDT duplicate-TXID detection and wallet credit are owned by
+  `BillingStore.settle_usdt_order()` under one lock and one atomic ledger
+  write. The V107 middleware check is only an early rejection; concurrent
+  confirmations cannot both credit the same TRON transaction. Manual
+  confirmation requires the order to be in `reviewing` state, while a retry
+  of the already-paid same order remains idempotent.
 - The internal wallet ledger uses an in-process lock plus atomic
   file replacement under P-01's **single-process** runtime.
   Multi-worker or multi-host wallet transactions are not supported.
