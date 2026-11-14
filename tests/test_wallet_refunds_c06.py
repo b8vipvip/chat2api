@@ -234,3 +234,44 @@ def test_wallet_credit_fsync_failure_never_leaves_spendable_phantom_balance(
     # The exact same credit may be safely retried after storage recovers.
     assert billing.credit("usr_credit_existing", 50) == 150
     assert BillingStore(tmp_path).balance_cents("usr_credit_existing") == 150
+
+
+def test_wallet_accounting_caps_inconsistent_cached_input_to_total_input(tmp_path: Path) -> None:
+    pricing = PricingStore(tmp_path)
+    config = pricing.public()
+    pricing.update(billing_enabled=True, usd_cny_rate=7.0, models=config["models"])
+    billing = BillingStore(tmp_path)
+    billing.credit("usr_cache_guard", 10_000)
+
+    row = billing.record_charge("usr_cache_guard", {
+        "request_id": "req_cache_exceeds_input",
+        "status": "completed",
+        "requested_model": "gpt-5.6-sol",
+        "usage": {
+            "prompt_tokens": 1_000_000,
+            "cached_input_tokens": 2_000_000,
+            "completion_tokens": 0,
+            "estimated": True,
+        },
+    }, pricing)
+    assert row is not None
+    assert row["input_tokens"] == 1_000_000
+    assert row["cached_input_tokens"] == 1_000_000
+    assert row["cost_cny_cents"] == 280  # 0.40 USD per 1M * 7 CNY/USD
+    assert billing.balance_cents("usr_cache_guard") == 9_720
+
+    # Negative cache telemetry must not offset ordinary input accounting.
+    other = billing.record_charge("usr_cache_guard", {
+        "request_id": "req_negative_cached_input",
+        "status": "completed",
+        "requested_model": "gpt-5.6-sol",
+        "usage": {
+            "prompt_tokens": 1_000_000,
+            "cached_input_tokens": -100,
+            "completion_tokens": 0,
+        },
+    }, pricing)
+    assert other is not None
+    assert other["cached_input_tokens"] == 0
+    assert other["cost_cny_cents"] == 2_800  # 4.00 USD per 1M * 7 CNY/USD
+    assert billing.balance_cents("usr_cache_guard") == 6_920
