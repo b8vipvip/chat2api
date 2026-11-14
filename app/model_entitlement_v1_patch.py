@@ -420,11 +420,15 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=404, detail="User not found")
         try:
             role = accounts.validate_system_role(body.system_role)
+            previous_role = accounts.system_role_for(user_id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="User role authority unavailable") from exc
         audit_event(
             actor, "user.system_role_update_requested", "user", user_id,
-            {"system_role": role}, target_type="user",
+            {"previous_system_role": previous_role, "system_role": role},
+            target_type="user",
         )
         try:
             user = accounts.set_system_role(user_id, role)
@@ -434,7 +438,8 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         audit_event(
             actor, "user.system_role_update_completed", "user", user_id,
-            {"system_role": role}, target_type="user",
+            {"previous_system_role": previous_role, "system_role": role},
+            target_type="user",
         )
         return {"user": user}
 
@@ -455,7 +460,15 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
         actor = admin_actor(request)
         if accounts.admin_get(user_id) is None:
             raise HTTPException(status_code=404, detail="User not found")
-        details = {"plan_id": body.plan_id, "expires_at": body.expires_at}
+        try:
+            previous_plan = subscriptions.current_plan_for_user(user_id)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Subscription authority unavailable") from exc
+        details = {
+            "previous_plan_id": previous_plan.get("plan_id"),
+            "plan_id": body.plan_id,
+            "expires_at": body.expires_at,
+        }
         audit_event(
             actor, "subscription.assignment_requested", "user_subscription", user_id,
             details, target_type="user_subscription",
@@ -470,7 +483,11 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         audit_event(
             actor, "subscription.assignment_completed", "user_subscription", user_id,
-            {"subscription_id": subscription["subscription_id"], "plan_id": subscription["plan_id"]},
+            {
+                "subscription_id": subscription["subscription_id"],
+                "previous_plan_id": previous_plan.get("plan_id"),
+                "plan_id": subscription["plan_id"],
+            },
             target_type="user_subscription",
         )
         return {"subscription": subscription}
@@ -480,14 +497,20 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
         actor = admin_actor(request)
         if accounts.admin_get(user_id) is None:
             raise HTTPException(status_code=404, detail="User not found")
+        try:
+            previous_plan = subscriptions.current_plan_for_user(user_id)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Subscription authority unavailable") from exc
         audit_event(
             actor, "subscription.cancellation_requested", "user_subscription", user_id,
-            {}, target_type="user_subscription",
+            {"previous_plan_id": previous_plan.get("plan_id")},
+            target_type="user_subscription",
         )
         cancelled = subscriptions.cancel_active(user_id)
         audit_event(
             actor, "subscription.cancellation_completed", "user_subscription", user_id,
-            {"cancelled": cancelled}, target_type="user_subscription",
+            {"cancelled": cancelled, "previous_plan_id": previous_plan.get("plan_id")},
+            target_type="user_subscription",
         )
         return {"cancelled": bool(cancelled)}
 
