@@ -65,6 +65,11 @@ This prevents a broad alias from bypassing a concrete allowlist.
     Chat adapter call; the context is always restored after dispatch.
   - POST /v1/images/generations uses the server-owned gpt-image target. A
     client-supplied model field cannot change the entitlement target.
+  - Responses `image_generation` delegates to that same Images executor.
+    Because the adapter calls the route function directly, it explicitly binds
+    the authenticated API key and server-owned `gpt-image` model context around
+    the executor call; it does not inherit the outer Responses text model or
+    rely on a FastAPI dependency that is not executed by a direct function call.
   - POST /v1/audio/speech and POST /v1/audio/conversations bind the model from
     their validated request body before the shared resolver runs.
   - WEBSOCKET /v1/audio/realtime binds the requested model from the first
@@ -135,8 +140,9 @@ pre-dispatch 403, master-key compatibility, API session auth, subject
 validation, audit and restart persistence. Additional tests cover identity and
 tenant-store outages, orphaned tenant memberships, the server-owned gpt-image
 target, Speech/Conversation request model context, Realtime session.start
-model context including deny behavior, and legacy v13 manual-auth key-context
-binding for model detail and Completions. The legacy model detail route must
+model context including deny behavior, legacy v13 manual-auth key-context
+binding for model detail and Completions, and Responses hosted image-tool
+key/model context with a negative `gpt-image` entitlement regression. The legacy model detail route must
 enforce the models scope and conceal policy-filtered model IDs; legacy
 Completions must reject a denied model before Worker resolution. Exact-head full CI and production image
 smoke remain required.
