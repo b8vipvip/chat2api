@@ -67,6 +67,49 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
         raise RuntimeError("Model entitlements require the authoritative TenantMembershipStore")
     app.state.model_entitlements = store
 
+    # Responses image_generation calls the canonical Images executor directly
+    # from its adapter. Keep the C-03B adapter/resource-ownership module free of
+    # entitlement concerns by wrapping the shared executor at this composition
+    # boundary. This also guarantees the server-owned gpt-image target is used
+    # for both streaming and non-streaming Responses tool calls.
+    base_image_executor = getattr(app.state, "image_generation_executor", None)
+    if callable(base_image_executor):
+        async def image_executor_with_entitlements(**kwargs):
+            request = kwargs.get("request")
+            request_path = str(getattr(getattr(request, "url", None), "path", "") or "")
+            if request_path != "/v1/responses":
+                return await base_image_executor(**kwargs)
+            principal = kwargs.get("principal")
+            key_id = str(getattr(principal, "key_id", "") or "")
+            if not key_id:
+                raise HTTPException(
+                    status_code=503,
+                    detail={"code": "model_entitlement_image_identity_unavailable"},
+                )
+            routing_context = getattr(registry, "routing_key_context", None)
+            if not callable(getattr(routing_context, "set", None)) or not callable(
+                getattr(routing_context, "reset", None)
+            ):
+                raise HTTPException(
+                    status_code=503,
+                    detail={"code": "model_entitlement_image_context_unavailable"},
+                )
+            routing_token = routing_context.set(key_id)
+            image_body = kwargs.get("body")
+            try:
+                with model_routing.model_target_context(
+                    "gpt-image",
+                    needs_multimodal=bool(getattr(image_body, "attachments", None)),
+                ):
+                    return await base_image_executor(**kwargs)
+            finally:
+                routing_context.reset(routing_token)
+
+        app.state.image_generation_executor = image_executor_with_entitlements
+        app.state.model_entitlement_image_executor_wrapped = True
+    else:
+        app.state.model_entitlement_image_executor_wrapped = False
+
     audit = getattr(app.state, "admin_audit", None) or AdminAuditStore(app.state.settings.data_dir)
     app.state.admin_audit = audit
 
