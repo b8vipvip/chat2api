@@ -530,6 +530,15 @@ class BillingStore:
                 if row.get("user_id") == user_id and row.get("state") == "reserved"
             )
 
+    def active_reservations_for_user(self, user_id: str) -> list[dict[str, Any]]:
+        """Return durable active holds so terminal recovery is not limited to the telemetry cache."""
+        with self.lock:
+            rows = [
+                dict(row) for row in self.reservations.values()
+                if row.get("user_id") == user_id and row.get("state") == "reserved"
+            ]
+        return sorted(rows, key=lambda row: str(row.get("created_at") or ""))
+
     def available_balance_cents(self, user_id: str) -> int:
         with self.lock:
             reserved = sum(
