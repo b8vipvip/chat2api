@@ -24,6 +24,7 @@ SUBJECT_TYPES = frozenset({
 EFFECTS = frozenset({"allow", "deny"})
 MAX_MODELS = 200
 SUBJECT_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,160}$")
+ ROLE_OR_PLAN_ID = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 
 
 class ModelEntitlementError(ValueError):
@@ -125,6 +126,8 @@ class ModelEntitlementStore:
             subject_id = str(subject_id or "").strip().lower()
         if not isinstance(subject_id, str) or not SUBJECT_ID.fullmatch(subject_id):
             raise ModelEntitlementError("Invalid subject_id")
+        if subject_type in {"user_role", "subscription_plan"} and not ROLE_OR_PLAN_ID.fullmatch(subject_id):
+            raise ModelEntitlementError("Invalid role or subscription plan subject_id")
         return subject_type, subject_id
 
     def upsert(
