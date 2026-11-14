@@ -54,6 +54,9 @@ class FakeAccounts:
     def owner_for_key(self, key_id):
         return {"key_1": "usr_abcdef123"}.get(key_id)
 
+    def owns_key(self, user_id, key_id):
+        return user_id == "usr_abcdef123" and key_id == "key_1"
+
     def authenticate(self, token):
         return {"user_id": "usr_abcdef123"} if token == "valid-user-session" else None
 
@@ -469,7 +472,37 @@ def test_user_console_model_catalog_obeys_global_and_user_entitlements(tmp_path:
             cookies={"chat2api_user_session": "valid-user-session"},
         )
         assert response.status_code == 200
-        assert [row["id"] for row in response.json()["data"]] == ["gpt-5.6-sol"]
+        # The production pricing catalog uses model_id, not id/model. The
+        # filter must use the actual field or user/global rules silently vanish.
+        assert [row["model_id"] for row in response.json()["data"]] == ["gpt-5.6-sol"]
+
+
+def test_user_console_model_catalog_applies_selected_key_and_tenant_entitlements(
+    tmp_path: Path,
+):
+    app, _ = build_app(tmp_path)
+    store = app.state.model_entitlements
+    store.upsert("global", "default", "allow", ["gpt-5.5", "gpt-5.6-sol"])
+    store.upsert("user", "usr_abcdef123", "deny", ["gpt-5.6-sol"])
+    store.upsert("tenant", "ten_abc123", "allow", ["gpt-5.5"])
+    store.upsert("tenant_role", "owner", "allow", ["gpt-5.5"])
+    store.upsert("key", "key_1", "allow", ["gpt-5.5"])
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/user/models?key_id=key_1",
+            cookies={"chat2api_user_session": "valid-user-session"},
+        )
+        assert response.status_code == 200
+        assert [row["model_id"] for row in response.json()["data"]] == ["gpt-5.5"]
+
+        # A user cannot query the catalog under another user's API-key policy.
+        foreign = client.get(
+            "/api/user/models?key_id=key_2",
+            cookies={"chat2api_user_session": "valid-user-session"},
+        )
+        assert foreign.status_code == 404
+        assert foreign.json()["detail"] == "API key not found"
 
 
 def test_tenant_allowlist_applies_only_through_explicit_api_key_binding(tmp_path: Path):
