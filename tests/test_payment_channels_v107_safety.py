@@ -383,3 +383,62 @@ def test_payment_cipher_mismatch_fails_closed_without_rewriting_existing_config(
         install_payment_channels_v106_patch(app)
     assert (tmp_path / "user_payment_channels_v106.json").read_bytes() == original
     assert not (tmp_path / ".chat2api_data_secret").exists()
+
+def test_merchant_trade_numbers_are_unique_across_all_payment_channels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.user_commerce as commerce
+    from app.config import Settings
+    from app.main import create_app
+    from app.user_console_v104_patch import install_user_console_v104_patch
+    from app.payment_channels_v106_patch import install_payment_channels_v106_patch
+
+    app = create_app(Settings(
+        CHAT2API_DATA_DIR=str(tmp_path),
+        CHAT2API_API_KEY="v107-merchant-trade-unique-master",
+    ))
+    install_user_console_v104_patch(app)
+    install_payment_channels_v106_patch(app)
+    billing = app.state.user_billing
+
+    # Force the same millisecond and a random collision across the two
+    # legacy (ZPAY) and direct-provider creation paths. Allocation must retry
+    # while holding the BillingStore lock instead of persisting an ambiguous
+    # callback key.
+    candidates = iter([1, 1, 2, 2, 3, 3, 4])
+    monkeypatch.setattr(commerce.time, "time", lambda: 1_700_000_000.0)
+    monkeypatch.setattr(commerce.secrets, "randbelow", lambda _upper: next(candidates))
+
+    orders = [
+        billing.create_order("usr_trade_alipay", 125, "alipay"),
+        billing.create_order("usr_trade_wechat", 125, "wechat"),
+        billing.create_order("usr_trade_paypal", 125, "paypal"),
+        billing.create_order("usr_trade_usdt", 125, "usdt"),
+    ]
+    trade_numbers = [row["merchant_trade_no"] for row in orders]
+    assert len(set(trade_numbers)) == len(orders)
+    for order in orders:
+        matched = billing.order_by_trade_no(order["merchant_trade_no"])
+        assert matched is not None
+        assert matched["order_id"] == order["order_id"]
+
+
+def test_billing_ledger_rejects_duplicate_merchant_trade_numbers_without_overwrite(
+    tmp_path: Path,
+) -> None:
+    from app.user_commerce import BillingStore, WalletReservationError
+
+    billing = BillingStore(tmp_path)
+    first = billing.create_order("usr_trade_duplicate_a", 125, "alipay")
+    second = billing.create_order("usr_trade_duplicate_b", 250, "wechat")
+    with billing.lock:
+        billing.orders[second["order_id"]]["merchant_trade_no"] = first["merchant_trade_no"]
+        billing._save()
+    source = billing.path.read_bytes()
+
+    with pytest.raises(WalletReservationError, match="ambiguous"):
+        billing.order_by_trade_no(first["merchant_trade_no"])
+    with pytest.raises(RuntimeError, match="Billing ledger is unreadable"):
+        BillingStore(tmp_path)
+    assert billing.path.read_bytes() == source
+
