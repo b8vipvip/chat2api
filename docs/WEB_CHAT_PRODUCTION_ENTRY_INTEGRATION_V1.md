@@ -45,10 +45,12 @@ does not install the W-02 plaintext SQLite conversation prototype.
 ## Automated integration coverage
 
 The app.entry subprocess test verifies route uniqueness, private/no-store auth
-failures, static asset serving, script order and image preview/delete route
-installation. Existing W-01/W-03/W-04/W-05 tests remain included. CI checks
-JavaScript syntax for the renderer, recovery controller, image-drop adapter
-and chat client.
+failures, static asset serving, script order, image preview/delete routes and
+real document upload/download/delete through the production composition. A
+Playwright Chromium E2E exercises the document picker, actual FileStore upload,
+message payload, file card and authenticated download. Worker handoff is also
+covered by a separate API/WebSocket test. CI checks JavaScript syntax for the
+renderer, recovery controller, image-drop adapter and chat client.
 
 ## Remaining release gates
 
@@ -58,6 +60,18 @@ verification, retention/orphan cleanup, cross-account isolation in production
 FileStore, W-02 encrypted server-side history, durable event replay, production
 image smoke and deployment/rollback evidence remain required. This PR stays
 Draft until these gates pass.
+
+## W-05B generic document attachments
+
+- Web Chat accepts PDF, TXT, Markdown, CSV, JSON, RTF, DOCX, XLSX and PPTX through a separate file picker.
+- Files use the existing `/v1/files` JSON/base64 upload contract with purpose `assistants` and the selected API Key's `files` scope.
+- User messages persist a structured `type: file` / `file_id` content part; the existing Chat Completions attachment resolver verifies API-Key ownership and passes canonical file metadata to the Worker.
+- The W-05A session-authenticated download route renders user file cards; the same-origin delete route accepts only owned `vision` image files or `assistants` document MIME types.
+- Up to four combined image/document attachments and 20 MiB total per message. Browser history stores file IDs and metadata only; it does not store file bytes.
+- No server-side conversation store, encrypted FileStore, server retention policy, document OCR, or native document preview is claimed by this slice.
+- A Playwright Chromium E2E covers browser file selection, FileStore upload, structured send payload, user-message file card and authenticated exact-byte download. It mocks only the Chat Completions SSE response; Worker handoff is covered separately by the API/WebSocket test.
+
+- `app.entry:app` installs the owner-scoped download route through the single Web Chat composition owner `install_web_chat_features_v1`, after the user-account routes exist. Production-entry tests register an account, create a `files`-scoped key, upload a document, download exact bytes through the HttpOnly session, and delete the owner-scoped file.
 
 ## Inherited C-03B resource-ownership and Worker download boundary
 

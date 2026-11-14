@@ -27,6 +27,8 @@ jobs:
           node-version: '22'
       - name: Install Python dependencies
         run: python -m pip install -e '.[dev]' pytest-timeout
+      - name: Install Chromium for Web Chat browser E2E
+        run: python -m playwright install --with-deps chromium
       - name: Recent request logs ZIP export regression v213
         run: pytest -q tests/test_request_logs_batch_export_v213.py --timeout=120
       - name: Python compile
@@ -279,5 +281,7 @@ jobs:
 
       - name: Responses bridge generation regression
         run: pytest -q tests/test_responses_bridge_regeneration_v154.py --timeout=120
+      - name: Web Chat document attachment browser E2E
+        run: pytest -q tests/test_web_chat_document_attachments_e2e.py --timeout=180
       - name: Tests
         run: pytest -q --timeout=120

@@ -43,7 +43,7 @@ class FileUploadRequest(BaseModel):
     filename: str = Field(min_length=1, max_length=180)
     mime_type: str | None = Field(default=None, max_length=160)
     data_base64: str = Field(min_length=1)
-    purpose: Literal["vision", "file-understanding", "image-reference", "voice-input", "chat2api"] = "chat2api"
+    purpose: Literal["vision", "file-understanding", "image-reference", "voice-input", "chat2api", "assistants"] = "chat2api"
 
 
 class AttachmentRef(BaseModel):
@@ -78,7 +78,8 @@ class ChatMessage(BaseModel):
                 continue
             kind = str(part.get("type") or "")
             if kind in {"file", "input_file"}:
-                value = part.get("file_id") or (part.get("file") or {}).get("file_id")
+                nested = part.get("file")
+                value = part.get("file_id") or (nested.get("file_id") if isinstance(nested, dict) else None)
                 if value:
                     result.append(str(value))
             elif kind in {"image_url", "input_image"}:
@@ -87,8 +88,21 @@ class ChatMessage(BaseModel):
                     value = value.get("url")
                 if isinstance(value, str) and value.startswith("file_"):
                     result.append(value)
-        return result
+        return list(dict.fromkeys(result))
 
+    def referenced_document_file_ids(self) -> list[str]:
+        """Return file IDs used by explicit document input parts."""
+        if not isinstance(self.content, list):
+            return []
+        result: list[str] = []
+        for part in self.content:
+            if not isinstance(part, dict) or part.get("type") not in {"file", "input_file"}:
+                continue
+            nested = part.get("file")
+            value = part.get("file_id") or (nested.get("file_id") if isinstance(nested, dict) else None)
+            if value:
+                result.append(str(value))
+        return list(dict.fromkeys(result))
 
 class ChatCompletionRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
