@@ -630,6 +630,7 @@ class BillingStore:
             }
             allowed_order_channels = {"alipay", "wechat", "paypal", "usdt"}
             paid_provider_transactions: set[tuple[str, str]] = set()
+            merchant_trade_numbers: set[str] = set()
             for order in orders.values():
                 if order.get("status") not in allowed_order_states:
                     raise ValueError("billing ledger orders.status is unsupported")
@@ -639,7 +640,9 @@ class BillingStore:
                     type(order.get("amount_cents")) is not int
                     or not 1 <= order["amount_cents"] <= 10_000_000
                     or not isinstance(order.get("merchant_trade_no"), str)
-                    or not order["merchant_trade_no"]
+                    or not order["merchant_trade_no"].strip()
+                    or order["merchant_trade_no"] != order["merchant_trade_no"].strip()
+                    or len(order["merchant_trade_no"]) > 160
                     or not isinstance(order.get("provider_trade_no"), str)
                     or len(order["provider_trade_no"]) > 160
                     or any(not isinstance(order.get(field), str) for field in ("pay_url", "qr_image_url", "qr_payload"))
@@ -648,6 +651,10 @@ class BillingStore:
                     or (order.get("paid_at") is not None and not isinstance(order.get("paid_at"), str))
                 ):
                     raise ValueError("billing ledger payment order metadata is invalid")
+                merchant_trade_no = order["merchant_trade_no"]
+                if merchant_trade_no in merchant_trade_numbers:
+                    raise ValueError("billing ledger contains a duplicate merchant trade number")
+                merchant_trade_numbers.add(merchant_trade_no)
                 provider_trade_no = str(order.get("provider_trade_no") or "").strip()
                 if order.get("status") == "paid" and provider_trade_no:
                     identity = (_payment_transaction_scope(order.get("channel")), provider_trade_no)
@@ -1223,6 +1230,25 @@ class BillingStore:
                 raise
             return dict(row)
 
+    def _new_merchant_trade_no_locked(self) -> str:
+        """Allocate a merchant callback key unique across every payment channel.
+
+        The caller holds self.lock through insertion and persistence so two
+        concurrent admissions cannot claim the same generated identifier.
+        """
+        existing = {
+            str(row.get("merchant_trade_no") or "")
+            for row in self.orders.values()
+        }
+        for _ in range(8):
+            candidate = (
+                str(int(time.time() * 1000))
+                + f"{secrets.randbelow(10**12):012d}"
+            )[:32]
+            if candidate and candidate not in existing:
+                return candidate
+        raise WalletReservationError("Unable to allocate a unique merchant trade number")
+
     def create_order(self, user_id: str, amount_cents: int, channel: str) -> dict[str, Any]:
         if type(amount_cents) is not int:
             raise ValueError("充值金额必须为整数分")
@@ -1232,10 +1258,9 @@ class BillingStore:
         if channel not in {"alipay", "wechat"}:
             raise ValueError("暂不支持该支付方式")
         order_id = "pay_" + secrets.token_urlsafe(10).replace("-", "").replace("_", "")
-        trade_no = (str(int(time.time() * 1000)) + f"{secrets.randbelow(10**12):012d}")[:32]
         row = {
             "order_id": order_id,
-            "merchant_trade_no": trade_no,
+            "merchant_trade_no": "",
             "user_id": user_id,
             "amount_cents": amount,
             "channel": channel,
@@ -1249,6 +1274,7 @@ class BillingStore:
             "updated_at": _now(),
         }
         with self.lock:
+            row["merchant_trade_no"] = self._new_merchant_trade_no_locked()
             self.orders[order_id] = row
             try:
                 self._save()
@@ -1273,8 +1299,13 @@ class BillingStore:
 
     def order_by_trade_no(self, trade_no: str) -> dict[str, Any] | None:
         with self.lock:
-            row = next((item for item in self.orders.values() if item.get("merchant_trade_no") == trade_no), None)
-            return dict(row) if row else None
+            rows = [
+                item for item in self.orders.values()
+                if item.get("merchant_trade_no") == trade_no
+            ]
+            if len(rows) > 1:
+                raise WalletReservationError("Merchant trade number is ambiguous")
+            return dict(rows[0]) if rows else None
 
     def settle_order(self, order_id: str, provider_trade_no: str) -> dict[str, Any]:
         normalized_trade_no = str(provider_trade_no or "").strip()
