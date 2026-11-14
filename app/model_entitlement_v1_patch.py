@@ -119,7 +119,9 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
                 detail={"code": "model_entitlement_identity_unavailable"},
             ) from exc
 
-    def _tenant_context_for_key(key_id: str | None) -> tuple[str | None, str | None]:
+    def _tenant_context_for_key(
+        key_id: str | None, owner_id: str | None,
+    ) -> tuple[str | None, str | None]:
         if not key_id or key_id == "master":
             return None, None
         try:
@@ -129,10 +131,17 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
             tenant_id = str(raw_tenant_id).strip()
             if not tenant_id:
                 raise RuntimeError("API key tenant binding is empty")
+            # The binding stores the owner at the time the administrator
+            # attached the key to a workspace. That snapshot must still match
+            # the authoritative UserAccountStore owner on every request:
+            # otherwise a transferred/deleted key could retain a stale tenant
+            # role and inherit that workspace's model allowlist.
             raw_user_id = tenant_memberships.user_for_key(str(key_id))
-            user_id = str(raw_user_id or "").strip()
-            role = str(tenant_memberships.role_for(tenant_id, user_id) or "").strip() if user_id else ""
-            if not user_id or not role:
+            bound_user_id = str(raw_user_id or "").strip()
+            if not owner_id or not bound_user_id or bound_user_id != owner_id:
+                raise RuntimeError("Tenant-bound API key owner does not match its active account owner")
+            role = str(tenant_memberships.role_for(tenant_id, owner_id) or "").strip()
+            if not role:
                 raise RuntimeError("Tenant-bound API key has no active owner membership")
             return tenant_id, role
         except HTTPException:
@@ -146,11 +155,12 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
     def _decision(key_id: str | None, model_id: str | None) -> dict[str, Any]:
         if not key_id or key_id == "master":
             return {"allowed": True, "reason": "master_key", "model": model_id, "matched_rules": []}
-        tenant_id, tenant_role = _tenant_context_for_key(key_id)
+        owner_id = _identity(key_id)
+        tenant_id, tenant_role = _tenant_context_for_key(key_id, owner_id)
         return store.evaluate(
             str(model_id or ""),
             key_id=str(key_id),
-            user_id=_identity(key_id),
+            user_id=owner_id,
             tenant_id=tenant_id,
             tenant_role=tenant_role,
         )
