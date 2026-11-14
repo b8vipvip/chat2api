@@ -294,6 +294,7 @@ _WORKER_DISPATCH_FAILURE_TIMINGS = (
     "request_v6_dispatch_elapsed_ms",
     "request_v6_dispatch_submit_click_elapsed_ms",
     "request_v6_dispatch_to_response_started_ms",
+    "retry_after_ms",
 )
 _WORKER_DISPATCH_FAILURE_STAGES = frozenset({
     "target-tab-lookup", "ensure-content", "content-script-message",
@@ -321,6 +322,15 @@ def _worker_dispatch_failure_provenance(event: dict[str, Any]) -> dict[str, Any]
     stage = raw.get("worker_dispatch_failure_stage")
     if isinstance(stage, str) and stage in _WORKER_DISPATCH_FAILURE_STAGES:
         result["worker_dispatch_failure_stage"] = stage
+    # Routed Worker allocation failures use the same terminal event but a
+    # separate route-stage vocabulary from background.js tab handoff errors.
+    for key in ("route_failure_stage", "route_failure_code"):
+        value = raw.get(key)
+        if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,60}", value):
+            result[key] = value
+    for key in ("routed_dispatch_terminal_v58", "route_retired_by_authority_v30", "rate_limit_terminal"):
+        if isinstance(raw.get(key), bool):
+            result[key] = raw[key]
     if raw.get("request_controller") == "request-v6":
         result["request_controller"] = "request-v6"
     if type(raw.get("request_v6_dispatch_timing_version")) is int and raw.get("request_v6_dispatch_timing_version") == 1:
