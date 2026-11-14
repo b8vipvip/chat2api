@@ -410,6 +410,12 @@ class BillingStore:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
             if not isinstance(payload, dict):
                 raise ValueError("billing ledger root must be an object")
+            # Version 1 is the only supported on-disk schema. Missing version
+            # is accepted as the original v1 legacy representation, but a
+            # future/unknown version must never be rewritten by this reader.
+            ledger_version = payload.get("version", USER_COMMERCE_VERSION)
+            if type(ledger_version) is not int or ledger_version != USER_COMMERCE_VERSION:
+                raise ValueError("billing ledger version is unsupported")
 
             raw_wallets = payload.get("wallets", {})
             if not isinstance(raw_wallets, dict):
@@ -424,6 +430,7 @@ class BillingStore:
 
             def read_rows(
                 name: str,
+                id_field: str,
                 integer_fields: tuple[str, ...],
                 nullable_integer_fields: tuple[str, ...] = (),
             ) -> dict[str, dict[str, Any]]:
@@ -435,6 +442,10 @@ class BillingStore:
                     if not isinstance(row_id, str) or not row_id or not isinstance(raw_row, dict):
                         raise ValueError(f"billing ledger {name} contains an invalid row")
                     row = dict(raw_row)
+                    if row.get(id_field) != row_id:
+                        raise ValueError(f"billing ledger {name}.{id_field} does not match its ledger key")
+                    if not isinstance(row.get("user_id"), str) or not row["user_id"]:
+                        raise ValueError(f"billing ledger {name}.user_id must be a non-empty string")
                     for field in integer_fields:
                         if field in row and (type(row[field]) is not int or row[field] < 0):
                             raise ValueError(f"billing ledger {name}.{field} must be non-negative integer units")
@@ -450,15 +461,38 @@ class BillingStore:
             # loaded wallet projection available to callers.
             charges = read_rows(
                 "charges",
+                "request_id",
                 ("input_tokens", "cached_input_tokens", "output_tokens", "cost_usd_micros", "cost_cny_cents"),
             )
-            orders = read_rows("orders", ("amount_cents",))
+            orders = read_rows("orders", "order_id", ("amount_cents",))
             reservations = read_rows(
                 "reservations",
+                "request_id",
                 ("estimated_input_tokens", "estimated_output_tokens", "reserved_cny_cents"),
                 ("actual_cny_cents",),
             )
-            refunds = read_rows("refunds", ("amount_cents", "charge_cny_cents"))
+            refunds = read_rows("refunds", "refund_id", ("amount_cents", "charge_cny_cents"))
+
+            # A refund is a derived credit against one immutable, debited
+            # charge. Reject orphaned, cross-owner or cumulatively excessive
+            # journal entries instead of silently accepting inconsistent money.
+            refunded_by_request: dict[str, int] = {}
+            for refund in refunds.values():
+                request_id = str(refund.get("request_id") or "")
+                charge = charges.get(request_id)
+                if (
+                    not charge
+                    or charge.get("debited") is not True
+                    or str(charge.get("user_id") or "") != str(refund.get("user_id") or "")
+                    or type(charge.get("cost_cny_cents")) is not int
+                    or refund.get("charge_cny_cents") != charge.get("cost_cny_cents")
+                ):
+                    raise ValueError("billing ledger refund does not match a debited owner charge")
+                refunded_by_request[request_id] = (
+                    refunded_by_request.get(request_id, 0) + int(refund["amount_cents"])
+                )
+                if refunded_by_request[request_id] > int(charge["cost_cny_cents"]):
+                    raise ValueError("billing ledger refunds exceed the original wallet charge")
 
             self.wallets = wallets
             self.charges = charges
