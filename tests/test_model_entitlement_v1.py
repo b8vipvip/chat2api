@@ -878,8 +878,8 @@ def test_model_entitlement_schema_migrates_existing_rules_for_role_and_plan_subj
     assert store.rules_for(
         key_id="key_1", user_id="usr_abcdef123",
     )[0]["subject_type"] == "global"
-    store.upsert("user_role", "trusted", "allow", ["gpt-5.5"])
-    store.upsert("subscription_plan", "pro", "allow", ["gpt-5.5"])
+    store.upsert("user_role", "Trusted", "allow", ["gpt-5.5"])
+    store.upsert("subscription_plan", "Pro", "allow", ["gpt-5.5"])
     allowed = store.evaluate(
         "gpt-5.5",
         key_id="key_1",
