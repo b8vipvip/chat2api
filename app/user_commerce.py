@@ -1075,7 +1075,14 @@ class BillingStore:
             ) / 1_000_000
             usd_micros = max(0, int(round(usd * 1_000_000)))
             cny_cents = max(0, int(round(usd * fx * 100)))
-            billing_enabled = bool(pricing.public().get("billing_enabled"))
+            # A durable positive reservation proves that wallet billing
+            # was enabled at admission. A later administrator toggle affects
+            # new admissions only; it must not waive an already accepted
+            # in-flight request or release its hold without settlement.
+            billing_enabled = (
+                reservation is not None
+                and reservation.get("state") == "reserved"
+            ) or bool(pricing.public().get("billing_enabled"))
             prior_balance = self.wallets.get(user_id)
             prior_reservation = dict(reservation) if reservation else None
             if billing_enabled and cny_cents:

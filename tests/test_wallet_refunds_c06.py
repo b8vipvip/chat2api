@@ -176,6 +176,49 @@ def test_billing_disabled_at_admission_cannot_become_a_retroactive_charge(tmp_pa
     assert restarted.balance_cents("usr_admission_snapshot") == 20_000
 
 
+def test_billing_disabled_after_paid_admission_still_settles_reserved_charge(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+    from app.quota_reservation_runtime_v1 import reserve_wallet_charge
+
+    app, billing, pricing = _runtime_wallet(
+        tmp_path, billing_enabled=True, models=[_price_row("paid-model", 10_000.0)],
+    )
+    hold = reserve_wallet_charge(
+        app, "req_paid_toggle", SimpleNamespace(kind="managed", key_id="key-managed"),
+        "paid-model", 100, 4096,
+    )
+    assert hold is not None
+    assert hold["state"] == "reserved"
+    assert billing.balance_cents("usr_admission_snapshot") == 20_000
+
+    # A policy toggle and price edit while the Worker is processing must not
+    # change the admitted request's debit decision, price or FX snapshot.
+    pricing.update(
+        billing_enabled=False,
+        usd_cny_rate=9.0,
+        models=[_price_row("paid-model", 1.0)],
+    )
+    restarted = BillingStore(tmp_path)
+    charge = restarted.record_charge("usr_admission_snapshot", {
+        "request_id": "req_paid_toggle",
+        "status": "completed",
+        "requested_model": "paid-model",
+        "diagnostics": {"actual_model": "paid-model"},
+        "usage": {
+            "prompt_tokens": 100, "completion_tokens": 0,
+            "total_tokens": 100, "cached_input_tokens": 0, "estimated": True,
+        },
+    }, pricing)
+
+    assert charge is not None
+    assert charge["debited"] is True
+    assert charge["cost_cny_cents"] == 700
+    assert charge["price_snapshot"]["input_usd_per_million"] == 10_000.0
+    assert charge["usd_cny_rate"] == 7.0
+    assert restarted.balance_cents("usr_admission_snapshot") == 19_300
+    assert restarted.reservations["req_paid_toggle"]["state"] == "settled"
+
+
 def test_explicit_free_model_stays_free_after_price_edit(tmp_path: Path) -> None:
     from app.quota_reservation_runtime_v1 import reserve_wallet_charge
 
