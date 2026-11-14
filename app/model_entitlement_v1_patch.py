@@ -420,9 +420,10 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=404, detail="User not found")
         try:
             role = accounts.validate_system_role(body.system_role)
-            previous_role = accounts.system_role_for(user_id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        try:
+            previous_role = accounts.system_role_for(user_id)
         except Exception as exc:
             raise HTTPException(status_code=503, detail="User role authority unavailable") from exc
         audit_event(
