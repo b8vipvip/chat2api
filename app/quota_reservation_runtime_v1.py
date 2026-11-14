@@ -41,7 +41,13 @@ def reserve_wallet_charge(
             return None
         price = pricing.model(model_id)
         if not price:
-            return None
+            # Billing-enabled managed accounts must never dispatch an
+            # unpriced model for free. Configure an explicit price (including
+            # an intentional zero-rate row) or disable wallet billing.
+            raise HTTPException(
+                status_code=503,
+                detail="Wallet price is not configured for this model",
+            )
         fx = float(config.get("usd_cny_rate") or 0)
         if fx <= 0:
             raise ValueError("Invalid USD/CNY billing rate")
