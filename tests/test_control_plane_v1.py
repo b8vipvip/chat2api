@@ -235,3 +235,16 @@ def test_legacy_admin_session_storage_stays_backward_compatible(tmp_path: Path):
     revived = AdminSessionStore("owner", "password", storage_path=path)
     assert revived.identity(token) == "owner"
     assert revived.authenticate(token)
+
+
+def test_user_role_and_subscription_admin_routes_have_distinct_rbac_permissions():
+    from app.control_plane import permission_for_admin_route
+
+    assert permission_for_admin_route("/api/admin/users/usr_12345/role", "PUT") == "users:write"
+    assert permission_for_admin_route("/api/admin/users/usr_12345/subscription", "GET") == "billing:read"
+    assert permission_for_admin_route("/api/admin/users/usr_12345/subscription", "PUT") == "billing:write"
+    assert permission_for_admin_route("/api/admin/users/usr_12345/subscription", "DELETE") == "billing:write"
+    assert permission_for_admin_route("/api/admin/subscription-plans", "GET") == "billing:read"
+    assert permission_for_admin_route("/api/admin/subscription-plans/pro", "PUT") == "billing:write"
+    assert permission_for_admin_route("/api/admin/model-entitlements/user_role/trusted", "PUT") == "models:write"
+    assert permission_for_admin_route("/api/admin/model-entitlements/subscription_plan/pro", "PUT") == "models:write"
