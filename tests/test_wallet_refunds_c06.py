@@ -403,3 +403,48 @@ def test_wallet_recharge_api_and_order_store_require_strict_integer_cents(tmp_pa
                 headers=ORIGIN,
             )
             assert response.status_code == 422, response.text
+
+
+def test_payment_order_create_checkout_and_settlement_rollback_on_save_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    billing = BillingStore(tmp_path)
+
+    def fail_save() -> None:
+        raise TypeError("simulated payment ledger serialization failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(billing, "_save", fail_save)
+        with pytest.raises(TypeError, match="serialization failure"):
+            billing.create_order("usr_order_rollback", 125, "alipay")
+    assert billing.orders_for_user("usr_order_rollback") == []
+    assert BillingStore(tmp_path).orders_for_user("usr_order_rollback") == []
+
+    order = billing.create_order("usr_order_rollback", 125, "alipay")
+    original = dict(order)
+    with monkeypatch.context() as patch:
+        patch.setattr(billing, "_save", fail_save)
+        with pytest.raises(TypeError, match="serialization failure"):
+            billing.update_order_checkout(
+                order["order_id"], pay_url="https://pay.invalid/phantom",
+                qr_payload="phantom-payload",
+            )
+    assert billing.order_by_trade_no(order["merchant_trade_no"]) == original
+    assert BillingStore(tmp_path).order_by_trade_no(order["merchant_trade_no"]) == original
+
+    with monkeypatch.context() as patch:
+        patch.setattr(billing, "_save", fail_save)
+        with pytest.raises(TypeError, match="serialization failure"):
+            billing.settle_order(order["order_id"], "provider-trade-rollback")
+    assert billing.balance_cents("usr_order_rollback") == 0
+    assert billing.order_by_trade_no(order["merchant_trade_no"]) == original
+    reloaded = BillingStore(tmp_path)
+    assert reloaded.balance_cents("usr_order_rollback") == 0
+    assert reloaded.order_by_trade_no(order["merchant_trade_no"]) == original
+
+    settled = billing.settle_order(order["order_id"], "provider-trade-rollback")
+    assert settled["status"] == "paid"
+    assert billing.balance_cents("usr_order_rollback") == 125
+    durable = BillingStore(tmp_path)
+    assert durable.balance_cents("usr_order_rollback") == 125
+    assert durable.order_by_trade_no(order["merchant_trade_no"])["status"] == "paid"
