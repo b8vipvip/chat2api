@@ -713,7 +713,7 @@ def install_responses_v108_patch(app: FastAPI) -> FastAPI:
 
     @app.get("/v1/responses/{response_id}")
     async def retrieve_response(response_id: str, request: Request):
-        principal = await _authenticate(app, request, allow_images_only=True)
+        principal = await _authenticate(app, request)
         response_key = str(response_id)
         value = app.state.responses_v108_store.get(response_key)
         owner_key_id = app.state.responses_v108_owners.get(response_key)
@@ -724,16 +724,6 @@ def install_responses_v108_patch(app: FastAPI) -> FastAPI:
         ):
             # Do not reveal whether a response exists under another API key.
             return _error("Response not found", status_code=404, code="response_not_found")
-        if principal.kind != "master" and not {"chat", "admin"}.intersection(principal.scopes):
-            output = value.get("output") if isinstance(value, dict) else None
-            is_image_only_response = bool(output) and all(
-                isinstance(item, dict) and item.get("type") == "image_generation_call"
-                for item in output
-            )
-            if "images" not in principal.scopes or not is_image_only_response:
-                # Images-only keys may retrieve their own image-tool results,
-                # but must not use the Responses GET surface as a text scope.
-                return _error("Response not found", status_code=404, code="response_not_found")
         return JSONResponse(value)
 
     return app
