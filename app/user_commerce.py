@@ -539,6 +539,14 @@ class BillingStore:
             ]
         return sorted(rows, key=lambda row: str(row.get("created_at") or ""))
 
+    def active_reservation_user_ids(self) -> list[str]:
+        with self.lock:
+            return sorted({
+                str(row.get("user_id") or "")
+                for row in self.reservations.values()
+                if row.get("state") == "reserved" and row.get("user_id")
+            })
+
     def available_balance_cents(self, user_id: str) -> int:
         with self.lock:
             reserved = sum(
