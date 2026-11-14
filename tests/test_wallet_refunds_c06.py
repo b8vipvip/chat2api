@@ -11,7 +11,9 @@ from app.config import Settings
 from app.control_plane import ControlPlaneStore, permission_for_admin_route
 from app.main import create_app
 from app.quota_reservation_admin_v1_patch import install_quota_reservation_admin_v1
-from app.user_commerce import BillingStore, PricingStore, WalletReservationError
+from app.user_commerce import (
+    BillingStore, InsufficientWalletBalance, PricingStore, WalletReservationError,
+)
 from app.user_console_v104_patch import install_user_console_v104_patch
 from app.v17_patch import install_v17_patch
 
@@ -45,6 +47,77 @@ def _price_row(model_id: str, input_rate: float) -> dict[str, object]:
         "cached_input_usd_per_million": 0.0,
         "output_usd_per_million": 0.0,
     }
+
+
+def test_concurrent_wallet_reservations_cannot_overcommit_available_balance(tmp_path: Path) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    user_id = "usr_concurrent_reservations"
+    price = _price_row("paid-model", 10_000.0)
+    billing = BillingStore(tmp_path)
+    billing.credit(user_id, 1_000)
+
+    def reserve(request_id: str):
+        try:
+            return billing.reserve_for_request(
+                user_id, request_id,
+                model_id="paid-model", estimated_cny_cents=700,
+                input_tokens=100, output_tokens=4096,
+                price_snapshot=price, usd_cny_rate=7.0,
+                price_catalog_snapshot={"paid-model": price},
+            )
+        except InsufficientWalletBalance:
+            return None
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(reserve, ["req_concurrent_a", "req_concurrent_b"]))
+
+    assert sum(result is not None for result in results) == 1
+    active = billing.active_reservations_for_user(user_id)
+    assert len(active) == 1
+    assert active[0]["reserved_cny_cents"] == 700
+    assert billing.balance_cents(user_id) == 1_000
+
+
+def test_usage_overrun_records_debt_and_blocks_future_paid_admission(tmp_path: Path) -> None:
+    pricing = PricingStore(tmp_path)
+    price = _price_row("paid-model", 10_000.0)
+    pricing.update(billing_enabled=True, usd_cny_rate=7.0, models=[price])
+    billing = BillingStore(tmp_path)
+    billing.credit("usr_debt_policy", 500)
+    billing.reserve_for_request(
+        "usr_debt_policy", "req_debt_policy",
+        model_id="paid-model", estimated_cny_cents=100,
+        input_tokens=10, output_tokens=4096,
+        price_snapshot=price,
+        price_catalog_snapshot={"paid-model": price},
+        usd_cny_rate=7.0,
+    )
+
+    # The hold is a conservative admission check, not a cap on actual usage.
+    # Full terminal usage is charged even when it exceeds the held amount.
+    charge = billing.record_charge("usr_debt_policy", {
+        "request_id": "req_debt_policy",
+        "status": "completed",
+        "requested_model": "paid-model",
+        "diagnostics": {"actual_model": "paid-model"},
+        "usage": {
+            "prompt_tokens": 100, "completion_tokens": 0,
+            "total_tokens": 100, "cached_input_tokens": 0, "estimated": True,
+        },
+    }, pricing)
+
+    assert charge is not None and charge["cost_cny_cents"] == 700
+    assert charge["debited"] is True
+    assert billing.balance_cents("usr_debt_policy") == -200
+    with pytest.raises(InsufficientWalletBalance):
+        billing.reserve_for_request(
+            "usr_debt_policy", "req_debt_followup",
+            model_id="paid-model", estimated_cny_cents=1,
+            input_tokens=1, output_tokens=1,
+            price_snapshot=price, price_catalog_snapshot={"paid-model": price},
+            usd_cny_rate=7.0,
+        )
 
 
 def test_reserved_charge_uses_admission_catalog_and_fx_snapshot_after_restart(tmp_path: Path) -> None:

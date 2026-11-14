@@ -88,8 +88,13 @@ the Control Plane maps this route to `billing:write`. Caller body:
   amounts fail closed; the existing ledger bytes are preserved for offline
   recovery. Refund rows must reference a debited charge owned by the same
   user, match its original charge amount, and remain within the cumulative
-  refund cap. Exact negative integer wallet balances remain valid under the
-  documented debt policy.
+  refund cap.
+- Admission holds are estimates, not hard spending caps. Final settlement
+  debits the full cost computed from the immutable admission price/FX snapshot
+  and terminal usage, even when actual usage exceeds the hold. This may create
+  an exact negative integer wallet balance; that balance is debt, not spendable
+  credit. New paid admissions remain blocked until a top-up covers the debt
+  and the next request's hold.
 - All payment-channel extensions that mutate the shared wallet order
   ledger (PayPal/USDT order creation, checkout metadata, USDT txid submission
   and administrator rejection) restore the prior in-memory row if persistence
