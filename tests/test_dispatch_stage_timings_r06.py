@@ -381,7 +381,7 @@ def test_broker_preserves_bounded_worker_dispatch_failure_diagnostics() -> None:
             "request_id": "req_r06_failure_evidence",
             "error": "Content script readiness timed out",
             "diagnostics": {
-                "worker_dispatch_queue_wait_ms": 160000.36,
+                "worker_dispatch_queue_wait_ms": 160000.26,
                 "worker_route_resolve_ms": 12.34,
                 "worker_target_tab_lookup_ms": 4,
                 "worker_ensure_content_ms": 900001,
