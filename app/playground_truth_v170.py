@@ -76,6 +76,7 @@ async def reconcile_playground_runs(
         if not ids:
             continue
         result_rows = [dict(x) for x in (run.get("results") or [])]
+        execution_active = str(run.get("run_id") or "") in active
         # ABCD artifact/quality checks are a separate observer. The production
         # broker remains the only owner of completed/error, while test history
         # must not turn a failed four-file acceptance into "passed" merely
@@ -127,20 +128,33 @@ async def reconcile_playground_runs(
             elif status == "passed" and abcd_warning:
                 status = "warning"
             statuses.append(status)
-            if entry.get("status") != status or entry.get("authoritative_request_status") != row["status"]:
+            # While the executor is live, keep its visible case pending/running
+            # even though the authoritative request has reached terminal. The
+            # executor owns final response parsing and rich result persistence.
+            visible_status = (
+                local_status
+                if execution_active and local_status in {"pending", "running"}
+                else status
+            )
+            if entry.get("status") != visible_status or entry.get("authoritative_request_status") != row["status"]:
+                if execution_active and local_status in {"pending", "running"}:
+                    message = "Worker 已完成；正在等待 Playground 执行器完成响应和媒体验证"
+                elif abcd_failed and row["status"] == "completed":
+                    message = "ABCD 文件/内容验收失败；API 请求本身已完成"
+                elif status == "passed":
+                    message = "已按服务端请求记录同步完成"
+                elif (
+                    status == "warning"
+                    and isinstance(row.get("diagnostics"), dict)
+                    and row["diagnostics"].get("api_stream_closed_before_delivery") is True
+                ):
+                    message = "Worker 已完成但 HTTP 流提前断开；调用方没有完整收到最终回复"
+                else:
+                    message = str(row.get("error") or status)[:300]
                 entry.update({
-                    "status": status,
+                    "status": visible_status,
                     "authoritative_request_status": row["status"],
-                    "message": (
-                        "ABCD 文件/内容验收失败；API 请求本身已完成"
-                        if abcd_failed and row["status"] == "completed"
-                        else "已按服务端请求记录同步完成" if status == "passed"
-                        else "Worker 已完成但 HTTP 流提前断开；调用方没有完整收到最终回复"
-                            if status == "warning"
-                            and isinstance(row.get("diagnostics"), dict)
-                            and row["diagnostics"].get("api_stream_closed_before_delivery") is True
-                        else str(row.get("error") or status)[:300]
-                    ),
+                    "message": message,
                     "request_id": rid,
                     "response_chars": int(row.get("completion_chars") or 0),
                     "image_count": int(row.get("response_media_count") or 0),
