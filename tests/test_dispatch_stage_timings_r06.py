@@ -218,7 +218,11 @@ def test_registry_send_binds_the_exact_socket_for_every_broker_request_family(tm
             "voice.live.start", "voice.live.request", "dictation.request",
         )
         states = {
-            f"req_r06_{index}": SimpleNamespace(dispatch_socket=None)
+            f"req_r06_{index}": SimpleNamespace(
+                dispatch_socket=None,
+                dispatch_send_started_mono=None,
+                dispatch_send_completed_mono=None,
+            )
             for index, _ in enumerate(request_types)
         }
         registry.request_broker = SimpleNamespace(requests=states)
@@ -229,6 +233,12 @@ def test_registry_send_binds_the_exact_socket_for_every_broker_request_family(tm
             })
 
         assert all(state.dispatch_socket is socket for state in states.values())
+        assert all(state.dispatch_send_started_mono is not None for state in states.values())
+        assert all(
+            state.dispatch_send_completed_mono is not None
+            and state.dispatch_send_completed_mono >= state.dispatch_send_started_mono
+            for state in states.values()
+        )
         assert [payload["type"] for payload in socket.sent] == list(request_types)
 
     asyncio.run(exercise())
@@ -281,3 +291,31 @@ def test_request_v6_readiness_continues_when_diagnostic_background_ack_hangs() -
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "nonblocking browser dispatch diagnostics: pass" in result.stdout
+
+
+
+def test_registry_dispatch_timing_is_not_reset_by_followup_control_messages(tmp_path) -> None:
+    class FakeSocket:
+        async def send_json(self, _payload) -> None:
+            return None
+
+    async def exercise() -> None:
+        registry = ClientRegistry(tmp_path)
+        socket = FakeSocket()
+        registry.clients["ext_r06"] = SimpleNamespace(connection_enabled=True)
+        registry.sockets["ext_r06"] = socket
+        registry.chatgpt_routing_ready = lambda _client_id: True
+        state = SimpleNamespace(
+            dispatch_socket=None,
+            dispatch_send_started_mono=None,
+            dispatch_send_completed_mono=None,
+        )
+        registry.request_broker = SimpleNamespace(requests={"req_r06_once": state})
+        await registry.send("ext_r06", {"type": "chat.request", "request_id": "req_r06_once"})
+        original_started = state.dispatch_send_started_mono
+        original_completed = state.dispatch_send_completed_mono
+        await registry.send("ext_r06", {"type": "chat.cancel", "request_id": "req_r06_once"})
+        assert state.dispatch_send_started_mono == original_started
+        assert state.dispatch_send_completed_mono == original_completed
+
+    asyncio.run(exercise())
