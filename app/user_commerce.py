@@ -19,6 +19,13 @@ from .timezone_utils import beijing_now_iso
 USER_SESSION_COOKIE = "chat2api_user_session"
 USER_COMMERCE_VERSION = 1
 _EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+USER_ACCOUNT_SCHEMA_VERSION = 2
+DEFAULT_USER_SYSTEM_ROLE = "user"
+USER_SYSTEM_ROLE_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
+RESERVED_ADMIN_ROLES = frozenset({
+    "super_admin", "system_admin", "user_admin", "api_key_admin",
+    "billing_admin", "plugin_admin", "support",
+})
 
 # Reference rates are intentionally persisted as editable seed data. They are
 # not used as a claim about the upstream implementation behind chat2api.
@@ -94,17 +101,34 @@ class UserAccountStore:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
             users = payload.get("users") if isinstance(payload, dict) else None
             sessions = payload.get("sessions") if isinstance(payload, dict) else None
+            migrated = False
             if isinstance(users, list):
-                self.users = {str(row.get("user_id")): dict(row) for row in users if isinstance(row, dict) and row.get("user_id")}
+                loaded: dict[str, dict[str, Any]] = {}
+                for raw in users:
+                    if not isinstance(raw, dict) or not raw.get("user_id"):
+                        continue
+                    row = dict(raw)
+                    role = str(row.get("system_role") or DEFAULT_USER_SYSTEM_ROLE).strip().lower()
+                    # Existing accounts migrate to the least-privileged ordinary
+                    # user role. Invalid legacy values never inherit admin RBAC.
+                    if not USER_SYSTEM_ROLE_RE.fullmatch(role) or role in RESERVED_ADMIN_ROLES:
+                        role = DEFAULT_USER_SYSTEM_ROLE
+                    if row.get("system_role") != role:
+                        row["system_role"] = role
+                        migrated = True
+                    loaded[str(row["user_id"])] = row
+                self.users = loaded
             if isinstance(sessions, dict):
                 self.sessions = {str(key): dict(value) for key, value in sessions.items() if isinstance(value, dict)}
             self._cleanup_sessions(save=False)
+            if migrated:
+                self._save()
         except (OSError, ValueError, TypeError):
             self.users = {}
             self.sessions = {}
 
     def _save(self) -> None:
-        _atomic_json(self.path, {"version": USER_COMMERCE_VERSION, "users": list(self.users.values()), "sessions": self.sessions})
+        _atomic_json(self.path, {"version": USER_ACCOUNT_SCHEMA_VERSION, "users": list(self.users.values()), "sessions": self.sessions})
 
     def _cleanup_sessions(self, *, save: bool = True) -> None:
         now = time.time()
@@ -139,6 +163,7 @@ class UserAccountStore:
                 "password_salt": salt,
                 "password_hash": password_hash,
                 "enabled": True,
+                "system_role": DEFAULT_USER_SYSTEM_ROLE,
                 "key_ids": [],
                 "created_at": now,
                 "updated_at": now,
@@ -199,9 +224,43 @@ class UserAccountStore:
             "email": str(row.get("email") or ""),
             "display_name": str(row.get("display_name") or ""),
             "enabled": bool(row.get("enabled", True)),
+            "system_role": str(row.get("system_role") or DEFAULT_USER_SYSTEM_ROLE),
             "created_at": row.get("created_at"),
             "updated_at": row.get("updated_at"),
         }
+
+    @staticmethod
+    def validate_system_role(system_role: str) -> str:
+        role = str(system_role or "").strip().lower()
+        if not USER_SYSTEM_ROLE_RE.fullmatch(role) or role in RESERVED_ADMIN_ROLES:
+            raise ValueError("system_role must be a non-admin role slug")
+        return role
+
+    def system_role_for(self, user_id: str) -> str:
+        with self.lock:
+            row = self.users.get(str(user_id or ""))
+            if row is None:
+                raise KeyError("用户不存在")
+            return self.validate_system_role(str(row.get("system_role") or DEFAULT_USER_SYSTEM_ROLE))
+
+    def set_system_role(self, user_id: str, system_role: str) -> dict[str, Any]:
+        role = self.validate_system_role(system_role)
+        with self.lock:
+            row = self.users.get(str(user_id or ""))
+            if row is None:
+                raise KeyError("用户不存在")
+            previous = row.get("system_role")
+            row["system_role"] = role
+            row["updated_at"] = _now()
+            try:
+                self._save()
+            except Exception:
+                if previous is None:
+                    row.pop("system_role", None)
+                else:
+                    row["system_role"] = previous
+                raise
+            return self.public(row)
 
     def update_profile(self, user_id: str, *, display_name: str) -> dict[str, Any]:
         name = str(display_name or "").strip()
