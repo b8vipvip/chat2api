@@ -90,6 +90,10 @@ the Control Plane maps this route to `billing:write`. Caller body:
 - The internal wallet ledger uses an in-process lock plus atomic
   file replacement under P-01's **single-process** runtime.
   Multi-worker or multi-host wallet transactions are not supported.
+- Pricing configuration rejects non-finite exchange rates and model
+  prices, validates persisted rates at startup, and restores the previous
+  in-memory pricing state if a config write fails. Corrupt pricing data is
+  never replaced silently with default rates while billing continues.
 - When wallet billing is enabled for a managed user, every dispatched
   model must have an explicit pricing row. An unpriced model is rejected
   before Worker dispatch; administrators may add an explicit zero-rate row
