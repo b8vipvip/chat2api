@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt
 
 from .user_commerce import WalletReservationError
 from .admin_audit import AdminAuditError, AdminAuditStore
@@ -14,7 +14,7 @@ from .quota_reservations import QuotaReservationError, QuotaReservationStore
 
 class WalletRefundRequest(BaseModel):
     refund_id: str = Field(pattern=r"^rf_[A-Za-z0-9_-]{8,100}$")
-    amount_cents: int = Field(gt=0, le=10_000_000)
+    amount_cents: StrictInt = Field(gt=0, le=10_000_000)
     reason: str = Field(min_length=5, max_length=500)
 
 
