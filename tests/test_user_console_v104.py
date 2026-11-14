@@ -125,7 +125,7 @@ def test_pricing_update_rolls_back_memory_when_persistence_fails(
 ) -> None:
     pricing = PricingStore(tmp_path)
     previous = pricing.public()
-    models = previous["models"]
+    models = [dict(row) for row in previous["models"]]
     models[0]["input_usd_per_million"] = 9.0
 
     def fail_save() -> None:

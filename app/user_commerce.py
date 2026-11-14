@@ -22,6 +22,11 @@ USER_SESSION_COOKIE = "chat2api_user_session"
 USER_COMMERCE_VERSION = 1
 
 
+def _pricing_model_key(value: Any) -> str:
+    model_id = str(value or "").strip().lower()
+    return {"gpt-5.6": "gpt-5.6-sol"}.get(model_id, model_id)
+
+
 class WalletReservationError(RuntimeError):
     pass
 
@@ -459,14 +464,10 @@ class PricingStore:
             return self.public()
 
     def model(self, model_id: str) -> dict[str, Any] | None:
-        wanted = str(model_id or "").strip().lower()
-        aliases = {"gpt-5.6": "gpt-5.6-sol"}
-        wanted = aliases.get(wanted, wanted)
+        wanted = _pricing_model_key(model_id)
         with self.lock:
             for row in self.payload.get("models") or []:
-                current = str(row.get("model_id") or "").lower()
-                current = aliases.get(current, current)
-                if current == wanted:
+                if _pricing_model_key(row.get("model_id")) == wanted:
                     return dict(row)
         return None
 
@@ -590,6 +591,7 @@ class BillingStore:
                     not isinstance(snapshot, dict)
                     or not isinstance(snapshot.get("model_id"), str)
                     or not snapshot["model_id"]
+                    or _pricing_model_key(snapshot["model_id"]) != _pricing_model_key(model_id)
                 ):
                     raise ValueError(f"billing ledger {collection}.price_snapshot identity is invalid")
                 if "enabled" in snapshot and type(snapshot["enabled"]) is not bool:
@@ -608,7 +610,10 @@ class BillingStore:
                     or type(charge.get("usage_is_estimated", False)) is not bool
                 ):
                     raise ValueError("billing ledger charge metadata is invalid")
-                validate_price_snapshot(charge.get("price_snapshot"), "charges", charge["model_id"])
+                priced_model_id = charge.get("priced_model_id", charge["model_id"])
+                if not isinstance(priced_model_id, str) or not priced_model_id:
+                    raise ValueError("billing ledger charges.priced_model_id is invalid")
+                validate_price_snapshot(charge.get("price_snapshot"), "charges", priced_model_id)
                 rate = charge.get("usd_cny_rate")
                 if type(rate) not in {int, float} or not math.isfinite(float(rate)) or rate < 0:
                     raise ValueError("billing ledger charges.usd_cny_rate must be finite and non-negative")
@@ -648,6 +653,15 @@ class BillingStore:
                 rate = reservation.get("usd_cny_rate")
                 if type(rate) not in {int, float} or not math.isfinite(float(rate)) or rate < 0:
                     raise ValueError("billing ledger reservations.usd_cny_rate must be finite and non-negative")
+                catalog = reservation.get("price_catalog_snapshot", {})
+                if not isinstance(catalog, dict):
+                    raise ValueError("billing ledger reservations.price_catalog_snapshot must be an object")
+                for model_key, model_price in catalog.items():
+                    if not isinstance(model_key, str) or not model_key:
+                        raise ValueError("billing ledger reservation price catalog key is invalid")
+                    validate_price_snapshot(model_price, "reservation price catalog", model_key)
+                    if type(model_price.get("enabled", True)) is not bool:
+                        raise ValueError("billing ledger reservation price catalog enabled must be boolean")
                 if reservation["state"] == "settled" and reservation.get("actual_cny_cents") is None:
                     raise ValueError("settled wallet reservation must include actual cost")
             for refund in refunds.values():
@@ -750,6 +764,7 @@ class BillingStore:
         model_id: str, estimated_cny_cents: int,
         input_tokens: int, output_tokens: int,
         price_snapshot: dict[str, Any], usd_cny_rate: float,
+        price_catalog_snapshot: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any] | None:
         if not user_id or not request_id:
             raise WalletReservationError("user_id and request_id are required")
@@ -757,6 +772,17 @@ class BillingStore:
             raise WalletReservationError("estimated wallet amount must be non-negative integer cents")
         if estimated_cny_cents == 0:
             return None
+        if not isinstance(price_snapshot, dict):
+            raise WalletReservationError("price_snapshot must be an object")
+        catalog_snapshot: dict[str, dict[str, Any]] = {}
+        if price_catalog_snapshot is not None:
+            if not isinstance(price_catalog_snapshot, dict):
+                raise WalletReservationError("price_catalog_snapshot must be an object")
+            for model_key, row in price_catalog_snapshot.items():
+                normalized_key = _pricing_model_key(model_key)
+                if not normalized_key or not isinstance(row, dict):
+                    raise WalletReservationError("price_catalog_snapshot contains an invalid model row")
+                catalog_snapshot.setdefault(normalized_key, dict(row))
         now = _now()
         with self.lock:
             existing_charge = self.charges.get(request_id)
@@ -801,6 +827,7 @@ class BillingStore:
                 "reserved_cny_cents": estimated_cny_cents,
                 "actual_cny_cents": None,
                 "price_snapshot": dict(price_snapshot),
+                "price_catalog_snapshot": catalog_snapshot,
                 "usd_cny_rate": float(usd_cny_rate),
                 "state": "reserved",
                 "created_at": now,
@@ -885,27 +912,41 @@ class BillingStore:
                         raise
                 return dict(existing)
             diagnostics = request_row.get("diagnostics") if isinstance(request_row.get("diagnostics"), dict) else {}
-            model_id = str(diagnostics.get("actual_model") or request_row.get("requested_model") or "")
             reservation = self.reservations.get(request_id)
             if reservation and str(reservation.get("user_id") or "") != user_id:
                 raise WalletReservationError("Request wallet reservation belongs to another user")
             reserved_model = str((reservation or {}).get("model_id") or "")
-            if reservation and reservation.get("state") == "reserved" and reserved_model == model_id:
-                price = dict(reservation.get("price_snapshot") or {})
+            actual_model_id = str(diagnostics.get("actual_model") or "").strip()
+            requested_model_id = str(request_row.get("requested_model") or "").strip()
+            model_id = actual_model_id or requested_model_id or reserved_model
+            if reservation and reservation.get("state") != "reserved":
+                # A terminally released/settled hold cannot be revived by a
+                # later completion projection that has no matching charge.
+                return None
+            if reservation:
+                # Reserved requests must never consult live pricing at
+                # completion. Select the actual served model from the full
+                # catalog captured at admission; if it was not present then,
+                # fall back to the exact requested-model snapshot held for
+                # admission. The FX rate is likewise immutable for this request.
                 fx = float(reservation.get("usd_cny_rate") or 0)
+                catalog = reservation.get("price_catalog_snapshot")
+                candidate = (
+                    catalog.get(_pricing_model_key(model_id))
+                    if isinstance(catalog, dict) else None
+                )
+                if isinstance(candidate, dict) and candidate.get("enabled", True) is True:
+                    price = dict(candidate)
+                    priced_model_id = str(candidate.get("model_id") or model_id)
+                else:
+                    price = dict(reservation.get("price_snapshot") or {})
+                    priced_model_id = reserved_model
             else:
                 price = pricing.model(model_id)
                 if price and price.get("enabled", True) is not True:
                     price = None
                 fx = float(pricing.public().get("usd_cny_rate") or 0)
-                if not price and reservation and reservation.get("state") == "reserved":
-                    # If served_model is unknown or has no configured price,
-                    # settle against the requested-model snapshot that was
-                    # actually held at admission rather than silently dropping
-                    # a priced request's wallet charge.
-                    model_id = reserved_model
-                    price = dict(reservation.get("price_snapshot") or {})
-                    fx = float(reservation.get("usd_cny_rate") or fx)
+                priced_model_id = str((price or {}).get("model_id") or model_id)
             if not price:
                 if reservation and reservation.get("state") == "reserved":
                     previous = dict(reservation)
@@ -965,6 +1006,7 @@ class BillingStore:
                 "request_id": request_id,
                 "user_id": user_id,
                 "model_id": model_id,
+                "priced_model_id": priced_model_id,
                 "input_tokens": input_tokens,
                 "cached_input_tokens": cached_tokens,
                 "output_tokens": output_tokens,

@@ -58,6 +58,14 @@ the Control Plane maps this route to `billing:write`. Caller body:
   values, total must equal input plus output, and cached input must be a
   bounded subset. Missing or inconsistent usage leaves the hold reserved
   for later terminal replay.
+- Each priced admission snapshots the complete model price catalog and the
+  USD/CNY rate. Settlement selects the actual served model from that immutable
+  catalog; if it was not present at admission, it falls back to the
+  requested-model snapshot. It never reads a changed live price or FX rate
+  for a request that already holds a reservation. Charge rows keep both
+  `model_id` (served model) and `priced_model_id` (price source). Positive-rate
+  requests reserve at least one cent using upward cent rounding, so tiny
+  estimates still retain their admission snapshot.
 - Startup validates the supported v1 ledger schema, collection/row
   structure, required charge/order/reservation/refund fields, owner IDs,
   row-key identity, integer-unit fields, finite exchange rates and

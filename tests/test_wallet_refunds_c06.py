@@ -35,6 +35,97 @@ def _charged_wallet(tmp_path: Path) -> tuple[BillingStore, PricingStore]:
     return billing, pricing
 
 
+def _price_row(model_id: str, input_rate: float) -> dict[str, object]:
+    return {
+        "model_id": model_id,
+        "name": model_id,
+        "enabled": True,
+        "input_usd_per_million": input_rate,
+        "cached_input_usd_per_million": 0.0,
+        "output_usd_per_million": 0.0,
+    }
+
+
+def test_reserved_charge_uses_admission_catalog_and_fx_snapshot_after_restart(tmp_path: Path) -> None:
+    pricing = PricingStore(tmp_path)
+    requested = _price_row("requested-model", 10_000.0)
+    served = _price_row("served-model", 20_000.0)
+    pricing.update(billing_enabled=True, usd_cny_rate=7.0, models=[requested, served])
+    billing = BillingStore(tmp_path)
+    billing.credit("usr_price_snapshot", 100_000)
+    catalog = {row["model_id"]: dict(row) for row in pricing.public()["models"]}
+    billing.reserve_for_request(
+        "usr_price_snapshot", "req_price_snapshot",
+        model_id="requested-model", estimated_cny_cents=5_000,
+        input_tokens=100, output_tokens=4096,
+        price_snapshot=pricing.model("requested-model") or {},
+        price_catalog_snapshot=catalog,
+        usd_cny_rate=7.0,
+    )
+
+    # Live prices and FX may change while the provider is still processing.
+    pricing.update(
+        billing_enabled=True, usd_cny_rate=9.0,
+        models=[_price_row("requested-model", 1.0), _price_row("served-model", 1.0)],
+    )
+    restarted = BillingStore(tmp_path)
+    charge = restarted.record_charge("usr_price_snapshot", {
+        "request_id": "req_price_snapshot",
+        "status": "completed",
+        "requested_model": "requested-model",
+        "diagnostics": {"actual_model": "served-model"},
+        "usage": {
+            "prompt_tokens": 100, "completion_tokens": 0,
+            "total_tokens": 100, "cached_input_tokens": 0, "estimated": True,
+        },
+    }, pricing)
+
+    assert charge is not None
+    assert charge["model_id"] == "served-model"
+    assert charge["priced_model_id"] == "served-model"
+    assert charge["price_snapshot"]["input_usd_per_million"] == 20_000.0
+    assert charge["usd_cny_rate"] == 7.0
+    assert charge["cost_cny_cents"] == 1_400
+    assert restarted.balance_cents("usr_price_snapshot") == 98_600
+
+
+def test_reserved_charge_falls_back_to_requested_admission_price_not_live_price(tmp_path: Path) -> None:
+    pricing = PricingStore(tmp_path)
+    requested = _price_row("requested-model", 10_000.0)
+    pricing.update(billing_enabled=True, usd_cny_rate=7.0, models=[requested])
+    billing = BillingStore(tmp_path)
+    billing.credit("usr_price_fallback", 10_000)
+    billing.reserve_for_request(
+        "usr_price_fallback", "req_price_fallback",
+        model_id="requested-model", estimated_cny_cents=2_000,
+        input_tokens=100, output_tokens=4096,
+        price_snapshot=pricing.model("requested-model") or {},
+        price_catalog_snapshot={"requested-model": requested},
+        usd_cny_rate=7.0,
+    )
+    pricing.update(
+        billing_enabled=True, usd_cny_rate=9.0,
+        models=[requested, _price_row("late-added-model", 50_000.0)],
+    )
+    charge = BillingStore(tmp_path).record_charge("usr_price_fallback", {
+        "request_id": "req_price_fallback",
+        "status": "completed",
+        "requested_model": "requested-model",
+        "diagnostics": {"actual_model": "late-added-model"},
+        "usage": {
+            "prompt_tokens": 100, "completion_tokens": 0,
+            "total_tokens": 100, "cached_input_tokens": 0, "estimated": True,
+        },
+    }, pricing)
+
+    assert charge is not None
+    assert charge["model_id"] == "late-added-model"
+    assert charge["priced_model_id"] == "requested-model"
+    assert charge["price_snapshot"]["input_usd_per_million"] == 10_000.0
+    assert charge["usd_cny_rate"] == 7.0
+    assert charge["cost_cny_cents"] == 700
+
+
 def test_refund_is_idempotent_partial_and_never_over_refunds(tmp_path: Path) -> None:
     billing, _pricing = _charged_wallet(tmp_path)
     first = billing.refund_charge("req_refundable", "rf_partial0001", 3, "billing correction")

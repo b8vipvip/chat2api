@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any
 
 from fastapi import HTTPException
 
 from .quota_reservations import QuotaExceeded, QuotaReservationError
 from .token_usage import usage_for
-from .user_commerce import InsufficientWalletBalance, WalletReservationError
+from .user_commerce import InsufficientWalletBalance, WalletReservationError, _pricing_model_key
 
 logger = logging.getLogger(__name__)
 
@@ -70,9 +71,24 @@ def reserve_wallet_charge(
             max(0, int(prompt_tokens)) * float(price.get("input_usd_per_million") or 0)
             + max(0, int(output_tokens)) * float(price.get("output_usd_per_million") or 0)
         ) / 1_000_000
-        estimated_cny_cents = max(0, int(round(usd * fx * 100)))
+        rate_fields = (
+            "input_usd_per_million",
+            "cached_input_usd_per_million",
+            "output_usd_per_million",
+        )
+        has_positive_rate = any(float(price.get(field) or 0) > 0 for field in rate_fields)
+        # A positive-rate request always gets a durable admission snapshot and
+        # at least a one-cent hold, even when nearest-cent rounding would be 0.
+        estimated_cny_cents = max(1, int(math.ceil(usd * fx * 100))) if has_positive_rate else 0
         if estimated_cny_cents <= 0:
             return None
+        catalog_snapshot: dict[str, dict[str, Any]] = {}
+        for row in config.get("models") or []:
+            if not isinstance(row, dict):
+                continue
+            key = _pricing_model_key(row.get("model_id"))
+            if key:
+                catalog_snapshot.setdefault(key, dict(row))
         return billing.reserve_for_request(
             str(owner), str(request_id),
             model_id=str(model_id or ""),
@@ -80,6 +96,7 @@ def reserve_wallet_charge(
             input_tokens=max(0, int(prompt_tokens)),
             output_tokens=max(0, int(output_tokens)),
             price_snapshot=price,
+            price_catalog_snapshot=catalog_snapshot,
             usd_cny_rate=fx,
         )
     except HTTPException:
