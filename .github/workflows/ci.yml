@@ -150,6 +150,9 @@ jobs:
           node --check app/admin_extension_columns.js
           node --check app/admin_linux_workers.js
           node --check app/admin_control_plane_admin_v1.js
+          node --check app/chat_renderer_v2.js
+          node --check app/chat_stream_recovery_v1.js
+          node --check app/chat_client_v1.js
           python - <<'PY'
           import re
           from pathlib import Path
