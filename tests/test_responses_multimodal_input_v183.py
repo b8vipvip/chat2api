@@ -233,6 +233,7 @@ def test_responses_dispatch_failure_terminalizes_request_scoped_attachment_grant
             state = SimpleNamespace(
                 request_id=request_id, client_id=client_id, timings=lambda: {},
                 completed_mono=None, terminal_event_type=None,
+                final_future=asyncio.get_running_loop().create_future(),
             )
             self.requests[request_id] = state
             return state
@@ -263,6 +264,7 @@ def test_responses_dispatch_failure_terminalizes_request_scoped_attachment_grant
     app = SimpleNamespace(state=SimpleNamespace(
         registry=registry,
         broker=broker,
+        chat_request_service=ChatRequestService(registry, broker),
         telemetry=telemetry,
         settings=SimpleNamespace(request_timeout_seconds=600),
     ))
