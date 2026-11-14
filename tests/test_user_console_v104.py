@@ -811,12 +811,15 @@ def test_wallet_recovery_uses_persisted_request_id_beyond_telemetry_memory_windo
             }))
 
     # Evict the terminal row from TelemetryStore's maxlen=500 memory cache.
-    for index in range(501):
-        asyncio.run(app.state.telemetry.append({
-            "request_id": f"req_wallet_recovery_noise_{index}",
-            "status": "running",
-            "usage": {},
-        }))
+    async def append_noise() -> None:
+        for index in range(501):
+            await app.state.telemetry.append({
+                "request_id": f"req_wallet_recovery_noise_{index}",
+                "status": "running",
+                "usage": {},
+            })
+
+    asyncio.run(append_noise())
     assert len(app.state.telemetry.recent(1000)) == 500
     assert all(
         row.get("request_id") != "req_wallet_recovery_old"
@@ -827,6 +830,10 @@ def test_wallet_recovery_uses_persisted_request_id_beyond_telemetry_memory_windo
 
     session = app.state.user_accounts.create_session(user["user_id"])
     with TestClient(app) as client:
+        # Lifespan startup loads persisted telemetry and runs wallet recovery
+        # before serving the first request, despite the row being outside the
+        # 500-item in-memory history window.
+        assert billing.charge_for_request("req_wallet_recovery_old") is not None
         client.cookies.set("chat2api_user_session", session)
         response = client.get("/api/user/billing")
 
