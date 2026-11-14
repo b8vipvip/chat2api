@@ -344,6 +344,37 @@ def test_identity_and_tenant_lookup_failures_fail_closed(tmp_path: Path):
         reset_model_context(tokens)
 
 
+def test_tenant_key_binding_must_match_current_authoritative_key_owner(tmp_path: Path):
+    app, _ = build_app(tmp_path)
+    registry = app.state.registry
+    registry.routing_key_context.set("key_1")
+    app.state.model_entitlements.upsert("tenant", "ten_abc123", "allow", ["gpt-5.5"])
+    tokens = set_model_context("gpt-5.5")
+    original_owner_lookup = app.state.user_accounts.owner_for_key
+    try:
+        # A stale binding must not lend the former owner's workspace role to
+        # a key that is now owned by a different account.
+        app.state.user_accounts.owner_for_key = lambda _key_id: "usr_otherowner"
+        with pytest.raises(HTTPException) as reassigned:
+            registry.resolve_client(None)
+        assert reassigned.value.status_code == 503
+        assert reassigned.value.detail["code"] == "model_entitlement_tenant_context_unavailable"
+
+        # An orphaned tenant-bound key is not a valid unowned standalone key.
+        app.state.user_accounts.owner_for_key = lambda _key_id: None
+        with pytest.raises(HTTPException) as orphaned:
+            registry.resolve_client(None)
+        assert orphaned.value.status_code == 503
+        assert orphaned.value.detail["code"] == "model_entitlement_tenant_context_unavailable"
+
+        # The unchanged authoritative owner retains the active workspace role.
+        app.state.user_accounts.owner_for_key = original_owner_lookup
+        assert registry.resolve_client(None) == "worker_1"
+    finally:
+        app.state.user_accounts.owner_for_key = original_owner_lookup
+        reset_model_context(tokens)
+
+
 def test_admin_entitlement_api_requires_session_audits_and_validates_subjects(tmp_path: Path):
     app, token = build_app(tmp_path)
     with TestClient(app) as client:
