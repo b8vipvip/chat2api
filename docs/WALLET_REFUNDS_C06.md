@@ -157,6 +157,12 @@ the Control Plane maps this route to `billing:write`. Caller body:
   safeguard, not a DataKeyring migration or a claim that the legacy payment
   key has been rotated. Do not infer encrypted-at-rest wallet records or
   production migration approval.
+- The separate legacy V104 ZPAY configuration (`user_payment_config.json`)
+  also validates its persisted schema and decrypts any existing ciphertext at
+  startup. Malformed JSON or a mismatched data key fails closed without
+  overwriting the source file, and failed config writes restore the previous
+  in-memory state. This path continues to use its existing `data_secret`
+  cipher; it is not a DataKeyring migration or key rotation.
 - Keep this PR Draft until exact-head CI, image smoke, SDK contract,
   admin review, stacked dependency resolution and production
   acceptance are explicitly complete.
