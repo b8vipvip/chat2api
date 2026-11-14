@@ -49,10 +49,12 @@ def test_backend_terminal_does_not_finalize_a_live_playground_executor(tmp_path:
         )
         current = store.get(run_id)
         assert current["status"] == "running"
-        # Backend truth may be reflected while the executor is active, but the
-        # aggregate run cannot become terminal before the executor persists
-        # effective_model, audio bytes, artifact metadata and quality fields.
-        assert current["results"][0]["status"] == "passed"
+        # Backend truth is visible as evidence, but the case itself remains
+        # running until the executor persists effective_model, audio bytes,
+        # artifact metadata and quality fields.
+        assert current["results"][0]["status"] == "running"
+        assert current["results"][0]["authoritative_request_status"] == "completed"
+        assert "等待 Playground 执行器" in current["results"][0]["message"]
 
     asyncio.run(scenario())
 
