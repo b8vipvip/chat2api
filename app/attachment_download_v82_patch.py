@@ -60,8 +60,9 @@ def install_attachment_download_v82_patch(app: FastAPI) -> FastAPI:
         if not await registry.authenticate(client_id, token):
             raise HTTPException(status_code=401, detail="Invalid extension token")
         # A paired Worker is not a global file reader. A download is valid only
-        # while the exact request is running on this Worker, the file was
-        # explicitly attached to that request, and the request API key owns it.
+        # while the exact request is running on this Worker and the file was
+        # explicitly attached to that request. Ordinary keys must own the file;
+        # the privileged master key retains its existing cross-key read scope.
         row = telemetry.get(request_id)
         item = file_store.get(file_id)
         active = getattr(broker, "requests", {}).get(request_id)
