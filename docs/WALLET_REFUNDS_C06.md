@@ -49,10 +49,14 @@ the Control Plane maps this route to `billing:write`. Caller body:
 - This is not an automatic refund on failed API requests: failures
   release *uncommitted admission holds*. Posted charges need an
   explicit audited administrative correction.
-- Startup validates the ledger's object structure and integer-unit fields.
-  Floating-point, boolean and string balances/amounts fail closed; the
-  existing ledger bytes are preserved for offline recovery. Exact negative
-  integer wallet balances remain valid under the documented debt policy.
+- Startup validates the supported v1 ledger schema, collection/row
+  structure, owner IDs, row-key identity and integer-unit fields.
+  Unknown schema versions, floating-point, boolean and string balances/
+  amounts fail closed; the existing ledger bytes are preserved for offline
+  recovery. Refund rows must reference a debited charge owned by the same
+  user, match its original charge amount, and remain within the cumulative
+  refund cap. Exact negative integer wallet balances remain valid under the
+  documented debt policy.
 - The internal wallet ledger uses an in-process lock plus atomic
   file replacement under P-01's **single-process** runtime.
   Multi-worker or multi-host wallet transactions are not supported.
