@@ -85,6 +85,59 @@ def test_admin_user_session_revoke_is_idempotent_and_scoped(tmp_path: Path) -> N
     assert store.authenticate(bob_session)["user_id"] == bob["user_id"]
 
 
+@pytest.mark.parametrize("bad_rate", [float("nan"), float("inf"), True, -1.0])
+def test_pricing_rejects_non_finite_or_non_numeric_exchange_rates(
+    tmp_path: Path, bad_rate: float,
+) -> None:
+    pricing = PricingStore(tmp_path)
+    with pytest.raises(ValueError):
+        pricing.update(
+            billing_enabled=True,
+            usd_cny_rate=bad_rate,
+            models=pricing.public()["models"],
+        )
+    assert pricing.public()["billing_enabled"] is False
+
+
+@pytest.mark.parametrize("bad_price", [float("nan"), float("inf"), True, -1.0])
+def test_pricing_rejects_non_finite_or_invalid_model_rates(
+    tmp_path: Path, bad_price: float,
+) -> None:
+    pricing = PricingStore(tmp_path)
+    models = pricing.public()["models"]
+    models[0]["input_usd_per_million"] = bad_price
+    with pytest.raises(ValueError):
+        pricing.update(billing_enabled=True, usd_cny_rate=7.0, models=models)
+    assert pricing.public()["billing_enabled"] is False
+
+
+def test_pricing_config_load_fails_closed_on_non_finite_saved_rates(tmp_path: Path) -> None:
+    path = tmp_path / "user_pricing.json"
+    source = b'{"version":1,"billing_enabled":true,"usd_cny_rate":NaN,"models":[]}'
+    path.write_bytes(source)
+    with pytest.raises(RuntimeError, match="Pricing configuration is unreadable"):
+        PricingStore(tmp_path)
+    assert path.read_bytes() == source
+
+
+def test_pricing_update_rolls_back_memory_when_persistence_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pricing = PricingStore(tmp_path)
+    previous = pricing.public()
+    models = previous["models"]
+    models[0]["input_usd_per_million"] = 9.0
+
+    def fail_save() -> None:
+        raise OSError("simulated pricing config write failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(pricing, "_save", fail_save)
+        with pytest.raises(OSError, match="write failure"):
+            pricing.update(billing_enabled=True, usd_cny_rate=8.0, models=models)
+    assert pricing.public() == previous
+
+
 def test_default_model_prices_follow_current_reference_rate_card(tmp_path: Path) -> None:
     pricing = PricingStore(tmp_path)
     assert pricing.model("gpt-5.6-sol") == {
