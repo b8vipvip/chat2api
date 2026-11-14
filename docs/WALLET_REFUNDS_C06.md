@@ -71,6 +71,10 @@ the Control Plane maps this route to `billing:write`. Caller body:
   user, match its original charge amount, and remain within the cumulative
   refund cap. Exact negative integer wallet balances remain valid under the
   documented debt policy.
+- All payment-channel extensions that mutate the shared wallet order
+  ledger (PayPal/USDT order creation, checkout metadata, USDT txid submission
+  and administrator rejection) restore the prior in-memory row if persistence
+  fails. V106 recharge amount boundaries also require strict integer cents.
 - The internal wallet ledger uses an in-process lock plus atomic
   file replacement under P-01's **single-process** runtime.
   Multi-worker or multi-host wallet transactions are not supported.
