@@ -586,7 +586,11 @@ class BillingStore:
             # accepting truthy strings or unknown states would let corrupted
             # records masquerade as paid/debited or disappear from active holds.
             def validate_price_snapshot(snapshot: Any, collection: str, model_id: str) -> None:
-                if not isinstance(snapshot, dict) or snapshot.get("model_id") != model_id:
+                if (
+                    not isinstance(snapshot, dict)
+                    or not isinstance(snapshot.get("model_id"), str)
+                    or not snapshot["model_id"]
+                ):
                     raise ValueError(f"billing ledger {collection}.price_snapshot identity is invalid")
                 if "enabled" in snapshot and type(snapshot["enabled"]) is not bool:
                     raise ValueError(f"billing ledger {collection}.price_snapshot.enabled must be boolean")
