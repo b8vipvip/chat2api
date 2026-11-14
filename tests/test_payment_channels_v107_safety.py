@@ -442,3 +442,92 @@ def test_billing_ledger_rejects_duplicate_merchant_trade_numbers_without_overwri
         BillingStore(tmp_path)
     assert billing.path.read_bytes() == source
 
+@pytest.mark.parametrize("terminal_status", ["rejected", "failed", "cancelled", "expired"])
+def test_usdt_txid_submission_cannot_reopen_terminal_orders(
+    tmp_path: Path, terminal_status: str,
+) -> None:
+    from fastapi.testclient import TestClient
+
+    from app.config import Settings
+    from app.main import create_app
+    from app.user_commerce import USER_SESSION_COOKIE
+    from app.user_console_v104_patch import install_user_console_v104_patch
+    from app.payment_channels_v106_patch import install_payment_channels_v106_patch
+
+    app = create_app(Settings(
+        CHAT2API_DATA_DIR=str(tmp_path),
+        CHAT2API_API_KEY="v107-usdt-terminal-submit-master",
+    ))
+    install_user_console_v104_patch(app)
+    install_payment_channels_v106_patch(app)
+    accounts = app.state.user_accounts
+    billing = app.state.user_billing
+    user = accounts.register(
+        f"usdt-terminal-{terminal_status}@example.com",
+        "valid-password-123",
+    )
+    user_id = str(user["user_id"])
+    order = billing.create_order(user_id, 125, "usdt")
+    with billing.lock:
+        billing.orders[order["order_id"]]["status"] = terminal_status
+        billing._save()
+
+    session = accounts.create_session(user_id)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        client.cookies.set(USER_SESSION_COOKIE, session)
+        response = client.post(
+            f"/api/user/payments/v106/usdt/{order['order_id']}/txid",
+            json={"txid": "d" * 64},
+        )
+
+    assert response.status_code == 409, response.text
+    assert billing.orders[order["order_id"]]["status"] == terminal_status
+    assert billing.orders[order["order_id"]]["txid"] == ""
+    assert billing.balance_cents(user_id) == 0
+
+
+@pytest.mark.parametrize("initial_status", ["pending", "reviewing"])
+def test_usdt_txid_submission_keeps_open_orders_reviewable(
+    tmp_path: Path, initial_status: str,
+) -> None:
+    from fastapi.testclient import TestClient
+
+    from app.config import Settings
+    from app.main import create_app
+    from app.user_commerce import USER_SESSION_COOKIE
+    from app.user_console_v104_patch import install_user_console_v104_patch
+    from app.payment_channels_v106_patch import install_payment_channels_v106_patch
+
+    app = create_app(Settings(
+        CHAT2API_DATA_DIR=str(tmp_path),
+        CHAT2API_API_KEY="v107-usdt-open-submit-master",
+    ))
+    install_user_console_v104_patch(app)
+    install_payment_channels_v106_patch(app)
+    accounts = app.state.user_accounts
+    billing = app.state.user_billing
+    user = accounts.register(
+        f"usdt-open-{initial_status}@example.com",
+        "valid-password-123",
+    )
+    user_id = str(user["user_id"])
+    order = billing.create_order(user_id, 125, "usdt")
+    with billing.lock:
+        row = billing.orders[order["order_id"]]
+        row["status"] = initial_status
+        if initial_status == "reviewing":
+            row["txid"] = "e" * 64
+        billing._save()
+
+    session = accounts.create_session(user_id)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        client.cookies.set(USER_SESSION_COOKIE, session)
+        response = client.post(
+            f"/api/user/payments/v106/usdt/{order['order_id']}/txid",
+            json={"txid": "d" * 64},
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["order"]["status"] == "reviewing"
+    assert response.json()["order"]["txid"] == "d" * 64
+
