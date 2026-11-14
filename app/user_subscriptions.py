@@ -253,6 +253,7 @@ class UserSubscriptionStore:
 
     def history_for_user(self, user_id: str) -> list[dict[str, Any]]:
         wanted = str(user_id or "").strip()
+        now = _now()
         with self.lock:
             rows = self.db.execute(
                 """SELECT subscription_id,user_id,plan_id,status,starts_at,expires_at,
@@ -261,7 +262,13 @@ class UserSubscriptionStore:
                    ORDER BY created_at DESC,subscription_id DESC""",
                 (wanted,),
             ).fetchall()
-        return [self._subscription_row(row) for row in rows]
+        history = []
+        for row in rows:
+            item = self._subscription_row(row)
+            if item["status"] == "active" and item["expires_at"] and item["expires_at"] <= now:
+                item["status"] = "expired"
+            history.append(item)
+        return history
 
     def cancel_active(self, user_id: str) -> int:
         wanted = str(user_id or "").strip()
