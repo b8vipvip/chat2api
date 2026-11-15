@@ -135,3 +135,22 @@ def test_disabling_a_plan_immediately_removes_its_effective_entitlement(tmp_path
     )
     store.upsert_plan("pro", "Pro", enabled=True)
     assert store.current_plan_for_user("usr_customer123")["plan_id"] == "free"
+
+
+@pytest.mark.parametrize("expires_at", [None, "2099-01-01T00:00:00Z"])
+def test_identical_subscription_assignment_is_idempotent(tmp_path: Path, expires_at: str | None):
+    store = UserSubscriptionStore(tmp_path)
+    store.upsert_plan("pro", "Pro", enabled=True)
+
+    first = store.assign(
+        "usr_abcdef123", "pro", expires_at=expires_at, assigned_by="billing-admin",
+    )
+    retried = store.assign(
+        "usr_abcdef123", "pro", expires_at=expires_at, assigned_by="billing-admin",
+    )
+
+    assert retried == first
+    history = store.history_for_user("usr_abcdef123")
+    assert len(history) == 1
+    assert history[0]["subscription_id"] == first["subscription_id"]
+    store.close()
