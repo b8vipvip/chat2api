@@ -1040,10 +1040,20 @@ class BillingStore:
                 # admission. The FX rate is likewise immutable for this request.
                 fx = float(reservation.get("usd_cny_rate") or 0)
                 catalog = reservation.get("price_catalog_snapshot")
-                candidate = (
-                    catalog.get(_pricing_model_key(model_id))
-                    if isinstance(catalog, dict) else None
-                )
+                # New snapshots preserve exact model IDs because aliases such
+                # as gpt-5.6 and gpt-5.6-sol may have independent prices.
+                catalog_key = str(model_id or "").strip().casefold()
+                candidate = catalog.get(catalog_key) if isinstance(catalog, dict) else None
+                if not isinstance(candidate, dict) and isinstance(catalog, dict):
+                    # Older reservations used canonicalized keys. Only accept a
+                    # legacy row when its stored model ID is an exact match;
+                    # otherwise the old snapshot lost alias identity.
+                    legacy_candidate = catalog.get(_pricing_model_key(model_id))
+                    if (
+                        isinstance(legacy_candidate, dict)
+                        and str(legacy_candidate.get("model_id") or "").strip().casefold() == catalog_key
+                    ):
+                        candidate = legacy_candidate
                 if isinstance(candidate, dict):
                     if candidate.get("enabled", True) is not True:
                         # A disabled actual model is not permission to charge
@@ -1054,8 +1064,8 @@ class BillingStore:
                 else:
                     observed_model_id = actual_model_id or requested_model_id or reserved_model
                     if (
-                        _pricing_model_key(observed_model_id)
-                        != _pricing_model_key(reserved_model)
+                        str(observed_model_id or "").strip().casefold()
+                        != str(reserved_model or "").strip().casefold()
                     ):
                         # The Worker served a model that was not in the
                         # admission-time catalog. Never substitute the
