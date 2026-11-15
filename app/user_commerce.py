@@ -8,6 +8,7 @@ import math
 import os
 import re
 import secrets
+import stat
 import threading
 import time
 from pathlib import Path
@@ -72,18 +73,45 @@ def _now() -> str:
 
 
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
+    """Atomically persist private JSON without a world-readable temp window."""
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{secrets.token_hex(6)}.tmp")
-    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    serialized = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(temporary, flags, 0o600)
     try:
-        os.chmod(temporary, 0o600)
-    except OSError:
-        pass
-    temporary.replace(path)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = -1
+            handle.write(serialized)
+            handle.flush()
+            os.fsync(handle.fileno())
+        # The file already has mode 0600 from creation. Rename preserves its
+        # mode; never perform a fallible permission change after commit.
+        os.replace(temporary, path)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        temporary.unlink(missing_ok=True)
+
+
+def _read_json_private(path: Path) -> Any:
+    """Read a single-link regular JSON file and repair legacy POSIX mode bits."""
+    if path.is_symlink():
+        raise ValueError("private JSON storage cannot be a symbolic link")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
     try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
+        metadata = os.fstat(fd)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise ValueError("private JSON storage must be a single-link regular file")
+        if os.name != "nt" and hasattr(os, "fchmod"):
+            os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "r", encoding="utf-8") as handle:
+            fd = -1
+            return json.load(handle)
+    finally:
+        if fd >= 0:
+            os.close(fd)
 
 
 def _token_hash(value: str) -> str:
@@ -122,7 +150,7 @@ class UserAccountStore:
         if not self.path.exists():
             return
         try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
+            payload = _read_json_private(self.path)
             if not isinstance(payload, dict):
                 raise ValueError("user account store must be an object")
             version = payload.get("version", USER_COMMERCE_VERSION)
@@ -582,7 +610,7 @@ class PricingStore:
             self._save()
             return
         try:
-            raw = json.loads(self.path.read_text(encoding="utf-8"))
+            raw = _read_json_private(self.path)
             if not isinstance(raw, dict):
                 raise ValueError("pricing configuration root must be an object")
             candidate = copy.deepcopy(self.payload)
@@ -699,7 +727,7 @@ class BillingStore:
         if not self.path.exists():
             return
         try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
+            payload = _read_json_private(self.path)
             if not isinstance(payload, dict):
                 raise ValueError("billing ledger root must be an object")
             # Version 1 is the only supported on-disk schema. Missing version
@@ -1630,7 +1658,7 @@ class PaymentConfigStore:
             self._save()
             return
         try:
-            raw = json.loads(self.path.read_text(encoding="utf-8"))
+            raw = _read_json_private(self.path)
             if not isinstance(raw, dict):
                 raise ValueError("payment configuration must be an object")
             candidate = {**self.payload, **raw}
