@@ -305,10 +305,10 @@ class RequestBroker:
         if not state:
             return False
         event_type = event.get("type")
-        if state.terminal_event_type is not None:
-            # Ignore EVERY event after the first terminal. In particular a late
-            # error must not overturn completion, and a second completion must
-            # not enter the stream queue after the first final frame.
+        if state.terminal_event_type is not None or state.completed_mono is not None:
+            # Ignore EVERY event after a Worker terminal or a server-owned
+            # terminal cutoff (for example, an API timeout). A late Worker
+            # completion must not overturn an already finalized API response.
             return False
         now = time.perf_counter()
         if event_type in {"chat.diagnostics", "image.diagnostics"}:
