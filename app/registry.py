@@ -339,6 +339,8 @@ class ClientRegistry:
                     or expected_socket is None
                     or str(getattr(state, "client_id", "") or "") != client_id
                     or websocket is not expected_socket
+                    or getattr(state, "terminal_event_type", None) is not None
+                    or getattr(state, "completed_mono", None) is not None
                 ):
                     raise RuntimeError("Request Worker connection changed or is unavailable")
                 websocket = expected_socket
