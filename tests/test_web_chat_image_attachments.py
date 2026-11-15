@@ -153,7 +153,7 @@ def test_user_image_preview_rejects_invalid_raster_bytes(tmp_path: Path) -> None
         assert preview.status_code == 415
         assert preview.headers["cache-control"] == "private, no-store"
 
-def test_legacy_file_index_backfills_sha256_on_first_read(tmp_path: Path) -> None:
+def test_legacy_file_index_backfills_sha256_during_load(tmp_path: Path) -> None:
     import asyncio
     import hashlib
     import json
@@ -189,13 +189,15 @@ def test_legacy_file_index_backfills_sha256_on_first_read(tmp_path: Path) -> Non
         index_path.write_text(json.dumps(index), encoding="utf-8")
         asyncio.run(app.state.file_store.load())
         legacy_item = app.state.file_store.get(file_id)
-        assert legacy_item is not None and legacy_item.sha256 == ""
+        digest = hashlib.sha256(payload).hexdigest()
+        assert legacy_item is not None and legacy_item.sha256 == digest
+        migrated = json.loads(index_path.read_text(encoding="utf-8"))
+        migrated_row = next(row for row in migrated["files"] if row["file_id"] == file_id)
+        assert migrated_row["sha256"] == digest
 
         preview = client.get(f"/api/user/files/{file_id}/content")
         assert preview.status_code == 200
-        digest = hashlib.sha256(payload).hexdigest()
         assert preview.headers["x-chat2api-content-sha256"] == digest
-        assert legacy_item.sha256 == digest
         persisted = json.loads(index_path.read_text(encoding="utf-8"))
         stored_row = next(row for row in persisted["files"] if row["file_id"] == file_id)
         assert stored_row["sha256"] == digest

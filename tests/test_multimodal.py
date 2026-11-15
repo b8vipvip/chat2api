@@ -23,6 +23,20 @@ def settings(tmp_path: Path) -> Settings:
     )
 
 
+def _png_bytes() -> bytes:
+    output = io.BytesIO()
+    Image.new("RGB", (2, 2), (30, 120, 90)).save(output, format="PNG")
+    return output.getvalue()
+
+
+def _error_message(response) -> str:
+    payload = response.json()
+    error = payload.get("error") if isinstance(payload, dict) else None
+    if isinstance(error, dict) and error.get("message"):
+        return str(error["message"])
+    return str(payload.get("detail") or "")
+
+
 def admin_headers() -> dict[str, str]:
     return {"Authorization": "Bearer master-key"}
 

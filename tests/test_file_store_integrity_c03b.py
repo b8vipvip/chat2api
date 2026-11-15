@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from app.file_store import FileStore
+from app.file_store import FileIntegrityError, FileStore
 
 
 def _create(store: FileStore):
@@ -259,5 +259,5 @@ def test_file_store_read_rejects_same_size_content_tampering(tmp_path):
     # detect the modified bytes.
     stored_path.write_bytes(b"x" * item.size)
 
-    with pytest.raises(FileNotFoundError, match="digest"):
+    with pytest.raises(FileIntegrityError, match="digest"):
         store.read(item.file_id)

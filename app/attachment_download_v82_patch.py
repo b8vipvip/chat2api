@@ -6,6 +6,8 @@ from urllib.parse import quote
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import Response
 
+from .file_store import FileIntegrityError
+
 
 ATTACHMENT_DOWNLOAD_REVISION = 83
 _EXTENSION_FILE_PATH = "/api/extensions/files/{file_id}"
@@ -91,6 +93,8 @@ def install_attachment_download_v82_patch(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=404, detail="Unknown attachment")
         try:
             item, payload = file_store.read(file_id)
+        except FileIntegrityError as error:
+            raise HTTPException(status_code=503, detail="Stored file content failed integrity verification") from error
         except KeyError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except FileNotFoundError as error:

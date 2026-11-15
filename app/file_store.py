@@ -54,6 +54,10 @@ class StoredFile:
         }
 
 
+class FileIntegrityError(OSError):
+    """Stored bytes do not match the authoritative file-index digest."""
+
+
 class FileStore:
     def __init__(self, data_dir: Path, max_file_bytes: int = 20 * 1024 * 1024) -> None:
         self.root = data_dir / "files"
@@ -351,7 +355,7 @@ class FileStore:
                     raise FileNotFoundError("Stored file content is incomplete")
                 digest = hashlib.sha256(payload).hexdigest()
                 if not secrets.compare_digest(digest, item.sha256):
-                    raise FileNotFoundError("Stored file content digest does not match the index")
+                    raise FileIntegrityError("Stored file content digest does not match the index")
                 return item, payload
             finally:
                 if fd >= 0:

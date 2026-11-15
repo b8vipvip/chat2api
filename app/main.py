@@ -30,7 +30,7 @@ from .terminal_archive_singleflight_v277 import archive_once
 from .mixed_media_archive_v280 import archive_mixed_reply
 from .archive_write_stop_v280 import ArchiveWriteStop
 from .config import Settings, get_settings
-from .file_store import FileStore
+from .file_store import FileIntegrityError, FileStore
 from .media_archive_v173 import MediaArchive
 from .mode_management import ModeManagementError, ModeManagementStore
 from .mode_resolver import ModeResolverMiddleware
@@ -1087,6 +1087,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Unknown attachment")
         try:
             item, payload = file_store.read(file_id)
+        except FileIntegrityError as error:
+            raise HTTPException(status_code=503, detail="Stored file content failed integrity verification") from error
         except KeyError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except FileNotFoundError as error:
@@ -2454,6 +2456,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Invalid request media")
         try:
             item, payload = file_store.read(file_id)
+        except FileIntegrityError as error:
+            raise HTTPException(status_code=503, detail="Archived image integrity check failed") from error
         except (KeyError, FileNotFoundError) as error:
             raise HTTPException(status_code=404, detail="Archived image is no longer available") from error
         return Response(
