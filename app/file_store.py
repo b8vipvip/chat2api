@@ -5,6 +5,7 @@ import json
 import mimetypes
 import re
 import secrets
+import threading
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any
@@ -52,6 +53,10 @@ class FileStore:
         self.index_path = self.root / "index.json"
         self.max_file_bytes = max_file_bytes
         self.items: dict[str, StoredFile] = {}
+        # The JSON index is a single snapshot file. Serialize every catalog
+        # mutation and read/delete boundary so concurrent uploads cannot race
+        # on the shared temp path or publish a stale snapshot over newer files.
+        self.lock = threading.RLock()
 
     async def load(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -97,20 +102,29 @@ class FileStore:
             # Publish only after the entire index has been validated. A corrupt
             # row must never turn the authoritative file catalog into an empty
             # in-memory store while leaving the original index on disk.
-            self.items = loaded
+            with self.lock:
+                self.items = loaded
         except (OSError, ValueError, TypeError, KeyError, UnicodeError) as error:
             raise RuntimeError(
                 "File index is corrupt or unreadable; refusing to discard file metadata"
             ) from error
 
     def save_index(self) -> None:
-        self.root.mkdir(parents=True, exist_ok=True)
-        temp = self.index_path.with_suffix(".tmp")
-        temp.write_text(
-            json.dumps({"files": [asdict(item) for item in self.items.values()]}, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        temp.replace(self.index_path)
+        with self.lock:
+            self.root.mkdir(parents=True, exist_ok=True)
+            # Keep a unique temp path as an additional guard for callers that
+            # may invoke save_index outside the normal mutation methods.
+            temp = self.index_path.with_name(
+                f".{self.index_path.name}.{secrets.token_hex(8)}.tmp"
+            )
+            try:
+                temp.write_text(
+                    json.dumps({"files": [asdict(item) for item in self.items.values()]}, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                temp.replace(self.index_path)
+            finally:
+                temp.unlink(missing_ok=True)
 
     def _decode(self, data_base64: str, mime_type: str | None) -> tuple[bytes, str]:
         raw = str(data_base64 or "").strip()
@@ -163,70 +177,72 @@ class FileStore:
             path=disk_name,
             purpose=purpose,
         )
-        self.items[file_id] = item
-        try:
-            self.save_index()
-        except Exception:
-            self.items.pop(file_id, None)
+        with self.lock:
+            self.items[file_id] = item
             try:
-                path.unlink(missing_ok=True)
-            except OSError:
-                # Keep the original persistence error; an unindexed orphan can
-                # be safely cleaned up without exposing a phantom file record.
-                pass
-            raise
+                self.save_index()
+            except Exception:
+                self.items.pop(file_id, None)
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    # Keep the original persistence error; an unindexed orphan can
+                    # be safely cleaned up without exposing a phantom file record.
+                    pass
+                raise
         return item
 
     def get(self, file_id: str) -> StoredFile | None:
-        return self.items.get(str(file_id or ""))
+        with self.lock:
+            return self.items.get(str(file_id or ""))
 
     def read(self, file_id: str) -> tuple[StoredFile, bytes]:
-        item = self.get(file_id)
-        if not item:
-            raise KeyError("Unknown file_id")
-        path = self.root / item.path
-        if not path.exists():
-            raise FileNotFoundError("Stored file content is missing")
-        return item, path.read_bytes()
+        with self.lock:
+            item = self.items.get(str(file_id or ""))
+            if not item:
+                raise KeyError("Unknown file_id")
+            path = self.root / item.path
+            if not path.exists():
+                raise FileNotFoundError("Stored file content is missing")
+            return item, path.read_bytes()
 
     async def delete(self, file_id: str, owner_key_id: str | None = None) -> None:
-        item = self.get(file_id)
-        if not item:
-            raise KeyError("Unknown file_id")
-        # "master" is a privileged owner namespace, not a shared-file marker.
-        # Only an explicitly privileged caller (None or "master" at this
-        # boundary) may delete master-owned files; ordinary API keys must own
-        # the exact file, matching the read/metadata endpoint contract.
-        if owner_key_id is not None and owner_key_id != "master" and item.owner_key_id != owner_key_id:
-            raise PermissionError("File belongs to another API key")
+        with self.lock:
+            item = self.items.get(str(file_id or ""))
+            if not item:
+                raise KeyError("Unknown file_id")
+            # "master" is a privileged owner namespace, not a shared-file marker.
+            # Only an explicitly privileged caller (None or "master") may delete
+            # master-owned files; ordinary API keys must own the exact file.
+            if owner_key_id is not None and owner_key_id != "master" and item.owner_key_id != owner_key_id:
+                raise PermissionError("File belongs to another API key")
 
-        path = self.root / item.path
-        moved_path: Path | None = None
-        # Rename first so a failed index commit can restore the original bytes
-        # atomically without buffering an upload-sized file in memory.
-        if path.exists() or path.is_symlink():
-            moved_path = path.with_name(f".{path.name}.{secrets.token_hex(6)}.delete")
-            path.replace(moved_path)
+            path = self.root / item.path
+            moved_path: Path | None = None
+            # Rename first so a failed index commit can restore the original bytes
+            # atomically without buffering an upload-sized file in memory.
+            if path.exists() or path.is_symlink():
+                moved_path = path.with_name(f".{path.name}.{secrets.token_hex(6)}.delete")
+                path.replace(moved_path)
 
-        self.items.pop(file_id, None)
-        try:
-            self.save_index()
-        except Exception:
-            self.items[file_id] = item
-            if moved_path is not None and (moved_path.exists() or moved_path.is_symlink()):
-                try:
-                    moved_path.replace(path)
-                except OSError as restore_error:
-                    raise RuntimeError(
-                        "File index update failed and the original file could not be restored"
-                    ) from restore_error
-            raise
-
-        # The index commit is the logical deletion point. If cleanup of the
-        # private tombstone fails, leave an unindexed orphan for offline cleanup
-        # rather than resurrecting an entry whose deletion already committed.
-        if moved_path is not None:
+            self.items.pop(file_id, None)
             try:
-                moved_path.unlink(missing_ok=True)
-            except OSError:
-                pass
+                self.save_index()
+            except Exception:
+                self.items[file_id] = item
+                if moved_path is not None and (moved_path.exists() or moved_path.is_symlink()):
+                    try:
+                        moved_path.replace(path)
+                    except OSError as restore_error:
+                        raise RuntimeError(
+                            "File index update failed and the original file could not be restored"
+                        ) from restore_error
+                raise
+
+            # The index commit is the logical deletion point. If cleanup of the
+            # private tombstone fails, leave an unindexed orphan for offline cleanup.
+            if moved_path is not None:
+                try:
+                    moved_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
