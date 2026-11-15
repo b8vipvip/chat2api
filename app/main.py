@@ -1093,6 +1093,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except FileNotFoundError as error:
             raise HTTPException(status_code=410, detail=str(error)) from error
+        except OSError as error:
+            raise HTTPException(status_code=503, detail="Stored file content is temporarily unavailable") from error
         return Response(
             payload,
             media_type=item.mime_type,
@@ -2460,6 +2462,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=503, detail="Archived image integrity check failed") from error
         except (KeyError, FileNotFoundError) as error:
             raise HTTPException(status_code=404, detail="Archived image is no longer available") from error
+        except OSError as error:
+            raise HTTPException(status_code=503, detail="Archived image storage is temporarily unavailable") from error
         return Response(
             content=payload, media_type=item.mime_type,
             headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
