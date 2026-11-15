@@ -307,12 +307,16 @@ class ClientRegistry:
         lock = self.socket_locks.setdefault(client_id, asyncio.Lock())
         async with lock:
             if request_type in {
-                "chat.request", "image.request", "voice.request", "voice.live.multimodal",
+                "chat.request", "image.request", "voice.request",
+                "voice.live.start", "voice.live.request",
             }:
                 request_id = str(payload.get("request_id") or "")
                 broker = getattr(self, "request_broker", None)
                 state = getattr(broker, "requests", {}).get(request_id) if broker else None
-                if state is not None:
+                # Bind the request to the socket that received its initial
+                # dispatch. Follow-up Live multimodal turns must not rebind a
+                # session to a replacement socket after reconnect.
+                if state is not None and state.dispatch_socket is None:
                     state.dispatch_socket = websocket
             await websocket.send_json(payload)
 
