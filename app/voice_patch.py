@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import secrets
 import time
@@ -17,7 +18,9 @@ from .api_keys import ApiPrincipal
 from . import model_capability_routing_patch as model_routing
 from .token_usage import usage_for
 from .prompt_config import build_speech_prompt
+from .quota_reservation_runtime_v1 import reserve_audio_request_quota
 
+logger = logging.getLogger(__name__)
 PATCH_VERSION = "0.6.0"
 
 
@@ -190,6 +193,48 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
             state = await broker.create(request_id, selected_client)
         except RuntimeError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+
+        quota_reservation = None
+        if request_type in {"voice_generation", "voice_conversation"}:
+            try:
+                quota_reservation = reserve_audio_request_quota(
+                    app, request_id, principal, prompt,
+                )
+            except HTTPException as quota_error:
+                state.completed_mono = time.perf_counter()
+                state.diagnostics["quota_reservation_v1"] = {
+                    "state": "rejected",
+                    "http_status": quota_error.status_code,
+                    "estimate_policy": "text_input_tokens_plus_4096_audio_admission_floor_v1",
+                }
+                try:
+                    await record_voice(
+                        request_id=request_id, response_id=response_id, client_id=selected_client,
+                        principal=principal, model=model, request_type=request_type, prompt=prompt,
+                        transcript="", state=state, status_value="error",
+                        error=str(quota_error.detail),
+                    )
+                except Exception as telemetry_error:
+                    logger.warning(
+                        "Voice quota rejection could not be persisted request_id=%s error_type=%s",
+                        request_id, type(telemetry_error).__name__,
+                    )
+                try:
+                    await broker.release(request_id)
+                except Exception as release_error:
+                    logger.warning(
+                        "Voice quota rejection broker release failed request_id=%s error_type=%s",
+                        request_id, type(release_error).__name__,
+                    )
+                raise
+
+            if quota_reservation:
+                state.diagnostics["quota_reservation_v1"] = {
+                    "state": "reserved",
+                    "reserved_tokens": int(quota_reservation.get("reserved_tokens") or 0),
+                    "estimate_policy": "text_input_tokens_plus_4096_audio_admission_floor_v1",
+                    "provider_usage_verified": False,
+                }
         registry.busy_clients.add(selected_client)
         if prompt_policy:
             state.diagnostics.update(prompt_policy)
@@ -293,6 +338,16 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=502, detail=str(error)) from error
         finally:
             registry.busy_clients.discard(selected_client)
+            if quota_reservation:
+                current = telemetry.get(request_id)
+                if str((current or {}).get("status") or "") != "completed":
+                    try:
+                        app.state.quota_reservations.release(request_id, principal.key_id)
+                    except Exception as release_error:
+                        logger.warning(
+                            "Voice quota reservation cleanup deferred request_id=%s error_type=%s",
+                            request_id, type(release_error).__name__,
+                        )
             await broker.release(request_id)
 
     @app.post("/v1/audio/speech")
