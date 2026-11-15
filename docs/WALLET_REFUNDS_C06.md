@@ -58,7 +58,6 @@ the Control Plane maps this route to `billing:write`. Caller body:
   values, total must equal input plus output, and cached input must be a
   bounded subset. Missing or inconsistent usage leaves the hold reserved
   for later terminal replay.
-- Request IDs are single-use admission identities. A second dispatch using an active, settled, released or expired ID returns HTTP 409; idempotency is limited to replaying the original usage/accounting projection and never creates a second Worker dispatch.
 - Each priced admission snapshots the complete model price catalog and the
   USD/CNY rate. Settlement selects the actual served model from that immutable
   catalog; if it was not present at admission, it falls back to the
@@ -164,6 +163,12 @@ the Control Plane maps this route to `billing:write`. Caller body:
   overwriting the source file, and failed config writes restore the previous
   in-memory state. This path continues to use its existing `data_secret`
   cipher; it is not a DataKeyring migration or key rotation.
+- The user-account ownership store also fails closed on malformed or
+  unsupported ledgers, invalid account/session rows, duplicate account emails
+  and cross-user API-key ownership. It preserves the source file for recovery;
+  account registration, key attachment, profile changes, session creation/
+  revocation, expiry cleanup and account disablement restore their prior
+  in-memory state if persistence fails.
 - Keep this PR Draft until exact-head CI, image smoke, SDK contract,
   admin review, stacked dependency resolution and production
   acceptance are explicitly complete.
