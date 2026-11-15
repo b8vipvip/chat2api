@@ -60,8 +60,8 @@ def test_voice_request_binds_the_current_worker_socket_for_scoped_file_download(
 
     registry = ClientRegistry(tmp_path)
     socket = FakeSocket()
-    state = SimpleNamespace(dispatch_socket=None)
-    live_state = SimpleNamespace(dispatch_socket=None)
+    state = SimpleNamespace(dispatch_socket=None, client_id="ext_voice_worker")
+    live_state = SimpleNamespace(dispatch_socket=None, client_id="ext_voice_worker")
     registry.sockets["ext_voice_worker"] = socket
     registry.socket_locks["ext_voice_worker"] = asyncio.Lock()
     registry.request_broker = SimpleNamespace(requests={
