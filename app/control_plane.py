@@ -87,8 +87,12 @@ def permission_for_admin_route(path: str, method: str) -> str | None:
         r"/api/admin/subscription-plans/[^/]+", path
     ) or re.fullmatch(r"/api/admin/users/[^/]+/subscription", path):
         return "billing:" + suffix
+    if re.fullmatch(r"/api/admin/users/[^/]+/keys(?:/[^/]+)?", path):
+        # API-key metadata is a separate privilege from user-directory access.
+        # A delegated user_admin must not inherit key enumeration or mutation.
+        return "keys:" + suffix
     if path == "/api/admin/users" or re.fullmatch(
-        r"/api/admin/users/[^/]+(?:/sessions/revoke|/keys(?:/[^/]+)?)?", path
+        r"/api/admin/users/[^/]+(?:/sessions/revoke)?", path
     ):
         return "users:" + suffix
     if re.fullmatch(r"/api/admin/keys/[^/]+/secret", path):
