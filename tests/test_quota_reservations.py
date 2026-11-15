@@ -9,6 +9,7 @@ import pytest
 
 from app.quota_reservations import (
     QuotaExceeded,
+    QuotaReservationConflict,
     QuotaReservationError,
     QuotaReservationStore,
 )
@@ -49,13 +50,14 @@ def completed(request_id="req_1", tokens=35):
     }
 
 
-def test_reservations_are_idempotent_and_accounting_owner_stays_api_key_store(tmp_path: Path):
+def test_admission_is_one_shot_and_accounting_owner_stays_api_key_store(tmp_path: Path):
     store = QuotaReservationStore(tmp_path)
     first = store.reserve("req_1", "key_1", 20, quota_limit=100, completed_tokens=0)
-    duplicate = store.reserve("req_1", "key_1", 99, quota_limit=100, completed_tokens=0)
-    assert first["reserved_tokens"] == duplicate["reserved_tokens"] == 20
+    with pytest.raises(QuotaReservationConflict, match="already been admitted"):
+        store.reserve("req_1", "key_1", 99, quota_limit=100, completed_tokens=0)
+    assert first["reserved_tokens"] == 20
     assert store.active_reserved_tokens("key_1") == 20
-    with pytest.raises(QuotaReservationError, match="another API key"):
+    with pytest.raises(QuotaReservationConflict, match="another API key"):
         store.reserve("req_1", "key_2", 1, quota_limit=100, completed_tokens=0)
 
     api_keys = FakeApiKeys()
@@ -66,6 +68,8 @@ def test_reservations_are_idempotent_and_accounting_owner_stays_api_key_store(tm
     assert store.get("req_1")["state"] == "settled"
     assert store.get("req_1")["reserved_tokens"] == 35
     assert store.active_reserved_tokens("key_1") == 0
+    with pytest.raises(QuotaReservationConflict, match="already been admitted"):
+        store.reserve("req_1", "key_1", 1, quota_limit=100, completed_tokens=35)
 
     # Rewritten terminal usage can increase an existing idempotent charge only
     # by the delta, never charge the same request twice.
