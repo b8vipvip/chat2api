@@ -13,6 +13,7 @@ import json
 import os
 import re
 import secrets
+import stat
 import threading
 import uuid
 from pathlib import Path
@@ -151,8 +152,20 @@ class ControlPlaneStore:
             raise ControlPlaneError("Control-plane storage cannot be a symbolic link")
         if not self.path.exists():
             return
+        fd = -1
         try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(self.path, flags)
+            metadata = os.fstat(fd)
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                raise ValueError("control-plane storage must be a single-link regular file")
+            if os.name != "nt" and hasattr(os, "fchmod"):
+                # Repair legacy permissions through the opened descriptor so
+                # a path swap cannot redirect chmod to another file.
+                os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "r", encoding="utf-8") as handle:
+                fd = -1
+                payload = json.load(handle)
             if not isinstance(payload, dict) or payload.get("version") != POLICY_VERSION:
                 raise ValueError("unsupported control-plane schema")
             client = payload["client"]
@@ -182,6 +195,9 @@ class ControlPlaneStore:
             self.client = dict(client)
         except (OSError, ValueError, KeyError, TypeError) as exc:
             raise ControlPlaneError("Control-plane storage is corrupt or unreadable; refusing to reset") from exc
+        finally:
+            if fd >= 0:
+                os.close(fd)
 
     def _save(self) -> None:
         payload = {"version": POLICY_VERSION, "client": self.client, "admins": list(self.admins.values())}
@@ -196,8 +212,11 @@ class ControlPlaneStore:
                 file.write("\n")
                 file.flush()
                 os.fsync(file.fileno())
+            # The temporary file is created with mode 0600. Rename
+            # preserves that mode; do not perform a fallible chmod after the
+            # atomic commit point or callers could roll memory back while disk
+            # already contains the new policy snapshot.
             os.replace(tmp, self.path)
-            os.chmod(self.path, 0o600)
         finally:
             tmp.unlink(missing_ok=True)
 
