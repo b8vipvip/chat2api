@@ -117,6 +117,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await registry.load()
         await telemetry.load()
         await api_keys.load()
+        recovered_queued = await telemetry.recover_queued_after_restart(set(broker.requests))
+        if recovered_queued:
+            logger.warning(
+                "Recovered %s queued request(s) from the previous process as stalled",
+                recovered_queued,
+            )
         quota_store = getattr(app.state, "quota_reservations", None)
         if quota_store is not None and getattr(app.state, "quota_reservation_runtime_enabled", False):
             # Recover terminal telemetry before expiring old reservations.
