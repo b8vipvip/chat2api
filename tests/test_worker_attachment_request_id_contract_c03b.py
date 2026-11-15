@@ -50,7 +50,6 @@ def test_worker_decodes_percent_utf8_attachment_filename_header() -> None:
     background = (ROOT / "chrome_extension/background.js").read_text(encoding="utf-8")
 
     assert headers["X-Chat2API-Filename-Encoding"] == "percent-utf8"
-    assert re.sub(r"%([0-9A-Fa-f]{2})", lambda match: chr(int(match.group(1), 16)), "") == ""
     from urllib.parse import unquote
 
     assert unquote(headers["X-Chat2API-Filename"], encoding="utf-8") == filename
