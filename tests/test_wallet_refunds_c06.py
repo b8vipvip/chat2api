@@ -791,3 +791,40 @@ def test_wallet_ledger_preserves_valid_negative_integer_debt_balance(tmp_path: P
         encoding="utf-8",
     )
     assert BillingStore(tmp_path).balance_cents("usr_debt") == -125
+
+
+
+def test_reused_request_id_returns_conflict_without_releasing_original_holds(tmp_path: Path) -> None:
+    from fastapi import HTTPException
+    from app.quota_reservation_runtime_v1 import reserve_request_quota
+    from app.quota_reservations import QuotaReservationStore
+
+    app, billing, _pricing = _runtime_wallet(
+        tmp_path, billing_enabled=True, models=[_price_row("paid-model", 10_000.0)],
+    )
+    item = SimpleNamespace(
+        token_quota=100_000, tokens_used=0,
+        public=lambda: {"enabled": True},
+    )
+    app.state.api_keys = SimpleNamespace(keys={"key-managed": item})
+    app.state.quota_reservations = QuotaReservationStore(tmp_path)
+    app.state.quota_reservation_runtime_enabled = True
+    principal = SimpleNamespace(kind="managed", key_id="key-managed")
+
+    first = reserve_request_quota(
+        app, "req_reused_quota_id", principal, "prompt", 4096, model_id="paid-model",
+    )
+    assert first is not None
+    assert app.state.quota_reservations.get("req_reused_quota_id")["state"] == "reserved"
+    assert billing.active_reservations_for_user("usr_admission_snapshot")
+
+    with pytest.raises(HTTPException) as conflict:
+        reserve_request_quota(
+            app, "req_reused_quota_id", principal, "different prompt", 8192,
+            model_id="paid-model",
+        )
+
+    assert conflict.value.status_code == 409
+    assert conflict.value.detail["code"] == "request_id_conflict"
+    assert app.state.quota_reservations.get("req_reused_quota_id")["state"] == "reserved"
+    assert len(billing.active_reservations_for_user("usr_admission_snapshot")) == 1
