@@ -11,7 +11,6 @@ from .quota_reservations import QuotaExceeded, QuotaReservationConflict, QuotaRe
 from .token_usage import usage_for
 from .user_commerce import (
     InsufficientWalletBalance, WalletReservationConflict, WalletReservationError,
-    _pricing_model_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -119,7 +118,9 @@ def reserve_wallet_charge(
         for row in config.get("models") or []:
             if not isinstance(row, dict):
                 continue
-            key = _pricing_model_key(row.get("model_id"))
+            # Preserve exact model IDs: gpt-5.6 and gpt-5.6-sol can
+            # intentionally carry different administrator-configured prices.
+            key = str(row.get("model_id") or "").strip().casefold()
             if key:
                 catalog_snapshot.setdefault(key, dict(row))
         return billing.reserve_for_request(
