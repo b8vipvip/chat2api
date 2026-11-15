@@ -82,3 +82,18 @@ def test_corrupt_file_index_fails_closed_and_rejects_path_traversal(tmp_path):
 
     assert store.index_path.read_bytes() == original
     assert store.items == {}
+
+
+
+def test_create_removes_phantom_file_when_index_commit_fails(tmp_path, monkeypatch):
+    store = FileStore(tmp_path)
+
+    def fail_index_save():
+        raise OSError("simulated file index write failure")
+
+    monkeypatch.setattr(store, "save_index", fail_index_save)
+    with pytest.raises(OSError, match="file index write failure"):
+        _create(store)
+
+    assert store.items == {}
+    assert not list(store.root.glob("file_*"))
