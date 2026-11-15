@@ -202,6 +202,44 @@ def test_actual_model_missing_from_admission_catalog_keeps_hold_for_reconciliati
     assert restarted.balance_cents("usr_price_fallback") == 10_000
 
 
+def test_disabled_actual_model_does_not_fall_back_to_requested_price(tmp_path: Path) -> None:
+    pricing = PricingStore(tmp_path)
+    requested = _price_row("requested-model", 10_000.0)
+    disabled = _price_row("disabled-served-model", 20_000.0)
+    disabled["enabled"] = False
+    pricing.update(billing_enabled=True, usd_cny_rate=7.0, models=[requested, disabled])
+    billing = BillingStore(tmp_path)
+    billing.credit("usr_disabled_actual", 10_000)
+    catalog = {
+        row["model_id"]: dict(row) for row in pricing.public()["models"]
+    }
+    billing.reserve_for_request(
+        "usr_disabled_actual", "req_disabled_actual",
+        model_id="requested-model", estimated_cny_cents=2_000,
+        input_tokens=100, output_tokens=4096,
+        price_snapshot=pricing.model("requested-model") or {},
+        price_catalog_snapshot=catalog,
+        usd_cny_rate=7.0,
+    )
+
+    restarted = BillingStore(tmp_path)
+    charge = restarted.record_charge("usr_disabled_actual", {
+        "request_id": "req_disabled_actual",
+        "status": "completed",
+        "requested_model": "requested-model",
+        "diagnostics": {"actual_model": "disabled-served-model"},
+        "usage": {
+            "prompt_tokens": 100, "completion_tokens": 0,
+            "total_tokens": 100, "cached_input_tokens": 0, "estimated": True,
+        },
+    }, pricing)
+
+    assert charge is None
+    assert restarted.charge_for_request("req_disabled_actual") is None
+    assert restarted.reservations["req_disabled_actual"]["state"] == "reserved"
+    assert restarted.balance_cents("usr_disabled_actual") == 10_000
+
+
 def test_reserved_charge_uses_requested_snapshot_when_actual_model_evidence_is_missing(tmp_path: Path) -> None:
     pricing = PricingStore(tmp_path)
     requested = _price_row("requested-model", 10_000.0)
