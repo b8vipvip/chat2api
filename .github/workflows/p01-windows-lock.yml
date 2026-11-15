@@ -1,0 +1,29 @@
+name: P-01 Windows runtime lock regression
+
+on:
+  pull_request:
+    paths:
+      - app/runtime_single_process_guard.py
+      - tests/test_runtime_single_process_guard.py
+      - .github/workflows/p01-windows-lock.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-lock:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install project dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Verify Windows byte-range locking and lifespan behavior
+        run: >-
+          python -m pytest -q tests/test_runtime_single_process_guard.py
+          -k "guard_exclusively or os_lock_excludes or guard_rejects_known_multi_worker
+          or hard_linked or installer_wraps or installer_reuses or fastapi_installer"
