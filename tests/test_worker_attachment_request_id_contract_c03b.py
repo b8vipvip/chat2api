@@ -60,8 +60,14 @@ def test_voice_request_binds_the_current_worker_socket_for_scoped_file_download(
 
     registry = ClientRegistry(tmp_path)
     socket = FakeSocket()
-    state = SimpleNamespace(dispatch_socket=None, client_id="ext_voice_worker")
-    live_state = SimpleNamespace(dispatch_socket=None, client_id="ext_voice_worker")
+    state = SimpleNamespace(
+        dispatch_socket=None, client_id="ext_voice_worker",
+        terminal_event_type=None, completed_mono=None,
+    )
+    live_state = SimpleNamespace(
+        dispatch_socket=None, client_id="ext_voice_worker",
+        terminal_event_type=None, completed_mono=None,
+    )
     registry.sockets["ext_voice_worker"] = socket
     registry.socket_locks["ext_voice_worker"] = asyncio.Lock()
     registry.request_broker = SimpleNamespace(requests={
@@ -122,7 +128,10 @@ def test_voice_request_binds_the_current_worker_socket_for_scoped_file_download(
     assert live_state.dispatch_socket is socket
     assert socket.sent[-1]["attachments"][0]["request_id"] == "voicereq_live_media_123"
 
-    orphan_state = SimpleNamespace(dispatch_socket=None, client_id="ext_voice_worker")
+    orphan_state = SimpleNamespace(
+        dispatch_socket=None, client_id="ext_voice_worker",
+        terminal_event_type=None, completed_mono=None,
+    )
     registry.request_broker.requests["voicereq_orphan_media_123"] = orphan_state
     with pytest.raises(RuntimeError, match="connection changed"):
         asyncio.run(registry.send("ext_voice_worker", {
@@ -131,6 +140,16 @@ def test_voice_request_binds_the_current_worker_socket_for_scoped_file_download(
             "attachments": [{"file_id": "file_orphan", "request_id": "voicereq_orphan_media_123"}],
         }))
     assert orphan_state.dispatch_socket is None
+
+    # A request that has already reached a Broker terminal cannot receive
+    # further media or cancellation commands during its release grace period.
+    live_state.terminal_event_type = "voice.live.completed"
+    with pytest.raises(RuntimeError, match="connection changed"):
+        asyncio.run(registry.send("ext_voice_worker", {
+            "type": "voice.live.audio",
+            "request_id": "voicereq_live_media_123",
+            "pcm_base64": "AA==",
+        }))
 
 
 def test_live_voice_media_grant_is_persisted_and_request_scoped_before_worker_dispatch() -> None:
