@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -70,6 +71,25 @@ def test_runtime_reserves_prompt_plus_conservative_output_floor(tmp_path: Path) 
     assert any("image_generation" in value for value in app.state.quota_reservation_runtime_coverage)
     assert "/v1/audio/speech" in app.state.quota_reservation_runtime_coverage
     assert "/v1/audio/conversations" in app.state.quota_reservation_runtime_coverage
+    store.close()
+
+
+def test_runtime_maps_reservation_store_io_failures_to_retryable_503(tmp_path: Path, monkeypatch) -> None:
+    app, store, _ = _runtime(tmp_path)
+
+    def fail_reserve(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(store, "reserve_for_key", fail_reserve)
+    with pytest.raises(HTTPException) as error:
+        reserve_request_quota(
+            app, "req_runtime_store_failure_0001",
+            SimpleNamespace(key_id="key-1"), "hello world", 4096,
+        )
+
+    assert error.value.status_code == 503
+    assert error.value.detail == "Token quota reservation service is temporarily unavailable"
+    assert store.get("req_runtime_store_failure_0001") is None
     store.close()
 
 
