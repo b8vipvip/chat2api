@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 RECOVERY_JS = ROOT / "app" / "chat_stream_recovery_v1.js"
 
 
+
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is needed for the Web Chat stream harness")
 def test_in_band_stream_failure_settles_without_recovery_polling():
     harness = r"""
@@ -36,12 +37,17 @@ const body = new ReadableStream({
   },
 });
 const context = {
-  state: {apiToken: 'token', user: {user_id: 'user-a'}, selectedModel: 'model'},
+  state: {apiToken: 'token', user: {user_id: 'user-a'}, selectedModel: 'model', pendingImages: [], pendingImagesConversationId: ''},
   currentConversation: () => conversation,
   window: {Chat2APIStreamRecoveryV1: {createRequestId: () => 'req_webchat_error'}},
   apiJson: async () => ({user: {user_id: 'user-a'}}),
   fetch: async () => ({ok: true, body}),
   makeRecoveryController: () => null,
+  selectedKeyId: () => 'key-a',
+  selectedKeyHasScope: () => true,
+  uploadPendingImages: async () => {},
+  renderPendingImages() {},
+  setConnection() {},
   recoverPendingMessage: async () => { polls++; return {status: 'completed'}; },
   id: () => String(conversation.messages.length),
   toast: (message) => notices.push(message),
@@ -62,6 +68,7 @@ const sendMessage = vm.runInNewContext(readFrame + send + '\nsendMessage', conte
 })().catch((error) => { console.error(error); process.exitCode = 1; });
 """
     subprocess.run(["node", "-e", harness], cwd=ROOT, check=True, timeout=20)
+
 
 
 def make_app(data_dir: Path):

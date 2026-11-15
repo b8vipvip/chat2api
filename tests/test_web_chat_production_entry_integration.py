@@ -18,6 +18,9 @@ expected = {
     ("GET", "/api/user/chat/requests/{request_id}/recovery"),
     ("POST", "/api/user/chat/requests/{request_id}/cancel"),
     ("GET", "/api/user/chat/files/{file_id}/download"),
+    ("GET", "/api/user/files/{file_id}/content"),
+    ("DELETE", "/api/user/files/{file_id}"),
+    ("GET", "/assets/chat2api-image-drop-v1.js"),
     ("GET", "/assets/chat2api-chat-renderer-v2.js"),
     ("GET", "/assets/chat2api-chat-stream-recovery-v1.js"),
 }
@@ -36,14 +39,28 @@ with TestClient(app) as client:
     download = client.get("/api/user/chat/files/file_12345678/download")
     assert download.status_code == 401
     assert download.headers["cache-control"] == "private, no-store"
+    image_content = client.get("/api/user/files/file_12345678/content")
+    assert image_content.status_code == 401
+    assert image_content.headers["cache-control"] == "private, no-store"
+    image_delete = client.delete("/api/user/files/file_12345678", headers={"Origin": "http://testserver"})
+    assert image_delete.status_code == 401
+    assert image_delete.headers["cache-control"] == "private, no-store"
     renderer = client.get("/assets/chat2api-chat-renderer-v2.js")
     assert renderer.status_code == 200
     assert "Chat2APISafeRenderer" in renderer.text
     recovery_js = client.get("/assets/chat2api-chat-stream-recovery-v1.js")
     assert recovery_js.status_code == 200
     assert "Chat2APIStreamRecoveryV1" in recovery_js.text
+    image_drop = client.get("/assets/chat2api-image-drop-v1.js")
+    assert image_drop.status_code == 200
+    assert "Chat2APIImageDropV1" in image_drop.text
     page = client.get("/chat")
     assert page.status_code == 200
+    assert "imageInput" in page.text
+    assert "attachButton" in page.text
+    assert page.text.index("chat2api-chat-renderer-v2.js") < page.text.index("chat2api-chat-client-v1.js")
+    assert page.text.index("chat2api-chat-stream-recovery-v1.js") < page.text.index("chat2api-chat-client-v1.js")
+    assert page.text.index("chat2api-image-drop-v1.js") < page.text.index("chat2api-chat-client-v1.js")
     assert page.text.index("chat2api-chat-renderer-v2.js") < page.text.index("chat2api-chat-client-v1.js")
     assert page.text.index("chat2api-chat-stream-recovery-v1.js") < page.text.index("chat2api-chat-client-v1.js")
     client_js = client.get("/assets/chat2api-chat-client-v1.js")
@@ -51,6 +68,8 @@ with TestClient(app) as client:
     assert "X-Chat2API-Request-ID" in client_js.text
     assert "recoverPendingMessage" in client_js.text
     assert "Chat2APISafeRenderer" in client_js.text
+    assert "uploadPendingImages" in client_js.text
+    assert "X-Chat2API-Request-ID" in client_js.text
 
 print("Web Chat production entry integration passed")
 """
