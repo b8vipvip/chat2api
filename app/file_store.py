@@ -126,7 +126,7 @@ class FileStore:
                     or not isinstance(item.purpose, str) or not item.purpose
                     or not isinstance(item.sha256, str)
                     or (item.sha256 and not re.fullmatch(r"[0-9a-f]{64}", item.sha256))
-                ): 
+                ):
                     raise ValueError("file index contains invalid file metadata")
                 if item.file_id in loaded or item.path in disk_paths:
                     raise ValueError("file index contains duplicate file IDs or disk paths")
