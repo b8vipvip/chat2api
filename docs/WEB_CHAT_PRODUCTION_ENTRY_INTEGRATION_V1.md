@@ -2,72 +2,79 @@
 
 Status: **Draft / partial product integration**.
 
-This integration connects the existing /chat client to the W-03 safe Markdown
-renderer, W-04 owner-scoped request recovery/cancellation APIs and W-05A
-owner-scoped document download API. It does not enable the W-01 image upload
-pipeline or the W-02 plaintext SQLite conversation prototype.
+This integration connects the existing /chat client to the W-01 account-scoped
+image attachment flow, W-03 safe Markdown renderer, W-04 owner-scoped request
+recovery/cancellation APIs and W-05A owner-scoped document download API. It
+does not install the W-02 plaintext SQLite conversation prototype.
 
 ## Installed behavior
 
-- The existing chat HTML loads the renderer and recovery controller before the
-  client script. All scripts are same-origin, no-store and served by one
-  production integration installer.
-- Assistant Markdown is rendered by the DOM-only allowlist renderer. If the
-  renderer asset is unavailable, the client falls back to textContent rather
-  than unsafe HTML.
+- The existing chat HTML loads the renderer, recovery controller and image-drop
+  adapter before the chat client. Assets are same-origin and no-store.
+- Assistant Markdown uses the DOM-only allowlist renderer; fallback is
+  textContent, never untrusted HTML.
+- W-01 accepts PNG/JPEG/WebP/GIF image attachments, validates actual raster bytes on Chat Completions/Responses image references and browser previews, uses the standard Files
+  endpoint with purpose=vision, enforces per-image/message size limits, binds
+  file IDs to the current account/API key, and provides owner-checked preview
+  and same-origin deletion endpoints.
 - Each Web Chat request supplies a client-generated req_ identifier using
-  X-Chat2API-Request-ID. The server remains the authority for request identity
-  and terminal status; the client never creates a second terminal owner.
-- Pending request_id and assistant message identity are persisted in the
-  existing account-scoped local browser history. On reload, the client polls
-  the owner-checked recovery endpoint and never re-POSTs the generation.
-- Stop sends the owner-checked cancel request to the assigned Worker, then
-  stops local stream reading and continues to reconcile the original request.
-- File download cards use the W-05A same-origin endpoint, which independently
-  verifies the user session, API-key ownership and stored file bytes.
+  X-Chat2API-Request-ID. Pending request_id and assistant message identity are
+  stored in account-scoped local browser history. On reload the client polls
+  the owner-checked recovery endpoint and never re-POSTs generation.
+- Stop sends an owner-checked cancel request to the assigned Worker before
+  stopping local stream reading and reconciling the original request.
+- W-05A document downloads use a same-origin owner-checked endpoint.
 
-## Inherited security boundaries from C-03B
+## Deliberately limited
 
-This PR is now stacked on the C-03B resource-ownership branch (PR #830).
-The combined production tree must retain these independent server-side checks:
-
-- Tenant membership is not an implicit grant to another user's personal API
-  keys, request history, billing, files, archived media or native-content
-  sidecars. Shared-workspace access requires a separately implemented and
-  reviewed resource-sharing contract.
-- A paired Worker attachment download is scoped to the exact live request,
-  assigned Worker, API-key owner and file IDs explicitly attached to that
-  request. A Worker token alone is not a global FileStore read capability.
-- Administrator request-media retrieval verifies that the archived file's
-  owner matches the API key recorded on the request.
-
-The #830 test suite is inherited through the base branch and must remain in
-the full production-entry CI run; do not rebase this Web Chat integration back
-to the pre-C-03B base and silently drop those protections.
-
-## Deliberately excluded
-
-- W-01 image upload/preview is not installed. The renderer's structured image
-  block is not connected to a live image endpoint in this integration.
-- W-02 server conversation storage is not installed because the current
-  prototype is plaintext SQLite and the DataKeyring/production storage gate
-  remains deferred by user decision. Existing local browser history remains.
-- This recovery API is snapshot polling, not durable token-level SSE replay.
-  It can restore a final Telemetry response when available; it does not replay
-  missing stream deltas or prove native 1:1 integrity.
-- A recovered status never replaces Broker/request-v6 terminal ownership.
+- FileStore image bytes are **not encrypted at rest** by this change. No
+  production retention/deletion lifecycle or orphan sweeper is established.
+  Do not describe image storage as encrypted or production-hardened.
+- Real Chrome + live Worker multimodal understanding and image-byte end-to-end
+  verification remain outstanding; API-level tests do not prove provider
+  vision behavior or native 1:1 content integrity.
+- W-02 server conversation storage is not installed because its current
+  prototype is plaintext SQLite and DataKeyring/production storage remains
+  deferred by explicit user decision. Existing browser history remains.
+- W-04 is final-snapshot polling, not durable token-level SSE event replay.
+  It can restore final Telemetry text when available, but cannot replay missing
+  deltas or replace Broker/request-v6 terminal ownership.
+- Structured renderer image blocks are not enabled; W-01 image previews use
+  their separate owner-checked preview endpoint.
 
 ## Automated integration coverage
 
-The app.entry subprocess test verifies production route uniqueness, owner-only
-401 responses, private/no-store headers, static asset serving and script load
-order. Existing W-03/W-04/W-05 tests remain included. The CI workflow runs
-JavaScript syntax checks for all three client-side scripts.
+The app.entry subprocess test verifies route uniqueness, private/no-store auth
+failures, static asset serving, script order and image preview/delete route
+installation. Existing W-01/W-03/W-04/W-05 tests remain included. CI checks
+JavaScript syntax for the renderer, recovery controller, image-drop adapter
+and chat client.
 
 ## Remaining release gates
 
 Real desktop/mobile browser E2E, live Worker cancellation, refresh recovery
-under network interruption, cross-account attachment tests against production
-FileStore, W-01 upload integration, W-02 encrypted server-side history,
-durable event replay, production-image smoke and deployment/rollback evidence
-remain required. This PR must remain Draft until these gates pass.
+under network interruption, real multimodal request evidence, image SHA/bytes
+verification, retention/orphan cleanup, cross-account isolation in production
+FileStore, W-02 encrypted server-side history, durable event replay, production
+image smoke and deployment/rollback evidence remain required. This PR stays
+Draft until these gates pass.
+
+## Inherited C-03B resource-ownership and Worker download boundary
+
+The production integration also includes the C-03B resource-authorization guards.
+Tenant membership is not an implicit grant to another user's personal API keys,
+request history, billing, files, archived media or native-content sidecars.
+Shared-workspace access requires a separately reviewed resource-sharing contract.
+
+A paired Worker attachment read is scoped to the exact live request, assigned
+Worker, API-key owner and file IDs explicitly attached to that request. A Worker
+token or a stale Telemetry row with `status=running` is not a global FileStore
+read capability: the server also requires the matching nonterminal Broker lease.
+Responses dispatch failure terminalizes that lease and the Telemetry projection.
+Administrator request-media retrieval verifies that the archived file owner
+matches the API key recorded on the request.
+
+The C-03B tenant/resource tests and stale-grant regressions must remain in the
+full production-entry CI run. Do not rebase this integration to the pre-C-03B
+base and silently drop those protections.
+

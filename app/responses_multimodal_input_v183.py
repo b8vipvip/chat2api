@@ -63,6 +63,26 @@ def attachment_specs(file_store: FileStore, file_ids: list[str], principal: ApiP
     return result
 
 
+def verify_raster_image(data: bytes, mime: str) -> None:
+    """Validate actual raster bytes, not only a caller-supplied MIME label."""
+    _verify_raster(data, mime)
+
+
+def validate_image_file(file_store: FileStore, file_id: str, principal: ApiPrincipal) -> tuple[Any, bytes]:
+    """Resolve one API-key-owned vision file and verify its stored raster bytes."""
+    attachment_specs(file_store, [file_id], principal)
+    item = file_store.get(file_id)
+    if item is None or item.purpose != "vision":
+        raise ValueError("input_image file_id must reference a vision image attachment")
+    try:
+        stored, payload = file_store.read(file_id)
+    except (KeyError, FileNotFoundError) as error:
+        raise ValueError("input_image file content is unavailable") from error
+    if stored.size != len(payload):
+        raise ValueError("input_image stored byte count does not match its metadata")
+    _verify_raster(payload, stored.mime_type)
+    return stored, payload
+
 def _verify_raster(data: bytes, mime: str) -> None:
     if mime not in _IMAGE_MIME:
         raise ValueError("input_image supports PNG, JPEG, WebP or GIF")
@@ -118,9 +138,7 @@ async def resolve_responses_attachments(
                 image_value if isinstance(image_value, str) and image_value.startswith("file_") else None
             )
             if file_id:
-                item = attachment_specs(file_store, [str(file_id)], principal)[0]
-                if item["mime_type"] not in _IMAGE_MIME:
-                    raise ValueError("input_image file_id must reference a raster image")
+                validate_image_file(file_store, str(file_id), principal)
                 file_ids.append(str(file_id))
                 continue
             if not isinstance(image_value, str) or not image_value:

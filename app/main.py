@@ -47,7 +47,11 @@ from .native_capture_audit_v281 import capture_comparison
 from .native_snapshot_finality_v282 import native_snapshot_finality, native_terminal_view
 from .media_public_origin_v187 import media_base_for_request
 from .response_history_media_v188 import history_safe_response_text
-from .responses_multimodal_input_v183 import attachment_specs as canonical_attachment_specs
+from .responses_multimodal_input_v183 import (
+    attachment_specs as canonical_attachment_specs,
+    validate_image_file,
+    verify_raster_image,
+)
 from .media_handoff import StreamMediaMarkerGate
 from .models import (
     ApiKeyCreate,
@@ -1165,6 +1169,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if not isinstance(value, str) or not value:
                     continue
                 if value.startswith("file_"):
+                    try:
+                        validate_image_file(file_store, value, principal)
+                    except ValueError as error:
+                        raise HTTPException(status_code=400, detail=str(error)) from error
                     result.append(value)
                     continue
                 if not value.startswith("data:"):
@@ -1174,10 +1182,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     )
                 sequence += 1
                 try:
+                    image_bytes, image_mime = file_store._decode(value, None)
+                    verify_raster_image(image_bytes, image_mime)
                     item = await file_store.create(
-                        filename=f"inline-image-{sequence}.png",
-                        data_base64=value,
-                        mime_type=None,
+                        filename=f"inline-image-{sequence}.{image_mime.split('/', 1)[-1]}",
+                        data_base64=base64.b64encode(image_bytes).decode("ascii"),
+                        mime_type=image_mime,
                         owner_key_id=principal.key_id,
                         purpose="vision",
                     )

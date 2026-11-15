@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import json
 import mimetypes
 import re
@@ -33,6 +35,7 @@ class StoredFile:
     owner_key_id: str
     path: str
     purpose: str = "chat2api"
+    sha256: str = ""
 
     def public(self) -> dict[str, Any]:
         return {
@@ -130,6 +133,7 @@ class FileStore:
             owner_key_id=owner_key_id,
             path=disk_name,
             purpose=purpose,
+            sha256=hashlib.sha256(payload).hexdigest(),
         )
         self.items[file_id] = item
         self.save_index()
@@ -145,7 +149,19 @@ class FileStore:
         path = self.root / item.path
         if not path.exists():
             raise FileNotFoundError("Stored file content is missing")
-        return item, path.read_bytes()
+        payload = path.read_bytes()
+        if len(payload) != int(item.size):
+            raise OSError("Stored file size integrity check failed")
+        digest = hashlib.sha256(payload).hexdigest()
+        if item.sha256:
+            if not hmac.compare_digest(str(item.sha256), digest):
+                raise OSError("Stored file SHA-256 integrity check failed")
+        else:
+            # Backfill legacy index rows once, without changing the public
+            # FileObject contract. New writes always persist the digest.
+            item.sha256 = digest
+            self.save_index()
+        return item, payload
 
     async def delete(self, file_id: str, owner_key_id: str | None = None) -> None:
         item = self.get(file_id)
