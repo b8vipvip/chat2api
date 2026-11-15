@@ -160,8 +160,8 @@ class TelemetryStore:
                 })
                 recovered += 1
             except Exception:
-                # The persisted queued row remains visible for explicit
-                # reconciliation; never fail the whole application startup.
+                # Keep the row visible for explicit reconciliation; do not
+                # fail startup because one telemetry callback could not run.
                 continue
         return recovered
 
