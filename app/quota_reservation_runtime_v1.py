@@ -82,8 +82,16 @@ def reserve_wallet_charge(
                     status_code=503,
                     detail="Provider usage for this model is not metered for wallet billing",
                 )
+        # Cached-token share is unknown at admission. Reserve against the
+        # higher of ordinary and cached input rates so an administrator's
+        # valid (but unusually high) cached-input price cannot make the hold
+        # systematically understate the eventual charge.
+        conservative_input_rate = max(
+            float(price.get("input_usd_per_million") or 0),
+            float(price.get("cached_input_usd_per_million") or 0),
+        )
         usd = (
-            max(0, int(prompt_tokens)) * float(price.get("input_usd_per_million") or 0)
+            max(0, int(prompt_tokens)) * conservative_input_rate
             + max(0, int(output_tokens)) * float(price.get("output_usd_per_million") or 0)
         ) / 1_000_000
         rate_fields = (
