@@ -489,7 +489,7 @@
   }
 
   function consumeSseFrame(frame, assistant) {
-    const data = frame.split("\n")
+    const data = frame.split(/\r?\n/)
       .filter((line) => line.startsWith("data:"))
       .map((line) => line.slice(5).trimStart())
       .join("\n");
@@ -497,7 +497,10 @@
     if (data.trim() === "[DONE]") return true;
     let event;
     try { event = JSON.parse(data); } catch { return false; }
-    const choice = Array.isArray(event.choices) ? event.choices[0] : null;
+    if (event?.error) {
+      throw new Error(event.error.message || "服务端返回流式错误");
+    }
+    const choice = Array.isArray(event?.choices) ? event.choices[0] : null;
     if (choice?.delta && Object.prototype.hasOwnProperty.call(choice.delta, "content")) {
       appendDelta(assistant, choice.delta.content);
     }
@@ -581,35 +584,42 @@
       let buffer = "";
       let done = false;
       let lastSavedLength = 0;
-      while (!done) {
-        const part = await reader.read();
-        if (part.done) break;
-        buffer += decoder.decode(part.value, {stream:true});
-        buffer = buffer.replace(/\r\n/g, "\n");
-        let boundary;
-        while ((boundary = buffer.indexOf("\n\n")) >= 0) {
-          const frame = buffer.slice(0, boundary);
-          buffer = buffer.slice(boundary + 2);
-          if (consumeSseFrame(frame, assistant)) {
-            done = true;
-            break;
+      try {
+        while (!done) {
+          const part = await reader.read();
+          if (part.done) break;
+          buffer += decoder.decode(part.value, {stream:true});
+          let boundary;
+          while ((boundary = /\r?\n\r?\n/.exec(buffer))) {
+            const frame = buffer.slice(0, boundary.index);
+            buffer = buffer.slice(boundary.index + boundary[0].length);
+            if (consumeSseFrame(frame, assistant)) {
+              done = true;
+              break;
+            }
+          }
+          if (assistant.content) {
+            conversation.updatedAt = new Date().toISOString();
+            if (assistant.content.length - lastSavedLength >= 1000) {
+              saveHistory();
+              lastSavedLength = assistant.content.length;
+            }
+            renderMessages();
           }
         }
-        if (assistant.content) {
-          conversation.updatedAt = new Date().toISOString();
-          if (assistant.content.length - lastSavedLength >= 1000) {
-            saveHistory();
-            lastSavedLength = assistant.content.length;
-          }
-          renderMessages();
-        }
+      } finally {
+        // After [DONE], let the server finish closing the HTTP response.
+        // If processing failed, stop reading without masking the original error.
+        if (!done) void reader.cancel().catch(() => {});
+        reader.releaseLock();
       }
-      if (buffer.trim() && consumeSseFrame(buffer, assistant)) done = true;
       if (!assistant.content.trim()) {
         conversation.messages = conversation.messages.filter((message) => message.id !== assistant.id);
-        toast("模型没有返回文本内容。");
-      } else if (!done) {
+      }
+      if (!done) {
         toast("连接已结束，但未收到流结束标记；请检查请求记录确认是否完整。");
+      } else if (!assistant.content.trim()) {
+        toast("模型没有返回文本内容。");
       }
     } catch (error) {
       if (error.name === "AbortError") {
