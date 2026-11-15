@@ -227,7 +227,8 @@ class UserSubscriptionStore:
                           s.expires_at,s.assigned_by,s.created_at,s.updated_at,p.name
                    FROM user_subscriptions s
                    JOIN subscription_plans p ON p.plan_id=s.plan_id
-                   WHERE s.user_id=? AND s.status='active' AND s.starts_at<=?
+                   WHERE s.user_id=? AND s.status='active' AND p.enabled=1
+                     AND s.starts_at<=?
                      AND (s.expires_at IS NULL OR s.expires_at>?)
                    ORDER BY s.starts_at DESC,s.created_at DESC LIMIT 1""",
                 (wanted, now, now),
@@ -239,7 +240,7 @@ class UserSubscriptionStore:
                     "source": "subscription",
                 }
             free = self.db.execute(
-                "SELECT plan_id,name FROM subscription_plans WHERE plan_id=?",
+                "SELECT plan_id,name FROM subscription_plans WHERE plan_id=? AND enabled=1",
                 (DEFAULT_PLAN_ID,),
             ).fetchone()
         if free is None:
