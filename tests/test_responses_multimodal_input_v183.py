@@ -18,7 +18,7 @@ from app.api_keys import ApiPrincipal
 from app.file_store import FileStore
 from app.media_archive_v173 import MediaArchive
 from app.responses_multimodal_input_v183 import (
-    attachment_specs, needs_multimodal, resolve_responses_attachments,
+    attachment_specs, needs_multimodal, resolve_responses_attachments, validate_image_file,
 )
 from app.responses_v108_patch import _dispatch
 from app.responses_image_tool_v182 import handle_image_tool
@@ -272,3 +272,23 @@ def test_responses_dispatch_failure_terminalizes_request_scoped_attachment_grant
     assert row["diagnostics"]["responses_v108_dispatch_error_type"] == "ConnectionError"
     assert request_id not in broker.requests
     assert registry.busy_clients == set()
+
+
+def test_responses_file_integrity_failure_is_service_unavailable(tmp_path: Path) -> None:
+    files, _archive = _stores(tmp_path)
+    stored = asyncio.run(files.create(
+        filename="corrupt-input.png",
+        data_base64=base64.b64encode(_png()).decode(),
+        mime_type="image/png",
+        owner_key_id="key-a",
+        purpose="vision",
+    ))
+    path = files.root / stored.path
+    tampered = b"x" * stored.size
+    path.write_bytes(tampered)
+
+    with pytest.raises(HTTPException) as error:
+        validate_image_file(files, stored.file_id, _key())
+
+    assert error.value.status_code == 503
+    assert error.value.detail == {"code": "stored_file_integrity_unavailable"}
