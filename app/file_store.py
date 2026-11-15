@@ -151,9 +151,11 @@ class FileStore:
                 f".{self.index_path.name}.{secrets.token_hex(8)}.tmp"
             )
             fd = -1
+            created_temp = False
             try:
                 flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
                 fd = os.open(temp, flags, 0o600)
+                created_temp = True
                 with os.fdopen(fd, "wb") as handle:
                     fd = -1
                     encoded = json.dumps(
@@ -169,7 +171,8 @@ class FileStore:
             finally:
                 if fd >= 0:
                     os.close(fd)
-                temp.unlink(missing_ok=True)
+                if created_temp:
+                    temp.unlink(missing_ok=True)
 
     def _decode(self, data_base64: str, mime_type: str | None) -> tuple[bytes, str]:
         raw = str(data_base64 or "").strip()
@@ -212,9 +215,11 @@ class FileStore:
         path = self.root / disk_name
         self._ensure_private_root()
         fd = -1
+        created_path = False
         try:
             flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
             fd = os.open(path, flags, 0o600)
+            created_path = True
             with os.fdopen(fd, "wb") as handle:
                 fd = -1
                 handle.write(payload)
@@ -225,7 +230,8 @@ class FileStore:
         except Exception:
             if fd >= 0:
                 os.close(fd)
-            path.unlink(missing_ok=True)
+            if created_path:
+                path.unlink(missing_ok=True)
             raise
         item = StoredFile(
             file_id=file_id,
