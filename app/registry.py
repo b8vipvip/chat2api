@@ -325,6 +325,13 @@ class ClientRegistry:
             "voice.live.audio", "voice.live.text", "voice.live.multimodal",
             "voice.live.cancel_response", "voice.live.stop",
         }
+        # A server timeout may set completed_mono before sending the Worker
+        # cancellation. Cancellation is the one follow-up allowed after that
+        # server-owned cutoff, but never after a Worker terminal.
+        cancellation_types = {
+            "chat.cancel", "voice.cancel", "dictation.cancel",
+            "voice.live.cancel_response", "voice.live.stop",
+        }
         async with lock:
             # Re-read the socket while holding its send lock. A reconnect
             # between lookup and send must never redirect an active request's
@@ -354,7 +361,10 @@ class ClientRegistry:
                     or str(getattr(state, "client_id", "") or "") != client_id
                     or websocket is not expected_socket
                     or getattr(state, "terminal_event_type", None) is not None
-                    or getattr(state, "completed_mono", None) is not None
+                    or (
+                        getattr(state, "completed_mono", None) is not None
+                        and request_type not in cancellation_types
+                    )
                 ):
                     raise RuntimeError("Request Worker connection changed or is unavailable")
                 websocket = expected_socket
