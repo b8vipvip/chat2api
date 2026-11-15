@@ -3,8 +3,10 @@ from __future__ import annotations
 import base64
 import json
 import mimetypes
+import os
 import re
 import secrets
+import stat
 import threading
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -53,17 +55,44 @@ class FileStore:
         self.index_path = self.root / "index.json"
         self.max_file_bytes = max_file_bytes
         self.items: dict[str, StoredFile] = {}
+        # Uploaded content and its index contain user data and must not be
+        # readable by other local accounts on a shared host.
         # The JSON index is a single snapshot file. Serialize every catalog
         # mutation and read/delete boundary so concurrent uploads cannot race
         # on the shared temp path or publish a stale snapshot over newer files.
         self.lock = threading.RLock()
 
+    def _ensure_private_root(self) -> None:
+        if self.root.is_symlink():
+            raise RuntimeError("File storage directory cannot be a symbolic link")
+        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if self.root.is_symlink() or not self.root.is_dir():
+            raise RuntimeError("File storage directory is not a regular directory")
+        if os.name != "nt":
+            os.chmod(self.root, 0o700)
+
     async def load(self) -> None:
-        self.root.mkdir(parents=True, exist_ok=True)
+        self._ensure_private_root()
+        if self.index_path.is_symlink():
+            raise RuntimeError("File index cannot be a symbolic link")
         if not self.index_path.exists():
             return
         try:
-            payload = json.loads(self.index_path.read_text(encoding="utf-8"))
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(self.index_path, flags)
+            try:
+                metadata = os.fstat(fd)
+                if not stat.S_ISREG(metadata.st_mode):
+                    raise ValueError("file index must be a regular file")
+                if os.name != "nt" and hasattr(os, "fchmod"):
+                    os.fchmod(fd, 0o600)
+                with os.fdopen(fd, "rb") as handle:
+                    fd = -1
+                    raw = handle.read()
+            finally:
+                if fd >= 0:
+                    os.close(fd)
+            payload = json.loads(raw.decode("utf-8"))
             if not isinstance(payload, dict) or not isinstance(payload.get("files"), list):
                 raise ValueError("file index root/files collection is invalid")
 
@@ -111,19 +140,31 @@ class FileStore:
 
     def save_index(self) -> None:
         with self.lock:
-            self.root.mkdir(parents=True, exist_ok=True)
+            self._ensure_private_root()
             # Keep a unique temp path as an additional guard for callers that
             # may invoke save_index outside the normal mutation methods.
             temp = self.index_path.with_name(
                 f".{self.index_path.name}.{secrets.token_hex(8)}.tmp"
             )
+            fd = -1
             try:
-                temp.write_text(
-                    json.dumps({"files": [asdict(item) for item in self.items.values()]}, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
-                temp.replace(self.index_path)
+                flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+                fd = os.open(temp, flags, 0o600)
+                with os.fdopen(fd, "wb") as handle:
+                    fd = -1
+                    encoded = json.dumps(
+                        {"files": [asdict(item) for item in self.items.values()]},
+                        ensure_ascii=False, indent=2,
+                    ).encode("utf-8")
+                    handle.write(encoded)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temp, self.index_path)
+                if os.name != "nt":
+                    os.chmod(self.index_path, 0o600)
             finally:
+                if fd >= 0:
+                    os.close(fd)
                 temp.unlink(missing_ok=True)
 
     def _decode(self, data_base64: str, mime_type: str | None) -> tuple[bytes, str]:
@@ -165,8 +206,23 @@ class FileStore:
         suffix = Path(clean).suffix[:16]
         disk_name = f"{file_id}{suffix}"
         path = self.root / disk_name
-        self.root.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(payload)
+        self._ensure_private_root()
+        fd = -1
+        try:
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(path, flags, 0o600)
+            with os.fdopen(fd, "wb") as handle:
+                fd = -1
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            if os.name != "nt":
+                os.chmod(path, 0o600)
+        except Exception:
+            if fd >= 0:
+                os.close(fd)
+            path.unlink(missing_ok=True)
+            raise
         item = StoredFile(
             file_id=file_id,
             filename=clean,
@@ -202,9 +258,24 @@ class FileStore:
             if not item:
                 raise KeyError("Unknown file_id")
             path = self.root / item.path
-            if not path.exists():
-                raise FileNotFoundError("Stored file content is missing")
-            return item, path.read_bytes()
+            try:
+                flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+                fd = os.open(path, flags)
+            except (FileNotFoundError, OSError) as error:
+                raise FileNotFoundError("Stored file content is unavailable") from error
+            try:
+                metadata = os.fstat(fd)
+                if not stat.S_ISREG(metadata.st_mode) or metadata.st_size != item.size:
+                    raise FileNotFoundError("Stored file content is not the original regular file")
+                with os.fdopen(fd, "rb") as handle:
+                    fd = -1
+                    payload = handle.read()
+                if len(payload) != item.size:
+                    raise FileNotFoundError("Stored file content is incomplete")
+                return item, payload
+            finally:
+                if fd >= 0:
+                    os.close(fd)
 
     async def delete(self, file_id: str, owner_key_id: str | None = None) -> None:
         with self.lock:
