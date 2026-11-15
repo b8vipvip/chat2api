@@ -78,6 +78,18 @@ def test_voice_request_binds_the_current_worker_socket_for_scoped_file_download(
     assert socket.sent[0]["request_id"] == "req_voice_file_123"
 
     asyncio.run(registry.send("ext_voice_worker", {
+        "type": "voice.live.start",
+        "request_id": "voicereq_live_media_123",
+    }))
+    assert live_state.dispatch_socket is socket
+
+    # A reconnect may replace the registry's current socket while the old
+    # Live session is still owned by its original socket. A later multimodal
+    # turn must not transfer the file-download grant to the replacement.
+    replacement = FakeSocket()
+    registry.sockets["ext_voice_worker"] = replacement
+    registry.socket_locks["ext_voice_worker"] = asyncio.Lock()
+    asyncio.run(registry.send("ext_voice_worker", {
         "type": "voice.live.multimodal",
         "request_id": "voicereq_live_media_123",
         "attachments": [{
@@ -85,9 +97,18 @@ def test_voice_request_binds_the_current_worker_socket_for_scoped_file_download(
             "request_id": "voicereq_live_media_123",
         }],
     }))
-
     assert live_state.dispatch_socket is socket
-    assert socket.sent[1]["attachments"][0]["request_id"] == "voicereq_live_media_123"
+    assert replacement.sent[0]["attachments"][0]["request_id"] == "voicereq_live_media_123"
+
+    # A multimodal message cannot establish a session/socket grant on its own.
+    orphan_state = SimpleNamespace(dispatch_socket=None)
+    registry.request_broker.requests["voicereq_orphan_media_123"] = orphan_state
+    asyncio.run(registry.send("ext_voice_worker", {
+        "type": "voice.live.multimodal",
+        "request_id": "voicereq_orphan_media_123",
+        "attachments": [{"file_id": "file_orphan", "request_id": "voicereq_orphan_media_123"}],
+    }))
+    assert orphan_state.dispatch_socket is None
 
 
 def test_live_voice_media_grant_is_persisted_and_request_scoped_before_worker_dispatch() -> None:
