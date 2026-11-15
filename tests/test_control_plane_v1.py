@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -315,3 +317,34 @@ def test_user_admin_and_billing_admin_can_only_manage_their_own_identity_domains
 
     assert app.state.user_accounts.system_role_for(user_id) == "trusted"
     assert app.state.user_subscriptions.current_plan_for_user(user_id)["plan_id"] == "pro"
+
+
+def test_control_plane_load_repairs_existing_file_permissions(tmp_path: Path):
+    if os.name == "nt":
+        pytest.skip("POSIX file mode bits are not enforced on Windows")
+    store = ControlPlaneStore(tmp_path, "owner")
+    store.create_admin("support_agent", "long-enough-password", "support")
+    os.chmod(store.path, 0o644)
+
+    reopened = ControlPlaneStore(tmp_path, "owner")
+
+    assert reopened.verify_admin("support_agent", "long-enough-password")
+    assert stat.S_IMODE(store.path.stat().st_mode) == 0o600
+
+
+def test_control_plane_atomic_save_never_rolls_memory_back_after_disk_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    store = ControlPlaneStore(tmp_path, "owner")
+
+    def fail_chmod(*_args, **_kwargs):
+        raise OSError("simulated post-commit chmod failure")
+
+    monkeypatch.setattr("app.control_plane.os.chmod", fail_chmod)
+
+    updated = store.update_client({"announcement": "committed"})
+
+    persisted = json.loads(store.path.read_text(encoding="utf-8"))
+    assert updated["announcement"] == "committed"
+    assert store.public_client()["announcement"] == "committed"
+    assert persisted["client"]["announcement"] == "committed"
