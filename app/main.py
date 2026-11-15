@@ -2538,18 +2538,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if not is_request_id_conflict(quota_error):
                 try:
                     await telemetry.upsert({
-                    "request_id": request_id, "response_id": response_id, "client_id": client_id,
-                    "api_key_id": principal.key_id, "api_key_name": principal.name, "auth_kind": principal.kind,
-                    "requested_model": "gpt-image", "request_type": "image_generation",
-                    "attachments_count": len(attachments), "stream": False, "prompt_mode": "image",
-                    "prompt_chars": len(body.prompt), "completion_chars": 0, "status": "error",
-                    "usage": {}, "timings": state.timings(),
-                    "diagnostics": {"quota_reservation_v1": {
-                        "state": "rejected", "http_status": quota_error.status_code,
-                        "estimate_policy": "prompt_tokens_plus_4096_per_image_admission_floor_v1",
-                    }},
-                    "error": str(quota_error.detail),
-                })
+                        "request_id": request_id, "response_id": response_id, "client_id": client_id,
+                        "api_key_id": principal.key_id, "api_key_name": principal.name, "auth_kind": principal.kind,
+                        "requested_model": "gpt-image", "request_type": "image_generation",
+                        "attachments_count": len(attachments), "stream": False, "prompt_mode": "image",
+                        "prompt_chars": len(body.prompt), "completion_chars": 0, "status": "error",
+                        "usage": {}, "timings": state.timings(),
+                        "diagnostics": {"quota_reservation_v1": {
+                            "state": "rejected", "http_status": quota_error.status_code,
+                            "estimate_policy": "prompt_tokens_plus_4096_per_image_admission_floor_v1",
+                        }},
+                        "error": str(quota_error.detail),
+                    }, create_only=True)
+                except DuplicateRequestIdentity:
+                    # A concurrent request won this identity. Never replace
+                    # its history with the losing admission's quota error.
+                    pass
                 except Exception as telemetry_error:
                     logger.warning(
                         "Image quota rejection could not be persisted request_id=%s error_type=%s",
@@ -2590,7 +2594,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "stream": False, "prompt_mode": "image",
                     "prompt_chars": len(body.prompt), "completion_chars": 0, "status": "running",
                     "usage": {}, "timings": state.timings(), "diagnostics": image_diagnostics(), "error": None,
-                }
+                },
+                create_only=True,
             )
             await registry.send(
                 client_id,
