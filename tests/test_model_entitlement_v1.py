@@ -125,7 +125,9 @@ def install_voice_test_runtime(app):
     app.state.settings.api_key = "master-test-secret"
     app.state.settings.request_timeout_seconds = 30
     app.state.broker = StopBeforeWorkerDispatchBroker()
-    app.state.telemetry = SimpleNamespace()
+    # Voice admission now checks request-ID ownership before resolving a
+    # Worker. Keep the fake aligned with the production TelemetryStore API.
+    app.state.telemetry = SimpleNamespace(get=lambda _request_id: None)
     app.state.file_store = SimpleNamespace(get=lambda _file_id: SimpleNamespace(
         file_id="file_audio", filename="audio.wav", mime_type="audio/wav",
         size=10, owner_key_id="key_1",
@@ -159,6 +161,32 @@ def test_voice_endpoints_entitlement_uses_the_requested_model(
     # context was lost and the entitlement resolver saw an empty model.
     assert response.status_code == 409, response.text
     assert app.state.registry.resolve_calls == ["worker_1"]
+
+
+def test_voice_duplicate_request_id_is_rejected_before_worker_resolution(tmp_path: Path):
+    app, _ = build_app(tmp_path)
+    app.state.settings.api_key = "master-test-secret"
+    app.state.settings.request_timeout_seconds = 30
+    app.state.broker = StopBeforeWorkerDispatchBroker()
+    app.state.telemetry = SimpleNamespace(
+        get=lambda request_id: {"request_id": request_id, "status": "completed"}
+    )
+    app.state.file_store = SimpleNamespace(get=lambda _file_id: SimpleNamespace(
+        file_id="file_audio", filename="audio.wav", mime_type="audio/wav",
+        size=10, owner_key_id="key_1",
+    ))
+    install_voice_patch(app)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/audio/speech",
+            headers={"Authorization": "Bearer voice-token"},
+            json={"model": "gpt-live-mini", "input": "hello"},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "request_id_conflict"
+    assert app.state.registry.resolve_calls == []
 
 
 def test_live_realtime_entitlement_uses_session_start_model(tmp_path: Path):
