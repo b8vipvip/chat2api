@@ -349,18 +349,32 @@ class ClientRegistry:
                     # Bind once to the socket that received the initial
                     # dispatch. A reused request ID cannot migrate to a new
                     # connection after reconnect.
-                    if state.dispatch_socket is None:
+                    # Test doubles and older in-memory Broker states may not
+                    # carry the optional socket field; treat absence as unbound,
+                    # then bind exactly once to this dispatch connection.
+                    dispatch_socket = getattr(state, "dispatch_socket", None)
+                    if dispatch_socket is None:
                         state.dispatch_socket = websocket
-                    elif state.dispatch_socket is not websocket:
+                    elif dispatch_socket is not websocket:
                         raise RuntimeError("Request Worker connection changed")
             elif request_type in request_followup_types:
                 expected_socket = getattr(state, "dispatch_socket", None) if state is not None else None
+                terminal_event_type = getattr(state, "terminal_event_type", None) if state is not None else None
+                # A terminal browser error/cancel must still allow the server to
+                # stop the same live voice session. This is a cleanup command,
+                # not a second generation or a new terminal decision. Keep it
+                # bound to the exact original/current socket like every other
+                # request-scoped follow-up.
+                allow_voice_live_terminal_cleanup = (
+                    request_type == "voice.live.stop"
+                    and terminal_event_type in {"image.error", "image.cancelled"}
+                )
                 if (
                     state is None
                     or expected_socket is None
                     or str(getattr(state, "client_id", "") or "") != client_id
                     or websocket is not expected_socket
-                    or getattr(state, "terminal_event_type", None) is not None
+                    or (terminal_event_type is not None and not allow_voice_live_terminal_cleanup)
                     or (
                         getattr(state, "completed_mono", None) is not None
                         and request_type not in cancellation_types
