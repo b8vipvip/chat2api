@@ -74,6 +74,13 @@ def test_voice_request_binds_the_current_worker_socket_for_scoped_file_download(
     assert socket.sent[0]["request_id"] == "req_voice_file_123"
 
 
+def test_voice_request_telemetry_persists_the_audio_file_grant() -> None:
+    source = (ROOT / "app/voice_patch.py").read_text(encoding="utf-8")
+    assert '"input_file_ids": list(dict.fromkeys(' in source
+    assert 'audio_spec.get("file_id")' in source
+    assert "input_file_ids=input_file_ids" in source
+
+
 def test_worker_request_prepares_request_scoped_attachments_before_prompt_submission() -> None:
     request_v6 = (ROOT / "chrome_extension/content_request_v6.js").read_text(encoding="utf-8")
     run_request = request_v6.split("async function runRequest(message)", 1)[1].split(
