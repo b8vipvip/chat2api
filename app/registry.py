@@ -306,7 +306,7 @@ class ClientRegistry:
             raise RuntimeError("Chrome extension is offline")
         lock = self.socket_locks.setdefault(client_id, asyncio.Lock())
         async with lock:
-            if request_type in {"chat.request", "image.request"}:
+            if request_type in {"chat.request", "image.request", "voice.request"}:
                 request_id = str(payload.get("request_id") or "")
                 broker = getattr(self, "request_broker", None)
                 state = getattr(broker, "requests", {}).get(request_id) if broker else None
