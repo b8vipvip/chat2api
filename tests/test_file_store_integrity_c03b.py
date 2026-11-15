@@ -51,6 +51,33 @@ def test_file_store_rejects_symlinked_index_and_preserves_target(tmp_path):
     assert target.read_bytes() == original
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX hard links are not portable on Windows")
+def test_file_store_rejects_hardlinked_index_without_changing_target(tmp_path):
+    root = tmp_path / "files"
+    root.mkdir()
+    target = tmp_path / "external-index.json"
+    original = b'{"files":[]}'
+    target.write_bytes(original)
+    (root / "index.json").hardlink_to(target)
+    with pytest.raises(RuntimeError, match="single-link regular file"):
+        asyncio.run(FileStore(tmp_path).load())
+    assert target.read_bytes() == original
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX hard links are not portable on Windows")
+def test_file_store_read_rejects_hardlinked_content(tmp_path):
+    store = FileStore(tmp_path)
+    item = _create(store)
+    secret = tmp_path / "outside-secret.txt"
+    secret.write_bytes(b"important file bytes")
+    stored_path = store.root / item.path
+    stored_path.unlink()
+    os.link(secret, stored_path)
+    with pytest.raises(FileNotFoundError, match="original regular file"):
+        store.read(item.file_id)
+    assert secret.read_bytes() == b"important file bytes"
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX named pipes are unavailable on Windows")
 def test_file_store_read_rejects_fifo_swapped_after_startup(tmp_path):
     store = FileStore(tmp_path)
