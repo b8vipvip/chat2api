@@ -188,8 +188,12 @@ def test_document_content_part_rejects_corrupt_size_metadata(tmp_path: Path) -> 
                 }],
             },
         )
-        assert response.status_code == 400, response.text
-        assert "byte count" in response.json()["detail"]
+        # A stored size mismatch is a server-side integrity failure, not
+        # malformed client input. Never pass potentially corrupted bytes on.
+        assert response.status_code == 503, response.text
+        assert response.json()["detail"] == {
+            "code": "stored_file_integrity_unavailable",
+        }
 
 def test_chat_completion_enforces_four_combined_file_input_limit(tmp_path: Path) -> None:
     with TestClient(create_app(_settings(tmp_path))) as client:
