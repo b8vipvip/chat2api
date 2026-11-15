@@ -329,3 +329,68 @@ def test_chat_completion_enforces_twenty_mib_combined_attachment_limit(tmp_path:
         )
         assert response.status_code == 400, response.text
         assert "20 MiB" in response.json()["detail"]
+
+def test_document_and_image_integrity_failures_return_service_unavailable(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    with TestClient(create_app(_settings(tmp_path))) as client:
+        document = _upload_document(
+            client, "integrity.txt", "text/plain", b"document bytes",
+        )
+        image = client.post(
+            "/v1/files",
+            headers=_admin_headers(),
+            json={
+                "filename": "integrity.png",
+                "mime_type": "image/png",
+                "data_base64": base64.b64encode(b"image bytes").decode("ascii"),
+                "purpose": "vision",
+            },
+        )
+        assert image.status_code == 200, image.text
+
+        def fail_integrity(_file_id: str):
+            raise OSError("stored file digest mismatch")
+
+        monkeypatch.setattr(client.app.state.file_store, "read", fail_integrity)
+
+        document_response = client.post(
+            "/v1/chat/completions",
+            headers=_admin_headers(),
+            json={
+                "model": "default",
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Summarize this document."},
+                        {"type": "file", "file_id": document["id"]},
+                    ],
+                }],
+                "stream": False,
+            },
+        )
+        assert document_response.status_code == 503, document_response.text
+        assert document_response.json()["detail"] == {
+            "code": "stored_file_integrity_unavailable",
+        }
+
+        image_response = client.post(
+            "/v1/chat/completions",
+            headers=_admin_headers(),
+            json={
+                "model": "default",
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Describe this image."},
+                        {"type": "image_url", "image_url": {"url": image.json()["id"]}},
+                    ],
+                }],
+                "stream": False,
+            },
+        )
+        assert image_response.status_code == 503, image_response.text
+        assert image_response.json()["detail"] == {
+            "code": "stored_file_integrity_unavailable",
+        }
+

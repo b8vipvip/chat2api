@@ -78,6 +78,11 @@ def validate_image_file(file_store: FileStore, file_id: str, principal: ApiPrinc
         stored, payload = file_store.read(file_id)
     except (KeyError, FileNotFoundError) as error:
         raise ValueError("input_image file content is unavailable") from error
+    except OSError as error:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "stored_file_integrity_unavailable"},
+        ) from error
     if stored.size != len(payload):
         raise ValueError("input_image stored byte count does not match its metadata")
     if len(payload) > 10 * 1024 * 1024:
@@ -109,14 +114,12 @@ def validate_document_file(file_store: FileStore, file_id: str, principal: ApiPr
     except (KeyError, FileNotFoundError) as error:
         raise ValueError("file content part document bytes are unavailable") from error
     except OSError as error:
-        # FileStore distinguishes size and digest integrity failures from
-        # ordinary missing/unreadable payloads. Preserve that distinction
-        # without exposing filesystem paths or raw storage exceptions.
-        if "size integrity" in str(error).lower():
-            raise ValueError("file content part document byte count does not match its metadata") from error
-        if "sha-256 integrity" in str(error).lower():
-            raise ValueError("file content part document SHA-256 integrity check failed") from error
-        raise ValueError("file content part document bytes are unavailable") from error
+        # A storage integrity failure is not a malformed client attachment.
+        # Return a retryable service error without leaking filesystem details.
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "stored_file_integrity_unavailable"},
+        ) from error
     if not payload or stored.size != len(payload):
         raise ValueError("file content part document byte count does not match its metadata")
     if len(payload) > file_store.max_file_bytes:
