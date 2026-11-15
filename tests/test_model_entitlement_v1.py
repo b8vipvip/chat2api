@@ -59,6 +59,10 @@ class FakeRegistry:
 class FakeAccounts:
     def __init__(self):
         self.roles = {"usr_abcdef123": "user"}
+        self.disabled_users = set()
+
+    def is_enabled(self, user_id):
+        return user_id in self.roles and user_id not in self.disabled_users
 
     def owner_for_key(self, key_id):
         return {"key_1": "usr_abcdef123"}.get(key_id)
@@ -905,3 +909,19 @@ def test_model_entitlement_schema_migrates_existing_rules_for_role_and_plan_subj
     assert {row["subject_type"] for row in store.list_rules()} == {
         "global", "user_role", "subscription_plan",
     }
+
+
+def test_disabled_user_cannot_dispatch_with_owned_managed_key(tmp_path: Path):
+    app, _ = build_app(tmp_path)
+    registry = app.state.registry
+    registry.routing_key_context.set("key_1")
+    app.state.user_accounts.disabled_users.add("usr_abcdef123")
+    tokens = set_model_context("gpt-5.5")
+    try:
+        with pytest.raises(HTTPException) as denied:
+            registry.resolve_client(None)
+        assert denied.value.status_code == 403
+        assert denied.value.detail["code"] == "model_entitlement_user_disabled"
+        assert registry.resolve_calls == []
+    finally:
+        reset_model_context(tokens)
