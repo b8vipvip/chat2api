@@ -24,7 +24,7 @@ SUBJECT_TYPES = frozenset({
 EFFECTS = frozenset({"allow", "deny"})
 MAX_MODELS = 200
 SUBJECT_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,160}$")
- ROLE_OR_PLAN_ID = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
+ROLE_OR_PLAN_ID = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 
 
 class ModelEntitlementError(ValueError):
