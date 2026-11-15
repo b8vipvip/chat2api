@@ -126,6 +126,45 @@ class TelemetryStore:
         except (OSError, ValueError, TypeError):
             self.items.clear()
 
+    async def recover_queued_after_restart(
+        self, active_request_ids: set[str] | None = None,
+    ) -> int:
+        """Terminalize queued requests left behind by a previous server process.
+
+        A queued row is written before Worker selection and before Broker
+        allocation. It therefore proves that no Worker dispatch occurred.
+        After restart the old admission queue no longer exists, so those
+        admission holds can be released. Running rows are deliberately
+        untouched because they may have consumed provider usage.
+        """
+        active = {str(value) for value in (active_request_ids or set()) if value}
+        recovered = 0
+        for row in self.recent(self.items.maxlen or 500):
+            request_id = str(row.get("request_id") or "")
+            if (
+                not request_id
+                or request_id in active
+                or str(row.get("status") or "").lower() != "queued"
+            ):
+                continue
+            diagnostics = row.get("diagnostics")
+            diagnostics = dict(diagnostics) if isinstance(diagnostics, dict) else {}
+            diagnostics["request_admission_recovery"] = "server-restart-before-worker-dispatch"
+            diagnostics["request_admission_failure_kind"] = "server_restart"
+            try:
+                await self.upsert({
+                    **row,
+                    "status": "stalled",
+                    "error": "Server restarted before Worker dispatch",
+                    "diagnostics": diagnostics,
+                })
+                recovered += 1
+            except Exception:
+                # Keep the row visible for explicit reconciliation; do not
+                # fail startup because one telemetry callback could not run.
+                continue
+        return recovered
+
     async def append(self, item: dict[str, Any]) -> None:
         await self.upsert(item)
 
@@ -263,6 +302,33 @@ class TelemetryStore:
             if str(row.get("request_id") or "") == request_id:
                 return dict(row)
         return None
+
+    def get_many_persisted(self, request_ids: set[str]) -> dict[str, dict[str, Any]]:
+        """Return the newest persisted rows for exact IDs using the bounded JSONL tail.
+
+        Recovery may need a committing request older than the in-memory 500-row
+        window. This read-only path scans one bounded tail once for all IDs.
+        """
+        targets = {str(value) for value in request_ids if str(value)}
+        if not targets:
+            return {}
+        found: dict[str, dict[str, Any]] = {}
+        try:
+            for row in iter_recent_jsonl(self.path):
+                request_id = str(row.get("request_id") or "")
+                if request_id in targets and request_id not in found:
+                    found[request_id] = _normalize_record_time(row)
+                    if len(found) == len(targets):
+                        break
+        except OSError:
+            # A failed disk read is not proof of completion. In-memory rows
+            # remain a best-effort fallback; unresolved reservations stay held.
+            pass
+        for request_id in targets - set(found):
+            cached = self.get(request_id)
+            if cached is not None:
+                found[request_id] = cached
+        return found
 
     def query(
         self,
