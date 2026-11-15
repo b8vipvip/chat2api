@@ -79,7 +79,15 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
             try:
                 page = context.new_page()
                 page_errors: list[str] = []
+                auth_responses: list[dict[str, object]] = []
                 page.on("pageerror", lambda error: page_errors.append(error.stack or str(error)))
+                page.on(
+                    "response",
+                    lambda response: auth_responses.append({
+                        "path": response.url.split("?")[0],
+                        "status": response.status,
+                    }) if "/api/admin/auth/" in response.url else None,
+                )
                 page.goto(base_url + "/admin", wait_until="domcontentloaded")
                 page.locator("#adminSessionState").wait_for(state="visible", timeout=10000)
                 page.wait_for_function(
@@ -391,11 +399,35 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                 )
                 page.locator("#adminUsername").fill(user_username)
                 page.locator("#adminPassword").fill(user_password)
+                auth_responses.clear()
                 page.locator("#adminLoginButton").click()
-                page.wait_for_function(
-                    "() => document.getElementById('adminSessionState')?.textContent.includes('user_operator')",
-                    timeout=10000,
-                )
+                try:
+                    page.wait_for_function(
+                        "() => document.getElementById('adminSessionState')?.textContent.includes('user_operator')",
+                        timeout=10000,
+                    )
+                except Exception as error:
+                    diagnostics = page.evaluate(
+                        """() => ({
+                          loginError: document.getElementById("adminLoginError")?.textContent || "",
+                          sessionState: document.getElementById("adminSessionState")?.textContent || "",
+                          loginGateDisplay: document.getElementById("adminLoginGate")?.style.display || "",
+                          commerceRole: document.documentElement.dataset.adminCommerceRole || "",
+                          commerceSessionReady: document.documentElement.dataset.adminCommerceSessionReady || "",
+                          adminUiReady: window.__CHAT2API_CONTROL_PLANE_ADMIN_V1_READY__ === true,
+                          loginButtonDisabled: Boolean(document.getElementById("adminLoginButton")?.disabled),
+                          usernameValue: document.getElementById("adminUsername")?.value || "",
+                          passwordLength: document.getElementById("adminPassword")?.value?.length || 0
+                        })"""
+                    )
+                    raise AssertionError(
+                        "delegated user admin login did not hydrate: "
+                        + repr({
+                            "auth_responses": auth_responses[-8:],
+                            "diagnostics": diagnostics,
+                            "page_errors": page_errors[-8:],
+                        })
+                    ) from error
                 page.wait_for_function(
                     "() => document.documentElement.dataset.adminCommerceRole === 'user_admin' && document.documentElement.dataset.adminCommerceSessionReady === 'true'",
                     timeout=10000,
