@@ -24,6 +24,7 @@ from app.model_entitlements import ModelEntitlementError, ModelEntitlementStore
 from app import model_capability_routing_patch as model_routing
 from app import v13_patch
 from app.responses_image_tool_v182 import handle_image_tool
+from app.responses_model_routing_v108_patch import _ResponsesModelContextMiddleware
 
 
 class FakeRegistry:
@@ -925,3 +926,54 @@ def test_disabled_user_cannot_dispatch_with_owned_managed_key(tmp_path: Path):
         assert registry.resolve_calls == []
     finally:
         reset_model_context(tokens)
+
+
+def test_responses_text_model_context_reaches_entitlement_gate(tmp_path: Path):
+    app, _ = build_app(tmp_path)
+    store = app.state.model_entitlements
+    registry = app.state.registry
+    store.upsert("key", "key_1", "allow", ["gpt-5.5"])
+
+    async def scenario():
+        async def inner(scope, receive, send):
+            registry.resolve_client(None)
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b'{"ok":true}', "more_body": False})
+
+        middleware = _ResponsesModelContextMiddleware(inner, server_app=app)
+        routing_token = registry.routing_key_context.set("key_1")
+        body = json.dumps({"model": "gpt-5.6-sol", "input": "hello"}).encode("utf-8")
+        received = False
+
+        async def receive():
+            nonlocal received
+            if not received:
+                received = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            return {"type": "http.disconnect"}
+
+        async def send(_message):
+            return None
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/responses",
+            "query_string": b"",
+            "headers": [
+                (b"authorization", b"Bearer voice-token"),
+                (b"content-type", b"application/json"),
+            ],
+            "asgi": {"version": "3.0"},
+        }
+        try:
+            with pytest.raises(HTTPException) as denied:
+                await middleware(scope, receive, send)
+            assert denied.value.status_code == 403
+            assert denied.value.detail["code"] == "model_not_entitled"
+            assert model_routing._MODEL_CONTEXT.get() is None
+            assert v13_patch._target_context.get() is None
+        finally:
+            registry.routing_key_context.reset(routing_token)
+
+    asyncio.run(scenario())
