@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -33,16 +34,18 @@ class FakeKey:
 class FakeApiKeys:
     def __init__(self, token_quota: int | None = 10000) -> None:
         self.keys = {"key-1": FakeKey(token_quota)}
+        self.lock = asyncio.Lock()
         self.charged_requests: dict[str, int] = {}
 
     async def account_completed_usage(self, record: dict) -> None:
         request_id = str(record["request_id"])
-        if request_id in self.charged_requests:
-            return
-        usage = record.get("usage") or {}
-        amount = max(0, int(usage.get("total_tokens") or 0))
-        self.keys[str(record["api_key_id"])].tokens_used += amount
-        self.charged_requests[request_id] = amount
+        async with self.lock:
+            if request_id in self.charged_requests:
+                return
+            usage = record.get("usage") or {}
+            amount = max(0, int(usage.get("total_tokens") or 0))
+            self.keys[str(record["api_key_id"])].tokens_used += amount
+            self.charged_requests[request_id] = amount
 
 
 def _runtime(tmp_path: Path, token_quota: int | None = 10000):
@@ -58,9 +61,9 @@ def _runtime(tmp_path: Path, token_quota: int | None = 10000):
 
 def test_runtime_reserves_prompt_plus_conservative_output_floor(tmp_path: Path) -> None:
     app, store, api_keys = _runtime(tmp_path)
-    reservation = reserve_request_quota(
+    reservation = asyncio.run(reserve_request_quota(
         app, "req_runtime_0001", SimpleNamespace(key_id="key-1"), "hello world", 4096,
-    )
+    ))
     assert reservation is not None
     assert reservation["state"] == "reserved"
     assert reservation["reserved_tokens"] >= 4097
@@ -82,10 +85,10 @@ def test_runtime_maps_reservation_store_io_failures_to_retryable_503(tmp_path: P
 
     monkeypatch.setattr(store, "reserve_for_key", fail_reserve)
     with pytest.raises(HTTPException) as error:
-        reserve_request_quota(
+        asyncio.run(reserve_request_quota(
             app, "req_runtime_store_failure_0001",
             SimpleNamespace(key_id="key-1"), "hello world", 4096,
-        )
+        ))
 
     assert error.value.status_code == 503
     assert error.value.detail == "Token quota reservation service is temporarily unavailable"
@@ -93,12 +96,30 @@ def test_runtime_maps_reservation_store_io_failures_to_retryable_503(tmp_path: P
     store.close()
 
 
+@pytest.mark.asyncio
+async def test_runtime_reservation_waits_for_api_key_usage_ledger_lock(tmp_path: Path) -> None:
+    app, store, api_keys = _runtime(tmp_path)
+
+    async with api_keys.lock:
+        task = asyncio.create_task(reserve_request_quota(
+            app, "req_runtime_lock_serialized_0001",
+            SimpleNamespace(key_id="key-1"), "prompt", 4096,
+        ))
+        await asyncio.sleep(0)
+        assert not task.done()
+
+    reservation = await task
+    assert reservation["state"] == "reserved"
+    assert store.get("req_runtime_lock_serialized_0001")["state"] == "reserved"
+    store.close()
+
+
 def test_runtime_leaves_master_key_on_unmetered_path(tmp_path: Path) -> None:
     app, store, api_keys = _runtime(tmp_path)
-    reservation = reserve_request_quota(
+    reservation = asyncio.run(reserve_request_quota(
         app, "req_master_unmetered_0001",
         SimpleNamespace(key_id="master", kind="master"), "hello world", 4096,
-    )
+    ))
     assert reservation is None
     assert store.get("req_master_unmetered_0001") is None
     store.close()
@@ -107,9 +128,9 @@ def test_runtime_leaves_master_key_on_unmetered_path(tmp_path: Path) -> None:
 def test_runtime_denies_reservation_when_completed_plus_inflight_exceeds_quota(tmp_path: Path) -> None:
     app, store, api_keys = _runtime(tmp_path, token_quota=100)
     with pytest.raises(HTTPException) as error:
-        reserve_request_quota(
+        asyncio.run(reserve_request_quota(
             app, "req_runtime_0002", SimpleNamespace(key_id="key-1"), "hello", 4096,
-        )
+        ))
     assert error.value.status_code == 429
     assert store.get("req_runtime_0002") is None
     store.close()
@@ -118,7 +139,7 @@ def test_runtime_denies_reservation_when_completed_plus_inflight_exceeds_quota(t
 @pytest.mark.asyncio
 async def test_nonterminal_telemetry_updates_do_not_release_reservation(tmp_path: Path) -> None:
     app, store, api_keys = _runtime(tmp_path)
-    reserve_request_quota(app, "req_runtime_0003", SimpleNamespace(key_id="key-1"), "prompt", 4096)
+    await reserve_request_quota(app, "req_runtime_0003", SimpleNamespace(key_id="key-1"), "prompt", 4096)
     callback = app.state.telemetry.usage_accounting
     for status in ("queued", "running"):
         await callback({"request_id": "req_runtime_0003", "api_key_id": "key-1", "status": status})
@@ -138,7 +159,7 @@ async def test_completed_usage_without_positive_total_keeps_reservation_until_le
         ("req_usage_zero_0001", {"total_tokens": 0}),
         ("req_usage_fractional_0001", {"total_tokens": 1.5}),
     ):
-        reserve_request_quota(
+        await reserve_request_quota(
             app, request_id, SimpleNamespace(key_id="key-1"), "prompt", 4096,
         )
         record = {
@@ -173,7 +194,7 @@ async def test_completed_usage_without_positive_total_keeps_reservation_until_le
 async def test_completed_usage_requires_durable_api_key_ledger_proof_before_settlement(tmp_path: Path) -> None:
     app, store, api_keys = _runtime(tmp_path)
     request_id = "req_charge_proof_missing_0001"
-    reserve_request_quota(app, request_id, SimpleNamespace(key_id="key-1"), "prompt", 4096)
+    await reserve_request_quota(app, request_id, SimpleNamespace(key_id="key-1"), "prompt", 4096)
 
     async def interrupted_charge(record: dict) -> None:
         # Simulate an accounting owner that returned without persisting a
@@ -227,7 +248,7 @@ async def test_startup_recovery_replays_terminal_before_expiring_reserved_hold(t
 
     app, store, api_keys = _runtime(tmp_path)
     request_id = "req_replay_before_begin_commit_0001"
-    reservation = reserve_request_quota(
+    reservation = await reserve_request_quota(
         app, request_id, SimpleNamespace(key_id="key-1"), "prompt", 4096,
     )
     telemetry = TelemetryStore(tmp_path)
@@ -255,9 +276,9 @@ async def test_startup_recovery_releases_reserved_terminal_failure(tmp_path: Pat
 
     app, store, api_keys = _runtime(tmp_path)
     request_id = "req_replay_reserved_cancelled_0001"
-    reserve_request_quota(
+    asyncio.run(reserve_request_quota(
         app, request_id, SimpleNamespace(key_id="key-1"), "prompt", 4096,
-    )
+    ))
     telemetry = TelemetryStore(tmp_path)
     await telemetry.upsert({
         "request_id": request_id, "api_key_id": "key-1", "status": "cancelled",
@@ -291,7 +312,7 @@ def test_reconcile_accepts_store_level_idempotency_ledger_adapter(tmp_path: Path
 async def test_completed_usage_commits_once_and_terminal_failure_releases(tmp_path: Path) -> None:
     app, store, api_keys = _runtime(tmp_path)
     callback = app.state.telemetry.usage_accounting
-    reserve_request_quota(app, "req_runtime_0004", SimpleNamespace(key_id="key-1"), "prompt", 4096)
+    await reserve_request_quota(app, "req_runtime_0004", SimpleNamespace(key_id="key-1"), "prompt", 4096)
     completed = {
         "request_id": "req_runtime_0004", "api_key_id": "key-1", "status": "completed",
         "usage": {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12},
@@ -302,7 +323,7 @@ async def test_completed_usage_commits_once_and_terminal_failure_releases(tmp_pa
     assert api_keys.keys["key-1"].tokens_used == 12
     assert api_keys.charged_requests["req_runtime_0004"] == 12
 
-    reserve_request_quota(app, "req_runtime_0005", SimpleNamespace(key_id="key-1"), "prompt", 4096)
+    await reserve_request_quota(app, "req_runtime_0005", SimpleNamespace(key_id="key-1"), "prompt", 4096)
     await callback({"request_id": "req_runtime_0005", "api_key_id": "key-1", "status": "cancelled"})
     assert store.get("req_runtime_0005")["state"] == "released"
     assert api_keys.keys["key-1"].tokens_used == 12
