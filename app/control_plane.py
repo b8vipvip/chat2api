@@ -55,6 +55,9 @@ def permission_for_admin_route(path: str, method: str) -> str | None:
     if path == "/api/admin/control/admins" or re.fullmatch(r"/api/admin/control/admins/[^/]+", path):
         return "admins:write" if write else "admins:read"
     if re.fullmatch(r"/api/admin/control/admins/[^/]+/password", path):
+        # This compatibility route also supports self-service. The handler
+        # requires the authenticated actor to match the target username and
+        # verify the current password; only root may target another admin.
         return "users:write"
     if path == "/api/admin/control/self/password":
         return "admin:self_password"
@@ -81,9 +84,13 @@ def permission_for_admin_route(path: str, method: str) -> str | None:
     ):
         return "tenants:" + suffix
     if path == "/api/admin/users" or re.fullmatch(
-        r"/api/admin/users/[^/]+(?:/sessions/revoke|/keys(?:/[^/]+)?)?", path
+        r"/api/admin/users/[^/]+(?:/sessions/revoke)?", path
     ):
         return "users:" + suffix
+    # User-owned API keys have their own permission boundary. A user manager
+    # must not gain key visibility or mutation rights through /users/{id}/keys.
+    if re.fullmatch(r"/api/admin/users/[^/]+/keys(?:/[^/]+)?", path):
+        return "keys:" + suffix
     if re.fullmatch(r"/api/admin/keys/[^/]+/secret", path):
         return "secrets:read"
     if re.fullmatch(r"/api/admin/keys/[^/]+/settings", path):

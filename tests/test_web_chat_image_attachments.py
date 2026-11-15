@@ -303,12 +303,21 @@ def test_web_chat_image_picker_and_client_javascript_are_wired(tmp_path: Path) -
         assert 'id="imageInput"' in page.text
         assert 'id="attachButton"' in page.text
         assert 'id="pendingImages"' in page.text
+        assert 'id="fileInput"' in page.text
+        assert 'id="fileButton"' in page.text
+        assert 'id="pendingFiles"' in page.text
         assert "image/png,image/jpeg,image/webp,image/gif" in page.text
 
         script = client.get("/assets/chat2api-chat-client-v1.js")
         assert script.status_code == 200
         assert "/v1/files" in script.text
         assert 'purpose: "vision"' in script.text
+        assert 'purpose: "assistants"' in script.text
+        assert 'type: "file"' in script.text
+        assert "uploadPendingFiles" in script.text
+        assert "/api/user/chat/files/" in script.text
+        assert "MAX_FILES_PER_MESSAGE = 4" in script.text
+        assert "MAX_DOCUMENT_BYTES = 20 * 1024 * 1024" in script.text
         assert 'type: "image_url"' in script.text
         assert "/api/user/files/" in script.text
         assert 'method: "DELETE"' in script.text
@@ -339,3 +348,67 @@ def test_web_chat_image_picker_and_client_javascript_are_wired(tmp_path: Path) -
                 timeout=10,
             )
             assert checked.returncode == 0, checked.stdout + checked.stderr
+
+
+def test_user_can_download_and_delete_owned_assistant_document(tmp_path: Path) -> None:
+    from app.web_chat_file_download_api import install_web_chat_file_download_api
+
+    settings = Settings(
+        CHAT2API_API_KEY="web-chat-document-master-key",
+        CHAT2API_DATA_DIR=str(tmp_path),
+    )
+    app = create_app(settings)
+    install_user_console_v104_patch(app)
+    install_web_chat_file_download_api(app)
+    payload = b"%PDF-1.4\n% chat2api test document\n%%EOF\n"
+    with TestClient(app) as client:
+        token = _register_and_create_key(client, "document-owner@example.com")
+        uploaded = client.post(
+            "/v1/files",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "filename": "reference.pdf", "mime_type": "application/pdf",
+                "data_base64": base64.b64encode(payload).decode("ascii"),
+                "purpose": "assistants",
+            },
+        )
+        assert uploaded.status_code == 200, uploaded.text
+        file_id = uploaded.json()["id"]
+        downloaded = client.get(f"/api/user/chat/files/{file_id}/download")
+        assert downloaded.status_code == 200
+        assert downloaded.content == payload
+        assert downloaded.headers["content-type"].startswith("application/pdf")
+        assert "attachment" in downloaded.headers["content-disposition"]
+        assert downloaded.headers["cache-control"] == "private, no-store"
+        deleted = client.delete(f"/api/user/files/{file_id}", headers={"Origin":"http://testserver"})
+        assert deleted.status_code == 200, deleted.text
+        assert deleted.json() == {"deleted": True}
+        assert client.get(f"/api/user/chat/files/{file_id}/download").status_code == 404
+
+
+def test_user_cannot_download_or_delete_another_accounts_document(tmp_path: Path) -> None:
+    from app.web_chat_file_download_api import install_web_chat_file_download_api
+
+    app = create_app(Settings(CHAT2API_API_KEY="web-chat-document-master-key", CHAT2API_DATA_DIR=str(tmp_path)))
+    install_user_console_v104_patch(app)
+    install_web_chat_file_download_api(app)
+    payload = b"%PDF-1.4\n% chat2api test document\n%%EOF\n"
+    with TestClient(app) as client:
+        token = _register_and_create_key(client, "document-owner@example.com")
+        uploaded = client.post(
+            "/v1/files",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "filename": "private.pdf", "mime_type": "application/pdf",
+                "data_base64": base64.b64encode(payload).decode("ascii"),
+                "purpose": "assistants",
+            },
+        )
+        assert uploaded.status_code == 200, uploaded.text
+        file_id = uploaded.json()["id"]
+        client.post("/api/user/logout")
+        _register_and_create_key(client, "document-other@example.com")
+        assert client.get(f"/api/user/chat/files/{file_id}/download").status_code == 404
+        assert client.delete(
+            f"/api/user/files/{file_id}", headers={"Origin":"http://testserver"},
+        ).status_code == 404
