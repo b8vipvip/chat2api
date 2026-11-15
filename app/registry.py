@@ -301,23 +301,47 @@ class ClientRegistry:
             raise RuntimeError(
                 "Chrome extension is online but ChatGPT is not logged in or the composer is not ready"
             )
-        websocket = self.sockets.get(client_id)
-        if not websocket:
-            raise RuntimeError("Chrome extension is offline")
         lock = self.socket_locks.setdefault(client_id, asyncio.Lock())
+        initial_request_types = {
+            "chat.request", "image.request", "voice.request",
+            "voice.live.start", "voice.live.request",
+        }
+        request_followup_types = {
+            "chat.cancel", "voice.cancel", "voice.live.audio",
+            "voice.live.text", "voice.live.multimodal",
+            "voice.live.cancel_response", "voice.live.stop",
+        }
         async with lock:
-            if request_type in {
-                "chat.request", "image.request", "voice.request",
-                "voice.live.start", "voice.live.request",
-            }:
-                request_id = str(payload.get("request_id") or "")
-                broker = getattr(self, "request_broker", None)
-                state = getattr(broker, "requests", {}).get(request_id) if broker else None
-                # Bind the request to the socket that received its initial
-                # dispatch. Follow-up Live multimodal turns must not rebind a
-                # session to a replacement socket after reconnect.
-                if state is not None and state.dispatch_socket is None:
-                    state.dispatch_socket = websocket
+            # Re-read the socket while holding its send lock. A reconnect
+            # between lookup and send must never redirect an active request's
+            # follow-up/cancel message to a different Worker connection.
+            websocket = self.sockets.get(client_id)
+            if not websocket:
+                raise RuntimeError("Chrome extension is offline")
+            request_id = str(payload.get("request_id") or "")
+            broker = getattr(self, "request_broker", None)
+            state = getattr(broker, "requests", {}).get(request_id) if broker and request_id else None
+            if request_type in initial_request_types:
+                if state is not None:
+                    if str(getattr(state, "client_id", "") or "") != client_id:
+                        raise RuntimeError("Request is not assigned to this Worker")
+                    # Bind once to the socket that received the initial
+                    # dispatch. A reused request ID cannot migrate to a new
+                    # connection after reconnect.
+                    if state.dispatch_socket is None:
+                        state.dispatch_socket = websocket
+                    elif state.dispatch_socket is not websocket:
+                        raise RuntimeError("Request Worker connection changed")
+            elif request_type in request_followup_types:
+                expected_socket = getattr(state, "dispatch_socket", None) if state is not None else None
+                if (
+                    state is None
+                    or expected_socket is None
+                    or str(getattr(state, "client_id", "") or "") != client_id
+                    or websocket is not expected_socket
+                ):
+                    raise RuntimeError("Request Worker connection changed or is unavailable")
+                websocket = expected_socket
             await websocket.send_json(payload)
 
     def online_client_ids(self) -> list[str]:
