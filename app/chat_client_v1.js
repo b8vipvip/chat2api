@@ -14,6 +14,9 @@
     streaming: false,
     streamingMessageId: "",
     abortController: null,
+    recoveryController: null,
+    activeRequestRecord: null,
+    recoveryInFlight: new Set(),
     toastTimer: null,
   };
   const MAX_CONVERSATIONS = 15;
@@ -85,6 +88,9 @@
             role: message.role,
             content: message.content.slice(0, MAX_MESSAGE_CHARS),
             createdAt: String(message.createdAt || ""),
+            requestId: typeof message.requestId === "string" ? message.requestId.slice(0, 140) : "",
+            pending: message.pending === true,
+            recoveryStatus: typeof message.recoveryStatus === "string" ? message.recoveryStatus.slice(0, 40) : "",
           })) : [],
         }));
     } catch {
@@ -422,13 +428,24 @@
       const time = document.createElement("span");
       time.className = "message-time";
       time.textContent = message.createdAt ? new Date(message.createdAt).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}) : "";
-      header.append(name, time);
+      header.append(name, time);      if (message.role === "assistant" && message.recoveryStatus &&
+          (message.pending || message.recoveryStatus !== "completed")) {
+        const status = document.createElement("span");
+        status.className = "recovery-status";
+        status.textContent = recoveryStatusLabel(message.recoveryStatus);
+        header.appendChild(status);
+      }
       const body = document.createElement("div");
       body.className = "message-body";
       if (message.role === "user") {
         body.textContent = message.content;
       } else {
-        renderMarkdown(body, message.content);
+        const renderer = window.Chat2APISafeRenderer;
+        if (renderer && typeof renderer.renderMarkdown === "function") {
+          renderer.renderMarkdown(body, message.content);
+        } else {
+          body.textContent = message.content;
+        }
       }
       if (state.streaming && message.id === state.streamingMessageId) {
         const caret = document.createElement("span");
@@ -438,6 +455,14 @@
       }
       const actions = document.createElement("div");
       actions.className = "message-actions";
+      if (message.role === "assistant" && message.pending && message.requestId) {
+        const recover = document.createElement("button");
+        recover.type = "button";
+        recover.className = "recovery-action";
+        recover.textContent = "恢复回复";
+        recover.addEventListener("click", () => { void recoverPendingMessage(conversation, message); });
+        actions.appendChild(recover);
+      }
       const copy = document.createElement("button");
       copy.type = "button";
       copy.textContent = "复制";
@@ -488,8 +513,10 @@
     }
   }
 
+  class StreamResponseError extends Error {}
+
   function consumeSseFrame(frame, assistant) {
-    const data = frame.split("\n")
+    const data = frame.split(/\r?\n/)
       .filter((line) => line.startsWith("data:"))
       .map((line) => line.slice(5).trimStart())
       .join("\n");
@@ -497,13 +524,117 @@
     if (data.trim() === "[DONE]") return true;
     let event;
     try { event = JSON.parse(data); } catch { return false; }
-    const choice = Array.isArray(event.choices) ? event.choices[0] : null;
+    if (event?.error) {
+      throw new StreamResponseError(event.error.message || "服务端返回流式错误");
+    }
+    const choice = Array.isArray(event?.choices) ? event.choices[0] : null;
     if (choice?.delta && Object.prototype.hasOwnProperty.call(choice.delta, "content")) {
       appendDelta(assistant, choice.delta.content);
     }
     return false;
   }
 
+  function recoveryStatusLabel(status) {
+    const labels = {
+      streaming: "生成中", recovering: "恢复中", recovery_pending: "等待服务端确认",
+      queued: "排队中", running: "生成中", reconnecting: "重新连接中",
+      completed: "已完成", completed_without_text: "已完成，但无可恢复文本",
+      cancellation_requested: "正在确认停止", cancelled: "已取消", error: "请求失败",
+      stalled: "请求停滞", auth_required: "需要重新登录", not_found: "请求记录不存在",
+      recovery_unavailable: "暂不可恢复", recovery_timeout: "恢复超时",
+      recovery_failed: "恢复失败", recovery_error: "恢复连接异常",
+      invalid_response: "恢复响应无效", request_mismatch: "请求身份不匹配",
+      invalid_request: "请求记录无效", polling_stopped: "恢复已停止",
+    };
+    return labels[String(status || "")] || "请求状态：" + String(status || "unknown");
+  }
+
+  function makeRecoveryController(conversation, assistant) {
+    const recoveryApi = window.Chat2APIStreamRecoveryV1;
+    if (!recoveryApi || typeof recoveryApi.create !== "function") return null;
+    return recoveryApi.create({
+      onUpdate(update) {
+        if (!update || update.request_id !== assistant.requestId ||
+            update.assistant_message_id !== assistant.id) return;
+        assistant.recoveryStatus = String(update.status || "recovering").slice(0, 40);
+        if (update.status === "completed" && update.terminal === true &&
+            typeof update.response_text === "string") {
+          assistant.content = update.response_text.slice(0, MAX_MESSAGE_CHARS);
+        }
+        saveHistory();
+        if (currentConversation()?.id === conversation.id) renderMessages();
+      },
+    });
+  }
+
+  async function recoverPendingMessage(conversation, assistant, existingController = null) {
+    if (!assistant || assistant.pending !== true || !assistant.requestId) {
+      return {status:"not_pending"};
+    }
+    const record = {
+      request_id: String(assistant.requestId),
+      assistant_message_id: String(assistant.id || ""),
+    };
+    const recoveryKey = record.request_id + ":" + record.assistant_message_id;
+    if (state.recoveryInFlight.has(recoveryKey)) return {status:"already_recovering"};
+    const controller = existingController || makeRecoveryController(conversation, assistant);
+    if (!controller) {
+      assistant.pending = false;
+      assistant.recoveryStatus = "recovery_unavailable";
+      saveHistory();
+      if (currentConversation()?.id === conversation.id) renderMessages();
+      return {status:"recovery_unavailable"};
+    }
+
+    state.recoveryInFlight.add(recoveryKey);
+    assistant.recoveryStatus = "recovering";
+    saveHistory();
+    if (currentConversation()?.id === conversation.id) renderMessages();
+    try {
+      const result = await controller.resume(record);
+      const status = String(result?.status || "recovery_failed");
+      if (result?.terminal === true) {
+        assistant.pending = false;
+        assistant.recoveryStatus = status;
+        if (status === "completed" && typeof result.response_text === "string") {
+          assistant.content = result.response_text.slice(0, MAX_MESSAGE_CHARS);
+        }
+      } else if (["recovery_timeout", "polling_stopped", "auth_required"].includes(status)) {
+        assistant.pending = true;
+        assistant.recoveryStatus = status;
+      } else {
+        assistant.pending = false;
+        assistant.recoveryStatus = status;
+        if (status === "not_found" && !assistant.content) {
+          assistant.content = "请求未被服务端接收，或请求记录已过期，无法恢复。";
+        }
+      }
+      return result;
+    } catch (error) {
+      assistant.pending = !(error && error.name === "TypeError");
+      assistant.recoveryStatus = assistant.pending ? "recovery_error" : "invalid_request";
+      return {status:assistant.recoveryStatus};
+    } finally {
+      state.recoveryInFlight.delete(recoveryKey);
+      conversation.updatedAt = new Date().toISOString();
+      saveHistory();
+      if (currentConversation()?.id === conversation.id) renderMessages();
+    }
+  }
+
+  function resumePendingMessages() {
+    const pending = [];
+    state.conversations.forEach((conversation) => {
+      (conversation.messages || []).forEach((message) => {
+        if (message.role === "assistant" && message.pending === true && message.requestId) {
+          pending.push({conversation, message});
+        }
+      });
+    });
+    pending.slice(0, 5).forEach(({conversation, message}) => {
+      void recoverPendingMessage(conversation, message);
+    });
+  }
   async function sendMessage(text) {
     const clean = String(text || "").trim();
     if (!clean || state.streaming) return;
@@ -513,12 +644,24 @@
       return;
     }
     const conversation = currentConversation() || createConversation();
+    if (conversation.messages.some((message) => message.role === "assistant" && message.pending === true)) {
+      toast("上一条回复仍在恢复；请先完成恢复后再发送。");
+      return;
+    }
+    const recoveryApi = window.Chat2APIStreamRecoveryV1;
+    if (!recoveryApi || typeof recoveryApi.createRequestId !== "function") {
+      toast("请求恢复模块尚未加载，请刷新页面后重试。");
+      return;
+    }
+    const requestId = recoveryApi.createRequestId();
     conversation.model = state.selectedModel;
     const userMessage = {id:id(),role:"user",content:clean,createdAt:new Date().toISOString()};
     conversation.messages.push(userMessage);
     autoTitle(conversation);
-    const assistant = {id:id(),role:"assistant",content:"",createdAt:new Date().toISOString()};
+    const assistant = {id:id(),role:"assistant",content:"",createdAt:new Date().toISOString(),requestId,pending:true,recoveryStatus:"streaming"};
     conversation.messages.push(assistant);
+    state.recoveryController = makeRecoveryController(conversation, assistant);
+    state.activeRequestRecord = {request_id:requestId, assistant_message_id:assistant.id};
     conversation.updatedAt = new Date().toISOString();
     saveHistory();
     state.streaming = true;
@@ -533,6 +676,7 @@
     $("modelSelect").disabled = true;
     renderAll();
 
+    let requestSubmitted = false;
     try {
       const messages = conversation.messages
         .filter((message) => message.id !== assistant.id)
@@ -549,6 +693,7 @@
         setConnection("登录已失效", "error");
         throw new Error("用户登录状态已失效，请重新登录后再继续聊天");
       }
+      requestSubmitted = true;
       const response = await fetch("/v1/chat/completions", {
         method: "POST",
         credentials: "same-origin",
@@ -556,6 +701,7 @@
           "Authorization": "Bearer " + state.apiToken,
           "Content-Type": "application/json",
           "Accept": "text/event-stream",
+          "X-Chat2API-Request-ID": requestId,
         },
         body: JSON.stringify({
           model: state.selectedModel,
@@ -581,40 +727,70 @@
       let buffer = "";
       let done = false;
       let lastSavedLength = 0;
-      while (!done) {
-        const part = await reader.read();
-        if (part.done) break;
-        buffer += decoder.decode(part.value, {stream:true});
-        buffer = buffer.replace(/\r\n/g, "\n");
-        let boundary;
-        while ((boundary = buffer.indexOf("\n\n")) >= 0) {
-          const frame = buffer.slice(0, boundary);
-          buffer = buffer.slice(boundary + 2);
-          if (consumeSseFrame(frame, assistant)) {
-            done = true;
-            break;
+      try {
+        while (!done) {
+          const part = await reader.read();
+          if (part.done) break;
+          buffer += decoder.decode(part.value, {stream:true});
+          let boundary;
+          while ((boundary = /\r?\n\r?\n/.exec(buffer))) {
+            const frame = buffer.slice(0, boundary.index);
+            buffer = buffer.slice(boundary.index + boundary[0].length);
+            if (consumeSseFrame(frame, assistant)) {
+              done = true;
+              break;
+            }
+          }
+          if (assistant.content) {
+            conversation.updatedAt = new Date().toISOString();
+            if (assistant.content.length - lastSavedLength >= 1000) {
+              saveHistory();
+              lastSavedLength = assistant.content.length;
+            }
+            renderMessages();
           }
         }
-        if (assistant.content) {
-          conversation.updatedAt = new Date().toISOString();
-          if (assistant.content.length - lastSavedLength >= 1000) {
-            saveHistory();
-            lastSavedLength = assistant.content.length;
-          }
-          renderMessages();
-        }
+      } finally {
+        // After [DONE], let the server finish closing the HTTP response.
+        // If processing failed, stop reading without masking the original error.
+        if (!done) void reader.cancel().catch(() => {});
+        reader.releaseLock();
       }
-      if (buffer.trim() && consumeSseFrame(buffer, assistant)) done = true;
-      if (!assistant.content.trim()) {
-        conversation.messages = conversation.messages.filter((message) => message.id !== assistant.id);
-        toast("模型没有返回文本内容。");
-      } else if (!done) {
-        toast("连接已结束，但未收到流结束标记；请检查请求记录确认是否完整。");
+      if (done) {
+        assistant.pending = false;
+        assistant.recoveryStatus = "completed";
+        if (!assistant.content.trim()) {
+          conversation.messages = conversation.messages.filter((message) => message.id !== assistant.id);
+          toast("模型没有返回文本内容。");
+        }
+      } else {
+        assistant.pending = true;
+        assistant.recoveryStatus = "recovery_pending";
+        saveHistory();
+        const recoveryController = state.recoveryController;
+        void recoverPendingMessage(conversation, assistant, recoveryController).then((result) => {
+          if (result?.status === "completed") toast("连接中断，已从服务端恢复最终回复。");
+          else toast("连接已结束但未收到流结束标记；请求状态：" + recoveryStatusLabel(result?.status));
+        });
       }
     } catch (error) {
-      if (error.name === "AbortError") {
-        toast(assistant.content ? "已停止生成，已保留当前回复。" : "已停止生成。");
-        if (!assistant.content) conversation.messages = conversation.messages.filter((message) => message.id !== assistant.id);
+      if (error instanceof StreamResponseError) {
+        assistant.pending = false;
+        assistant.recoveryStatus = "error";
+        toast("请求失败：" + error.message);
+        return;
+      }
+      assistant.pending = Boolean(requestSubmitted && assistant.requestId);
+      assistant.recoveryStatus = error.name === "AbortError" ? "cancellation_requested" : "recovery_pending";
+      if (assistant.pending) {
+        saveHistory();
+        const recoveryController = state.recoveryController;
+        void recoverPendingMessage(conversation, assistant, recoveryController).then((result) => {
+          if (result?.status === "completed") toast("连接中断，已恢复服务端最终回复。");
+          else if (result?.status === "cancelled") toast("请求已取消。");
+          else if (result?.status === "completed_without_text") toast("请求已完成，但服务端没有可恢复的文本。");
+          else toast((error.name === "AbortError" ? "停止状态：" : "请求失败，恢复状态：") + recoveryStatusLabel(result?.status));
+        });
       } else {
         if (!assistant.content) conversation.messages = conversation.messages.filter((message) => message.id !== assistant.id);
         toast("请求失败：" + error.message);
@@ -623,6 +799,8 @@
       state.streaming = false;
       state.streamingMessageId = "";
       state.abortController = null;
+      state.recoveryController = null;
+      state.activeRequestRecord = null;
       conversation.updatedAt = new Date().toISOString();
       saveHistory();
       if (state.apiToken) renderAll();
@@ -757,6 +935,7 @@
     if (state.conversations.length) state.activeConversationId = state.conversations[0].id;
     renderAll();
     const ready = await loadKeys();
+    resumePendingMessages();
     if (!ready) return;
     if (currentConversation()) state.selectedModel = currentConversation().model || state.selectedModel;
     renderAll();
@@ -776,6 +955,15 @@
   });
   $("sendButton").addEventListener("click", () => sendMessage($("messageInput").value));
   $("stopButton").addEventListener("click", () => {
+    const controller = state.recoveryController;
+    const record = state.activeRequestRecord;
+    if (controller && record) {
+      void controller.cancel(record).then((result) => {
+        if (result?.cancel_requested) toast("已向 Worker 发送停止请求。");
+        else if (result?.terminal) toast("请求已进入终态。");
+        else toast("无法确认停止状态，将继续核对服务端请求。");
+      }).catch(() => toast("停止请求未确认；已保留请求恢复记录。"));
+    }
     if (state.abortController) state.abortController.abort();
   });
   $("messageInput").addEventListener("input", resizeComposer);
