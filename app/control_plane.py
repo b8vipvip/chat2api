@@ -103,6 +103,10 @@ def permission_for_admin_route(path: str, method: str) -> str | None:
         return "keys:" + suffix
     if path == "/api/admin/user-pricing":
         return "billing:" + suffix
+    if re.fullmatch(r"/api/admin/billing/charges/[^/]+/refund", path):
+        # Wallet refunds move user funds; grant only the explicit billing-write
+        # capability and do not expose a read permission for this write-only route.
+        return "billing:write" if write else None
     if path == "/api/admin/user-payments":
         # Payment provider private keys remain root-only until G0 DataKeyring
         # migration and its rotation/rollback evidence are accepted.
