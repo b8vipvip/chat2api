@@ -2471,7 +2471,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else None
                 if message_type == "extension.hello" and metadata:
                     socket_runtime_epoch = str(metadata.get("transport_runtime_epoch") or "")
-                await registry.touch(client_id, metadata)
+                if not await registry.touch(client_id, metadata, websocket=websocket):
+                    # This connection was replaced while it was still draining.
+                    # Ignore every message from the stale socket.
+                    break
                 if message_type in {"heartbeat", "extension.hello", "extension.status"}:
                     if message_type in {"extension.hello", "extension.status"} and not window_target_synced:
                         window_runtime = getattr(app.state, "worker_window_limits", {})
