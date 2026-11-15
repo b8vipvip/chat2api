@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from pathlib import Path
+from types import SimpleNamespace
+
+from app.registry import ClientRegistry
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,6 +38,40 @@ def test_worker_attachment_request_id_grammar_matches_responses_server_contract(
     invalid = ("", "short", "bad/request", "bad.request", "x" * 121)
     assert all(SAFE_REQUEST_ID.fullmatch(value) for value in valid)
     assert all(not SAFE_REQUEST_ID.fullmatch(value) for value in invalid)
+
+
+def test_voice_worker_fetches_audio_with_the_original_request_id() -> None:
+    for filename in ("content_voice.js", "content_voice_v2.js"):
+        source = (ROOT / "chrome_extension" / filename).read_text(encoding="utf-8")
+        assert "async function fetchAudio(spec, requestId)" in source
+        assert "requestId: String(requestId || \"\")" in source
+        assert "fetchAudio(message.audio, active.requestId)" in source
+
+
+def test_voice_request_binds_the_current_worker_socket_for_scoped_file_download(tmp_path) -> None:
+    class FakeSocket:
+        def __init__(self):
+            self.sent = []
+
+        async def send_json(self, payload):
+            self.sent.append(payload)
+
+    registry = ClientRegistry(tmp_path)
+    socket = FakeSocket()
+    state = SimpleNamespace(dispatch_socket=None)
+    registry.sockets["ext_voice_worker"] = socket
+    registry.socket_locks["ext_voice_worker"] = asyncio.Lock()
+    registry.request_broker = SimpleNamespace(requests={"req_voice_file_123": state})
+    registry.worker_admin_enabled = lambda _client_id: True
+    registry.chatgpt_routing_ready = lambda _client_id: True
+
+    asyncio.run(registry.send("ext_voice_worker", {
+        "type": "voice.request", "request_id": "req_voice_file_123",
+        "audio": {"file_id": "file_audio"},
+    }))
+
+    assert state.dispatch_socket is socket
+    assert socket.sent[0]["request_id"] == "req_voice_file_123"
 
 
 def test_worker_request_prepares_request_scoped_attachments_before_prompt_submission() -> None:
