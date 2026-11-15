@@ -83,7 +83,7 @@ def test_runtime_maps_reservation_store_io_failures_to_retryable_503(tmp_path: P
     def fail_reserve(*args, **kwargs):
         raise sqlite3.OperationalError("database is locked")
 
-    monkeypatch.setattr(store, "reserve_for_key", fail_reserve)
+    monkeypatch.setattr(store, "reserve", fail_reserve)
     with pytest.raises(HTTPException) as error:
         asyncio.run(reserve_request_quota(
             app, "req_runtime_store_failure_0001",
