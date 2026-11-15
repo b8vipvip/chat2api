@@ -12,6 +12,9 @@ from typing import Any
 class RequestState:
     request_id: str
     client_id: str
+    # Exact WebSocket that received the initial dispatch. A reconnect for the
+    # same client_id does not inherit an already-running request.
+    dispatch_socket: Any | None = field(default=None, repr=False, compare=False)
     queue: asyncio.Queue[dict[str, Any]] = field(default_factory=asyncio.Queue)
     final_future: asyncio.Future[str] | None = None
     text: str = ""
@@ -21,6 +24,16 @@ class RequestState:
     completed_mono: float | None = None
     terminal_event_type: str | None = None
     diagnostics: dict[str, Any] = field(default_factory=dict)
+
+    def owns_dispatch_socket(self, client_id: str, websocket: Any, current_socket: Any) -> bool:
+        """Require the assigned Worker and exact original/current socket."""
+        return bool(
+            client_id
+            and websocket is not None
+            and self.client_id == str(client_id)
+            and self.dispatch_socket is websocket
+            and current_socket is websocket
+        )
 
     def timings(self) -> dict[str, float | None]:
         end = self.completed_mono or time.perf_counter()
@@ -281,7 +294,9 @@ class RequestBroker:
         if websocket is None or current_socket is not websocket:
             return False
         state = self.requests.get(request_id)
-        if state is None or state.client_id != client_id:
+        if state is None or not state.owns_dispatch_socket(
+            client_id, websocket, current_socket
+        ):
             return False
         return await self.publish(request_id, event)
 
