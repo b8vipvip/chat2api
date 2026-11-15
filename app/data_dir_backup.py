@@ -219,10 +219,16 @@ def create_backup(
     except RuntimeTopologyError as exc:
         raise BackupError("Cannot back up while another server process owns the data directory") from exc
     try:
+        # Bound manifest cardinality before copying anything. Otherwise an
+        # unexpectedly large source tree could consume unbounded time/disk and
+        # only fail after the complete copy when the manifest is serialized.
+        source_files = _walk_files(src)
+        if len(source_files) > MAX_MANIFEST_FILES:
+            raise BackupError("Data directory exceeds the 100,000-file backup limit")
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.mkdir(mode=0o700)
         try:
-            for path in _walk_files(src):
+            for path in source_files:
                 relative = path.relative_to(src)
                 target = dest / relative
                 target.parent.mkdir(parents=True, exist_ok=True)

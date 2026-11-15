@@ -2,7 +2,10 @@
 
 Broker and ClientRegistry are process-local authorities. Until a shared lease,
 message transport and transactional persistence architecture is approved, two
-server processes must not concurrently own the same data directory.
+server processes must not concurrently own the same data directory. A bind mount
+shared by containers on the same host is the same data directory and must be
+protected by the same OS advisory lock; separate volumes or hosts are not a
+supported distributed-lock topology.
 """
 from __future__ import annotations
 
@@ -69,6 +72,9 @@ class SingleProcessRuntimeGuard:
                 raise RuntimeTopologyError("Runtime lock path cannot be a symbolic link")
 
             flags = os.O_CREAT | os.O_RDWR
+            # os.open defaults to text mode on Windows; O_BINARY keeps the
+            # fixed 32-byte owner marker byte-for-byte stable across platforms.
+            flags |= getattr(os, "O_BINARY", 0)
             flags |= getattr(os, "O_NOFOLLOW", 0)
             try:
                 fd = os.open(self.lock_path, flags, 0o600)
@@ -79,6 +85,12 @@ class SingleProcessRuntimeGuard:
                 metadata = os.fstat(fd)
                 if not stat.S_ISREG(metadata.st_mode):
                     raise RuntimeTopologyError("Runtime lock path must be a regular file")
+                # A hard-linked lock path could make fchmod() change the mode
+                # of another data file and would let the runtime lock contend
+                # on an unrelated inode. The lock file is dedicated state and
+                # must have exactly one directory entry.
+                if getattr(metadata, "st_nlink", 1) != 1:
+                    raise RuntimeTopologyError("Runtime lock path cannot be hard-linked")
                 if hasattr(os, "fchmod"):
                     os.fchmod(fd, 0o600)
                 else:

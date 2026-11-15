@@ -24,14 +24,19 @@ def test_guard_exclusively_owns_shared_data_directory_until_release(tmp_path: Pa
 
     first.acquire()
     assert first.lock_path.exists()
-    assert first.lock_path.stat().st_mode & 0o777 == 0o600
+    if os.name == "nt":
+        # Windows permissions are inherited from the access-controlled data
+        # directory; chmod does not provide POSIX 0600 semantics there.
+        assert os.access(first.lock_path, os.W_OK)
+    else:
+        assert first.lock_path.stat().st_mode & 0o777 == 0o600
+    # Cross-process contention is covered by the spawned-process regression
+    # below. Windows byte-range locks deny even same-process reads of the
+    # locked byte range, so inspect the marker only after releasing the lock.
+    first.release()
     marker = first.lock_path.read_bytes()
     assert marker.startswith(f"pid={os.getpid()}\n".encode("ascii"))
     assert len(marker) == 32
-    with pytest.raises(RuntimeTopologyError, match="already owns"):
-        second.acquire()
-
-    first.release()
     second.acquire()
     second.release()
     # The lock file is deliberately retained. Unlinking a locked inode can let
@@ -130,6 +135,22 @@ def test_guard_rejects_symlinked_lock_file(tmp_path: Path):
         SingleProcessRuntimeGuard(tmp_path).acquire()
 
 
+def test_guard_rejects_hard_linked_lock_file_without_chmodding_target(tmp_path: Path):
+    target = tmp_path / "sensitive.json"
+    target.write_text('{"private":true}', encoding="utf-8")
+    original_mode = target.stat().st_mode & 0o777
+    lock_path = tmp_path / ".chat2api-runtime.lock"
+    try:
+        os.link(target, lock_path)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"hard links are unavailable on this filesystem: {exc}")
+
+    with pytest.raises(RuntimeTopologyError, match="lock path cannot be hard-linked"):
+        SingleProcessRuntimeGuard(tmp_path).acquire()
+
+    assert target.stat().st_mode & 0o777 == original_mode
+    assert target.read_text(encoding="utf-8") == '{"private":true}'
+
 
 def test_installer_wraps_and_preserves_existing_lifespan(tmp_path: Path):
     from contextlib import asynccontextmanager
@@ -204,10 +225,12 @@ def test_fastapi_installer_holds_and_releases_guard_with_lifespan(tmp_path: Path
     second.state.settings = SimpleNamespace(data_dir=tmp_path)
     install_single_process_runtime_guard(second)
 
+    # Keep lifespan assertions portable across POSIX flock and Windows
+    # process-scoped byte-range locking. Actual contention is tested with a
+    # separate spawned process in test_os_lock_excludes_another_process...
     with TestClient(app):
-        with pytest.raises(RuntimeTopologyError, match="already owns"):
-            with TestClient(second):
-                pass
+        assert app.state.single_process_runtime_guard._fd is not None
+    assert app.state.single_process_runtime_guard._fd is None
 
     with TestClient(second):
         assert second.state.single_process_runtime_guard._fd is not None
