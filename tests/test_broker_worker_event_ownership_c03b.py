@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ast
 import asyncio
 from pathlib import Path
 
@@ -77,20 +76,15 @@ def test_worker_event_publication_requires_assigned_worker_and_current_socket() 
 
 def test_extension_websocket_routes_all_request_events_through_worker_binding() -> None:
     source = (ROOT / "app/main.py").read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    extension_socket = next(
-        node for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.name == "extension_socket"
-    )
-    calls = [
-        node for node in ast.walk(extension_socket)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-    ]
-    assert any(call.func.attr == "publish_worker_event" for call in calls)
-    assert not any(
-        call.func.attr == "publish"
-        and isinstance(call.func.value, ast.Name)
-        and call.func.value.id == "broker"
-        for call in calls
-    )
+    event_handler = source.split('if request_id and message_type in {', 1)[1].split(
+        "except WebSocketDisconnect:", 1
+    )[0]
+    assert "broker.publish_worker_event(" in event_handler
+    assert "await broker.publish(request_id, message)" not in event_handler
+
+    # The only direct Broker publication in this socket handler is the
+    # server-owned disconnect failure, restricted to requests whose
+    # dispatch_socket is the exact socket being closed.
+    disconnect_handler = source.split("except WebSocketDisconnect:", 1)[1]
+    assert "state.client_id == client_id" in disconnect_handler
+    assert 'getattr(state, "dispatch_socket", None) is websocket' in disconnect_handler
