@@ -50,6 +50,23 @@ def test_file_store_rejects_symlinked_index_and_preserves_target(tmp_path):
     assert target.read_bytes() == original
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX named pipes are unavailable on Windows")
+def test_file_store_read_rejects_fifo_swapped_after_startup(tmp_path):
+    store = FileStore(tmp_path)
+    item = asyncio.run(store.create(
+        filename="owned.txt",
+        data_base64=base64.b64encode(b"owned-content").decode("ascii"),
+        mime_type="text/plain",
+        owner_key_id="key_owner",
+        purpose="assistants",
+    ))
+    stored_path = store.root / item.path
+    stored_path.unlink()
+    os.mkfifo(stored_path)
+    with pytest.raises(FileNotFoundError, match="regular file"):
+        store.read(item.file_id)
+
+
 def test_file_store_read_rejects_symlink_swapped_after_startup(tmp_path):
     store = FileStore(tmp_path)
     item = asyncio.run(store.create(
