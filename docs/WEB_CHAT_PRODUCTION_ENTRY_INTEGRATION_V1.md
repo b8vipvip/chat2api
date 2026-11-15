@@ -71,3 +71,10 @@ under network interruption, cross-account attachment tests against production
 FileStore, W-01 upload integration, W-02 encrypted server-side history,
 durable event replay, production-image smoke and deployment/rollback evidence
 remain required. This PR must remain Draft until these gates pass.
+
+
+## 2026-11-15 · Current C-03B stacked baseline
+
+The Web Chat integration branch is stacked on C-03B resource authorization. The current C-03B base head is `23f0e49e8d5be9c090395b9dd5b0e39739a4b68b`; its exact-head CI, Production image smoke, Contract Migration Guard and GPTAuto Observer are green. The integration must be tested against that exact base, not the older C-03B snapshot originally used when this branch was created.
+
+The shared Worker request boundary requires one-time binding to the actual dispatch socket. A terminal browser `image.error` / `image.cancelled` may permit only the same original socket to send `voice.live.stop` cleanup; it must not reopen generation or permit a second terminal. Request-scoped file reads remain limited to the attached file IDs, assigned Worker, original/current socket, and matching owner key.
