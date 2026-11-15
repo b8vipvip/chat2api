@@ -2509,6 +2509,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> dict[str, object]:
         require_scope(principal, "images")
         request_id = accepted_request_id(x_chat2api_request_id, "imgreq_")
+        if telemetry.get(request_id):
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "request_id_conflict", "message": "Duplicate request_id"},
+            )
         attachments = attachment_specs(
             [item.file_id for item in body.attachments], principal, request_id=request_id,
         )
