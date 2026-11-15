@@ -60,10 +60,13 @@ the Control Plane maps this route to `billing:write`. Caller body:
   for later terminal replay.
 - Request IDs are single-use admission identities. A second dispatch using an active, settled, released or expired ID returns HTTP 409; idempotency is limited to replaying the original usage/accounting projection and never creates a second Worker dispatch.
 - Each priced admission snapshots the complete model price catalog and the
-  USD/CNY rate. Settlement selects the actual served model from that immutable
-  catalog; if it was not present at admission, it falls back to the
-  requested-model snapshot. It never reads a changed live price or FX rate
-  for a request that already holds a reservation. Charge rows keep both
+  USD/CNY rate. Settlement selects the actual served model only when it is
+  present and enabled in that immutable catalog. If the Worker reports an
+  actual model absent from the admission snapshot, no charge is created and
+  the original hold remains reserved for reconciliation; settlement never
+  substitutes the requested model's price or reads live pricing. The
+  requested-model snapshot is only a fallback when actual-model evidence is
+  absent or resolves to the originally reserved model. Charge rows keep both
   `model_id` (served model) and `priced_model_id` (price source). Positive-rate
   requests reserve at least one cent using upward cent rounding, so tiny
   estimates still retain their admission snapshot.
