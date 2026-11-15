@@ -278,7 +278,7 @@ async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], princi
     raw_id = str(request_id_override or request.headers.get("x-chat2api-request-id") or "").strip()
     request_id = raw_id if re.fullmatch(r"[A-Za-z0-9_-]{6,120}", raw_id) else "resp_req_" + uuid.uuid4().hex
     try:
-        state = await broker.create(request_id, client_id)
+        state = await app.state.chat_request_service.reserve(request_id, client_id)
     except RuntimeError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     trace_scope = getattr(request, "scope", None)
@@ -357,19 +357,19 @@ async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], princi
             raise
     registry.busy_clients.add(client_id)
     try:
-        await registry.send(client_id, {
-            "type": "chat.request",
-            "request_id": request_id,
-            "prompt": prompt,
-            "attachments": scoped_attachments,
-            "options": {
+        await app.state.chat_request_service.dispatch(
+            client_id,
+            request_id=request_id,
+            prompt=prompt,
+            attachments=scoped_attachments,
+            options={
                 "auto_switch_text": True,
                 "timeout_seconds": timeout,
                 "model": str(body.get("model") or "gpt-5.6-sol"),
                 "response_protocol": "responses-v108",
                 "native_tools": native_tools,
             },
-        })
+        )
     except Exception as error:
         registry.busy_clients.discard(client_id)
         # A failed socket send is terminal for this dispatch attempt. Mark the
