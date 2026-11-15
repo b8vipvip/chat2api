@@ -8,6 +8,7 @@ import json
 import os
 import re
 import secrets
+import stat
 import threading
 import time
 from pathlib import Path
@@ -50,18 +51,41 @@ def _now() -> str:
 
 
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
+    """Atomically persist private JSON without a world-readable temp window."""
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{secrets.token_hex(6)}.tmp")
-    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    serialized = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(temporary, flags, 0o600)
     try:
-        os.chmod(temporary, 0o600)
-    except OSError:
-        pass
-    temporary.replace(path)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = -1
+            handle.write(serialized)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        temporary.unlink(missing_ok=True)
+
+
+def _read_json_private(path: Path) -> Any:
+    if path.is_symlink():
+        raise ValueError("private JSON storage cannot be a symbolic link")
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
+        metadata = os.fstat(fd)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise ValueError("private JSON storage must be a single-link regular file")
+        if os.name != "nt" and hasattr(os, "fchmod"):
+            os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "r", encoding="utf-8") as handle:
+            fd = -1
+            return json.load(handle)
+    finally:
+        if fd >= 0:
+            os.close(fd)
 
 
 def _token_hash(value: str) -> str:
@@ -100,7 +124,7 @@ class UserAccountStore:
         if not self.path.exists():
             return
         try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
+            payload = _read_json_private(self.path)
             if not isinstance(payload, dict):
                 raise ValueError("user account store must be an object")
             version = payload.get("version", USER_COMMERCE_VERSION)
@@ -517,7 +541,7 @@ class PricingStore:
             self._save()
             return
         try:
-            raw = json.loads(self.path.read_text(encoding="utf-8"))
+            raw = _read_json_private(self.path)
             if isinstance(raw, dict):
                 self.payload.update(raw)
             if not isinstance(self.payload.get("models"), list):
@@ -588,7 +612,7 @@ class BillingStore:
         if not self.path.exists():
             return
         try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
+            payload = _read_json_private(self.path)
             self.wallets = {str(k): int(v) for k, v in (payload.get("wallets") or {}).items()}
             self.charges = {str(k): dict(v) for k, v in (payload.get("charges") or {}).items() if isinstance(v, dict)}
             self.orders = {str(k): dict(v) for k, v in (payload.get("orders") or {}).items() if isinstance(v, dict)}
@@ -758,7 +782,7 @@ class PaymentConfigStore:
             self._save()
             return
         try:
-            raw = json.loads(self.path.read_text(encoding="utf-8"))
+            raw = _read_json_private(self.path)
             if isinstance(raw, dict):
                 self.payload.update(raw)
         except (OSError, ValueError, TypeError):
