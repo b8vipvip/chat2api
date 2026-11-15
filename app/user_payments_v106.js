@@ -63,7 +63,11 @@
       const txid = $("usdtTxid")?.value.trim() || "";
       try {
         await api(`/api/user/payments/v106/usdt/${encodeURIComponent(order.order_id)}/txid`, {method:"POST", body:JSON.stringify({txid})});
-        alert("交易哈希已提交，管理员确认到账后余额会更新。");
+        const input = $("usdtTxid");
+        const submit = $("submitUsdtTxid");
+        if (input) input.disabled = true;
+        if (submit) submit.disabled = true;
+        alert("交易哈希已提交，审核期间不可修改；管理员确认到账后余额会更新。");
         await refreshOrders();
       } catch (error) { alert(error.message); }
     });

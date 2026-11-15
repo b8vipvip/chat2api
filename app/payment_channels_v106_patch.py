@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import json
 import re
 import secrets
+import threading
 import time
 from pathlib import Path
 from types import MethodType
@@ -15,11 +17,11 @@ import httpx
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt
 
 from .admin_auth import SESSION_COOKIE as ADMIN_SESSION_COOKIE
 from .timezone_utils import beijing_now_iso
-from .user_commerce import USER_SESSION_COOKIE
+from .user_commerce import USER_SESSION_COOKIE, WalletReservationError
 from .user_console_v104_patch import _parse_json_maybe_wrapped, _safe_url, _verify_zpay, _zpay_sign
 
 
@@ -52,6 +54,81 @@ def _valid_tron_address(value: str) -> bool:
     return bool(re.fullmatch(r"T[1-9A-HJ-NP-Za-km-z]{33}", str(value or "").strip()))
 
 
+def _payment_channels_secret_candidate(data_dir: Path, settings: Any) -> tuple[str, bool]:
+    """Select the legacy payment cipher key without silently changing it.
+
+    Existing V106 ciphertext is still encrypted with .chat2api_data_secret (or
+    the original API-key fallback). Full DataKeyring migration is deferred, so
+    V107 must not replace this key before an approved, reversible migration.
+    """
+    path = data_dir / ".chat2api_data_secret"
+    if path.is_symlink():
+        raise RuntimeError("Payment channel secret file must not be a symlink")
+    try:
+        value = path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        value = ""
+        config_path = data_dir / "user_payment_channels_v106.json"
+        if config_path.exists():
+            try:
+                raw = json.loads(config_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, TypeError) as exc:
+                raise RuntimeError(
+                    "Payment channel configuration is unreadable; refusing to replace its secret"
+                ) from exc
+            zpay = ((raw.get("aggregate") or {}).get("zpay") or {}) if isinstance(raw, dict) else {}
+            paypal = ((raw.get("direct") or {}).get("paypal") or {}) if isinstance(raw, dict) else {}
+            has_ciphertext = bool(
+                (isinstance(zpay, dict) and zpay.get("key_ciphertext"))
+                or (isinstance(paypal, dict) and paypal.get("client_secret_ciphertext"))
+            )
+            # Preserve the exact V106 fallback for an existing encrypted file.
+            value = str(getattr(settings, "api_key", "") or "chat2api") if has_ciphertext else secrets.token_urlsafe(48)
+        else:
+            value = secrets.token_urlsafe(48)
+        return value, True
+    except OSError as exc:
+        raise RuntimeError("Unable to read the payment channel secret file") from exc
+    if not value:
+        # PaymentChannelsStore historically used this fallback when the file
+        # existed but contained only whitespace.
+        return "chat2api-payment-v106", True
+    return value, False
+
+
+def _persist_payment_channels_secret(data_dir: Path, value: str) -> None:
+    path = data_dir / ".chat2api_data_secret"
+    temporary = path.with_name(f".{path.name}.{secrets.token_hex(6)}.tmp")
+    temporary.write_text(value, encoding="utf-8")
+    try:
+        temporary.chmod(0o600)
+    except OSError:
+        pass
+    temporary.replace(path)
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+
+
+def _validate_payment_channel_ciphertexts(channels: "PaymentChannelsStore") -> None:
+    fields = (
+        (channels.payload["aggregate"]["zpay"], "key_ciphertext", "ZPAY"),
+        (channels.payload["direct"]["paypal"], "client_secret_ciphertext", "PayPal"),
+    )
+    for row, field, label in fields:
+        ciphertext = str(row.get(field) or "")
+        if not ciphertext:
+            continue
+        try:
+            channels.cipher.decrypt(ciphertext.encode("ascii"))
+        except (InvalidToken, ValueError, UnicodeEncodeError) as exc:
+            raise RuntimeError(
+                f"{label} credential cannot be decrypted with the configured legacy payment key; "
+                "preserving the existing payment configuration"
+            ) from exc
+
+
 class PaymentChannelsStore:
     """Provider-separated payment configuration.
 
@@ -61,6 +138,7 @@ class PaymentChannelsStore:
     """
 
     def __init__(self, data_dir: Path, secret: str) -> None:
+        self.lock = threading.RLock()
         self.path = data_dir / "user_payment_channels_v106.json"
         key = base64.urlsafe_b64encode(hashlib.sha256(str(secret or "chat2api-payment-v106").encode()).digest())
         self.cipher = Fernet(key)
@@ -103,19 +181,33 @@ class PaymentChannelsStore:
             return
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, TypeError):
-            return
-        if not isinstance(raw, dict):
-            return
-        self.payload["public_origin"] = str(raw.get("public_origin") or "")
-        for group in ("aggregate", "direct"):
-            incoming = raw.get(group)
-            if not isinstance(incoming, dict):
-                continue
-            for provider, values in incoming.items():
-                if provider in self.payload[group] and isinstance(values, dict):
-                    self.payload[group][provider].update(values)
-        self.payload["updated_at"] = raw.get("updated_at") or self.payload["updated_at"]
+            if not isinstance(raw, dict):
+                raise ValueError("payment channel configuration root must be an object")
+            version = raw.get("version", 106)
+            if type(version) is not int or version != 106:
+                raise ValueError("payment channel configuration version is unsupported")
+            origin = raw.get("public_origin", "")
+            updated_at = raw.get("updated_at", self.payload["updated_at"])
+            if not isinstance(origin, str) or not isinstance(updated_at, str):
+                raise ValueError("payment channel configuration metadata is invalid")
+            loaded = copy.deepcopy(self.payload)
+            loaded["public_origin"] = origin
+            loaded["updated_at"] = updated_at
+            for group in ("aggregate", "direct"):
+                incoming = raw.get(group, {})
+                if not isinstance(incoming, dict):
+                    raise ValueError(f"payment channel configuration {group} must be an object")
+                for provider, values in incoming.items():
+                    if provider not in loaded[group] or not isinstance(values, dict):
+                        raise ValueError(f"payment channel configuration {group}.{provider} is unsupported")
+                    loaded[group][provider].update(values)
+            self.payload = loaded
+        except (OSError, ValueError, TypeError) as error:
+            # Provider credentials are not a disposable cache. Do not turn an
+            # unreadable config into empty settings that a later save can erase.
+            raise RuntimeError(
+                "Payment channel configuration is unreadable; refusing to replace it"
+            ) from error
 
     def _save(self) -> None:
         _atomic_json(self.path, self.payload)
@@ -130,29 +222,32 @@ class PaymentChannelsStore:
             return ""
 
     def zpay_key(self) -> str:
-        return self._decrypt(self.payload["aggregate"]["zpay"].get("key_ciphertext"))
+        with self.lock:
+            return self._decrypt(self.payload["aggregate"]["zpay"].get("key_ciphertext"))
 
     def paypal_secret(self) -> str:
-        return self._decrypt(self.payload["direct"]["paypal"].get("client_secret_ciphertext"))
+        with self.lock:
+            return self._decrypt(self.payload["direct"]["paypal"].get("client_secret_ciphertext"))
 
     def admin_public(self) -> dict[str, Any]:
-        zpay = dict(self.payload["aggregate"]["zpay"])
-        paypal = dict(self.payload["direct"]["paypal"])
-        usdt = dict(self.payload["direct"]["usdt"])
-        zpay.pop("key_ciphertext", None)
-        paypal.pop("client_secret_ciphertext", None)
-        zpay["key_configured"] = bool(self.zpay_key())
-        zpay["configured"] = bool(zpay.get("pid") and self.zpay_key())
-        paypal["secret_configured"] = bool(self.paypal_secret())
-        paypal["configured"] = bool(paypal.get("client_id") and self.paypal_secret())
-        usdt["configured"] = bool(_valid_tron_address(str(usdt.get("address") or "")))
-        return {
-            "version": 106,
-            "public_origin": str(self.payload.get("public_origin") or ""),
-            "aggregate": {"zpay": zpay},
-            "direct": {"paypal": paypal, "usdt": usdt},
-            "updated_at": self.payload.get("updated_at"),
-        }
+        with self.lock:
+            zpay = dict(self.payload["aggregate"]["zpay"])
+            paypal = dict(self.payload["direct"]["paypal"])
+            usdt = dict(self.payload["direct"]["usdt"])
+            zpay.pop("key_ciphertext", None)
+            paypal.pop("client_secret_ciphertext", None)
+            zpay["key_configured"] = bool(self.zpay_key())
+            zpay["configured"] = bool(zpay.get("pid") and self.zpay_key())
+            paypal["secret_configured"] = bool(self.paypal_secret())
+            paypal["configured"] = bool(paypal.get("client_id") and self.paypal_secret())
+            usdt["configured"] = bool(_valid_tron_address(str(usdt.get("address") or "")))
+            return {
+                "version": 106,
+                "public_origin": str(self.payload.get("public_origin") or ""),
+                "aggregate": {"zpay": zpay},
+                "direct": {"paypal": paypal, "usdt": usdt},
+                "updated_at": self.payload.get("updated_at"),
+            }
 
     def user_public(self) -> dict[str, Any]:
         admin = self.admin_public()
@@ -186,33 +281,17 @@ class PaymentChannelsStore:
         p_in = direct.get("paypal") if isinstance(direct.get("paypal"), dict) else {}
         u_in = direct.get("usdt") if isinstance(direct.get("usdt"), dict) else {}
 
-        zpay = self.payload["aggregate"]["zpay"]
-        zpay.update({
+        zpay_values = {
             "enabled": bool(z_in.get("enabled")),
             "pid": str(z_in.get("pid") or "").strip()[:80],
             "alipay_enabled": bool(z_in.get("alipay_enabled")),
             "wechat_enabled": bool(z_in.get("wechat_enabled")),
             "alipay_cid": str(z_in.get("alipay_cid") or "").strip().replace(" ", "")[:240],
             "wechat_cid": str(z_in.get("wechat_cid") or "").strip().replace(" ", "")[:240],
-        })
-        for cid in (zpay["alipay_cid"], zpay["wechat_cid"]):
+        }
+        for cid in (zpay_values["alipay_cid"], zpay_values["wechat_cid"]):
             if cid and not re.fullmatch(r"\d+(?:,\d+)*", cid):
                 raise ValueError("ZPAY 渠道 ID 只能填写数字，多个 ID 使用英文逗号分隔")
-        if z_in.get("key"):
-            zpay["key_ciphertext"] = self.cipher.encrypt(str(z_in["key"]).encode()).decode("ascii")
-        if z_in.get("clear_key"):
-            zpay["key_ciphertext"] = ""
-
-        paypal = self.payload["direct"]["paypal"]
-        paypal.update({
-            "enabled": bool(p_in.get("enabled")),
-            "sandbox": bool(p_in.get("sandbox")),
-            "client_id": str(p_in.get("client_id") or "").strip()[:240],
-        })
-        if p_in.get("client_secret"):
-            paypal["client_secret_ciphertext"] = self.cipher.encrypt(str(p_in["client_secret"]).encode()).decode("ascii")
-        if p_in.get("clear_secret"):
-            paypal["client_secret_ciphertext"] = ""
 
         address = str(u_in.get("address") or "").strip()
         if address and not _valid_tron_address(address):
@@ -223,17 +302,42 @@ class PaymentChannelsStore:
             raise ValueError("USDT 二维码图片地址必须是 https:// URL")
         if link and not _safe_url(link):
             raise ValueError("USDT 地址链接必须是 https:// URL")
-        self.payload["direct"]["usdt"].update({
-            "enabled": bool(u_in.get("enabled")),
-            "network": "TRON (TRC20)",
-            "address": address,
-            "qr_image_url": qr,
-            "address_link": link,
-        })
-        self.payload["public_origin"] = origin
-        self.payload["updated_at"] = _now()
-        self._save()
-        return self.admin_public()
+
+        with self.lock:
+            previous = copy.deepcopy(self.payload)
+            try:
+                zpay = self.payload["aggregate"]["zpay"]
+                zpay.update(zpay_values)
+                if z_in.get("key"):
+                    zpay["key_ciphertext"] = self.cipher.encrypt(str(z_in["key"]).encode()).decode("ascii")
+                if z_in.get("clear_key"):
+                    zpay["key_ciphertext"] = ""
+
+                paypal = self.payload["direct"]["paypal"]
+                paypal.update({
+                    "enabled": bool(p_in.get("enabled")),
+                    "sandbox": bool(p_in.get("sandbox")),
+                    "client_id": str(p_in.get("client_id") or "").strip()[:240],
+                })
+                if p_in.get("client_secret"):
+                    paypal["client_secret_ciphertext"] = self.cipher.encrypt(str(p_in["client_secret"]).encode()).decode("ascii")
+                if p_in.get("clear_secret"):
+                    paypal["client_secret_ciphertext"] = ""
+
+                self.payload["direct"]["usdt"].update({
+                    "enabled": bool(u_in.get("enabled")),
+                    "network": "TRON (TRC20)",
+                    "address": address,
+                    "qr_image_url": qr,
+                    "address_link": link,
+                })
+                self.payload["public_origin"] = origin
+                self.payload["updated_at"] = _now()
+                self._save()
+            except Exception:
+                self.payload = previous
+                raise
+            return self.admin_public()
 
 
 class PaymentChannelsBody(BaseModel):
@@ -243,7 +347,7 @@ class PaymentChannelsBody(BaseModel):
 
 
 class RechargeV106Body(BaseModel):
-    amount_cents: int = Field(ge=1, le=10_000_000)
+    amount_cents: StrictInt = Field(ge=1, le=10_000_000)
     channel: str = Field(pattern=r"^(alipay|wechat|paypal|usdt)$")
 
 
@@ -274,26 +378,29 @@ def install_payment_channels_v106_patch(app: FastAPI) -> FastAPI:
     pricing = app.state.user_pricing
     admin_sessions = getattr(app.state, "admin_sessions", None)
     data_dir = Path(settings.data_dir)
-    secret_path = data_dir / ".chat2api_data_secret"
-    try:
-        data_secret = secret_path.read_text(encoding="utf-8").strip()
-    except OSError:
-        data_secret = str(getattr(settings, "api_key", "") or "chat2api")
+    data_secret, persist_secret = _payment_channels_secret_candidate(data_dir, settings)
     channels = PaymentChannelsStore(data_dir, data_secret)
+    # Never let _decrypt()'s legacy empty-string fallback hide an unreadable
+    # credential. Validate before pinning a fallback key or serving admin UI.
+    _validate_payment_channel_ciphertexts(channels)
+    if persist_secret:
+        _persist_payment_channels_secret(data_dir, data_secret)
     app.state.user_payment_channels_v106 = channels
 
     original_create_order = billing.create_order
 
     def create_order_extended(self: Any, user_id: str, amount_cents: int, channel: str) -> dict[str, Any]:
+        if type(amount_cents) is not int:
+            raise ValueError("充值金额必须为整数分")
         if channel in {"alipay", "wechat"}:
             return original_create_order(user_id, amount_cents, channel)
-        amount = int(amount_cents)
+        amount = amount_cents
         if amount < 1 or amount > 10_000_000 or channel not in {"paypal", "usdt"}:
             raise ValueError("不支持的充值订单")
         order_id = "pay_" + secrets.token_urlsafe(10).replace("-", "").replace("_", "")
         row = {
             "order_id": order_id,
-            "merchant_trade_no": (str(int(time.time() * 1000)) + f"{secrets.randbelow(10**12):012d}")[:32],
+            "merchant_trade_no": "",
             "user_id": user_id,
             "amount_cents": amount,
             "channel": channel,
@@ -309,8 +416,13 @@ def install_payment_channels_v106_patch(app: FastAPI) -> FastAPI:
             "created_at": _now(), "paid_at": None, "updated_at": _now(),
         }
         with self.lock:
+            row["merchant_trade_no"] = self._new_merchant_trade_no_locked()
             self.orders[order_id] = row
-            self._save()
+            try:
+                self._save()
+            except Exception:
+                self.orders.pop(order_id, None)
+                raise
         return dict(row)
 
     billing.create_order = MethodType(create_order_extended, billing)
@@ -339,9 +451,14 @@ def install_payment_channels_v106_patch(app: FastAPI) -> FastAPI:
             row = billing.orders.get(order_id)
             if not row:
                 raise KeyError("充值订单不存在")
+            previous = dict(row)
             row.update(values)
             row["updated_at"] = _now()
-            billing._save()
+            try:
+                billing._save()
+            except Exception:
+                billing.orders[order_id] = previous
+                raise
             return dict(row)
 
     async def paypal_token() -> tuple[str, str]:
@@ -474,10 +591,23 @@ def install_payment_channels_v106_patch(app: FastAPI) -> FastAPI:
                 raise HTTPException(status_code=404, detail="USDT 充值订单不存在")
             if order.get("status") == "paid":
                 return {"ok": True, "order": dict(order)}
+            # Once a TXID is submitted, the order enters manual review. Freeze
+            # that proof while an administrator verifies it; otherwise a user
+            # could replace the hash after the admin inspected the displayed one.
+            if order.get("status") != "pending":
+                raise HTTPException(
+                    status_code=409,
+                    detail="该 USDT 订单已提交或已结束，不能修改交易哈希",
+                )
+            previous = dict(order)
             order["txid"] = txid.lower()
             order["status"] = "reviewing"
             order["updated_at"] = _now()
-            billing._save()
+            try:
+                billing._save()
+            except Exception:
+                billing.orders[order_id] = previous
+                raise
             return {"ok": True, "order": dict(order)}
 
     @app.api_route("/api/user/payments/v106/zpay/notify", methods=["GET", "POST"], include_in_schema=False)
@@ -514,6 +644,10 @@ def install_payment_channels_v106_patch(app: FastAPI) -> FastAPI:
             return RedirectResponse("/console#billing", status_code=303)
         if order.get("status") == "paid":
             return RedirectResponse("/console#billing", status_code=303)
+        # Do not capture a provider order after its local recharge order has
+        # been rejected, cancelled, expired or otherwise made terminal.
+        if order.get("status") != "pending":
+            return RedirectResponse("/console#billing&payment=failed", status_code=303)
         base, access_token = await paypal_token()
         try:
             async with httpx.AsyncClient(timeout=20.0) as client:
@@ -583,19 +717,43 @@ def install_payment_channels_v106_patch(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=401, detail="Administrator login required")
         if action not in {"confirm", "reject"}:
             raise HTTPException(status_code=400, detail="不支持的审核动作")
+        if action == "confirm":
+            with billing.lock:
+                row = billing.orders.get(order_id)
+                if not row or row.get("channel") != "usdt":
+                    raise HTTPException(status_code=404, detail="USDT 订单不存在")
+                txid = str(row.get("txid") or "").lower()
+                if not re.fullmatch(r"[0-9a-f]{64}", txid):
+                    raise HTTPException(status_code=409, detail="用户尚未提交有效交易哈希")
+                try:
+                    # The BillingStore owns the atomic duplicate-check + credit
+                    # transaction; middleware is only an early rejection.
+                    settled = billing.settle_usdt_order(order_id, txid)
+                except KeyError as exc:
+                    raise HTTPException(status_code=404, detail="USDT 订单不存在") from exc
+                except WalletReservationError as exc:
+                    raise HTTPException(status_code=409, detail=str(exc)) from exc
+                return {"ok": True, "order": settled}
         with billing.lock:
             row = billing.orders.get(order_id)
             if not row or row.get("channel") != "usdt":
                 raise HTTPException(status_code=404, detail="USDT 订单不存在")
-            txid = str(row.get("txid") or "")
-            if action == "confirm" and not re.fullmatch(r"[0-9a-f]{64}", txid):
-                raise HTTPException(status_code=409, detail="用户尚未提交有效交易哈希")
-            if action == "reject":
-                row["status"] = "rejected"
-                row["updated_at"] = _now()
-                billing._save()
+            if row.get("status") == "rejected":
                 return {"ok": True, "order": dict(row)}
-        return {"ok": True, "order": billing.settle_order(order_id, txid)}
+            if row.get("status") not in {"pending", "reviewing"}:
+                # A paid order has already credited the wallet. Never allow a
+                # later reject action to downgrade its status, because that
+                # would make its TXID appear reusable to duplicate detection.
+                raise HTTPException(status_code=409, detail="该 USDT 订单已完成或处于不可拒绝状态")
+            previous = dict(row)
+            row["status"] = "rejected"
+            row["updated_at"] = _now()
+            try:
+                billing._save()
+            except Exception:
+                billing.orders[order_id] = previous
+                raise
+            return {"ok": True, "order": dict(row)}
 
     @app.middleware("http")
     async def payment_assets_v106(request: Request, call_next):
