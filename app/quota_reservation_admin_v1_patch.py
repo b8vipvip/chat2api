@@ -71,6 +71,7 @@ def install_quota_reservation_admin_v1(app: FastAPI) -> FastAPI:
             "data": rows,
             "active_reserved_tokens_in_result": active,
             "runtime_integration_enabled": bool(app.state.quota_reservation_runtime_enabled),
+            "runtime_coverage": list(getattr(app.state, "quota_reservation_runtime_coverage", [])),
             "accounting_owner": "ApiKeyStore.account_completed_usage",
         }
 
@@ -79,10 +80,14 @@ def install_quota_reservation_admin_v1(app: FastAPI) -> FastAPI:
         actor = admin_actor(request, write=True)
         audit_event(actor, "quota.reservation_reconcile_requested", request, {})
         try:
-            count = store.reconcile(api_keys)
+            replayed = await store.recover_committing(getattr(app.state, "telemetry", None), api_keys)
+            reconciled = store.reconcile(api_keys)
+            count = replayed + reconciled
         except Exception as exc:
             raise HTTPException(status_code=503, detail="Quota reservation reconciliation failed") from exc
-        audit_event(actor, "quota.reservation_reconcile_completed", request, {"settled": count})
+        audit_event(actor, "quota.reservation_reconcile_completed", request, {
+            "settled": count, "replayed_from_telemetry": replayed, "reconciled_from_api_key_ledger": reconciled,
+        })
         return {"settled": count}
 
     app.state.quota_reservation_admin_v1_installed = True
