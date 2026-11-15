@@ -175,6 +175,7 @@ def test_document_content_part_rejects_corrupt_size_metadata(tmp_path: Path) -> 
         document = _upload_document(client, "notes.txt", "text/plain", b"valid bytes")
         item = client.app.state.file_store.get(document["id"])
         item.size += 1
+        assert (client.app.state.file_store.root / item.path).is_file()
         response = client.post(
             "/v1/chat/completions", headers=_admin_headers(),
             json={
