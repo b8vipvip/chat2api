@@ -151,11 +151,48 @@ record at session termination, so there is no honest terminal amount with
 which to settle a token reservation. It requires a separate metering contract
 before quota enforcement can be safely enabled.
 
-These additions close the in-flight token-quota admission gap for the listed
-routes, but they do **not** implement image/audio provider cost accounting or
-monetary budgets. Other usage-bearing routes still require an
-endpoint-by-endpoint coverage audit. Wallet-cents reservation/refund, tenant
-quota inheritance, provider-verified usage reconciliation and multi-process
-ledger transactions remain outside this slice. ApiKeyStore and BillingStore
-remain the only actual charge authorities. C-06 is not complete until those
-explicit gaps and the remaining production acceptance gates are resolved.
+### Wallet-cent admission holds (follow-on C-06 slice)
+
+For user-owned managed API keys, Chat Completions and Responses requests whose
+requested model has a configured PricingStore price now reserve an estimated
+wallet amount before Worker dispatch. The estimate uses the known prompt-token
+estimate, the conservative 4096-token output floor (or a larger explicit
+output budget), the configured model price and the current USD/CNY rate.
+Available balance is wallet balance minus active wallet holds. Images and
+Voice models have no default price-card entry, so this wallet-cent hold is
+not claimed for them; their token admission holds remain active.
+
+The wallet hold is persisted inside the existing `BillingStore` JSON ledger.
+It is not a second charge ledger: `BillingStore.record_charge` remains the
+only final wallet debit owner, keyed by `request_id`. A completed request
+settles the hold against the existing terminal usage and saved price snapshot;
+an error/cancelled/stalled/failed/timeout terminal releases it. Repeated
+request IDs are idempotent, cross-user reservation/charge mismatches fail
+closed, and user billing UI exposes raw balance, active reserved cents and
+available balance. Recent terminal telemetry is reconciled on the next user
+API request or billing-page read if the process was interrupted between
+telemetry persistence and wallet projection.
+
+All current wallet charges remain explicitly **estimated** when the usage
+record is estimated; no upstream provider cost is inferred. The output floor
+is an admission estimate, not an enforced upstream generation cap. If actual
+usage or a changed served-model price exceeds the hold after the provider has
+already completed, the final charge may create a negative wallet balance;
+subsequent user requests are blocked until the account is topped up. This is
+the current post-completion overrun policy, not a guarantee that the hold
+bounds the final charge.
+
+The wallet JSON store uses an in-process lock and atomic file replacement,
+consistent with the current single-process P-01 runtime boundary. It is not a
+multi-process or multi-host transaction system. Terminal wallet reservations
+whose telemetry has been evicted from the recent history window still require
+manual reconciliation; no distributed expiry/lease protocol is claimed.
+
+These additions close the listed managed-key token-admission gaps and add
+estimated wallet admission holds for priced Chat/Responses models, but they do
+**not** implement image/audio provider cost accounting, wallet chargebacks or
+refunds, tenant/role quota inheritance, provider-verified usage reconciliation
+or multi-process ledger transactions. ApiKeyStore and BillingStore remain the
+only actual token and wallet charge authorities. C-06 is not complete until
+those explicit gaps and the remaining production acceptance gates are
+resolved.

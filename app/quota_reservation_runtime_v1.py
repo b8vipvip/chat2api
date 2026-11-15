@@ -1,16 +1,83 @@
 """Bounded runtime adapter for the C-06 in-flight token reservation ledger."""
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import HTTPException
 
 from .quota_reservations import QuotaExceeded, QuotaReservationError
 from .token_usage import usage_for
+from .user_commerce import InsufficientWalletBalance, WalletReservationError
+
+logger = logging.getLogger(__name__)
+
+
+def reserve_wallet_charge(
+    app: Any, request_id: str, principal: Any, model_id: str,
+    prompt_tokens: int, output_tokens: int,
+) -> dict[str, Any] | None:
+    """Reserve estimated wallet cents for a user-owned, priced model request.
+
+    This is an admission hold, not a second charge ledger. BillingStore remains
+    the sole owner of the final request_id charge and wallet debit.
+    """
+    if str(getattr(principal, "kind", "")) == "master":
+        return None
+    accounts = getattr(app.state, "user_accounts", None)
+    if accounts is None:
+        return None
+    key_id = str(getattr(principal, "key_id", "") or "")
+    owner = accounts.owner_for_key(key_id) if key_id else None
+    if not owner:
+        return None
+    billing = getattr(app.state, "user_billing", None)
+    pricing = getattr(app.state, "user_pricing", None)
+    if billing is None or pricing is None:
+        raise HTTPException(status_code=503, detail="Wallet reservation is unavailable")
+    try:
+        config = pricing.public()
+        if not bool(config.get("billing_enabled")):
+            return None
+        price = pricing.model(model_id)
+        if not price:
+            return None
+        fx = float(config.get("usd_cny_rate") or 0)
+        if fx <= 0:
+            raise ValueError("Invalid USD/CNY billing rate")
+        usd = (
+            max(0, int(prompt_tokens)) * float(price.get("input_usd_per_million") or 0)
+            + max(0, int(output_tokens)) * float(price.get("output_usd_per_million") or 0)
+        ) / 1_000_000
+        estimated_cny_cents = max(0, int(round(usd * fx * 100)))
+        if estimated_cny_cents <= 0:
+            return None
+        return billing.reserve_for_request(
+            str(owner), str(request_id),
+            model_id=str(model_id or ""),
+            estimated_cny_cents=estimated_cny_cents,
+            input_tokens=max(0, int(prompt_tokens)),
+            output_tokens=max(0, int(output_tokens)),
+            price_snapshot=price,
+            usd_cny_rate=fx,
+        )
+    except HTTPException:
+        raise
+    except InsufficientWalletBalance as error:
+        raise HTTPException(status_code=402, detail="账户余额不足，无法预留本次请求预计费用") from error
+    except WalletReservationError as error:
+        raise HTTPException(status_code=503, detail="Wallet reservation failed: " + str(error)) from error
+    except OSError as error:
+        # Storage write failure is an admission failure, never a best-effort
+        # bypass to Worker dispatch.
+        raise HTTPException(status_code=503, detail="Wallet reservation storage is unavailable") from error
+    except (TypeError, ValueError, OverflowError) as error:
+        raise HTTPException(status_code=503, detail="Wallet reservation estimate is invalid") from error
 
 
 def reserve_request_quota(
     app: Any, request_id: str, principal: Any, prompt: str, output_limit: int,
+    model_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Reserve a conservative estimate before a usage-bearing Worker dispatch."""
     if not bool(getattr(app.state, "quota_reservation_runtime_enabled", False)):
@@ -37,12 +104,34 @@ def reserve_request_quota(
     estimated_tokens = prompt_tokens + requested_output
     if estimated_tokens < 1 or estimated_tokens > 1_000_000:
         raise HTTPException(status_code=413, detail="Estimated request usage is too large for quota reservation")
+    token_reservation = None
     try:
-        return store.reserve_for_key(api_keys, str(request_id), key_id, estimated_tokens)
+        token_reservation = store.reserve_for_key(api_keys, str(request_id), key_id, estimated_tokens)
+        reserve_wallet_charge(
+            app, str(request_id), principal, str(model_id or ""),
+            prompt_tokens, requested_output,
+        )
+        return token_reservation
+    except HTTPException:
+        if token_reservation:
+            try:
+                store.release(str(request_id), key_id)
+            except Exception:
+                pass
+        raise
     except QuotaExceeded as error:
         raise HTTPException(status_code=429, detail=str(error)) from error
     except QuotaReservationError as error:
         raise HTTPException(status_code=503, detail="Token quota reservation failed: " + str(error)) from error
+    except Exception as error:
+        # Unexpected wallet/journal persistence failure must not leave a
+        # token hold that blocks unrelated, valid requests.
+        if token_reservation:
+            try:
+                store.release(str(request_id), key_id)
+            except Exception:
+                logger.exception("Token hold cleanup failed after quota admission exception request_id=%s", request_id)
+        raise HTTPException(status_code=503, detail="Quota admission is unavailable") from error
 
 
 # Images and Voice do not yet expose provider-verified usage in the Worker
@@ -54,17 +143,19 @@ AUDIO_REQUEST_RESERVATION_FLOOR_TOKENS = 4096
 
 def reserve_image_generation_quota(
     app: Any, request_id: str, principal: Any, prompt: str, image_count: int = 1,
+    model_id: str = "gpt-image",
 ) -> dict[str, Any] | None:
     if type(image_count) is not int or not 1 <= image_count <= 4:
         raise HTTPException(status_code=400, detail="Image count is outside the quota reservation limit")
     return reserve_request_quota(
         app, request_id, principal, prompt,
         IMAGE_GENERATION_RESERVATION_FLOOR_TOKENS * image_count,
+        model_id=model_id,
     )
 
 
 def reserve_audio_request_quota(
-    app: Any, request_id: str, principal: Any, prompt: str,
+    app: Any, request_id: str, principal: Any, prompt: str, model_id: str = "gpt-live",
 ) -> dict[str, Any] | None:
     """Hold an admission allowance for speech or uploaded-audio requests.
 
@@ -77,6 +168,7 @@ def reserve_audio_request_quota(
     return reserve_request_quota(
         app, request_id, principal, prompt,
         AUDIO_REQUEST_RESERVATION_FLOOR_TOKENS,
+        model_id=model_id,
     )
 
 
@@ -93,7 +185,24 @@ def install_quota_reservation_runtime_v1(app: Any) -> Any:
         # TelemetryStore invokes this for queued/running snapshots too. The
         # reservation store treats those as pending and settles/releases only
         # the Broker-owned terminal projection.
-        await store.commit_completed_usage(record, api_keys)
+        status = str(record.get("status") or "").lower()
+        try:
+            await store.commit_completed_usage(record, api_keys)
+        finally:
+            if status in {"error", "cancelled", "stalled", "failed", "timeout"}:
+                request_id = str(record.get("request_id") or "")
+                key_id = str(record.get("api_key_id") or "")
+                accounts = getattr(app.state, "user_accounts", None)
+                billing = getattr(app.state, "user_billing", None)
+                owner = accounts.owner_for_key(key_id) if accounts is not None and key_id else None
+                if owner and billing is not None and request_id:
+                    try:
+                        billing.release_reservation(request_id, str(owner), reason="request_" + status)
+                    except Exception as error:
+                        logger.warning(
+                            "Wallet reservation release deferred request_id=%s error_type=%s",
+                            request_id, type(error).__name__,
+                        )
 
     telemetry.usage_accounting = account_usage_with_reservations
     app.state.quota_reservation_runtime_enabled = True
