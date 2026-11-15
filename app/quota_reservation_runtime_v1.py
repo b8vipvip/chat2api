@@ -7,7 +7,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from .quota_reservations import QuotaExceeded, QuotaReservationError
+from .quota_reservations import QuotaExceeded, QuotaReservationConflict, QuotaReservationError
 from .token_usage import usage_for
 
 
@@ -76,6 +76,11 @@ async def reserve_request_quota(
             async with key_lock:
                 return await reserve_from_authoritative_key_snapshot()
         return await reserve_from_authoritative_key_snapshot()
+    except QuotaReservationConflict as error:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "request_id_conflict", "message": str(error)},
+        ) from error
     except QuotaExceeded as error:
         raise HTTPException(status_code=429, detail=str(error)) from error
     except QuotaReservationError as error:
