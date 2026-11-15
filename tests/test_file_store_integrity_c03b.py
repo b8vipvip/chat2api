@@ -38,6 +38,7 @@ def test_uploaded_files_and_index_are_private_to_the_server_account(tmp_path):
     assert store.index_path.stat().st_mode & 0o777 == 0o600
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlinks are unavailable on Windows")
 def test_file_store_rejects_symlinked_index_and_preserves_target(tmp_path):
     root = tmp_path / "files"
     root.mkdir()
@@ -67,6 +68,7 @@ def test_file_store_read_rejects_fifo_swapped_after_startup(tmp_path):
         store.read(item.file_id)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlinks are unavailable on Windows")
 def test_file_store_read_rejects_symlink_swapped_after_startup(tmp_path):
     store = FileStore(tmp_path)
     item = asyncio.run(store.create(
