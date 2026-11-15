@@ -16,7 +16,7 @@ from fastapi import HTTPException, Request
 from PIL import Image, UnidentifiedImageError
 
 from .api_keys import ApiPrincipal
-from .file_store import FileStore
+from .file_store import FileIntegrityError, FileStore
 from .media_archive_v173 import MediaArchive
 
 
@@ -76,6 +76,11 @@ def validate_image_file(file_store: FileStore, file_id: str, principal: ApiPrinc
         raise ValueError("input_image file_id must reference a vision image attachment")
     try:
         stored, payload = file_store.read(file_id)
+    except FileIntegrityError as error:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "stored_file_integrity_unavailable"},
+        ) from error
     except (KeyError, FileNotFoundError) as error:
         raise ValueError("input_image file content is unavailable") from error
     if stored.size != len(payload):
