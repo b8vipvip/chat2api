@@ -117,6 +117,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await registry.load()
         await telemetry.load()
         await api_keys.load()
+        recovered_queued = await telemetry.recover_queued_after_restart(set(broker.requests))
+        if recovered_queued:
+            logger.warning(
+                "Recovered %s queued request(s) from the previous process as stalled",
+                recovered_queued,
+            )
         wallet_reconciler = getattr(app.state, "wallet_charge_reconciler", None)
         billing_store = getattr(app.state, "user_billing", None)
         if callable(wallet_reconciler) and billing_store is not None:
