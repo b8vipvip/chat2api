@@ -53,20 +53,29 @@ def test_registry_binds_every_broker_request_family_including_legacy_dictation(t
         assert [item["type"] for item in socket.sent] == list(request_types)
 
         # Legacy dictation uses dictation.cancel for its follow-up control
-        # message; it must remain bound to the original dispatch socket too.
+        # message. A server timeout sets completed_mono before dispatching the
+        # cancel, so cancellation must remain possible on the original socket.
+        states["req_socket_binding_5"].completed_mono = 123.0
         await registry.send("worker-a", {
             "type": "dictation.cancel",
             "request_id": "req_socket_binding_5",
         })
         assert socket.sent[-1]["type"] == "dictation.cancel"
 
-        replacement = FakeSocket()
-        registry.sockets["worker-a"] = replacement
+        # Non-cancellation follow-ups must still stop after the server cutoff.
+        with pytest.raises(RuntimeError, match="Request Worker connection changed or is unavailable"):
+            await registry.send("worker-a", {
+                "type": "voice.live.audio",
+                "request_id": "req_socket_binding_5",
+            })
+
+        replacement_socket = FakeSocket()
+        registry.sockets["worker-a"] = replacement_socket
         with pytest.raises(RuntimeError, match="Request Worker connection changed"):
             await registry.send("worker-a", {
                 "type": "dictation.cancel",
                 "request_id": "req_socket_binding_5",
             })
-        assert replacement.sent == []
+        assert replacement_socket.sent == []
 
     asyncio.run(scenario())
