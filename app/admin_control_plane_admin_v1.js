@@ -12,9 +12,13 @@
     "model-entitlements": ["super_admin", "system_admin", "support"],
     "plugins": ["super_admin", "plugin_admin"],
     "quota-ledger": ["super_admin", "system_admin", "api_key_admin", "billing_admin"],
-    "api-keys": ["super_admin", "api_key_admin", "support"]
+    "api-keys": ["super_admin", "api_key_admin", "support"],
+    "admin-users": ["super_admin", "user_admin", "system_admin", "support"],
+    "user-pricing": ["super_admin", "billing_admin"],
+    "user-payments": ["super_admin", "billing_admin"]
   };
   let adminSession = null;
+  let sessionRefreshGeneration = 0;
   let roleCatalogue = {};
   let selectedTenantId = "";
 
@@ -70,12 +74,30 @@
   }
 
   function applyNavigation() {
+    // The existing Commerce module creates these nav buttons dynamically.
+    // Adopt them into the same server-session RBAC visibility contract.
+    for (const view of ["admin-users", "user-pricing", "user-payments"]) {
+      document.querySelectorAll('.nav button[data-view="' + view + '"]').forEach((node) => {
+        node.dataset.cview = "";
+      });
+    }
     document.querySelectorAll("[data-cview]").forEach((node) => {
-      node.hidden = !roleCan(node.dataset.view);
+      const allowed = roleCan(node.dataset.view);
+      node.hidden = !allowed;
+      // Author CSS sets nav buttons to display:flex, which overrides the
+      // browser's user-agent [hidden] rule. Set display explicitly so a
+      // denied route is actually absent from the visible navigation.
+      node.style.display = allowed ? "" : "none";
+      // The legacy inline bootstrap temporarily disables all navigation while
+      // checking its own session. RBAC owns the final state.
+      node.disabled = !allowed;
     });
     const root = adminSession && adminSession.authenticated && adminSession.role === "super_admin";
     document.querySelectorAll(".nav button:not([data-cview])").forEach((node) => {
-      node.hidden = !!(adminSession && adminSession.authenticated && !root);
+      const visible = !(adminSession && adminSession.authenticated && !root);
+      node.hidden = !visible;
+      node.style.display = visible ? "" : "none";
+      node.disabled = !root;
     });
     if ($("adminKey")) $("adminKey").disabled = !!(adminSession && adminSession.authenticated && !root);
     if ($("connect")) $("connect").hidden = !!(adminSession && adminSession.authenticated && !root);
@@ -89,9 +111,7 @@
     const canManageUserRoles = adminSession && ["super_admin", "user_admin"].includes(adminSession.role);
     if ($("cUserRoleReload")) $("cUserRoleReload").disabled = !canManageUserRoles;
     const canManageSubscriptions = adminSession && ["super_admin", "billing_admin"].includes(adminSession.role);
-    ["cPlanId", "cPlanName", "cPlanEnabled", "cPlanSave", "cPlanReload",
-      "cSubUserId", "cSubPlan", "cSubExpiresAt", "cSubAssign", "cSubLoad", "cSubCancel"]
-      .forEach((id) => { if ($(id)) $(id).disabled = !canManageSubscriptions; });
+    ["cPlanId", "cPlanName", "cPlanEnabled", "cPlanSave", "cPlanReload", "cSubUserId", "cSubPlan", "cSubExpiresAt", "cSubAssign", "cSubLoad", "cSubCancel"].forEach((id) => { if ($(id)) $(id).disabled = !canManageSubscriptions; });
     const canReconcileQuota = adminSession && ["super_admin", "system_admin", "api_key_admin"].includes(adminSession.role);
     if ($("cQuotaReconcile")) $("cQuotaReconcile").hidden = !canReconcileQuota;
     const canManageInvitations = adminSession && ["super_admin", "user_admin"].includes(adminSession.role);
@@ -108,8 +128,11 @@
   }
 
   async function refreshSession() {
+    const generation = ++sessionRefreshGeneration;
     try {
-      adminSession = await sessionApi("/api/admin/auth/session");
+      const nextSession = await sessionApi("/api/admin/auth/session");
+      if (generation !== sessionRefreshGeneration) return adminSession;
+      adminSession = nextSession;
       const state = $("adminSessionState");
       if (state) {
         state.textContent = adminSession.authenticated
@@ -126,18 +149,38 @@
       applyNavigation();
       window.dispatchEvent(new CustomEvent("chat2api-admin-session-changed", { detail: adminSession }));
       const active = location.hash.replace(/^#/, "");
-      if (C_ROLES[active]) {
+      if (adminSession.authenticated && adminSession.role !== "super_admin") {
+        const defaults = {
+          system_admin: "client-policy",
+          user_admin: "admin-users",
+          api_key_admin: "api-keys",
+          billing_admin: "user-pricing",
+          plugin_admin: "plugins",
+          support: "model-entitlements",
+        };
+        show(roleCan(active) ? active : (defaults[adminSession.role] || "model-entitlements"));
+      } else if (C_ROLES[active]) {
         if (!roleCan(active)) show("overview");
         else show(active);
       }
       return adminSession;
     } catch (error) {
+      if (generation !== sessionRefreshGeneration) return adminSession;
       adminSession = null;
       applyNavigation();
+      window.dispatchEvent(new CustomEvent("chat2api-admin-session-changed", {
+        detail: { authenticated: false, role: null, username: "" },
+      }));
       setStatus("adminSessionState", "会话检查失败：" + error.message, true);
       return null;
     }
   }
+
+  // admin_v17.js owns the visible login gate; refresh the authoritative RBAC
+  // session whenever that gate logs in or out, without requiring a page reload.
+  window.addEventListener("chat2api-admin-auth-state-changed", () => {
+    void refreshSession();
+  });
 
   $("adminSessionLogin")?.addEventListener("click", async () => {
     const username = $("adminSessionUser").value.trim();
@@ -294,6 +337,14 @@
   }
 
   $("cAdminCreate")?.addEventListener("click", async () => {
+    const createButton = $("cAdminCreate");
+    // Do not leave a prior success visible while the next administrator is
+    // still being persisted. Otherwise an E2E client (or human operator) can
+    // mistake the previous account's result for this request and log out
+    // before its server-side creation has completed.
+    if (createButton.disabled) return;
+    createButton.disabled = true;
+    setStatus("cAdminStatus", "正在创建管理员…");
     try {
       await sessionApi("/api/admin/control/admins", {
         method: "POST",
@@ -304,9 +355,13 @@
         }
       });
       $("cAdminPassword").value = "";
-      setStatus("cAdminStatus", "管理员已创建；密码不会再次显示");
       await loadAdmins();
-    } catch (error) { setStatus("cAdminStatus", error.message, true); }
+      setStatus("cAdminStatus", "管理员已创建；密码不会再次显示");
+    } catch (error) {
+      setStatus("cAdminStatus", error.message, true);
+    } finally {
+      createButton.disabled = false;
+    }
   });
   $("cAdminReload")?.addEventListener("click", loadAdmins);
 
@@ -838,5 +893,6 @@
   });
 
 
+  window.__CHAT2API_CONTROL_PLANE_ADMIN_V1_READY__ = true;
   refreshSession();
 })();
