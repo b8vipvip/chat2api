@@ -438,7 +438,16 @@ async function fetchAttachment(fileId, requestId) {
   const url = `${String(settings.serverUrl).replace(/\/$/, "")}/api/extensions/files/${encodeURIComponent(fileId)}?request_id=${encodeURIComponent(request)}&client_id=${encodeURIComponent(settings.clientId)}&token=${encodeURIComponent(settings.clientToken)}`;
   const response = await fetch(url, { cache: "no-store" });
   if (!response.ok) throw new Error(`Attachment ${fileId} download failed: HTTP ${response.status}`);
-  const filename = response.headers.get("X-Chat2API-Filename") || fileId;
+  const encodedFilename = response.headers.get("X-Chat2API-Filename") || fileId;
+  const filenameEncoding = response.headers.get("X-Chat2API-Filename-Encoding") || "";
+  let filename = encodedFilename;
+  if (filenameEncoding === "percent-utf8") {
+    try {
+      filename = decodeURIComponent(encodedFilename);
+    } catch {
+      filename = fileId;
+    }
+  }
   const mimeType = response.headers.get("Content-Type") || "application/octet-stream";
   const buffer = await response.arrayBuffer();
   return { file_id: fileId, filename, mime_type: mimeType, size: buffer.byteLength, base64: arrayBufferToBase64(buffer) };
