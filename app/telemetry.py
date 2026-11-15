@@ -14,6 +14,10 @@ from .runtime_code_identity import runtime_code_sha
 from .timezone_utils import beijing_now_iso, to_beijing_iso
 
 
+class DuplicateRequestIdentity(RuntimeError):
+    """Raised when a new request attempts to claim an existing request ID."""
+
+
 def utc_now() -> str:
     """Backward-compatible helper name; canonical timestamps are Asia/Shanghai."""
     return beijing_now_iso()
@@ -169,7 +173,9 @@ class TelemetryStore:
         await self.upsert(item)
 
     async def upsert(
-        self, item: dict[str, Any], *, merge_diagnostics: bool = False,
+        self, item: dict[str, Any], *,
+        merge_diagnostics: bool = False,
+        create_only: bool = False,
     ) -> dict[str, Any]:
         record = dict(item)
         trace_id = current_trace_id.get()
@@ -177,7 +183,11 @@ class TelemetryStore:
             record.setdefault("trace_id", trace_id)
         async with self.lock:
             request_id = str(record.get("request_id") or "")
+            if create_only and not request_id:
+                raise ValueError("create-only telemetry requires a request_id")
             existing = self.get(request_id) if request_id else None
+            if create_only and existing:
+                raise DuplicateRequestIdentity("request_id already exists")
             if merge_diagnostics:
                 # Read AND merge inside the same lock protecting the append.
                 # A passive SSE observer must never overwrite a more recent
