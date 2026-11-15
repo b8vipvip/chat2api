@@ -5,6 +5,8 @@ import re
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from app.registry import ClientRegistry
 
 
@@ -84,10 +86,30 @@ def test_voice_request_binds_the_current_worker_socket_for_scoped_file_download(
     assert live_state.dispatch_socket is socket
 
     # A reconnect may replace the registry's current socket while the old
-    # Live session is still owned by its original socket. A later multimodal
-    # turn must not transfer the file-download grant to the replacement.
+    # Live session is still owned by its original socket. Follow-up media and
+    # cancellation must fail closed rather than being sent to the replacement.
     replacement = FakeSocket()
     registry.sockets["ext_voice_worker"] = replacement
+    registry.socket_locks["ext_voice_worker"] = asyncio.Lock()
+    with pytest.raises(RuntimeError, match="connection changed"):
+        asyncio.run(registry.send("ext_voice_worker", {
+            "type": "voice.live.multimodal",
+            "request_id": "voicereq_live_media_123",
+            "attachments": [{
+                "file_id": "file_live_media",
+                "request_id": "voicereq_live_media_123",
+            }],
+        }))
+    with pytest.raises(RuntimeError, match="connection changed"):
+        asyncio.run(registry.send("ext_voice_worker", {
+            "type": "chat.cancel", "request_id": "req_voice_file_123",
+        }))
+    assert live_state.dispatch_socket is socket
+    assert replacement.sent == []
+
+    # The original socket may continue the session; a multimodal message alone
+    # cannot establish a session/socket grant without voice.live.start.
+    registry.sockets["ext_voice_worker"] = socket
     registry.socket_locks["ext_voice_worker"] = asyncio.Lock()
     asyncio.run(registry.send("ext_voice_worker", {
         "type": "voice.live.multimodal",
@@ -98,16 +120,16 @@ def test_voice_request_binds_the_current_worker_socket_for_scoped_file_download(
         }],
     }))
     assert live_state.dispatch_socket is socket
-    assert replacement.sent[0]["attachments"][0]["request_id"] == "voicereq_live_media_123"
+    assert socket.sent[-1]["attachments"][0]["request_id"] == "voicereq_live_media_123"
 
-    # A multimodal message cannot establish a session/socket grant on its own.
-    orphan_state = SimpleNamespace(dispatch_socket=None)
+    orphan_state = SimpleNamespace(dispatch_socket=None, client_id="ext_voice_worker")
     registry.request_broker.requests["voicereq_orphan_media_123"] = orphan_state
-    asyncio.run(registry.send("ext_voice_worker", {
-        "type": "voice.live.multimodal",
-        "request_id": "voicereq_orphan_media_123",
-        "attachments": [{"file_id": "file_orphan", "request_id": "voicereq_orphan_media_123"}],
-    }))
+    with pytest.raises(RuntimeError, match="connection changed"):
+        asyncio.run(registry.send("ext_voice_worker", {
+            "type": "voice.live.multimodal",
+            "request_id": "voicereq_orphan_media_123",
+            "attachments": [{"file_id": "file_orphan", "request_id": "voicereq_orphan_media_123"}],
+        }))
     assert orphan_state.dispatch_socket is None
 
 
