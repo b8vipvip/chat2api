@@ -215,8 +215,16 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
         if not owned:
             return
         for row in telemetry.recent(500):
-            if str(row.get("api_key_id") or "") in owned and str(row.get("status") or "") == "completed":
+            if str(row.get("api_key_id") or "") not in owned:
+                continue
+            status = str(row.get("status") or "").lower()
+            if status == "completed":
                 billing.record_charge(user_id, row, pricing)
+            elif status in {"error", "cancelled", "stalled", "failed", "timeout"}:
+                billing.release_reservation(
+                    str(row.get("request_id") or ""), user_id,
+                    reason="reconciled_terminal_" + status,
+                )
 
     def public_request(row: dict[str, Any]) -> dict[str, Any]:
         diagnostics = row.get("diagnostics") if isinstance(row.get("diagnostics"), dict) else {}
@@ -412,7 +420,13 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
     @app.get("/api/user/me")
     async def user_me(request: Request) -> dict[str, Any]:
         user = current_user(request)
-        return {"ok": True, "user": user, "balance_cents": billing.balance_cents(str(user["user_id"]))}
+        user_id = str(user["user_id"])
+        return {
+            "ok": True, "user": user,
+            "balance_cents": billing.balance_cents(user_id),
+            "reserved_cents": billing.reserved_cents(user_id),
+            "available_balance_cents": billing.available_balance_cents(user_id),
+        }
 
     @app.patch("/api/user/profile")
     async def user_profile(body: ProfileBody, request: Request) -> dict[str, Any]:
@@ -614,6 +628,8 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
         payload = pricing.public()
         return {
             "balance_cents": billing.balance_cents(user_id),
+            "reserved_cents": billing.reserved_cents(user_id),
+            "available_balance_cents": billing.available_balance_cents(user_id),
             "billing_enabled": bool(payload.get("billing_enabled")),
             "usd_cny_rate": float(payload.get("usd_cny_rate") or 0),
             "estimated_spend_cents": sum(int(row.get("cost_cny_cents") or 0) for row in charge_rows),
@@ -664,6 +680,8 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
             "estimated_tokens": total_tokens,
             "estimated_spend_cents": sum(int(row.get("cost_cny_cents") or 0) for row in charges),
             "balance_cents": billing.balance_cents(user_id),
+            "reserved_cents": billing.reserved_cents(user_id),
+            "available_balance_cents": billing.available_balance_cents(user_id),
             "avg_latency_ms": round(sum(latencies) / len(latencies), 1) if latencies else None,
             "by_model": [{"model": key, "requests": value} for key, value in by_model.most_common()],
             "by_status": [{"status": key, "requests": value} for key, value in by_status.items()],
@@ -809,7 +827,10 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
         # until a reviewed billing-scoped user projection exists.
         if role == "super_admin":
             for row in page:
-                row["balance_cents"] = billing.balance_cents(str(row["user_id"]))
+                user_id = str(row["user_id"])
+                row["balance_cents"] = billing.balance_cents(user_id)
+                row["reserved_cents"] = billing.reserved_cents(user_id)
+                row["available_balance_cents"] = billing.available_balance_cents(user_id)
         return {"data": page, "total": total, "limit": limit, "offset": offset}
 
     @app.patch("/api/admin/users/{user_id}")
@@ -1102,6 +1123,11 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
                     None,
                 )
                 owner = accounts.owner_for_key(str(matched.key_id)) if matched else None
+                if owner and billing.reserved_cents(owner) > 0:
+                    # Reconcile recent terminal charges/releases before checking
+                    # available funds; this recovers a process interruption
+                    # between telemetry persistence and the billing projection.
+                    sync_user_charges(owner)
                 if owner and not accounts.is_enabled(owner):
                     return JSONResponse(
                         status_code=401,
@@ -1113,7 +1139,7 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
                             }
                         },
                     )
-                if owner and bool(pricing.public().get("billing_enabled")) and billing.balance_cents(owner) <= 0:
+                if owner and bool(pricing.public().get("billing_enabled")) and billing.available_balance_cents(owner) <= 0:
                     return JSONResponse(
                         status_code=402,
                         content={
