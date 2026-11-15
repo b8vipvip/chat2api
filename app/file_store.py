@@ -123,8 +123,12 @@ class FileStore:
                 if item.file_id in loaded or item.path in disk_paths:
                     raise ValueError("file index contains duplicate file IDs or disk paths")
                 disk_path = self.root / item.path
-                if disk_path.is_symlink():
-                    raise ValueError("stored file path cannot be a symbolic link")
+                try:
+                    disk_metadata = disk_path.lstat()
+                except FileNotFoundError:
+                    disk_metadata = None
+                if disk_metadata is not None and not stat.S_ISREG(disk_metadata.st_mode):
+                    raise ValueError("stored file path must be a regular file")
                 loaded[item.file_id] = item
                 disk_paths.add(item.path)
 
@@ -259,7 +263,13 @@ class FileStore:
                 raise KeyError("Unknown file_id")
             path = self.root / item.path
             try:
-                flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+                # O_NONBLOCK prevents a replaced FIFO/device path from
+                # hanging an API worker before fstat can reject it.
+                flags = (
+                    os.O_RDONLY
+                    | getattr(os, "O_NOFOLLOW", 0)
+                    | getattr(os, "O_NONBLOCK", 0)
+                )
                 fd = os.open(path, flags)
             except (FileNotFoundError, OSError) as error:
                 raise FileNotFoundError("Stored file content is unavailable") from error
