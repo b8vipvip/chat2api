@@ -367,9 +367,12 @@ class PricingStore:
             if not isinstance(row, dict):
                 raise ValueError("pricing model row must be an object")
             model_id = row.get("model_id")
-            if not isinstance(model_id, str) or not model_id.strip() or len(model_id) > 120 or model_id in seen:
+            if not isinstance(model_id, str) or not model_id.strip() or len(model_id) > 120:
                 raise ValueError("pricing model identity is invalid or duplicated")
-            seen.add(model_id)
+            normalized_model_id = model_id.strip().casefold()
+            if normalized_model_id in seen:
+                raise ValueError("pricing model identity is invalid or duplicated")
+            seen.add(normalized_model_id)
             if type(row.get("enabled", True)) is not bool:
                 raise ValueError("pricing model enabled must be boolean")
             for field in ("input_usd_per_million", "cached_input_usd_per_million", "output_usd_per_million"):
