@@ -182,6 +182,23 @@ class UserSubscriptionStore:
                     raise KeyError("Subscription plan not found")
                 if not bool(plan[0]):
                     raise UserSubscriptionError("Subscription plan is disabled")
+                # PUT assignment is idempotent: an identical active plan and
+                # expiry must not create a new history row when an admin retries
+                # after a timeout or an audit-response failure.
+                existing = self.db.execute(
+                    """SELECT subscription_id,user_id,plan_id,status,starts_at,expires_at,
+                              assigned_by,created_at,updated_at
+                       FROM user_subscriptions
+                       WHERE user_id=? AND plan_id=? AND status='active'
+                         AND starts_at<=?
+                         AND ((expires_at IS NULL AND ? IS NULL) OR expires_at=?)
+                         AND (expires_at IS NULL OR expires_at>?)
+                       ORDER BY starts_at DESC,created_at DESC LIMIT 1""",
+                    (user_id, plan_id, now, expiry, expiry, now),
+                ).fetchone()
+                if existing is not None:
+                    self.db.execute("COMMIT")
+                    return self._subscription_row(existing)
                 # Assignment is immediate and replaces the previous active
                 # subscription. Historical rows remain for audit/reconciliation.
                 self.db.execute(
