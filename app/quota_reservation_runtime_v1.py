@@ -1,12 +1,16 @@
 """Bounded runtime adapter for the C-06 in-flight token reservation ledger."""
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import HTTPException
 
 from .quota_reservations import QuotaExceeded, QuotaReservationError
 from .token_usage import usage_for
+
+
+logger = logging.getLogger(__name__)
 
 
 def reserve_request_quota(
@@ -43,6 +47,18 @@ def reserve_request_quota(
         raise HTTPException(status_code=429, detail=str(error)) from error
     except QuotaReservationError as error:
         raise HTTPException(status_code=503, detail="Token quota reservation failed: " + str(error)) from error
+    except Exception as error:
+        # SQLite lock/I/O/corruption and unexpected ApiKeyStore failures must
+        # fail closed as a retryable service error. Do not leak DB details or
+        # leave a Broker request stranded behind an unclassified exception.
+        logger.warning(
+            "Token quota reservation backend unavailable error_type=%s",
+            type(error).__name__,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Token quota reservation service is temporarily unavailable",
+        ) from error
 
 
 # Images and Voice do not yet expose provider-verified usage in the Worker
