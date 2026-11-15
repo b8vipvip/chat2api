@@ -254,6 +254,7 @@ class UserAccountStore:
             if row is None:
                 raise KeyError("用户不存在")
             previous = row.get("system_role")
+            previous_updated_at = row.get("updated_at")
             row["system_role"] = role
             row["updated_at"] = _now()
             try:
@@ -263,6 +264,10 @@ class UserAccountStore:
                     row.pop("system_role", None)
                 else:
                     row["system_role"] = previous
+                if previous_updated_at is None:
+                    row.pop("updated_at", None)
+                else:
+                    row["updated_at"] = previous_updated_at
                 raise
             return self.public(row)
 
