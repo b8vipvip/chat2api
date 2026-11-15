@@ -164,7 +164,17 @@ class FileStore:
             purpose=purpose,
         )
         self.items[file_id] = item
-        self.save_index()
+        try:
+            self.save_index()
+        except Exception:
+            self.items.pop(file_id, None)
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                # Keep the original persistence error; an unindexed orphan can
+                # be safely cleaned up without exposing a phantom file record.
+                pass
+            raise
         return item
 
     def get(self, file_id: str) -> StoredFile | None:
