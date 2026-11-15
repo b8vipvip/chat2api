@@ -140,6 +140,7 @@ ADMIN_HTML = r'''<!doctype html>
 <section class="view" id="view-playground"><div class="panel"><h2>自动测试场</h2><div class="muted">执行标准化用例并生成质量报告。测试 Key 支持选择现有业务 Key 或手动粘贴；手动粘贴优先，未指定时默认使用管理员 CHAT2API_API_KEY。</div><div class="labConfig" style="margin-top:14px"><div><label>测试类型</label><select id="testType"><option value="text">文本</option><option value="vision">视觉理解</option><option value="file">文件理解</option><option value="image_generation">图片生成</option><option value="voice_generation">语音生成</option><option value="voice_call">语音通话</option><option value="all">全部测试</option></select></div><div><label>文本/理解模型</label><select id="testModel"><option value="default">默认（页面当前模型）</option></select></div><div><label>测试 API Key</label><div class="testKeyBox"><select id="testKeySelect"><option value="master">管理员 CHAT2API_API_KEY（默认）</option></select><input id="testKeyInput" type="password" autocomplete="off" placeholder="粘贴 API Key（可选，优先使用）"><div class="testKeyHint">留空时使用左侧选择项；默认选择管理员主 Key。完整 Key 不写入测试报告。</div></div></div><div><label>测试附件（可多选：图片 / PDF / 文档等）</label><input id="testFiles" type="file" multiple></div><button class="action good" id="startTest">开始测试</button></div><div class="testStatus"><div class="card"><div class="muted">当前状态</div><div class="n" id="testState">待命</div></div><div class="card"><div class="muted">通过</div><div class="n" id="testPass">0</div></div><div class="card"><div class="muted">警告</div><div class="n" id="testWarn">0</div></div><div class="card"><div class="muted">失败</div><div class="n" id="testFail">0</div></div></div><div class="panel"><h3>实时监测</h3><div class="timeline" id="timeline"><div class="muted">尚未开始测试。</div></div></div></div><div class="panel" style="margin-top:14px"><h3>测试记录</h3><div class="scroll"><table><thead><tr><th>时间</th><th>类型</th><th>状态</th><th>模型</th><th>测试 Key</th><th>耗时</th><th>摘要</th></tr></thead><tbody id="testHistory"></tbody></table></div></div></section>
 <div class="footer">Token 为 chat2api 本地估算，不是 ChatGPT 官方 usage。语音能力在本版测试场中会标记为未实现/跳过，不伪装为通过。</div></div></main></div>
 
+<script src="/assets/chat2api-control-plane-admin-v1.js" defer></script>
 <script>
 const INITIAL_VIEW='__INITIAL_VIEW__';
 const $=id=>document.getElementById(id);
@@ -342,7 +343,7 @@ $('mediaSaveSettings').onclick=async()=>{
     $('mediaStorageStatus').textContent='已保存配置';await loadMediaStorage();
   }catch(e){$('mediaStorageStatus').textContent='保存失败：'+e.message;}
 };
-$('connect').disabled=true;$('refresh').disabled=true;document.querySelectorAll('.nav button').forEach(button=>button.disabled=true);
+if($('connect'))$('connect').disabled=true;if($('refresh'))$('refresh').disabled=true;document.querySelectorAll('.nav button').forEach(button=>button.disabled=true);
 (async()=>{
   let session=null,sessionCheckSucceeded=false;
   try{
@@ -352,25 +353,24 @@ $('connect').disabled=true;$('refresh').disabled=true;document.querySelectorAll(
   }catch(_){}
   if(sessionCheckSucceeded&&session&&session.authenticated&&session.role!=='super_admin'){
     try{sessionStorage.removeItem('chat2api_admin_key')}catch(_){}
-    $('adminKey').value='';$('adminKey').disabled=true;$('connect').hidden=true;$('refresh').hidden=true;
+    if($('adminKey')){$('adminKey').value='';$('adminKey').disabled=true;}if($('connect'))$('connect').hidden=true;if($('refresh'))$('refresh').hidden=true;
     document.querySelectorAll('.nav button:not([data-cview])').forEach(button=>{button.hidden=true;button.disabled=true});
     document.querySelectorAll('.nav button[data-cview]').forEach(button=>{button.disabled=false});
     const defaults={system_admin:'client-policy',api_key_admin:'api-keys',plugin_admin:'plugins',support:'model-entitlements',billing_admin:'user-pricing',user_admin:'admin-users'};
     if(defaults[session.role])location.hash=defaults[session.role];
     status('已识别委派管理员 Session：'+session.username+' · '+session.role,'ok');
   }else if(sessionCheckSucceeded){
-    $('connect').disabled=false;$('refresh').disabled=false;
+    if($('connect'))$('connect').disabled=false;if($('refresh'))$('refresh').disabled=false;
     document.querySelectorAll('.nav button').forEach(button=>button.disabled=false);
     const start=(location.hash||'#'+INITIAL_VIEW).slice(1);show(titles[start]?start:'overview');
   }else{
     try{sessionStorage.removeItem('chat2api_admin_key')}catch(_){}
-    $('adminKey').value='';$('connect').disabled=false;$('refresh').disabled=true;
+    if($('adminKey'))$('adminKey').value='';if($('connect'))$('connect').disabled=false;if($('refresh'))$('refresh').disabled=true;
     document.querySelectorAll('.nav button:not([data-cview])').forEach(button=>button.disabled=true);
     document.querySelectorAll('.nav button[data-cview]').forEach(button=>{button.disabled=false});
     $('view-overview').classList.add('active');
     status('无法验证管理员 Session；已阻止自动使用缓存主密钥，请检查服务后重新登录','bad');
   }
-  const cTrackAdminScript=document.createElement("script");cTrackAdminScript.src="/assets/chat2api-control-plane-admin-v1.js";cTrackAdminScript.defer=true;document.body.appendChild(cTrackAdminScript);
 })();
 </script>
 <dialog id="adminPasswordDialog">
