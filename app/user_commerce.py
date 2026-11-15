@@ -8,6 +8,7 @@ import math
 import os
 import re
 import secrets
+import stat
 import threading
 import time
 from pathlib import Path
@@ -20,6 +21,13 @@ from .timezone_utils import beijing_now_iso
 
 USER_SESSION_COOKIE = "chat2api_user_session"
 USER_COMMERCE_VERSION = 1
+USER_ACCOUNT_SCHEMA_VERSION = 2
+DEFAULT_USER_SYSTEM_ROLE = "user"
+USER_SYSTEM_ROLE_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
+RESERVED_ADMIN_ROLES = frozenset({
+    "super_admin", "system_admin", "user_admin", "api_key_admin",
+    "billing_admin", "plugin_admin", "support",
+})
 
 
 def _pricing_model_key(value: Any) -> str:
@@ -69,18 +77,46 @@ def _now() -> str:
 
 
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
+    """Atomically persist private JSON without a world-readable temp window."""
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{secrets.token_hex(6)}.tmp")
-    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    serialized = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(temporary, flags, 0o600)
     try:
-        os.chmod(temporary, 0o600)
-    except OSError:
-        pass
-    temporary.replace(path)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = -1
+            handle.write(serialized)
+            handle.flush()
+            os.fsync(handle.fileno())
+        # The file already has mode 0600 from creation. Rename preserves its
+        # mode; never perform a fallible permission change after commit.
+        os.replace(temporary, path)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        temporary.unlink(missing_ok=True)
+
+
+def _read_json_private(path: Path) -> Any:
+    """Read a single-link regular JSON file and repair legacy POSIX mode bits."""
+    if path.is_symlink():
+        raise ValueError("private JSON storage cannot be a symbolic link")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
     try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
+        metadata = os.fstat(fd)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise ValueError("private JSON storage must be a single-link regular file")
+        if os.name != "nt" and hasattr(os, "fchmod"):
+            os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "r", encoding="utf-8") as handle:
+            fd = -1
+            return json.load(handle)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
 
 
 def _token_hash(value: str) -> str:
@@ -119,34 +155,129 @@ class UserAccountStore:
         if not self.path.exists():
             return
         try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
-            users = payload.get("users") if isinstance(payload, dict) else None
-            sessions = payload.get("sessions") if isinstance(payload, dict) else None
-            if isinstance(users, list):
-                self.users = {str(row.get("user_id")): dict(row) for row in users if isinstance(row, dict) and row.get("user_id")}
-            if isinstance(sessions, dict):
-                self.sessions = {str(key): dict(value) for key, value in sessions.items() if isinstance(value, dict)}
+            payload = _read_json_private(self.path)
+            if not isinstance(payload, dict):
+                raise ValueError("user account store must be an object")
+            version = payload.get("version", USER_COMMERCE_VERSION)
+            if type(version) is not int or version not in {USER_COMMERCE_VERSION, USER_ACCOUNT_SCHEMA_VERSION}:
+                raise ValueError("user account store version is unsupported")
+            migrated = version != USER_ACCOUNT_SCHEMA_VERSION
+            raw_users = payload.get("users")
+            raw_sessions = payload.get("sessions", {})
+            if not isinstance(raw_users, list) or not isinstance(raw_sessions, dict):
+                raise ValueError("user account collections are invalid")
+
+            users: dict[str, dict[str, Any]] = {}
+            emails: set[str] = set()
+            owned_keys: set[str] = set()
+            for raw in raw_users:
+                if not isinstance(raw, dict):
+                    raise ValueError("user account row is invalid")
+                user_id = raw.get("user_id")
+                email = raw.get("email")
+                display_name = raw.get("display_name")
+                salt = raw.get("password_salt")
+                password_hash = raw.get("password_hash")
+                enabled = raw.get("enabled")
+                key_ids = raw.get("key_ids", [])
+                created_at = raw.get("created_at")
+                updated_at = raw.get("updated_at")
+                if not isinstance(user_id, str) or not user_id or user_id != user_id.strip() or len(user_id) > 128:
+                    raise ValueError("user account ID is invalid")
+                if (
+                    not isinstance(email, str) or len(email) > 254
+                    or not _EMAIL_RE.fullmatch(email)
+                    or email != email.strip().lower()
+                ):
+                    raise ValueError("user account email is invalid")
+                if email in emails:
+                    raise ValueError("user account email is duplicated")
+                if not isinstance(display_name, str) or len(display_name) > 80:
+                    raise ValueError("user account display name is invalid")
+                if not isinstance(salt, str) or not isinstance(password_hash, str):
+                    raise ValueError("user account password record is invalid")
+                try:
+                    salt_bytes = base64.urlsafe_b64decode(salt.encode("ascii"))
+                    password_bytes = base64.urlsafe_b64decode(password_hash.encode("ascii"))
+                except (ValueError, UnicodeError) as error:
+                    raise ValueError("user account password record is invalid") from error
+                if len(salt_bytes) != 16 or len(password_bytes) != 32:
+                    raise ValueError("user account password record has an invalid length")
+                if type(enabled) is not bool:
+                    raise ValueError("user account enabled flag is invalid")
+                if not isinstance(key_ids, list):
+                    raise ValueError("user account key ownership list is invalid")
+                normalized_key_ids: list[str] = []
+                for key_id in key_ids:
+                    if not isinstance(key_id, str) or not key_id or len(key_id) > 128:
+                        raise ValueError("user account key ID is invalid")
+                    if key_id in owned_keys or key_id in normalized_key_ids:
+                        raise ValueError("API key is assigned to more than one user")
+                    normalized_key_ids.append(key_id)
+                    owned_keys.add(key_id)
+                if not isinstance(created_at, str) or not created_at or len(created_at) > 80:
+                    raise ValueError("user account created_at is invalid")
+                if not isinstance(updated_at, str) or not updated_at or len(updated_at) > 80:
+                    raise ValueError("user account updated_at is invalid")
+                if user_id in users:
+                    raise ValueError("user account ID is duplicated")
+                role = str(raw.get("system_role") or DEFAULT_USER_SYSTEM_ROLE).strip().lower()
+                if not USER_SYSTEM_ROLE_RE.fullmatch(role) or role in RESERVED_ADMIN_ROLES:
+                    role = DEFAULT_USER_SYSTEM_ROLE
+                if raw.get("system_role") != role:
+                    migrated = True
+                row = dict(raw)
+                row["system_role"] = role
+                row["key_ids"] = normalized_key_ids
+                users[user_id] = row
+                emails.add(email)
+
+            sessions: dict[str, dict[str, Any]] = {}
+            for digest, raw_session in raw_sessions.items():
+                if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+                    raise ValueError("user session digest is invalid")
+                if not isinstance(raw_session, dict):
+                    raise ValueError("user session row is invalid")
+                session_user_id = raw_session.get("user_id")
+                expires_at = raw_session.get("expires_at")
+                if not isinstance(session_user_id, str) or session_user_id not in users:
+                    raise ValueError("user session owner is invalid")
+                if (
+                    type(expires_at) not in {int, float}
+                    or not math.isfinite(float(expires_at))
+                ):
+                    raise ValueError("user session expiry is invalid")
+                sessions[digest] = dict(raw_session)
+
+            self.users = users
+            self.sessions = sessions
             self._cleanup_sessions(save=False)
-        except (OSError, ValueError, TypeError):
-            self.users = {}
-            self.sessions = {}
+            if migrated:
+                self._save()
+        except (OSError, ValueError, TypeError, UnicodeError, OverflowError) as error:
+            raise RuntimeError(
+                "User account store is unreadable; existing file was preserved"
+            ) from error
 
     def _save(self) -> None:
-        _atomic_json(self.path, {"version": USER_COMMERCE_VERSION, "users": list(self.users.values()), "sessions": self.sessions})
+        _atomic_json(self.path, {"version": USER_ACCOUNT_SCHEMA_VERSION, "users": list(self.users.values()), "sessions": self.sessions})
 
     def _cleanup_sessions(self, *, save: bool = True) -> None:
         now = time.time()
-        changed = False
+        removed: dict[str, dict[str, Any]] = {}
         for digest, row in list(self.sessions.items()):
             try:
                 expires_at = float(row.get("expires_at") or 0)
             except (TypeError, ValueError):
                 expires_at = 0
             if expires_at <= now or str(row.get("user_id") or "") not in self.users:
-                self.sessions.pop(digest, None)
-                changed = True
-        if changed and save:
-            self._save()
+                removed[digest] = self.sessions.pop(digest)
+        if removed and save:
+            try:
+                self._save()
+            except Exception:
+                self.sessions.update(removed)
+                raise
 
     def register(self, email: str, password: str, display_name: str = "") -> dict[str, Any]:
         normalized = str(email or "").strip().lower()
@@ -167,12 +298,17 @@ class UserAccountStore:
                 "password_salt": salt,
                 "password_hash": password_hash,
                 "enabled": True,
+                "system_role": DEFAULT_USER_SYSTEM_ROLE,
                 "key_ids": [],
                 "created_at": now,
                 "updated_at": now,
             }
             self.users[user_id] = row
-            self._save()
+            try:
+                self._save()
+            except Exception:
+                self.users.pop(user_id, None)
+                raise
             return self.public(row)
 
     def verify(self, email: str, password: str) -> dict[str, Any] | None:
@@ -189,10 +325,15 @@ class UserAccountStore:
         with self.lock:
             if user_id not in self.users or not self.users[user_id].get("enabled"):
                 raise KeyError("用户不存在或已停用")
+            previous_sessions = copy.deepcopy(self.sessions)
             self._cleanup_sessions(save=False)
             token = secrets.token_urlsafe(40)
             self.sessions[_token_hash(token)] = {"user_id": user_id, "expires_at": time.time() + self.session_ttl_seconds}
-            self._save()
+            try:
+                self._save()
+            except Exception:
+                self.sessions = previous_sessions
+                raise
             return token
 
     def authenticate(self, token: str | None) -> dict[str, Any] | None:
@@ -209,8 +350,13 @@ class UserAccountStore:
                 expired = True
             user = self.users.get(str(row.get("user_id") or ""))
             if expired or not user or not user.get("enabled"):
-                self.sessions.pop(digest, None)
-                self._save()
+                removed = self.sessions.pop(digest, None)
+                if removed is not None:
+                    try:
+                        self._save()
+                    except Exception:
+                        self.sessions[digest] = removed
+                        raise
                 return None
             return self.public(user)
 
@@ -218,8 +364,14 @@ class UserAccountStore:
         if not token:
             return
         with self.lock:
-            if self.sessions.pop(_token_hash(token), None) is not None:
-                self._save()
+            digest = _token_hash(token)
+            removed = self.sessions.pop(digest, None)
+            if removed is not None:
+                try:
+                    self._save()
+                except Exception:
+                    self.sessions[digest] = removed
+                    raise
 
     def public(self, row: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -227,9 +379,49 @@ class UserAccountStore:
             "email": str(row.get("email") or ""),
             "display_name": str(row.get("display_name") or ""),
             "enabled": bool(row.get("enabled", True)),
+            "system_role": str(row.get("system_role") or DEFAULT_USER_SYSTEM_ROLE),
             "created_at": row.get("created_at"),
             "updated_at": row.get("updated_at"),
         }
+
+
+    @staticmethod
+    def validate_system_role(system_role: str) -> str:
+        role = str(system_role or "").strip().lower()
+        if not USER_SYSTEM_ROLE_RE.fullmatch(role) or role in RESERVED_ADMIN_ROLES:
+            raise ValueError("system_role must be a non-admin role slug")
+        return role
+
+    def system_role_for(self, user_id: str) -> str:
+        with self.lock:
+            row = self.users.get(str(user_id or ""))
+            if row is None:
+                raise KeyError("用户不存在")
+            return self.validate_system_role(str(row.get("system_role") or DEFAULT_USER_SYSTEM_ROLE))
+
+    def set_system_role(self, user_id: str, system_role: str) -> dict[str, Any]:
+        role = self.validate_system_role(system_role)
+        with self.lock:
+            row = self.users.get(str(user_id or ""))
+            if row is None:
+                raise KeyError("用户不存在")
+            previous = row.get("system_role")
+            previous_updated_at = row.get("updated_at")
+            row["system_role"] = role
+            row["updated_at"] = _now()
+            try:
+                self._save()
+            except Exception:
+                if previous is None:
+                    row.pop("system_role", None)
+                else:
+                    row["system_role"] = previous
+                if previous_updated_at is None:
+                    row.pop("updated_at", None)
+                else:
+                    row["updated_at"] = previous_updated_at
+                raise
+            return self.public(row)
 
     def update_profile(self, user_id: str, *, display_name: str) -> dict[str, Any]:
         name = str(display_name or "").strip()
@@ -239,22 +431,40 @@ class UserAccountStore:
             row = self.users.get(user_id)
             if not row:
                 raise KeyError("用户不存在")
+            previous = dict(row)
             row["display_name"] = name[:80]
             row["updated_at"] = _now()
-            self._save()
+            try:
+                self._save()
+            except Exception:
+                self.users[user_id] = previous
+                raise
             return self.public(row)
 
     def attach_key(self, user_id: str, key_id: str) -> None:
+        normalized_key_id = str(key_id or "").strip()
+        if not normalized_key_id or len(normalized_key_id) > 128:
+            raise ValueError("API key ID is invalid")
         with self.lock:
             row = self.users.get(user_id)
             if not row:
                 raise KeyError("用户不存在")
+            for owner_id, owner in self.users.items():
+                if owner_id != user_id and normalized_key_id in {
+                    str(value) for value in owner.get("key_ids") or []
+                }:
+                    raise ValueError("API key is already assigned to another user")
             ids = [str(value) for value in row.get("key_ids") or []]
-            if key_id not in ids:
-                ids.append(key_id)
+            if normalized_key_id not in ids:
+                previous = dict(row)
+                ids.append(normalized_key_id)
                 row["key_ids"] = ids
                 row["updated_at"] = _now()
-                self._save()
+                try:
+                    self._save()
+                except Exception:
+                    self.users[user_id] = previous
+                    raise
 
     def key_ids(self, user_id: str) -> set[str]:
         with self.lock:
@@ -308,6 +518,8 @@ class UserAccountStore:
             row = self.users.get(str(user_id))
             if not row:
                 raise KeyError("用户不存在")
+            previous_row = dict(row)
+            previous_sessions = copy.deepcopy(self.sessions)
             row["enabled"] = enabled
             row["updated_at"] = _now()
             revoked = 0
@@ -316,21 +528,29 @@ class UserAccountStore:
                     if str(session.get("user_id") or "") == str(user_id):
                         self.sessions.pop(digest, None)
                         revoked += 1
-            self._save()
+            try:
+                self._save()
+            except Exception:
+                self.users[str(user_id)] = previous_row
+                self.sessions = previous_sessions
+                raise
             return self.public(row), revoked
 
     def revoke_user_sessions(self, user_id: str) -> int:
         with self.lock:
             if str(user_id) not in self.users:
                 raise KeyError("用户不存在")
-            revoked = 0
+            removed: dict[str, dict[str, Any]] = {}
             for digest, session in list(self.sessions.items()):
                 if str(session.get("user_id") or "") == str(user_id):
-                    self.sessions.pop(digest, None)
-                    revoked += 1
-            if revoked:
-                self._save()
-            return revoked
+                    removed[digest] = self.sessions.pop(digest)
+            if removed:
+                try:
+                    self._save()
+                except Exception:
+                    self.sessions.update(removed)
+                    raise
+            return len(removed)
 
 
 class PricingStore:
@@ -395,7 +615,7 @@ class PricingStore:
             self._save()
             return
         try:
-            raw = json.loads(self.path.read_text(encoding="utf-8"))
+            raw = _read_json_private(self.path)
             if not isinstance(raw, dict):
                 raise ValueError("pricing configuration root must be an object")
             candidate = copy.deepcopy(self.payload)
@@ -512,7 +732,7 @@ class BillingStore:
         if not self.path.exists():
             return
         try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
+            payload = _read_json_private(self.path)
             if not isinstance(payload, dict):
                 raise ValueError("billing ledger root must be an object")
             # Version 1 is the only supported on-disk schema. Missing version
@@ -1464,7 +1684,7 @@ class PaymentConfigStore:
             self._save()
             return
         try:
-            raw = json.loads(self.path.read_text(encoding="utf-8"))
+            raw = _read_json_private(self.path)
             if not isinstance(raw, dict):
                 raise ValueError("payment configuration must be an object")
             candidate = {**self.payload, **raw}
