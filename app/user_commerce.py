@@ -828,7 +828,7 @@ class BillingStore:
             if not isinstance(price_catalog_snapshot, dict):
                 raise WalletReservationError("price_catalog_snapshot must be an object")
             for model_key, row in price_catalog_snapshot.items():
-                normalized_key = _pricing_model_key(model_key)
+                normalized_key = str(model_key or "").strip().casefold()
                 if not normalized_key or not isinstance(row, dict):
                     raise WalletReservationError("price_catalog_snapshot contains an invalid model row")
                 catalog_snapshot.setdefault(normalized_key, dict(row))
