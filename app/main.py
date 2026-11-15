@@ -2635,7 +2635,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         active_state.diagnostics["terminal_transport_server_seen"] = True
                         active_state.diagnostics["terminal_transport_server_received_at"] = time.time()
                         active_state.diagnostics["terminal_transport_payload_chars"] = len(str(message.get("text") or ""))
-                    accepted = await broker.publish(request_id, message)
+                    # A request ID is not proof that this Worker owns the
+                    # request. Require both the Broker assignment and the exact
+                    # currently authenticated WebSocket before publishing any
+                    # progress or terminal event.
+                    accepted = await broker.publish_worker_event(
+                        request_id,
+                        message,
+                        client_id=client_id,
+                        websocket=websocket,
+                        current_socket=registry.sockets.get(client_id),
+                    )
                     if accepted and message_type == "chat.completed" and active_state:
                         row = telemetry.get(request_id) or {}
                         owner = str(row.get("api_key_id") or "")
