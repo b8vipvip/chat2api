@@ -262,6 +262,29 @@ class RequestBroker:
                 else:
                     self.client_requests.pop(state.client_id, None)
 
+
+    async def publish_worker_event(
+        self,
+        request_id: str,
+        event: dict[str, Any],
+        *,
+        client_id: str,
+        websocket: Any,
+        current_socket: Any,
+    ) -> bool:
+        """Publish a Worker event only from the current socket assigned the request.
+
+        Request IDs are correlation identifiers, not Worker credentials. The
+        authenticated socket identity and the Broker's request assignment must
+        both match before any progress or terminal event can enter the queue.
+        """
+        if websocket is None or current_socket is not websocket:
+            return False
+        state = self.requests.get(request_id)
+        if state is None or state.client_id != client_id:
+            return False
+        return await self.publish(request_id, event)
+
     async def publish(self, request_id: str, event: dict[str, Any]) -> bool:
         state = self.requests.get(request_id)
         if not state:
