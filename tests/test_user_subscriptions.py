@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 
@@ -21,6 +22,8 @@ def test_existing_user_accounts_migrate_to_least_privileged_role(tmp_path: Path)
             "user_id": "usr_legacy123",
             "email": "legacy@example.test",
             "display_name": "Legacy",
+            "password_salt": base64.urlsafe_b64encode(bytes(16)).decode("ascii"),
+            "password_hash": base64.urlsafe_b64encode(bytes(32)).decode("ascii"),
             "enabled": True,
             "key_ids": [],
             "created_at": "2026-01-01T00:00:00+00:00",
