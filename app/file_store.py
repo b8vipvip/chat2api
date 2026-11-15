@@ -167,14 +167,20 @@ class FileStore:
                     handle.write(encoded)
                     handle.flush()
                     os.fsync(handle.fileno())
+                # The temp file was created with mode 0600, so the atomic
+                # replacement already publishes a private index. Do not perform
+                # a fallible chmod after the commit point.
                 os.replace(temp, self.index_path)
-                if os.name != "nt":
-                    os.chmod(self.index_path, 0o600)
             finally:
                 if fd >= 0:
                     os.close(fd)
                 if created_temp:
-                    temp.unlink(missing_ok=True)
+                    try:
+                        temp.unlink(missing_ok=True)
+                    except OSError:
+                        # Cleanup must not turn a committed index replacement
+                        # into a reported failure that callers would roll back.
+                        pass
 
     def _decode(self, data_base64: str, mime_type: str | None) -> tuple[bytes, str]:
         raw = str(data_base64 or "").strip()
