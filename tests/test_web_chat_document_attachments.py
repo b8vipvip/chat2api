@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import base64
 import pytest
+
+from app.file_store import FileIntegrityError
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -177,7 +179,7 @@ def test_document_content_part_rejects_corrupt_size_metadata(tmp_path: Path) -> 
         item = client.app.state.file_store.get(document["id"])
         item.size += 1
         assert (client.app.state.file_store.root / item.path).is_file()
-        with pytest.raises(OSError, match="size integrity"):
+        with pytest.raises(FileIntegrityError, match="size"):
             client.app.state.file_store.read(document["id"])
         response = client.post(
             "/v1/chat/completions", headers=_admin_headers(),
