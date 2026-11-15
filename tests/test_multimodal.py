@@ -253,7 +253,9 @@ def test_remote_image_url_is_rejected_without_ssrf_fetch(tmp_path: Path) -> None
             },
         )
         assert response.status_code == 400
-        assert "Remote image URLs" in response.json()["detail"]
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "Remote image URLs" in error["message"]
 
 
 def test_gpt_image_route_round_trip(tmp_path: Path) -> None:
