@@ -17,6 +17,60 @@ ROOT = Path(__file__).resolve().parents[1]
 RECOVERY_JS = ROOT / "app" / "chat_stream_recovery_v1.js"
 
 
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is needed for the Web Chat stream harness")
+def test_in_band_stream_failure_settles_without_recovery_polling():
+    harness = r"""
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const source = fs.readFileSync('app/chat_client_v1.js', 'utf8');
+const conversation = {messages: []};
+const notices = [];
+let polls = 0;
+const node = {classList: {add() {}, remove() {}}, focus() {}};
+const body = new ReadableStream({
+  start(controller) {
+    const stream = 'data: {"error":{"type":"browser_error","message":"Worker failed"}}\r\n\r\ndata: [DONE]\r\n\r\n';
+    controller.enqueue(new TextEncoder().encode(stream));
+    controller.close();
+  },
+});
+const context = {
+  state: {apiToken: 'token', user: {user_id: 'user-a'}, selectedModel: 'model', pendingImages: [], pendingImagesConversationId: ''},
+  currentConversation: () => conversation,
+  window: {Chat2APIStreamRecoveryV1: {createRequestId: () => 'req_webchat_error'}},
+  apiJson: async () => ({user: {user_id: 'user-a'}}),
+  fetch: async () => ({ok: true, body}),
+  makeRecoveryController: () => null,
+  selectedKeyId: () => 'key-a',
+  selectedKeyHasScope: () => true,
+  uploadPendingImages: async () => {},
+  renderPendingImages() {},
+  setConnection() {},
+  recoverPendingMessage: async () => { polls++; return {status: 'completed'}; },
+  id: () => String(conversation.messages.length),
+  toast: (message) => notices.push(message),
+  $: () => node,
+  autoTitle() {}, saveHistory() {}, resizeComposer() {}, renderAll() {}, renderMessages() {},
+  AbortController, TextDecoder,
+};
+const readFrame = source.slice(source.indexOf('  class StreamResponseError'), source.indexOf('  function recoveryStatusLabel'));
+const send = source.slice(source.indexOf('  async function sendMessage'), source.indexOf('  async function selectApiKey'));
+const sendMessage = vm.runInNewContext(readFrame + send + '\nsendMessage', context);
+(async () => {
+  await sendMessage('question');
+  assert.deepEqual(notices, ['请求失败：Worker failed']);
+  assert.equal(conversation.messages[1].pending, false);
+  assert.equal(conversation.messages[1].recoveryStatus, 'error');
+  assert.equal(polls, 0);
+  assert.equal(body.locked, false);
+})().catch((error) => { console.error(error); process.exitCode = 1; });
+"""
+    subprocess.run(["node", "-e", harness], cwd=ROOT, check=True, timeout=20)
+
+
+
 def make_app(data_dir: Path):
     app = create_app(Settings(CHAT2API_API_KEY="w04-test-key", CHAT2API_DATA_DIR=str(data_dir)))
     install_user_console_v104_patch(app)
