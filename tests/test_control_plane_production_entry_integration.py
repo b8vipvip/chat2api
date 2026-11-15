@@ -16,6 +16,8 @@ from fastapi.testclient import TestClient
 assert app.state.control_plane_installed is True
 assert app.state.control_plane_features_v1_installed is True
 assert app.state.control_plane_integration_version == 1
+assert app.state.model_entitlements_installed is True
+assert any(plan.get("plan_id") == "free" for plan in app.state.user_subscriptions.list_plans())
 for name in (
     "admin_sessions",
     "admin_audit",
@@ -23,6 +25,7 @@ for name in (
     "invitations",
     "tenant_memberships",
     "model_entitlements",
+    "user_subscriptions",
     "product_plugin_registry",
     "quota_reservations",
 ):
@@ -37,6 +40,14 @@ expected = {
     ("GET", "/api/admin/tenants"),
     ("POST", "/api/admin/tenants"),
     ("GET", "/api/admin/model-entitlements"),
+    ("PUT", "/api/admin/model-entitlements/{subject_type}/{subject_id}"),
+    ("DELETE", "/api/admin/model-entitlements/{subject_type}/{subject_id}"),
+    ("GET", "/api/admin/subscription-plans"),
+    ("PUT", "/api/admin/subscription-plans/{plan_id}"),
+    ("PUT", "/api/admin/users/{user_id}/role"),
+    ("GET", "/api/admin/users/{user_id}/subscription"),
+    ("PUT", "/api/admin/users/{user_id}/subscription"),
+    ("DELETE", "/api/admin/users/{user_id}/subscription"),
     ("GET", "/api/admin/plugins"),
     ("POST", "/api/admin/plugins"),
     ("GET", "/api/admin/quota-reservations"),
@@ -79,6 +90,8 @@ with TestClient(app) as client:
         "/api/admin/control/invitations",
         "/api/admin/tenants",
         "/api/admin/model-entitlements",
+        "/api/admin/subscription-plans",
+        "/api/admin/users/integration-test-user/subscription",
         "/api/admin/plugins",
         "/api/admin/quota-reservations",
     ):
