@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import os
 import pytest
 
 from app.file_store import FileIntegrityError
@@ -200,6 +201,39 @@ def test_document_content_part_rejects_corrupt_size_metadata(tmp_path: Path) -> 
         assert response.json()["detail"] == {
             "code": "stored_file_integrity_unavailable",
         }
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlinks are unavailable on Windows")
+def test_document_content_part_rejects_symlink_replacement_as_storage_integrity_failure(tmp_path: Path) -> None:
+    with TestClient(create_app(_settings(tmp_path))) as client:
+        document = _upload_document(client, "notes.txt", "text/plain", b"valid bytes")
+        item = client.app.state.file_store.get(document["id"])
+        assert item is not None
+        outside = tmp_path / "outside-secret.txt"
+        outside.write_bytes(b"must not be sent to the Worker")
+        stored_path = client.app.state.file_store.root / item.path
+        stored_path.unlink()
+        stored_path.symlink_to(outside)
+
+        response = client.post(
+            "/v1/chat/completions", headers=_admin_headers(),
+            json={
+                "model": "default",
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Summarize this."},
+                        {"type": "file", "file_id": document["id"]},
+                    ],
+                }],
+            },
+        )
+
+        assert response.status_code == 503, response.text
+        assert response.json()["detail"] == {
+            "code": "stored_file_integrity_unavailable",
+        }
+        assert outside.read_bytes() == b"must not be sent to the Worker"
+
 
 def test_chat_completion_enforces_four_combined_file_input_limit(tmp_path: Path) -> None:
     with TestClient(create_app(_settings(tmp_path))) as client:
