@@ -74,7 +74,7 @@ def test_file_store_read_rejects_hardlinked_content(tmp_path):
     stored_path = store.root / item.path
     stored_path.unlink()
     os.link(secret, stored_path)
-    with pytest.raises(FileNotFoundError, match="original regular file"):
+    with pytest.raises(FileIntegrityError, match="file identity"):
         store.read(item.file_id)
     assert secret.read_bytes() == b"important file bytes"
 
@@ -92,7 +92,7 @@ def test_file_store_read_rejects_fifo_swapped_after_startup(tmp_path):
     stored_path = store.root / item.path
     stored_path.unlink()
     os.mkfifo(stored_path)
-    with pytest.raises(FileNotFoundError, match="regular file"):
+    with pytest.raises(FileIntegrityError, match="file identity"):
         store.read(item.file_id)
 
 
@@ -111,7 +111,7 @@ def test_file_store_read_rejects_symlink_swapped_after_startup(tmp_path):
     stored_path = store.root / item.path
     stored_path.unlink()
     stored_path.symlink_to(secret)
-    with pytest.raises(FileNotFoundError, match="regular file"):
+    with pytest.raises(FileIntegrityError, match="original regular file"):
         store.read(item.file_id)
     assert secret.read_bytes() == b"must-not-be-served"
 
