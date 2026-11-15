@@ -20,6 +20,13 @@ from .timezone_utils import beijing_now_iso
 
 USER_SESSION_COOKIE = "chat2api_user_session"
 USER_COMMERCE_VERSION = 1
+USER_ACCOUNT_SCHEMA_VERSION = 2
+DEFAULT_USER_SYSTEM_ROLE = "user"
+USER_SYSTEM_ROLE_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
+RESERVED_ADMIN_ROLES = frozenset({
+    "super_admin", "system_admin", "user_admin", "api_key_admin",
+    "billing_admin", "plugin_admin", "support",
+})
 
 
 def _pricing_model_key(value: Any) -> str:
@@ -36,10 +43,6 @@ def _payment_transaction_scope(channel: Any) -> str:
 
 class WalletReservationError(RuntimeError):
     pass
-
-
-class WalletReservationConflict(WalletReservationError):
-    """A request ID already owns a wallet admission or settlement."""
 
 
 class InsufficientWalletBalance(WalletReservationError):
@@ -120,33 +123,128 @@ class UserAccountStore:
             return
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
-            users = payload.get("users") if isinstance(payload, dict) else None
-            sessions = payload.get("sessions") if isinstance(payload, dict) else None
-            if isinstance(users, list):
-                self.users = {str(row.get("user_id")): dict(row) for row in users if isinstance(row, dict) and row.get("user_id")}
-            if isinstance(sessions, dict):
-                self.sessions = {str(key): dict(value) for key, value in sessions.items() if isinstance(value, dict)}
+            if not isinstance(payload, dict):
+                raise ValueError("user account store must be an object")
+            version = payload.get("version", USER_COMMERCE_VERSION)
+            if type(version) is not int or version not in {USER_COMMERCE_VERSION, USER_ACCOUNT_SCHEMA_VERSION}:
+                raise ValueError("user account store version is unsupported")
+            migrated = version != USER_ACCOUNT_SCHEMA_VERSION
+            raw_users = payload.get("users")
+            raw_sessions = payload.get("sessions", {})
+            if not isinstance(raw_users, list) or not isinstance(raw_sessions, dict):
+                raise ValueError("user account collections are invalid")
+
+            users: dict[str, dict[str, Any]] = {}
+            emails: set[str] = set()
+            owned_keys: set[str] = set()
+            for raw in raw_users:
+                if not isinstance(raw, dict):
+                    raise ValueError("user account row is invalid")
+                user_id = raw.get("user_id")
+                email = raw.get("email")
+                display_name = raw.get("display_name")
+                salt = raw.get("password_salt")
+                password_hash = raw.get("password_hash")
+                enabled = raw.get("enabled")
+                key_ids = raw.get("key_ids", [])
+                created_at = raw.get("created_at")
+                updated_at = raw.get("updated_at")
+                if not isinstance(user_id, str) or not user_id or user_id != user_id.strip() or len(user_id) > 128:
+                    raise ValueError("user account ID is invalid")
+                if (
+                    not isinstance(email, str) or len(email) > 254
+                    or not _EMAIL_RE.fullmatch(email)
+                    or email != email.strip().lower()
+                ):
+                    raise ValueError("user account email is invalid")
+                if email in emails:
+                    raise ValueError("user account email is duplicated")
+                if not isinstance(display_name, str) or len(display_name) > 80:
+                    raise ValueError("user account display name is invalid")
+                if not isinstance(salt, str) or not isinstance(password_hash, str):
+                    raise ValueError("user account password record is invalid")
+                try:
+                    salt_bytes = base64.urlsafe_b64decode(salt.encode("ascii"))
+                    password_bytes = base64.urlsafe_b64decode(password_hash.encode("ascii"))
+                except (ValueError, UnicodeError) as error:
+                    raise ValueError("user account password record is invalid") from error
+                if len(salt_bytes) != 16 or len(password_bytes) != 32:
+                    raise ValueError("user account password record has an invalid length")
+                if type(enabled) is not bool:
+                    raise ValueError("user account enabled flag is invalid")
+                if not isinstance(key_ids, list):
+                    raise ValueError("user account key ownership list is invalid")
+                normalized_key_ids: list[str] = []
+                for key_id in key_ids:
+                    if not isinstance(key_id, str) or not key_id or len(key_id) > 128:
+                        raise ValueError("user account key ID is invalid")
+                    if key_id in owned_keys or key_id in normalized_key_ids:
+                        raise ValueError("API key is assigned to more than one user")
+                    normalized_key_ids.append(key_id)
+                    owned_keys.add(key_id)
+                if not isinstance(created_at, str) or not created_at or len(created_at) > 80:
+                    raise ValueError("user account created_at is invalid")
+                if not isinstance(updated_at, str) or not updated_at or len(updated_at) > 80:
+                    raise ValueError("user account updated_at is invalid")
+                if user_id in users:
+                    raise ValueError("user account ID is duplicated")
+                role = str(raw.get("system_role") or DEFAULT_USER_SYSTEM_ROLE).strip().lower()
+                if not USER_SYSTEM_ROLE_RE.fullmatch(role) or role in RESERVED_ADMIN_ROLES:
+                    role = DEFAULT_USER_SYSTEM_ROLE
+                if raw.get("system_role") != role:
+                    migrated = True
+                row = dict(raw)
+                row["system_role"] = role
+                row["key_ids"] = normalized_key_ids
+                users[user_id] = row
+                emails.add(email)
+
+            sessions: dict[str, dict[str, Any]] = {}
+            for digest, raw_session in raw_sessions.items():
+                if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+                    raise ValueError("user session digest is invalid")
+                if not isinstance(raw_session, dict):
+                    raise ValueError("user session row is invalid")
+                session_user_id = raw_session.get("user_id")
+                expires_at = raw_session.get("expires_at")
+                if not isinstance(session_user_id, str) or session_user_id not in users:
+                    raise ValueError("user session owner is invalid")
+                if (
+                    type(expires_at) not in {int, float}
+                    or not math.isfinite(float(expires_at))
+                ):
+                    raise ValueError("user session expiry is invalid")
+                sessions[digest] = dict(raw_session)
+
+            self.users = users
+            self.sessions = sessions
             self._cleanup_sessions(save=False)
-        except (OSError, ValueError, TypeError):
-            self.users = {}
-            self.sessions = {}
+            if migrated:
+                self._save()
+        except (OSError, ValueError, TypeError, UnicodeError, OverflowError) as error:
+            raise RuntimeError(
+                "User account store is unreadable; existing file was preserved"
+            ) from error
 
     def _save(self) -> None:
-        _atomic_json(self.path, {"version": USER_COMMERCE_VERSION, "users": list(self.users.values()), "sessions": self.sessions})
+        _atomic_json(self.path, {"version": USER_ACCOUNT_SCHEMA_VERSION, "users": list(self.users.values()), "sessions": self.sessions})
 
     def _cleanup_sessions(self, *, save: bool = True) -> None:
         now = time.time()
-        changed = False
+        removed: dict[str, dict[str, Any]] = {}
         for digest, row in list(self.sessions.items()):
             try:
                 expires_at = float(row.get("expires_at") or 0)
             except (TypeError, ValueError):
                 expires_at = 0
             if expires_at <= now or str(row.get("user_id") or "") not in self.users:
-                self.sessions.pop(digest, None)
-                changed = True
-        if changed and save:
-            self._save()
+                removed[digest] = self.sessions.pop(digest)
+        if removed and save:
+            try:
+                self._save()
+            except Exception:
+                self.sessions.update(removed)
+                raise
 
     def register(self, email: str, password: str, display_name: str = "") -> dict[str, Any]:
         normalized = str(email or "").strip().lower()
@@ -167,12 +265,17 @@ class UserAccountStore:
                 "password_salt": salt,
                 "password_hash": password_hash,
                 "enabled": True,
+                "system_role": DEFAULT_USER_SYSTEM_ROLE,
                 "key_ids": [],
                 "created_at": now,
                 "updated_at": now,
             }
             self.users[user_id] = row
-            self._save()
+            try:
+                self._save()
+            except Exception:
+                self.users.pop(user_id, None)
+                raise
             return self.public(row)
 
     def verify(self, email: str, password: str) -> dict[str, Any] | None:
@@ -189,10 +292,15 @@ class UserAccountStore:
         with self.lock:
             if user_id not in self.users or not self.users[user_id].get("enabled"):
                 raise KeyError("用户不存在或已停用")
+            previous_sessions = copy.deepcopy(self.sessions)
             self._cleanup_sessions(save=False)
             token = secrets.token_urlsafe(40)
             self.sessions[_token_hash(token)] = {"user_id": user_id, "expires_at": time.time() + self.session_ttl_seconds}
-            self._save()
+            try:
+                self._save()
+            except Exception:
+                self.sessions = previous_sessions
+                raise
             return token
 
     def authenticate(self, token: str | None) -> dict[str, Any] | None:
@@ -209,8 +317,13 @@ class UserAccountStore:
                 expired = True
             user = self.users.get(str(row.get("user_id") or ""))
             if expired or not user or not user.get("enabled"):
-                self.sessions.pop(digest, None)
-                self._save()
+                removed = self.sessions.pop(digest, None)
+                if removed is not None:
+                    try:
+                        self._save()
+                    except Exception:
+                        self.sessions[digest] = removed
+                        raise
                 return None
             return self.public(user)
 
@@ -218,8 +331,14 @@ class UserAccountStore:
         if not token:
             return
         with self.lock:
-            if self.sessions.pop(_token_hash(token), None) is not None:
-                self._save()
+            digest = _token_hash(token)
+            removed = self.sessions.pop(digest, None)
+            if removed is not None:
+                try:
+                    self._save()
+                except Exception:
+                    self.sessions[digest] = removed
+                    raise
 
     def public(self, row: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -227,9 +346,49 @@ class UserAccountStore:
             "email": str(row.get("email") or ""),
             "display_name": str(row.get("display_name") or ""),
             "enabled": bool(row.get("enabled", True)),
+            "system_role": str(row.get("system_role") or DEFAULT_USER_SYSTEM_ROLE),
             "created_at": row.get("created_at"),
             "updated_at": row.get("updated_at"),
         }
+
+
+    @staticmethod
+    def validate_system_role(system_role: str) -> str:
+        role = str(system_role or "").strip().lower()
+        if not USER_SYSTEM_ROLE_RE.fullmatch(role) or role in RESERVED_ADMIN_ROLES:
+            raise ValueError("system_role must be a non-admin role slug")
+        return role
+
+    def system_role_for(self, user_id: str) -> str:
+        with self.lock:
+            row = self.users.get(str(user_id or ""))
+            if row is None:
+                raise KeyError("用户不存在")
+            return self.validate_system_role(str(row.get("system_role") or DEFAULT_USER_SYSTEM_ROLE))
+
+    def set_system_role(self, user_id: str, system_role: str) -> dict[str, Any]:
+        role = self.validate_system_role(system_role)
+        with self.lock:
+            row = self.users.get(str(user_id or ""))
+            if row is None:
+                raise KeyError("用户不存在")
+            previous = row.get("system_role")
+            previous_updated_at = row.get("updated_at")
+            row["system_role"] = role
+            row["updated_at"] = _now()
+            try:
+                self._save()
+            except Exception:
+                if previous is None:
+                    row.pop("system_role", None)
+                else:
+                    row["system_role"] = previous
+                if previous_updated_at is None:
+                    row.pop("updated_at", None)
+                else:
+                    row["updated_at"] = previous_updated_at
+                raise
+            return self.public(row)
 
     def update_profile(self, user_id: str, *, display_name: str) -> dict[str, Any]:
         name = str(display_name or "").strip()
@@ -239,22 +398,40 @@ class UserAccountStore:
             row = self.users.get(user_id)
             if not row:
                 raise KeyError("用户不存在")
+            previous = dict(row)
             row["display_name"] = name[:80]
             row["updated_at"] = _now()
-            self._save()
+            try:
+                self._save()
+            except Exception:
+                self.users[user_id] = previous
+                raise
             return self.public(row)
 
     def attach_key(self, user_id: str, key_id: str) -> None:
+        normalized_key_id = str(key_id or "").strip()
+        if not normalized_key_id or len(normalized_key_id) > 128:
+            raise ValueError("API key ID is invalid")
         with self.lock:
             row = self.users.get(user_id)
             if not row:
                 raise KeyError("用户不存在")
+            for owner_id, owner in self.users.items():
+                if owner_id != user_id and normalized_key_id in {
+                    str(value) for value in owner.get("key_ids") or []
+                }:
+                    raise ValueError("API key is already assigned to another user")
             ids = [str(value) for value in row.get("key_ids") or []]
-            if key_id not in ids:
-                ids.append(key_id)
+            if normalized_key_id not in ids:
+                previous = dict(row)
+                ids.append(normalized_key_id)
                 row["key_ids"] = ids
                 row["updated_at"] = _now()
-                self._save()
+                try:
+                    self._save()
+                except Exception:
+                    self.users[user_id] = previous
+                    raise
 
     def key_ids(self, user_id: str) -> set[str]:
         with self.lock:
@@ -308,6 +485,8 @@ class UserAccountStore:
             row = self.users.get(str(user_id))
             if not row:
                 raise KeyError("用户不存在")
+            previous_row = dict(row)
+            previous_sessions = copy.deepcopy(self.sessions)
             row["enabled"] = enabled
             row["updated_at"] = _now()
             revoked = 0
@@ -316,21 +495,29 @@ class UserAccountStore:
                     if str(session.get("user_id") or "") == str(user_id):
                         self.sessions.pop(digest, None)
                         revoked += 1
-            self._save()
+            try:
+                self._save()
+            except Exception:
+                self.users[str(user_id)] = previous_row
+                self.sessions = previous_sessions
+                raise
             return self.public(row), revoked
 
     def revoke_user_sessions(self, user_id: str) -> int:
         with self.lock:
             if str(user_id) not in self.users:
                 raise KeyError("用户不存在")
-            revoked = 0
+            removed: dict[str, dict[str, Any]] = {}
             for digest, session in list(self.sessions.items()):
                 if str(session.get("user_id") or "") == str(user_id):
-                    self.sessions.pop(digest, None)
-                    revoked += 1
-            if revoked:
-                self._save()
-            return revoked
+                    removed[digest] = self.sessions.pop(digest)
+            if removed:
+                try:
+                    self._save()
+                except Exception:
+                    self.sessions.update(removed)
+                    raise
+            return len(removed)
 
 
 class PricingStore:
@@ -841,20 +1028,21 @@ class BillingStore:
                 # A settled request ID is never a new dispatch authorization.
                 # Returning a synthetic "settled" hold here would let the
                 # caller reach a Worker without any active wallet capacity.
-                raise WalletReservationConflict("request_id was already charged and cannot be reused")
+                raise WalletReservationError("request_id was already charged and cannot be reused")
             existing = self.reservations.get(request_id)
             if existing:
-                # Admission idempotency belongs to the request/quota owner.
-                # A second reservation call must never adopt an old wallet
-                # hold: its caller may later roll back its own failed admission
-                # and accidentally release the original request's funds.
+                if str(existing.get("user_id") or "") != user_id:
+                    raise WalletReservationError("Request wallet reservation belongs to another user")
                 if existing.get("state") != "reserved":
-                    raise WalletReservationConflict(
-                        "request_id belongs to a terminal wallet reservation and cannot be reused"
-                    )
-                raise WalletReservationConflict(
-                    "request_id already has a wallet reservation and cannot be reused"
-                )
+                    raise WalletReservationError("request_id belongs to a terminal wallet reservation and cannot be reused")
+                if (
+                    str(existing.get("model_id") or "") != str(model_id or "")
+                    or int(existing.get("reserved_cny_cents") or 0) != estimated_cny_cents
+                    or int(existing.get("estimated_input_tokens") or 0) != max(0, int(input_tokens))
+                    or int(existing.get("estimated_output_tokens") or 0) != max(0, int(output_tokens))
+                ):
+                    raise WalletReservationError("Request wallet reservation payload does not match the original admission")
+                return dict(existing)
             active = sum(
                 max(0, int(row.get("reserved_cny_cents") or 0))
                 for row in self.reservations.values()
@@ -923,11 +1111,19 @@ class BillingStore:
         now = _now()
         with self.lock:
             if request_id in self.charges:
-                raise WalletReservationConflict("request_id already has a wallet charge")
-            if request_id in self.reservations:
-                raise WalletReservationConflict(
-                    "request_id already has a wallet admission and cannot be reused"
-                )
+                raise WalletReservationError("request_id already has a wallet charge")
+            existing = self.reservations.get(request_id)
+            if existing:
+                if (
+                    str(existing.get("user_id") or "") == user_id
+                    and str(existing.get("model_id") or "") == normalized_model
+                    and existing.get("state") == "released"
+                    and existing.get("release_reason") == reason
+                    and int(existing.get("estimated_input_tokens") or 0) == input_tokens
+                    and int(existing.get("estimated_output_tokens") or 0) == output_tokens
+                ):
+                    return dict(existing)
+                raise WalletReservationError("request_id already has a different wallet admission")
             row = {
                 "request_id": request_id,
                 "user_id": user_id,
@@ -1044,31 +1240,11 @@ class BillingStore:
                     catalog.get(_pricing_model_key(model_id))
                     if isinstance(catalog, dict) else None
                 )
-                if isinstance(candidate, dict):
-                    if candidate.get("enabled", True) is not True:
-                        # A disabled actual model is not permission to charge
-                        # using the requested model's unrelated price.
-                        return None
+                if isinstance(candidate, dict) and candidate.get("enabled", True) is True:
                     price = dict(candidate)
                     priced_model_id = str(candidate.get("model_id") or model_id)
                 else:
-                    observed_model_id = actual_model_id or requested_model_id or reserved_model
-                    if (
-                        _pricing_model_key(observed_model_id)
-                        != _pricing_model_key(reserved_model)
-                    ):
-                        # The Worker served a model that was not in the
-                        # admission-time catalog. Never substitute the
-                        # requested model's price or consult live pricing:
-                        # keep the original hold for explicit reconciliation.
-                        return None
-                    snapshot = reservation.get("price_snapshot")
-                    if not isinstance(snapshot, dict) or snapshot.get("enabled", True) is not True:
-                        return None
-                    snapshot_model_id = str(snapshot.get("model_id") or reserved_model)
-                    if _pricing_model_key(snapshot_model_id) != _pricing_model_key(reserved_model):
-                        return None
-                    price = dict(snapshot)
+                    price = dict(reservation.get("price_snapshot") or {})
                     priced_model_id = reserved_model
             else:
                 price = pricing.model(model_id)

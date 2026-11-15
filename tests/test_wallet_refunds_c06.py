@@ -12,8 +12,7 @@ from app.control_plane import ControlPlaneStore, permission_for_admin_route
 from app.main import create_app
 from app.quota_reservation_admin_v1_patch import install_quota_reservation_admin_v1
 from app.user_commerce import (
-    BillingStore, InsufficientWalletBalance, PricingStore,
-    WalletReservationConflict, WalletReservationError,
+    BillingStore, InsufficientWalletBalance, PricingStore, WalletReservationError,
 )
 from app.user_console_v104_patch import install_user_console_v104_patch
 from app.v17_patch import install_v17_patch
@@ -48,35 +47,6 @@ def _price_row(model_id: str, input_rate: float) -> dict[str, object]:
         "cached_input_usd_per_million": 0.0,
         "output_usd_per_million": 0.0,
     }
-
-
-def test_wallet_reservation_replay_cannot_adopt_or_release_original_hold(tmp_path: Path) -> None:
-    user_id = "usr_wallet_request_identity"
-    price = _price_row("paid-model", 10_000.0)
-    billing = BillingStore(tmp_path)
-    billing.credit(user_id, 2_000)
-    original = billing.reserve_for_request(
-        user_id, "req_wallet_identity",
-        model_id="paid-model", estimated_cny_cents=700,
-        input_tokens=100, output_tokens=4096,
-        price_snapshot=price, price_catalog_snapshot={"paid-model": price},
-        usd_cny_rate=7.0,
-    )
-
-    with pytest.raises(WalletReservationConflict, match="cannot be reused"):
-        billing.reserve_for_request(
-            user_id, "req_wallet_identity",
-            model_id="paid-model", estimated_cny_cents=700,
-            input_tokens=100, output_tokens=4096,
-            price_snapshot=price, price_catalog_snapshot={"paid-model": price},
-            usd_cny_rate=7.0,
-        )
-
-    reopened = BillingStore(tmp_path)
-    assert reopened.reservations["req_wallet_identity"]["state"] == "reserved"
-    assert reopened.reservations["req_wallet_identity"]["reserved_cny_cents"] == original["reserved_cny_cents"]
-    assert reopened.active_reservations_for_user(user_id)
-    assert reopened.balance_cents(user_id) == 2_000
 
 
 def test_concurrent_wallet_reservations_cannot_overcommit_available_balance(tmp_path: Path) -> None:
@@ -193,7 +163,7 @@ def test_reserved_charge_uses_admission_catalog_and_fx_snapshot_after_restart(tm
     assert restarted.balance_cents("usr_price_snapshot") == 98_600
 
 
-def test_actual_model_missing_from_admission_catalog_keeps_hold_for_reconciliation(tmp_path: Path) -> None:
+def test_reserved_charge_falls_back_to_requested_admission_price_not_live_price(tmp_path: Path) -> None:
     pricing = PricingStore(tmp_path)
     requested = _price_row("requested-model", 10_000.0)
     pricing.update(billing_enabled=True, usd_cny_rate=7.0, models=[requested])
@@ -211,8 +181,7 @@ def test_actual_model_missing_from_admission_catalog_keeps_hold_for_reconciliati
         billing_enabled=True, usd_cny_rate=9.0,
         models=[requested, _price_row("late-added-model", 50_000.0)],
     )
-    restarted = BillingStore(tmp_path)
-    charge = restarted.record_charge("usr_price_fallback", {
+    charge = BillingStore(tmp_path).record_charge("usr_price_fallback", {
         "request_id": "req_price_fallback",
         "status": "completed",
         "requested_model": "requested-model",
@@ -223,78 +192,8 @@ def test_actual_model_missing_from_admission_catalog_keeps_hold_for_reconciliati
         },
     }, pricing)
 
-    # The actual served model had no admission-time price. Do not silently
-    # bill it as the requested model; keep the original hold for reconciliation.
-    assert charge is None
-    assert restarted.charge_for_request("req_price_fallback") is None
-    assert restarted.reservations["req_price_fallback"]["state"] == "reserved"
-    assert restarted.active_reservations_for_user("usr_price_fallback")
-    assert restarted.balance_cents("usr_price_fallback") == 10_000
-
-
-def test_disabled_actual_model_does_not_fall_back_to_requested_price(tmp_path: Path) -> None:
-    pricing = PricingStore(tmp_path)
-    requested = _price_row("requested-model", 10_000.0)
-    disabled = _price_row("disabled-served-model", 20_000.0)
-    disabled["enabled"] = False
-    pricing.update(billing_enabled=True, usd_cny_rate=7.0, models=[requested, disabled])
-    billing = BillingStore(tmp_path)
-    billing.credit("usr_disabled_actual", 10_000)
-    catalog = {
-        row["model_id"]: dict(row) for row in pricing.public()["models"]
-    }
-    billing.reserve_for_request(
-        "usr_disabled_actual", "req_disabled_actual",
-        model_id="requested-model", estimated_cny_cents=2_000,
-        input_tokens=100, output_tokens=4096,
-        price_snapshot=pricing.model("requested-model") or {},
-        price_catalog_snapshot=catalog,
-        usd_cny_rate=7.0,
-    )
-
-    restarted = BillingStore(tmp_path)
-    charge = restarted.record_charge("usr_disabled_actual", {
-        "request_id": "req_disabled_actual",
-        "status": "completed",
-        "requested_model": "requested-model",
-        "diagnostics": {"actual_model": "disabled-served-model"},
-        "usage": {
-            "prompt_tokens": 100, "completion_tokens": 0,
-            "total_tokens": 100, "cached_input_tokens": 0, "estimated": True,
-        },
-    }, pricing)
-
-    assert charge is None
-    assert restarted.charge_for_request("req_disabled_actual") is None
-    assert restarted.reservations["req_disabled_actual"]["state"] == "reserved"
-    assert restarted.balance_cents("usr_disabled_actual") == 10_000
-
-
-def test_reserved_charge_uses_requested_snapshot_when_actual_model_evidence_is_missing(tmp_path: Path) -> None:
-    pricing = PricingStore(tmp_path)
-    requested = _price_row("requested-model", 10_000.0)
-    pricing.update(billing_enabled=True, usd_cny_rate=7.0, models=[requested])
-    billing = BillingStore(tmp_path)
-    billing.credit("usr_price_fallback_missing_actual", 10_000)
-    billing.reserve_for_request(
-        "usr_price_fallback_missing_actual", "req_price_fallback_missing_actual",
-        model_id="requested-model", estimated_cny_cents=2_000,
-        input_tokens=100, output_tokens=4096,
-        price_snapshot=pricing.model("requested-model") or {},
-        price_catalog_snapshot={},
-        usd_cny_rate=7.0,
-    )
-    charge = BillingStore(tmp_path).record_charge("usr_price_fallback_missing_actual", {
-        "request_id": "req_price_fallback_missing_actual",
-        "status": "completed",
-        "requested_model": "requested-model",
-        "usage": {
-            "prompt_tokens": 100, "completion_tokens": 0,
-            "total_tokens": 100, "cached_input_tokens": 0, "estimated": True,
-        },
-    }, pricing)
-
     assert charge is not None
+    assert charge["model_id"] == "late-added-model"
     assert charge["priced_model_id"] == "requested-model"
     assert charge["price_snapshot"]["input_usd_per_million"] == 10_000.0
     assert charge["usd_cny_rate"] == 7.0
@@ -313,28 +212,6 @@ def _runtime_wallet(tmp_path: Path, *, billing_enabled: bool, models: list[dict[
         user_accounts=accounts, user_billing=billing, user_pricing=pricing,
     ))
     return app, billing, pricing
-
-
-def test_wallet_admission_reserves_against_the_higher_cached_input_rate(tmp_path: Path) -> None:
-    from app.quota_reservation_runtime_v1 import reserve_wallet_charge
-
-    price = _price_row("cache-expensive-model", 1_000.0)
-    price["cached_input_usd_per_million"] = 10_000.0
-    app, billing, _pricing = _runtime_wallet(
-        tmp_path, billing_enabled=True, models=[price],
-    )
-
-    hold = reserve_wallet_charge(
-        app, "req_cached_price_hold",
-        SimpleNamespace(kind="managed", key_id="key-managed"),
-        "cache-expensive-model", 100, 0,
-    )
-
-    assert hold is not None
-    # 100 tokens at $10,000 / million * 7 CNY/USD = 700 cents.
-    # Reserving against only the $1,000 uncached rate would hold just 70 cents.
-    assert hold["reserved_cny_cents"] == 700
-    assert billing.balance_cents("usr_admission_snapshot") == 20_000
 
 
 def test_billing_disabled_at_admission_cannot_become_a_retroactive_charge(tmp_path: Path) -> None:

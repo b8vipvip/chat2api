@@ -16,8 +16,8 @@ from pydantic import BaseModel, Field
 
 from .api_keys import ApiPrincipal
 from . import model_capability_routing_patch as model_routing
-from .token_usage import usage_for
 from .telemetry import DuplicateRequestIdentity
+from .token_usage import usage_for
 from .prompt_config import build_speech_prompt
 from .quota_reservation_runtime_v1 import reserve_audio_request_quota
 
@@ -170,11 +170,6 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
         if request_id is not None and not re.fullmatch(r"voicereq_[A-Za-z0-9_-]{8,120}", request_id):
             raise HTTPException(status_code=400, detail="Invalid voicereq_ request ID")
         request_id = request_id or ("voicereq_" + uuid.uuid4().hex)
-        if telemetry.get(request_id):
-            raise HTTPException(
-                status_code=409,
-                detail={"code": "request_id_conflict", "message": "Duplicate request_id"},
-            )
         response_id = "voice_" + uuid.uuid4().hex
         prompt_policy: dict[str, object] = {}
         if request_type == "voice_generation":

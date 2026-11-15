@@ -9,10 +9,7 @@ from fastapi import HTTPException
 
 from .quota_reservations import QuotaExceeded, QuotaReservationConflict, QuotaReservationError
 from .token_usage import usage_for
-from .user_commerce import (
-    InsufficientWalletBalance, WalletReservationConflict, WalletReservationError,
-    _pricing_model_key,
-)
+from .user_commerce import InsufficientWalletBalance, WalletReservationError, _pricing_model_key
 
 logger = logging.getLogger(__name__)
 
@@ -85,16 +82,8 @@ def reserve_wallet_charge(
                     status_code=503,
                     detail="Provider usage for this model is not metered for wallet billing",
                 )
-        # Cached-token share is unknown at admission. Reserve against the
-        # higher of ordinary and cached input rates so an administrator's
-        # valid (but unusually high) cached-input price cannot make the hold
-        # systematically understate the eventual charge.
-        conservative_input_rate = max(
-            float(price.get("input_usd_per_million") or 0),
-            float(price.get("cached_input_usd_per_million") or 0),
-        )
         usd = (
-            max(0, int(prompt_tokens)) * conservative_input_rate
+            max(0, int(prompt_tokens)) * float(price.get("input_usd_per_million") or 0)
             + max(0, int(output_tokens)) * float(price.get("output_usd_per_million") or 0)
         ) / 1_000_000
         rate_fields = (
@@ -136,11 +125,6 @@ def reserve_wallet_charge(
         raise
     except InsufficientWalletBalance as error:
         raise HTTPException(status_code=402, detail="账户余额不足，无法预留本次请求预计费用") from error
-    except WalletReservationConflict as error:
-        raise HTTPException(
-            status_code=409,
-            detail={"code": "request_id_conflict", "message": str(error)},
-        ) from error
     except WalletReservationError as error:
         raise HTTPException(status_code=503, detail="Wallet reservation failed: " + str(error)) from error
     except OSError as error:

@@ -277,15 +277,6 @@ async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], princi
         raise HTTPException(status_code=503, detail=str(error)) from error
     raw_id = str(request_id_override or request.headers.get("x-chat2api-request-id") or "").strip()
     request_id = raw_id if re.fullmatch(r"[A-Za-z0-9_-]{6,120}", raw_id) else "resp_req_" + uuid.uuid4().hex
-    internal_repair = bool(request_id_override and request_id.startswith("resp_repair_"))
-    if not internal_repair and app.state.telemetry.get(request_id):
-        # Check before Broker allocation or quota reservation. Releasing a
-        # Broker lease after this check would otherwise risk touching the
-        # original request when a duplicate ID is submitted.
-        raise HTTPException(
-            status_code=409,
-            detail={"code": "request_id_conflict", "message": "Duplicate request_id"},
-        )
     try:
         state = await app.state.chat_request_service.reserve(request_id, client_id)
     except RuntimeError as error:
@@ -295,6 +286,7 @@ async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], princi
     # before Worker dispatch so the shared TelemetryStore hook can commit or
     # release it from that terminal. Only the trusted internal tool-repair
     # override is non-billable; a caller-supplied request-id prefix is not.
+    internal_repair = bool(request_id_override and request_id.startswith("resp_repair_"))
     if not internal_repair:
         raw_output_budget = body.get("max_output_tokens")
         try:
@@ -358,6 +350,9 @@ async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], princi
         # assigned Worker and attachment set before dispatch so the extension
         # download endpoint can enforce the same request-scoped file grant as
         # Chat Completions and Images.
+        if app.state.telemetry.get(request_id):
+            await broker.release(request_id)
+            raise HTTPException(status_code=409, detail="Duplicate request_id")
         try:
             await app.state.telemetry.upsert({
                 "request_id": request_id,
