@@ -59,7 +59,7 @@ def test_wallet_reservation_snapshot_preserves_exact_alias_prices(tmp_path):
         str(row["model_id"]).strip().casefold(): dict(row)
         for row in pricing.public()["models"]
     }
-    requested_price = pricing.model("gpt-5.6")
+    requested_price = pricing.model("gpt-5.6-sol")
     billing = BillingStore(tmp_path)
     user_id = "usr_alias_snapshot"
     request_id = "req_alias_snapshot_123"
@@ -67,7 +67,7 @@ def test_wallet_reservation_snapshot_preserves_exact_alias_prices(tmp_path):
     billing.reserve_for_request(
         user_id,
         request_id,
-        model_id="gpt-5.6",
+        model_id="gpt-5.6-sol",
         estimated_cny_cents=20_000,
         input_tokens=1_000_000,
         output_tokens=0,
@@ -87,8 +87,8 @@ def test_wallet_reservation_snapshot_preserves_exact_alias_prices(tmp_path):
         {
             "request_id": request_id,
             "status": "completed",
-            "requested_model": "gpt-5.6",
-            "diagnostics": {"actual_model": "gpt-5.6-sol"},
+            "requested_model": "gpt-5.6-sol",
+            "diagnostics": {"actual_model": "gpt-5.6"},
             "usage": {
                 "prompt_tokens": 1_000_000,
                 "completion_tokens": 0,
@@ -100,7 +100,7 @@ def test_wallet_reservation_snapshot_preserves_exact_alias_prices(tmp_path):
     )
 
     assert charge is not None
-    assert charge["model_id"] == "gpt-5.6-sol"
-    assert charge["priced_model_id"] == "gpt-5.6-sol"
-    assert charge["price_snapshot"]["input_usd_per_million"] == 11.0
-    assert charge["cost_cny_cents"] == 7_920
+    assert charge["model_id"] == "gpt-5.6"
+    assert charge["priced_model_id"] == "gpt-5.6"
+    assert charge["price_snapshot"]["input_usd_per_million"] == 22.0
+    assert charge["cost_cny_cents"] == 15_840
