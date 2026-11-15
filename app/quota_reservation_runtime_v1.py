@@ -11,9 +11,35 @@ from .quota_reservations import QuotaExceeded, QuotaReservationConflict, QuotaRe
 from .token_usage import usage_for
 from .user_commerce import (
     InsufficientWalletBalance, WalletReservationConflict, WalletReservationError,
+    _pricing_model_key,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _price_from_catalog_snapshot(config: dict[str, Any], model_id: str) -> dict[str, Any] | None:
+    """Resolve exact IDs before aliases from one immutable pricing snapshot."""
+    rows = config.get("models")
+    if not isinstance(rows, list):
+        return None
+    requested = str(model_id or "").strip()
+    if not requested:
+        return None
+    requested_key = requested.casefold()
+    for row in rows:
+        if (
+            isinstance(row, dict)
+            and str(row.get("model_id") or "").strip().casefold() == requested_key
+        ):
+            return dict(row)
+    canonical = _pricing_model_key(requested)
+    for row in rows:
+        if (
+            isinstance(row, dict)
+            and _pricing_model_key(row.get("model_id")) == canonical
+        ):
+            return dict(row)
+    return None
 
 
 def reserve_wallet_charge(
@@ -45,7 +71,7 @@ def reserve_wallet_charge(
             raise ValueError("Invalid USD/CNY billing rate")
         normalized_model_id = str(model_id or "").strip() or "unknown"
         if not bool(config.get("billing_enabled")):
-            price = pricing.model(normalized_model_id) or {
+            price = _price_from_catalog_snapshot(config, normalized_model_id) or {
                 "model_id": normalized_model_id,
                 "enabled": False,
                 "input_usd_per_million": 0.0,
@@ -60,7 +86,7 @@ def reserve_wallet_charge(
                 price_snapshot=price, usd_cny_rate=fx,
             )
             return None
-        price = pricing.model(normalized_model_id)
+        price = _price_from_catalog_snapshot(config, normalized_model_id)
         if not price or price.get("enabled", True) is not True:
             # Disabled and unpriced rows are both closed to new paid requests.
             # An intentional free model must have an explicit enabled zero-rate
