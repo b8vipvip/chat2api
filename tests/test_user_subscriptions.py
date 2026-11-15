@@ -109,3 +109,26 @@ def test_subscription_store_rejects_disabled_unknown_and_naive_expiry(tmp_path: 
         )
     with pytest.raises(UserSubscriptionError, match="cannot be disabled"):
         store.upsert_plan("free", "Free", enabled=False)
+
+
+
+def test_disabling_a_plan_immediately_removes_its_effective_entitlement(tmp_path: Path):
+    store = UserSubscriptionStore(tmp_path)
+    store.upsert_plan("pro", "Pro", enabled=True)
+    assigned = store.assign(
+        "usr_customer123", "pro", assigned_by="billing-admin",
+    )
+    assert store.current_plan_for_user("usr_customer123")["plan_id"] == "pro"
+
+    # Revocation must take effect immediately even for an unexpired grant.
+    store.upsert_plan("pro", "Pro", enabled=False)
+    assert store.current_plan_for_user("usr_customer123")["plan_id"] == "free"
+    assert store.history_for_user("usr_customer123")[0]["subscription_id"] == assigned["subscription_id"]
+
+    # Re-enabling a plan does not silently renew or prolong an expired grant.
+    store.db.execute(
+        "UPDATE user_subscriptions SET expires_at=? WHERE subscription_id=?",
+        ("2020-01-01T00:00:00+00:00", assigned["subscription_id"]),
+    )
+    store.upsert_plan("pro", "Pro", enabled=True)
+    assert store.current_plan_for_user("usr_customer123")["plan_id"] == "free"
