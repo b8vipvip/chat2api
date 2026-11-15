@@ -116,25 +116,30 @@ def test_concurrent_creates_serialize_index_snapshots_and_preserve_every_file(tm
         assert payload == f"concurrent-file-{index}".encode("ascii")
 
 
-def test_delete_does_not_drop_metadata_when_file_rename_fails(tmp_path, monkeypatch):
+def test_delete_unlink_failure_does_not_resurrect_committed_catalog_row(tmp_path, monkeypatch):
     store = FileStore(tmp_path)
     item = _create(store)
     file_path = store.root / item.path
-    original_replace = Path.replace
+    original_unlink = Path.unlink
 
-    def fail_source_rename(path, target):
+    def fail_content_unlink(path, *args, **kwargs):
         if path == file_path:
-            raise PermissionError("simulated file deletion permission failure")
-        return original_replace(path, target)
+            raise PermissionError("simulated content cleanup failure")
+        return original_unlink(path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "replace", fail_source_rename)
-    with pytest.raises(PermissionError, match="permission failure"):
-        asyncio.run(store.delete(item.file_id, owner_key_id="key_owner_123"))
+    monkeypatch.setattr(Path, "unlink", fail_content_unlink)
+    asyncio.run(store.delete(item.file_id, owner_key_id="key_owner_123"))
 
-    assert store.get(item.file_id) is item
+    assert store.get(item.file_id) is None
     assert file_path.read_bytes() == b"important file bytes"
     persisted = json.loads(store.index_path.read_text(encoding="utf-8"))
-    assert any(row["file_id"] == item.file_id for row in persisted["files"])
+    assert all(row["file_id"] != item.file_id for row in persisted["files"])
+
+    reopened = FileStore(tmp_path)
+    asyncio.run(reopened.load())
+    assert reopened.get(item.file_id) is None
+    with pytest.raises(KeyError, match="Unknown file_id"):
+        reopened.read(item.file_id)
 
 
 def test_delete_restores_file_and_metadata_when_index_commit_fails(tmp_path, monkeypatch):
