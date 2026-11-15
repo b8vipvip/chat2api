@@ -11,7 +11,7 @@ ADMIN_HTML = r'''<!doctype html>
 @media(max-width:1250px){.labConfig{grid-template-columns:1fr 1fr}.labConfig>button{align-self:end}.testKeyBox{grid-template-columns:1fr}}
 @media(max-width:1050px){.shell{grid-template-columns:1fr}.side{border-right:0;border-bottom:1px solid var(--line)}.nav{display:flex;overflow:auto}.nav button{width:auto;white-space:nowrap}.top{position:static}.grid{grid-template-columns:repeat(2,1fr)}.panels,.split{grid-template-columns:1fr}.wide{grid-column:auto}.labConfig{grid-template-columns:1fr}.timelineRow{grid-template-columns:1fr 1fr}.auth{min-width:0}.testKeyBox{grid-template-columns:1fr}}
 </style></head><body><div class="shell">
-<aside class="side"><div class="brand">chat2api<small>Server Console · v0.5</small></div><div class="nav"><button data-view="overview">概览</button><button data-view="modes">模式管理</button><button data-view="keys">API Key</button><button data-view="requests">请求记录</button><button data-view="media-storage">转存管理</button><button data-view="docs">开发文档</button><button data-view="playground">测试场</button><button data-view="control-admins" data-cview>管理员 RBAC</button><button data-view="client-policy" data-cview>客户端配置</button><button data-view="registration-invitations" data-cview>邀请注册</button><button data-view="tenants" data-cview>租户管理</button><button data-view="model-entitlements" data-cview>模型权限</button><button data-view="plugins" data-cview>插件目录</button><button data-view="quota-ledger" data-cview>额度预留</button><button data-view="api-keys" data-cview>API Key 管理</button></div></aside>
+<aside class="side"><div class="brand">chat2api<small>Server Console · v0.5</small></div><div class="nav"><button data-view="overview">概览</button><button data-view="modes">模式管理</button><button data-view="keys">API Key</button><button data-view="requests">请求记录</button><button data-view="media-storage">转存管理</button><button data-view="docs">开发文档</button><button data-view="playground">测试场</button><button data-view="control-admins" data-cview>管理员 RBAC</button><button data-view="client-policy" data-cview>客户端配置</button><button data-view="registration-invitations" data-cview>邀请注册</button><button data-view="tenants" data-cview>租户管理</button><button data-view="user-roles" data-cview>用户角色</button><button data-view="subscriptions" data-cview>订阅套餐</button><button data-view="model-entitlements" data-cview>模型权限</button><button data-view="plugins" data-cview>插件目录</button><button data-view="quota-ledger" data-cview>额度预留</button><button data-view="api-keys" data-cview>API Key 管理</button></div></aside>
 <main class="main"><header class="top"><div><b id="pageTitle">概览</b><div id="status" class="muted">输入管理员主密钥后连接</div></div><div class="auth"><input id="adminKey" type="password" placeholder="CHAT2API_API_KEY 管理员主密钥"><button class="action" id="connect">连接</button><button class="action" id="refresh">刷新</button></div><div class="sessionAuth"><input id="adminSessionUser" autocomplete="username" placeholder="管理员用户名"><input id="adminSessionPassword" type="password" autocomplete="current-password" placeholder="管理员密码"><button class="action good" id="adminSessionLogin">会话登录</button><button class="action" id="adminSessionLogout">退出会话</button><button class="action" id="adminSessionRotatePassword" hidden>修改我的密码</button><span id="adminSessionState" class="muted">未检查管理会话</span></div></header><div class="content">
 <section class="view" id="view-overview"><div class="grid"><div class="card"><div class="muted">在线扩展</div><div class="n" id="sExt">-</div></div><div class="card"><div class="muted">请求记录</div><div class="n" id="sReq">-</div></div><div class="card"><div class="muted">成功率</div><div class="n" id="sSuccess">-</div></div><div class="card"><div class="muted">平均首 Token</div><div class="n" id="sFirst">-</div></div><div class="card"><div class="muted">估算 Token</div><div class="n" id="sToken">-</div></div></div><div class="panels"><div class="panel"><h3>Chrome 扩展</h3><table><thead><tr><th>ID</th><th>名称</th><th>状态</th><th>版本</th><th>能力</th></tr></thead><tbody id="extBody"></tbody></table></div><div class="panel"><h3>模型目录</h3><table><thead><tr><th>ID</th><th>能力</th></tr></thead><tbody id="modelBody"></tbody></table></div><div class="panel wide"><h3>最近请求</h3><div class="scroll"><table><thead><tr><th>时间</th><th>类型</th><th>状态</th><th>Key</th><th>模型</th><th>首包</th><th>总耗时</th><th>Token</th></tr></thead><tbody id="recentBody"></tbody></table></div></div></div></section>
 <section class="view" id="view-modes">
@@ -109,9 +109,26 @@ ADMIN_HTML = r'''<!doctype html>
     <div class="panel wide"><h2>API Key 工作区绑定</h2><p class="c-note">仅允许绑定该用户真实拥有且已存在的 API Key。一个 Key 只能绑定一个工作区；移除成员前必须先解绑其 Key。</p><div class="c-form"><label>User ID<input id="cTenantKeyUser" placeholder="usr_..."></label><label>API Key ID<input id="cTenantKeyId" placeholder="key_..."></label><button class="action good" id="cTenantBindKey">绑定 Key</button><button class="action" id="cTenantReloadKeys">刷新绑定</button></div><div class="scroll"><table class="c-table"><thead><tr><th>API Key ID</th><th>User ID</th><th>创建时间</th><th>操作</th></tr></thead><tbody id="cTenantKeyRows"></tbody></table></div></div>
   </div>
 </section>
+<section class="view" id="view-user-roles">
+  <div class="panel"><h2>用户系统角色</h2><p class="c-note">这里管理最终用户的全局 system_role；它与管理员 RBAC 角色、工作区 Membership role 完全分离。现有用户默认迁移为 user。变更后下一次请求即时读取新角色。</p>
+    <div class="c-form"><input id="cUserRoleSearch" placeholder="搜索邮箱 / 用户 ID"><button class="action" id="cUserRoleReload">刷新用户</button><span id="cUserRoleStatus" class="muted"></span></div>
+    <div class="scroll"><table class="c-table"><thead><tr><th>User ID</th><th>邮箱</th><th>显示名</th><th>system_role</th><th>操作</th></tr></thead><tbody id="cUserRoleRows"></tbody></table></div>
+  </div>
+</section>
+<section class="view" id="view-subscriptions">
+  <div class="panel"><h2>订阅套餐目录</h2><p class="c-note">订阅状态由独立 UserSubscriptionStore 管理，不从钱包余额、充值订单或模型价格推断。套餐权限通过 subscription_plan 模型策略配置。当前只提供管理员立即分配/取消，不代表已实现自动续费、退款或支付回调激活。</p>
+    <div class="c-form"><label>套餐 ID<input id="cPlanId" placeholder="pro"></label><label>显示名称<input id="cPlanName" placeholder="Pro"></label><label>状态<select id="cPlanEnabled"><option value="true">启用</option><option value="false">停用</option></select></label><button class="action good" id="cPlanSave">保存套餐</button><button class="action" id="cPlanReload">刷新套餐</button><span id="cPlanStatus" class="muted"></span></div>
+    <div class="scroll"><table class="c-table"><thead><tr><th>套餐 ID</th><th>名称</th><th>状态</th><th>更新时间</th></tr></thead><tbody id="cPlanRows"></tbody></table></div>
+  </div>
+  <div class="panel" style="margin-top:14px"><h2>用户订阅</h2>
+    <div class="c-form"><label>User ID<input id="cSubUserId" placeholder="usr_..."></label><label>套餐<select id="cSubPlan"></select></label><label>到期时间（可选）<input id="cSubExpiresAt" type="datetime-local"></label><button class="action good" id="cSubAssign">立即分配</button><button class="action" id="cSubLoad">读取订阅</button><button class="action danger" id="cSubCancel">取消当前订阅</button></div>
+    <div id="cSubStatus" class="muted"></div><div id="cSubCurrent" class="c-note">尚未读取用户订阅。</div>
+    <div class="scroll"><table class="c-table"><thead><tr><th>Subscription ID</th><th>Plan</th><th>状态</th><th>开始时间</th><th>到期时间</th><th>操作人</th></tr></thead><tbody id="cSubHistory"></tbody></table></div>
+  </div>
+</section>
 <section class="view" id="view-model-entitlements">
-  <div class="panel"><h2>模型权限策略</h2><p class="c-note">Allowlist 在 global / tenant / user / API Key 之间取交集；任意 Deny 优先。默认别名 default、chatgpt-web、auto 在存在策略时会拒绝放行。这里只管理权限，不决定 Worker 实际可用模型，也不伪造 served-model 证据。</p>
-    <div class="c-form"><label>主体类型<select id="cEntSubjectType"><option value="global">全局</option><option value="tenant">租户</option><option value="tenant_role">租户角色</option><option value="user">用户</option><option value="key">API Key</option></select></label><label>主体 ID<input id="cEntSubjectId" placeholder="global 使用 default"></label><label>策略效果<select id="cEntEffect"><option value="allow">Allowlist</option><option value="deny">Denylist</option></select></label><label>模型 ID（逗号 / 换行分隔）<textarea id="cEntModels" placeholder="gpt-5.5&#10;gpt-5.6-sol"></textarea></label><button class="action good" id="cEntSave">保存策略</button><button class="action" id="cEntReload">刷新</button></div>
+  <div class="panel"><h2>模型权限策略</h2><p class="c-note">Allowlist 在 global / tenant / tenant role / user role / subscription plan / user / API Key 之间取交集；任意 Deny 优先。默认别名 default、chatgpt-web、auto 在存在策略时会拒绝放行。这里只管理权限，不决定 Worker 实际可用模型，也不伪造 served-model 证据。</p>
+    <div class="c-form"><label>主体类型<select id="cEntSubjectType"><option value="global">全局</option><option value="tenant">租户</option><option value="tenant_role">租户角色</option><option value="user_role">用户系统角色</option><option value="subscription_plan">订阅套餐</option><option value="user">用户</option><option value="key">API Key</option></select></label><label>主体 ID<input id="cEntSubjectId" placeholder="global 使用 default"></label><label>策略效果<select id="cEntEffect"><option value="allow">Allowlist</option><option value="deny">Denylist</option></select></label><label>模型 ID（逗号 / 换行分隔）<textarea id="cEntModels" placeholder="gpt-5.5&#10;gpt-5.6-sol"></textarea></label><button class="action good" id="cEntSave">保存策略</button><button class="action" id="cEntReload">刷新</button></div>
     <div id="cEntStatus" class="muted"></div><div class="scroll"><table class="c-table"><thead><tr><th>主体</th><th>效果</th><th>模型</th><th>状态</th><th>更新时间</th><th>操作</th></tr></thead><tbody id="cEntRows"></tbody></table></div>
   </div>
 </section>
@@ -140,7 +157,6 @@ ADMIN_HTML = r'''<!doctype html>
 <section class="view" id="view-playground"><div class="panel"><h2>自动测试场</h2><div class="muted">执行标准化用例并生成质量报告。测试 Key 支持选择现有业务 Key 或手动粘贴；手动粘贴优先，未指定时默认使用管理员 CHAT2API_API_KEY。</div><div class="labConfig" style="margin-top:14px"><div><label>测试类型</label><select id="testType"><option value="text">文本</option><option value="vision">视觉理解</option><option value="file">文件理解</option><option value="image_generation">图片生成</option><option value="voice_generation">语音生成</option><option value="voice_call">语音通话</option><option value="all">全部测试</option></select></div><div><label>文本/理解模型</label><select id="testModel"><option value="default">默认（页面当前模型）</option></select></div><div><label>测试 API Key</label><div class="testKeyBox"><select id="testKeySelect"><option value="master">管理员 CHAT2API_API_KEY（默认）</option></select><input id="testKeyInput" type="password" autocomplete="off" placeholder="粘贴 API Key（可选，优先使用）"><div class="testKeyHint">留空时使用左侧选择项；默认选择管理员主 Key。完整 Key 不写入测试报告。</div></div></div><div><label>测试附件（可多选：图片 / PDF / 文档等）</label><input id="testFiles" type="file" multiple></div><button class="action good" id="startTest">开始测试</button></div><div class="testStatus"><div class="card"><div class="muted">当前状态</div><div class="n" id="testState">待命</div></div><div class="card"><div class="muted">通过</div><div class="n" id="testPass">0</div></div><div class="card"><div class="muted">警告</div><div class="n" id="testWarn">0</div></div><div class="card"><div class="muted">失败</div><div class="n" id="testFail">0</div></div></div><div class="panel"><h3>实时监测</h3><div class="timeline" id="timeline"><div class="muted">尚未开始测试。</div></div></div></div><div class="panel" style="margin-top:14px"><h3>测试记录</h3><div class="scroll"><table><thead><tr><th>时间</th><th>类型</th><th>状态</th><th>模型</th><th>测试 Key</th><th>耗时</th><th>摘要</th></tr></thead><tbody id="testHistory"></tbody></table></div></div></section>
 <div class="footer">Token 为 chat2api 本地估算，不是 ChatGPT 官方 usage。语音能力在本版测试场中会标记为未实现/跳过，不伪装为通过。</div></div></main></div>
 
-<script src="/assets/chat2api-control-plane-admin-v1.js" defer></script>
 <script>
 const INITIAL_VIEW='__INITIAL_VIEW__';
 const $=id=>document.getElementById(id);
@@ -158,7 +174,7 @@ function status(t,c='muted'){$('status').className=c;$('status').textContent=t}
 $('adminKey').value=key();
 $('connect').onclick=()=>{sessionStorage.setItem('chat2api_admin_key',$('adminKey').value.trim());loadOverview()};
 $('refresh').onclick=()=>show((location.hash||'#overview').slice(1));
-const titles={overview:'概览',modes:'模式管理',keys:'API Key',requests:'请求记录','media-storage':'转存管理',docs:'开发文档',playground:'测试场','control-admins':'管理员 RBAC','client-policy':'客户端配置','registration-invitations':'邀请注册',tenants:'租户管理','model-entitlements':'模型权限',plugins:'插件目录','quota-ledger':'额度预留','api-keys':'API Key 管理'};
+const titles={overview:'概览',modes:'模式管理',keys:'API Key',requests:'请求记录','media-storage':'转存管理',docs:'开发文档',playground:'测试场','control-admins':'管理员 RBAC','client-policy':'客户端配置','registration-invitations':'邀请注册',tenants:'租户管理','user-roles':'用户角色',subscriptions:'订阅套餐','model-entitlements':'模型权限',plugins:'插件目录','quota-ledger':'额度预留','api-keys':'API Key 管理'};
 function show(v){document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.nav button').forEach(x=>x.classList.toggle('active',x.dataset.view===v));$('view-'+v)?.classList.add('active');$('pageTitle').textContent=titles[v]||v;location.hash=v;if(v==='overview')loadOverview();if(v==='modes')loadModes();if(v==='keys')loadKeys();if(v==='requests')loadRequests();if(v==='media-storage')loadMediaStorage();if(v==='docs')renderDocs();if(v==='playground'){loadOverview().then(loadTests)}}
 document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>show(b.dataset.view));
 let modeSettings=null;
@@ -343,7 +359,7 @@ $('mediaSaveSettings').onclick=async()=>{
     $('mediaStorageStatus').textContent='已保存配置';await loadMediaStorage();
   }catch(e){$('mediaStorageStatus').textContent='保存失败：'+e.message;}
 };
-if($('connect'))$('connect').disabled=true;if($('refresh'))$('refresh').disabled=true;document.querySelectorAll('.nav button').forEach(button=>button.disabled=true);
+$('connect').disabled=true;$('refresh').disabled=true;document.querySelectorAll('.nav button').forEach(button=>button.disabled=true);
 (async()=>{
   let session=null,sessionCheckSucceeded=false;
   try{
@@ -353,24 +369,25 @@ if($('connect'))$('connect').disabled=true;if($('refresh'))$('refresh').disabled
   }catch(_){}
   if(sessionCheckSucceeded&&session&&session.authenticated&&session.role!=='super_admin'){
     try{sessionStorage.removeItem('chat2api_admin_key')}catch(_){}
-    if($('adminKey')){$('adminKey').value='';$('adminKey').disabled=true;}if($('connect'))$('connect').hidden=true;if($('refresh'))$('refresh').hidden=true;
+    $('adminKey').value='';$('adminKey').disabled=true;$('connect').hidden=true;$('refresh').hidden=true;
     document.querySelectorAll('.nav button:not([data-cview])').forEach(button=>{button.hidden=true;button.disabled=true});
     document.querySelectorAll('.nav button[data-cview]').forEach(button=>{button.disabled=false});
-    const defaults={system_admin:'client-policy',api_key_admin:'api-keys',plugin_admin:'plugins',support:'model-entitlements',billing_admin:'user-pricing',user_admin:'admin-users'};
+    const defaults={system_admin:'client-policy',api_key_admin:'api-keys',plugin_admin:'plugins',support:'model-entitlements',billing_admin:'subscriptions',user_admin:'user-roles'};
     if(defaults[session.role])location.hash=defaults[session.role];
     status('已识别委派管理员 Session：'+session.username+' · '+session.role,'ok');
   }else if(sessionCheckSucceeded){
-    if($('connect'))$('connect').disabled=false;if($('refresh'))$('refresh').disabled=false;
+    $('connect').disabled=false;$('refresh').disabled=false;
     document.querySelectorAll('.nav button').forEach(button=>button.disabled=false);
     const start=(location.hash||'#'+INITIAL_VIEW).slice(1);show(titles[start]?start:'overview');
   }else{
     try{sessionStorage.removeItem('chat2api_admin_key')}catch(_){}
-    if($('adminKey'))$('adminKey').value='';if($('connect'))$('connect').disabled=false;if($('refresh'))$('refresh').disabled=true;
+    $('adminKey').value='';$('connect').disabled=false;$('refresh').disabled=true;
     document.querySelectorAll('.nav button:not([data-cview])').forEach(button=>button.disabled=true);
     document.querySelectorAll('.nav button[data-cview]').forEach(button=>{button.disabled=false});
     $('view-overview').classList.add('active');
     status('无法验证管理员 Session；已阻止自动使用缓存主密钥，请检查服务后重新登录','bad');
   }
+  const cTrackAdminScript=document.createElement("script");cTrackAdminScript.src="/assets/chat2api-control-plane-admin-v1.js";cTrackAdminScript.defer=true;document.body.appendChild(cTrackAdminScript);
 })();
 </script>
 <dialog id="adminPasswordDialog">
@@ -388,5 +405,5 @@ if($('connect'))$('connect').disabled=true;if($('refresh'))$('refresh').disabled
 
 
 def admin_response(initial_view: str = "overview") -> HTMLResponse:
-    view = initial_view if initial_view in {"overview", "modes", "keys", "requests", "media-storage", "docs", "playground", "control-admins", "client-policy", "registration-invitations", "tenants", "model-entitlements", "plugins", "quota-ledger", "api-keys"} else "overview"
+    view = initial_view if initial_view in {"overview", "modes", "keys", "requests", "media-storage", "docs", "playground", "control-admins", "client-policy", "registration-invitations", "tenants", "user-roles", "subscriptions", "model-entitlements", "plugins", "quota-ledger", "api-keys"} else "overview"
     return HTMLResponse(ADMIN_HTML.replace("__INITIAL_VIEW__", view), headers={"Cache-Control": "no-store"})
