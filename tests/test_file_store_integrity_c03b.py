@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor
@@ -226,6 +227,25 @@ def test_create_removes_phantom_file_when_index_commit_fails(tmp_path, monkeypat
 
     assert store.items == {}
     assert not list(store.root.glob("file_*"))
+
+
+
+
+def test_legacy_file_index_migrates_content_digest_without_losing_file(tmp_path):
+    store = FileStore(tmp_path)
+    item = _create(store)
+    index = json.loads(store.index_path.read_text(encoding="utf-8"))
+    for row in index["files"]:
+        row.pop("sha256", None)
+    store.index_path.write_text(json.dumps(index), encoding="utf-8")
+
+    reopened = FileStore(tmp_path)
+    asyncio.run(reopened.load())
+    restored, payload = reopened.read(item.file_id)
+
+    assert restored.sha256 == hashlib.sha256(payload).hexdigest()
+    persisted = json.loads(reopened.index_path.read_text(encoding="utf-8"))
+    assert persisted["files"][0]["sha256"] == restored.sha256
 
 
 
