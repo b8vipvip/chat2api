@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import errno
 import hashlib
 import json
 import mimetypes
@@ -37,6 +38,9 @@ class StoredFile:
     owner_key_id: str
     path: str
     purpose: str = "chat2api"
+    # Persisted content digest; empty only for legacy index rows whose content
+    # was already missing when the index migration ran.
+    sha256: str = ""
 
     def public(self) -> dict[str, Any]:
         return {
@@ -99,6 +103,7 @@ class FileStore:
 
             loaded: dict[str, StoredFile] = {}
             disk_paths: set[str] = set()
+            migrated = False
             for row in payload["files"]:
                 if not isinstance(row, dict):
                     raise ValueError("file index contains a non-object row")
@@ -119,7 +124,9 @@ class FileStore:
                     or "/" in item.path or "\\" in item.path or ":" in item.path
                     or Path(item.path).name != item.path
                     or not isinstance(item.purpose, str) or not item.purpose
-                ):
+                    or not isinstance(item.sha256, str)
+                    or (item.sha256 and not re.fullmatch(r"[0-9a-f]{64}", item.sha256))
+                ): 
                     raise ValueError("file index contains invalid file metadata")
                 if item.file_id in loaded or item.path in disk_paths:
                     raise ValueError("file index contains duplicate file IDs or disk paths")
@@ -130,8 +137,35 @@ class FileStore:
                     disk_metadata = None
                 if disk_metadata is not None and (
                     not stat.S_ISREG(disk_metadata.st_mode) or disk_metadata.st_nlink != 1
+                    or disk_metadata.st_size != item.size
                 ):
-                    raise ValueError("stored file path must be a single-link regular file")
+                    raise ValueError("stored file path must be a single-link regular file of the indexed size")
+                if "sha256" not in value:
+                    # Older indexes predate content digests. Migrate only after
+                    # reading the original regular file through a no-follow fd.
+                    migrated = True
+                    if disk_metadata is not None:
+                        fd = os.open(
+                            disk_path,
+                            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0),
+                        )
+                        try:
+                            opened = os.fstat(fd)
+                            if (
+                                not stat.S_ISREG(opened.st_mode)
+                                or opened.st_nlink != 1
+                                or opened.st_size != item.size
+                            ):
+                                raise ValueError("legacy stored file is not the indexed regular file")
+                            with os.fdopen(fd, "rb") as handle:
+                                fd = -1
+                                legacy_payload = handle.read()
+                        finally:
+                            if fd >= 0:
+                                os.close(fd)
+                        if len(legacy_payload) != item.size:
+                            raise ValueError("legacy stored file content is incomplete")
+                        item.sha256 = hashlib.sha256(legacy_payload).hexdigest()
                 loaded[item.file_id] = item
                 disk_paths.add(item.path)
 
@@ -139,7 +173,14 @@ class FileStore:
             # row must never turn the authoritative file catalog into an empty
             # in-memory store while leaving the original index on disk.
             with self.lock:
+                previous_items = self.items
                 self.items = loaded
+                if migrated:
+                    try:
+                        self.save_index()
+                    except Exception:
+                        self.items = previous_items
+                        raise
         except (OSError, ValueError, TypeError, KeyError, UnicodeError) as error:
             raise RuntimeError(
                 "File index is corrupt or unreadable; refusing to discard file metadata"
@@ -251,6 +292,7 @@ class FileStore:
             owner_key_id=owner_key_id,
             path=disk_name,
             purpose=purpose,
+            sha256=hashlib.sha256(payload).hexdigest(),
         )
         with self.lock:
             self.items[file_id] = item
@@ -286,7 +328,13 @@ class FileStore:
                     | getattr(os, "O_NONBLOCK", 0)
                 )
                 fd = os.open(path, flags)
-            except (FileNotFoundError, OSError) as error:
+            except FileNotFoundError as error:
+                raise FileNotFoundError("Stored file content is unavailable") from error
+            except OSError as error:
+                if error.errno == errno.ELOOP:
+                    raise FileNotFoundError(
+                        "Stored file content is not the original regular file"
+                    ) from error
                 raise FileNotFoundError("Stored file content is unavailable") from error
             try:
                 metadata = os.fstat(fd)
