@@ -58,6 +58,7 @@ the Control Plane maps this route to `billing:write`. Caller body:
   values, total must equal input plus output, and cached input must be a
   bounded subset. Missing or inconsistent usage leaves the hold reserved
   for later terminal replay.
+- Request IDs are single-use admission identities. A second dispatch using an active, settled, released or expired ID returns HTTP 409; idempotency is limited to replaying the original usage/accounting projection and never creates a second Worker dispatch.
 - Each priced admission snapshots the complete model price catalog and the
   USD/CNY rate. Settlement selects the actual served model from that immutable
   catalog; if it was not present at admission, it falls back to the
