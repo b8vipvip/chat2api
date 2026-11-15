@@ -247,6 +247,28 @@ def _runtime_wallet(tmp_path: Path, *, billing_enabled: bool, models: list[dict[
     return app, billing, pricing
 
 
+def test_wallet_admission_reserves_against_the_higher_cached_input_rate(tmp_path: Path) -> None:
+    from app.quota_reservation_runtime_v1 import reserve_wallet_charge
+
+    price = _price_row("cache-expensive-model", 1_000.0)
+    price["cached_input_usd_per_million"] = 10_000.0
+    app, billing, _pricing = _runtime_wallet(
+        tmp_path, billing_enabled=True, models=[price],
+    )
+
+    hold = reserve_wallet_charge(
+        app, "req_cached_price_hold",
+        SimpleNamespace(kind="managed", key_id="key-managed"),
+        "cache-expensive-model", 100, 0,
+    )
+
+    assert hold is not None
+    # 100 tokens at $10,000 / million * 7 CNY/USD = 700 cents.
+    # Reserving against only the $1,000 uncached rate would hold just 70 cents.
+    assert hold["reserved_cny_cents"] == 700
+    assert billing.balance_cents("usr_admission_snapshot") == 20_000
+
+
 def test_billing_disabled_at_admission_cannot_become_a_retroactive_charge(tmp_path: Path) -> None:
     from app.quota_reservation_runtime_v1 import reserve_wallet_charge
 
