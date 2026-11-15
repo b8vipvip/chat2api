@@ -38,6 +38,10 @@ class WalletReservationError(RuntimeError):
     pass
 
 
+class WalletReservationConflict(WalletReservationError):
+    """A request ID already owns a wallet admission or settlement."""
+
+
 class InsufficientWalletBalance(WalletReservationError):
     pass
 
@@ -837,21 +841,16 @@ class BillingStore:
                 # A settled request ID is never a new dispatch authorization.
                 # Returning a synthetic "settled" hold here would let the
                 # caller reach a Worker without any active wallet capacity.
-                raise WalletReservationError("request_id was already charged and cannot be reused")
+                raise WalletReservationConflict("request_id was already charged and cannot be reused")
             existing = self.reservations.get(request_id)
             if existing:
-                if str(existing.get("user_id") or "") != user_id:
-                    raise WalletReservationError("Request wallet reservation belongs to another user")
-                if existing.get("state") != "reserved":
-                    raise WalletReservationError("request_id belongs to a terminal wallet reservation and cannot be reused")
-                if (
-                    str(existing.get("model_id") or "") != str(model_id or "")
-                    or int(existing.get("reserved_cny_cents") or 0) != estimated_cny_cents
-                    or int(existing.get("estimated_input_tokens") or 0) != max(0, int(input_tokens))
-                    or int(existing.get("estimated_output_tokens") or 0) != max(0, int(output_tokens))
-                ):
-                    raise WalletReservationError("Request wallet reservation payload does not match the original admission")
-                return dict(existing)
+                # Admission idempotency belongs to the request/quota owner.
+                # A second reservation call must never adopt an old wallet
+                # hold: its caller may later roll back its own failed admission
+                # and accidentally release the original request's funds.
+                raise WalletReservationConflict(
+                    "request_id already has a wallet reservation and cannot be reused"
+                )
             active = sum(
                 max(0, int(row.get("reserved_cny_cents") or 0))
                 for row in self.reservations.values()
@@ -920,19 +919,11 @@ class BillingStore:
         now = _now()
         with self.lock:
             if request_id in self.charges:
-                raise WalletReservationError("request_id already has a wallet charge")
-            existing = self.reservations.get(request_id)
-            if existing:
-                if (
-                    str(existing.get("user_id") or "") == user_id
-                    and str(existing.get("model_id") or "") == normalized_model
-                    and existing.get("state") == "released"
-                    and existing.get("release_reason") == reason
-                    and int(existing.get("estimated_input_tokens") or 0) == input_tokens
-                    and int(existing.get("estimated_output_tokens") or 0) == output_tokens
-                ):
-                    return dict(existing)
-                raise WalletReservationError("request_id already has a different wallet admission")
+                raise WalletReservationConflict("request_id already has a wallet charge")
+            if request_id in self.reservations:
+                raise WalletReservationConflict(
+                    "request_id already has a wallet admission and cannot be reused"
+                )
             row = {
                 "request_id": request_id,
                 "user_id": user_id,
