@@ -99,6 +99,8 @@ def install_attachment_download_v82_patch(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except FileNotFoundError as error:
             raise HTTPException(status_code=410, detail=str(error)) from error
+        except OSError as error:
+            raise HTTPException(status_code=503, detail="Stored file content is temporarily unavailable") from error
         return Response(
             payload,
             media_type=item.mime_type,
