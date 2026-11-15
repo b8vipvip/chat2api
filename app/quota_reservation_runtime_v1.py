@@ -1,6 +1,7 @@
 """Bounded runtime adapter for the C-06 in-flight token reservation ledger."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -13,7 +14,7 @@ from .token_usage import usage_for
 logger = logging.getLogger(__name__)
 
 
-def reserve_request_quota(
+async def reserve_request_quota(
     app: Any, request_id: str, principal: Any, prompt: str, output_limit: int,
 ) -> dict[str, Any] | None:
     """Reserve a conservative estimate before a usage-bearing Worker dispatch."""
@@ -41,8 +42,40 @@ def reserve_request_quota(
     estimated_tokens = prompt_tokens + requested_output
     if estimated_tokens < 1 or estimated_tokens > 1_000_000:
         raise HTTPException(status_code=413, detail="Estimated request usage is too large for quota reservation")
+    async def reserve_from_authoritative_key_snapshot() -> dict[str, Any]:
+        item = getattr(api_keys, "keys", {}).get(key_id)
+        if item is None:
+            raise QuotaReservationError("Unknown API key")
+        public = item.public() if callable(getattr(item, "public", None)) else {}
+        completed_tokens = max(0, int(getattr(item, "tokens_used", 0) or 0))
+        quota_limit = getattr(item, "token_quota", None)
+        if quota_limit is not None and completed_tokens >= int(quota_limit):
+            raise QuotaExceeded("API key token quota is exhausted")
+        if (
+            not bool(getattr(item, "enabled", False))
+            or bool(getattr(item, "revoked_at", None))
+            or bool(public.get("expired", False))
+        ):
+            raise QuotaReservationError("API key is disabled, expired or revoked")
+        # Keep ApiKeyStore's async lock while the SQLite transaction reserves
+        # against the same completed-usage snapshot. Otherwise a concurrent
+        # terminal charge can update tokens_used between the snapshot and the
+        # reservation commit, admitting more work than the key quota allows.
+        return await asyncio.to_thread(
+            store.reserve,
+            str(request_id),
+            key_id,
+            estimated_tokens,
+            quota_limit=quota_limit,
+            completed_tokens=completed_tokens,
+        )
+
     try:
-        return store.reserve_for_key(api_keys, str(request_id), key_id, estimated_tokens)
+        key_lock = getattr(api_keys, "lock", None)
+        if key_lock is not None and hasattr(key_lock, "__aenter__"):
+            async with key_lock:
+                return await reserve_from_authoritative_key_snapshot()
+        return await reserve_from_authoritative_key_snapshot()
     except QuotaExceeded as error:
         raise HTTPException(status_code=429, detail=str(error)) from error
     except QuotaReservationError as error:
@@ -68,18 +101,18 @@ IMAGE_GENERATION_RESERVATION_FLOOR_TOKENS = 4096
 AUDIO_REQUEST_RESERVATION_FLOOR_TOKENS = 4096
 
 
-def reserve_image_generation_quota(
+async def reserve_image_generation_quota(
     app: Any, request_id: str, principal: Any, prompt: str, image_count: int = 1,
 ) -> dict[str, Any] | None:
     if type(image_count) is not int or not 1 <= image_count <= 4:
         raise HTTPException(status_code=400, detail="Image count is outside the quota reservation limit")
-    return reserve_request_quota(
+    return await reserve_request_quota(
         app, request_id, principal, prompt,
         IMAGE_GENERATION_RESERVATION_FLOOR_TOKENS * image_count,
     )
 
 
-def reserve_audio_request_quota(
+async def reserve_audio_request_quota(
     app: Any, request_id: str, principal: Any, prompt: str,
 ) -> dict[str, Any] | None:
     """Hold an admission allowance for speech or uploaded-audio requests.
@@ -90,7 +123,7 @@ def reserve_audio_request_quota(
     Worker does not report provider-verified usage, so terminal settlement
     continues to use the existing estimated prompt/transcript row.
     """
-    return reserve_request_quota(
+    return await reserve_request_quota(
         app, request_id, principal, prompt,
         AUDIO_REQUEST_RESERVATION_FLOOR_TOKENS,
     )
