@@ -32,6 +32,7 @@ class FakeRegistry:
         self.routing_key_context = contextvars.ContextVar("test_route_key", default=None)
         self.resolve_calls = []
         self.busy_clients = set()
+        self.previous_route = None
         self.catalog = [
             {"id": "default", "label": "Default"},
             {"id": "chatgpt-web", "label": "Web alias"},
@@ -54,7 +55,7 @@ class FakeRegistry:
         return ["worker_1"]
 
     def route_for_key(self, key_id):
-        return None
+        return self.previous_route
 
 
 class FakeAccounts:
@@ -245,6 +246,28 @@ def test_live_realtime_denied_model_returns_authorization_error(tmp_path: Path):
     assert error["retryable"] is False
     assert app.state.registry.resolve_calls == []
 
+
+
+def test_live_realtime_denied_model_is_enforced_with_existing_sticky_worker(tmp_path: Path):
+    app, _ = build_app(tmp_path)
+    install_voice_test_runtime(app)
+    install_live_voice_patch(app)
+    app.state.registry.previous_route = "worker_1"
+    app.state.model_entitlements.upsert("key", "key_1", "deny", ["gpt-live-mini"])
+
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            "/v1/audio/realtime",
+            headers={"Authorization": "Bearer voice-token"},
+        ) as websocket:
+            websocket.send_text(json.dumps({
+                "type": "session.start", "model": "gpt-live-mini",
+            }))
+            error = websocket.receive_json()
+
+    assert error["code"] == "model_not_entitled"
+    assert error["retryable"] is False
+    assert app.state.registry.resolve_calls == []
 
 def set_model_context(model_id: str):
     local = model_routing._MODEL_CONTEXT.set({"model": model_id})
