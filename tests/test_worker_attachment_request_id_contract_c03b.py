@@ -59,9 +59,13 @@ def test_voice_request_binds_the_current_worker_socket_for_scoped_file_download(
     registry = ClientRegistry(tmp_path)
     socket = FakeSocket()
     state = SimpleNamespace(dispatch_socket=None)
+    live_state = SimpleNamespace(dispatch_socket=None)
     registry.sockets["ext_voice_worker"] = socket
     registry.socket_locks["ext_voice_worker"] = asyncio.Lock()
-    registry.request_broker = SimpleNamespace(requests={"req_voice_file_123": state})
+    registry.request_broker = SimpleNamespace(requests={
+        "req_voice_file_123": state,
+        "voicereq_live_media_123": live_state,
+    })
     registry.worker_admin_enabled = lambda _client_id: True
     registry.chatgpt_routing_ready = lambda _client_id: True
 
@@ -72,6 +76,29 @@ def test_voice_request_binds_the_current_worker_socket_for_scoped_file_download(
 
     assert state.dispatch_socket is socket
     assert socket.sent[0]["request_id"] == "req_voice_file_123"
+
+    asyncio.run(registry.send("ext_voice_worker", {
+        "type": "voice.live.multimodal",
+        "request_id": "voicereq_live_media_123",
+        "attachments": [{
+            "file_id": "file_live_media",
+            "request_id": "voicereq_live_media_123",
+        }],
+    }))
+
+    assert live_state.dispatch_socket is socket
+    assert socket.sent[1]["attachments"][0]["request_id"] == "voicereq_live_media_123"
+
+
+def test_live_voice_media_grant_is_persisted_and_request_scoped_before_worker_dispatch() -> None:
+    source = (ROOT / "app/live_voice_patch.py").read_text(encoding="utf-8")
+    assert 'request_scoped_attachments = [' in source
+    assert '{**spec, "request_id": request_id}' in source
+    assert '"input_file_ids": next_media_ids' in source
+    assert '"code": "MEDIA_GRANT_PERSIST_FAILED"' in source
+    grant = source.index('"input_file_ids": next_media_ids')
+    dispatch = source.index('"type": "voice.live.multimodal"', grant)
+    assert grant < dispatch
 
 
 def test_voice_request_telemetry_persists_the_audio_file_grant() -> None:
