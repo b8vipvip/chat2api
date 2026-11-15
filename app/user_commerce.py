@@ -363,12 +363,6 @@ class PricingStore:
         if not isinstance(models, list) or not models:
             raise ValueError("pricing models must be a non-empty list")
         seen: set[str] = set()
-        canonical_seen: dict[str, tuple[bool, tuple[float, float, float]]] = {}
-        price_fields = (
-            "input_usd_per_million",
-            "cached_input_usd_per_million",
-            "output_usd_per_million",
-        )
         for row in models:
             if not isinstance(row, dict):
                 raise ValueError("pricing model row must be an object")
@@ -376,11 +370,9 @@ class PricingStore:
             if not isinstance(model_id, str) or not model_id.strip() or len(model_id) > 120 or model_id in seen:
                 raise ValueError("pricing model identity is invalid or duplicated")
             seen.add(model_id)
-            enabled = row.get("enabled", True)
-            if type(enabled) is not bool:
+            if type(row.get("enabled", True)) is not bool:
                 raise ValueError("pricing model enabled must be boolean")
-            values: dict[str, float] = {}
-            for field in price_fields:
+            for field in ("input_usd_per_million", "cached_input_usd_per_million", "output_usd_per_million"):
                 raw_value = row.get(field, 0)
                 if isinstance(raw_value, bool):
                     raise ValueError(f"pricing {field} must be numeric")
@@ -390,20 +382,6 @@ class PricingStore:
                     raise ValueError(f"pricing {field} must be numeric") from exc
                 if not math.isfinite(value) or value < 0 or value > 100000:
                     raise ValueError(f"pricing {field} must be finite and within range")
-                values[field] = value
-
-            # Aliases such as gpt-5.6 and gpt-5.6-sol resolve to the same
-            # canonical billing model. Their enabled state and rates must be
-            # identical, otherwise model() could select the first row and
-            # silently charge a different price depending on list ordering.
-            canonical_id = _pricing_model_key(model_id)
-            signature = (enabled, tuple(values[field] for field in price_fields))
-            previous = canonical_seen.get(canonical_id)
-            if previous is not None and previous != signature:
-                raise ValueError(
-                    f"pricing aliases for canonical model {canonical_id} must have identical enabled state and rates"
-                )
-            canonical_seen[canonical_id] = signature
 
     def _load(self) -> None:
         if not self.path.exists():
@@ -493,9 +471,20 @@ class PricingStore:
             return self.public()
 
     def model(self, model_id: str) -> dict[str, Any] | None:
-        wanted = _pricing_model_key(model_id)
+        requested = str(model_id or "").strip()
+        if not requested:
+            return None
         with self.lock:
-            for row in self.payload.get("models") or []:
+            models = self.payload.get("models") or []
+            # Exact IDs must win before canonical alias fallback. The public
+            # catalog intentionally exposes both gpt-5.6 and gpt-5.6-sol as
+            # independently editable rows; normalizing first made both names
+            # resolve to whichever row happened to appear first.
+            for row in models:
+                if str(row.get("model_id") or "").strip().casefold() == requested.casefold():
+                    return dict(row)
+            wanted = _pricing_model_key(requested)
+            for row in models:
                 if _pricing_model_key(row.get("model_id")) == wanted:
                     return dict(row)
         return None
