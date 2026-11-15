@@ -99,6 +99,26 @@ def test_runtime_maps_reservation_store_io_failures_to_retryable_503(tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_runtime_rejects_reused_request_id_without_mutating_original_reservation(tmp_path: Path) -> None:
+    app, store, _ = _runtime(tmp_path)
+    request_id = "req_runtime_duplicate_0001"
+    first = await reserve_request_quota(
+        app, request_id, SimpleNamespace(key_id="key-1"), "first prompt", 4096,
+    )
+
+    with pytest.raises(HTTPException) as error:
+        await reserve_request_quota(
+            app, request_id, SimpleNamespace(key_id="key-1"), "second prompt", 8192,
+        )
+
+    assert error.value.status_code == 409
+    assert error.value.detail["code"] == "request_id_conflict"
+    assert store.get(request_id) == first
+    assert store.active_reserved_tokens("key-1") == first["reserved_tokens"]
+    store.close()
+
+
+@pytest.mark.asyncio
 async def test_runtime_reservation_waits_for_api_key_usage_ledger_lock(tmp_path: Path) -> None:
     app, store, api_keys = _runtime(tmp_path)
 
