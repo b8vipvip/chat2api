@@ -26,9 +26,11 @@ class FakeKey:
     def __init__(self, token_quota: int | None = 10000) -> None:
         self.token_quota = token_quota
         self.tokens_used = 0
+        self.enabled = True
+        self.revoked_at = None
 
     def public(self) -> dict[str, bool]:
-        return {"enabled": True}
+        return {"enabled": True, "expired": False}
 
 
 class FakeApiKeys:
