@@ -81,6 +81,9 @@ def test_worker_event_publication_requires_assigned_worker_and_current_socket() 
             current_socket=worker_a_socket,
         )
         assert state.terminal_event_type == "chat.completed"
+        # Release the first lease before simulating a separate request on the
+        # same Worker; one Worker cannot own two concurrent Broker requests.
+        await broker.release(state.request_id)
 
         # An API/server timeout can close the response before the Worker
         # terminal arrives. completed_mono is therefore also a terminal
