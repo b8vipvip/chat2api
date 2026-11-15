@@ -59,17 +59,49 @@ class FileStore:
             return
         try:
             payload = json.loads(self.index_path.read_text(encoding="utf-8"))
-            self.items = {}
-            for row in payload.get("files", []):
-                if not isinstance(row, dict) or not row.get("file_id"):
-                    continue
+            if not isinstance(payload, dict) or not isinstance(payload.get("files"), list):
+                raise ValueError("file index root/files collection is invalid")
+
+            loaded: dict[str, StoredFile] = {}
+            disk_paths: set[str] = set()
+            for row in payload["files"]:
+                if not isinstance(row, dict):
+                    raise ValueError("file index contains a non-object row")
                 value = dict(row)
-                if value.get("created_at"):
-                    value["created_at"] = to_beijing_iso(value["created_at"]) or value["created_at"]
+                created_at = value.get("created_at")
+                if not isinstance(created_at, str) or not created_at:
+                    raise ValueError("file index created_at is invalid")
+                value["created_at"] = to_beijing_iso(created_at) or created_at
                 item = StoredFile(**value)
-                self.items[item.file_id] = item
-        except (OSError, ValueError, TypeError, KeyError):
-            self.items = {}
+                if (
+                    not isinstance(item.file_id, str) or not item.file_id
+                    or not isinstance(item.filename, str) or not item.filename
+                    or not isinstance(item.mime_type, str) or not item.mime_type
+                    or not isinstance(item.owner_key_id, str) or not item.owner_key_id
+                    or type(item.size) is not int or item.size <= 0
+                    or not isinstance(item.path, str) or not item.path
+                    or item.path in {".", ".."}
+                    or "/" in item.path or "\\" in item.path or ":" in item.path
+                    or Path(item.path).name != item.path
+                    or not isinstance(item.purpose, str) or not item.purpose
+                ):
+                    raise ValueError("file index contains invalid file metadata")
+                if item.file_id in loaded or item.path in disk_paths:
+                    raise ValueError("file index contains duplicate file IDs or disk paths")
+                disk_path = self.root / item.path
+                if disk_path.is_symlink():
+                    raise ValueError("stored file path cannot be a symbolic link")
+                loaded[item.file_id] = item
+                disk_paths.add(item.path)
+
+            # Publish only after the entire index has been validated. A corrupt
+            # row must never turn the authoritative file catalog into an empty
+            # in-memory store while leaving the original index on disk.
+            self.items = loaded
+        except (OSError, ValueError, TypeError, KeyError, UnicodeError) as error:
+            raise RuntimeError(
+                "File index is corrupt or unreadable; refusing to discard file metadata"
+            ) from error
 
     def save_index(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -157,8 +189,34 @@ class FileStore:
         # the exact file, matching the read/metadata endpoint contract.
         if owner_key_id is not None and owner_key_id != "master" and item.owner_key_id != owner_key_id:
             raise PermissionError("File belongs to another API key")
+
+        path = self.root / item.path
+        moved_path: Path | None = None
+        # Rename first so a failed index commit can restore the original bytes
+        # atomically without buffering an upload-sized file in memory.
+        if path.exists() or path.is_symlink():
+            moved_path = path.with_name(f".{path.name}.{secrets.token_hex(6)}.delete")
+            path.replace(moved_path)
+
+        self.items.pop(file_id, None)
         try:
-            (self.root / item.path).unlink(missing_ok=True)
-        finally:
-            self.items.pop(file_id, None)
             self.save_index()
+        except Exception:
+            self.items[file_id] = item
+            if moved_path is not None and (moved_path.exists() or moved_path.is_symlink()):
+                try:
+                    moved_path.replace(path)
+                except OSError as restore_error:
+                    raise RuntimeError(
+                        "File index update failed and the original file could not be restored"
+                    ) from restore_error
+            raise
+
+        # The index commit is the logical deletion point. If cleanup of the
+        # private tombstone fails, leave an unindexed orphan for offline cleanup
+        # rather than resurrecting an entry whose deletion already committed.
+        if moved_path is not None:
+            try:
+                moved_path.unlink(missing_ok=True)
+            except OSError:
+                pass
