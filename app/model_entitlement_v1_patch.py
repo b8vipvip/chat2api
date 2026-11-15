@@ -278,12 +278,22 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
         if not user_id:
             return None, None
         try:
+            # A disabled account must not keep generating through an API key
+            # created while it was enabled. Account/tenant data owners remain
+            # authoritative; this authorization adapter only consumes them.
+            if not accounts.is_enabled(str(user_id)):
+                raise HTTPException(
+                    status_code=403,
+                    detail={"code": "model_entitlement_user_disabled"},
+                )
             system_role = accounts.system_role_for(str(user_id))
             subscription = subscriptions.current_plan_for_user(str(user_id))
             plan_id = str(subscription.get("plan_id") or "")
             if not plan_id:
                 raise RuntimeError("User subscription has no effective plan")
             return system_role, plan_id
+        except HTTPException:
+            raise
         except Exception as exc:
             raise HTTPException(
                 status_code=503,
