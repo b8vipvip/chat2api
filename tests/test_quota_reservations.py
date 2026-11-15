@@ -156,14 +156,15 @@ def test_expiry_releases_only_unfinished_reservations_and_store_is_private(tmp_p
     assert store.path.stat().st_mode & 0o777 == 0o600
     store.close()
 
-def test_released_and_expired_request_ids_cannot_be_reused_for_new_admission(tmp_path: Path):
+def test_request_ids_are_one_shot_across_active_released_expired_and_settled_states(tmp_path: Path):
     store = QuotaReservationStore(tmp_path, reservation_ttl_seconds=60)
+
     released = store.reserve(
         "req_released", "key_1", 20, quota_limit=100, completed_tokens=0
     )
     assert store.release("req_released", "key_1") is True
     assert store.get("req_released")["state"] == "released"
-    with pytest.raises(QuotaReservationError, match="cannot be reused"):
+    with pytest.raises(QuotaReservationConflict, match="already been admitted"):
         store.reserve(
             "req_released", "key_1", 1, quota_limit=100, completed_tokens=0
         )
@@ -173,25 +174,29 @@ def test_released_and_expired_request_ids_cannot_be_reused_for_new_admission(tmp
     )
     assert store.expire_reservations(now=expired["expires_at"] + 1) == 1
     assert store.get("req_expired")["state"] == "expired"
-    with pytest.raises(QuotaReservationError, match="cannot be reused"):
+    with pytest.raises(QuotaReservationConflict, match="already been admitted"):
         store.reserve(
             "req_expired", "key_1", 1, quota_limit=100, completed_tokens=0
         )
 
-    # Same request ID remains idempotent while active and after settlement.
     active = store.reserve(
         "req_active", "key_1", 20, quota_limit=100, completed_tokens=0
     )
-    duplicate = store.reserve(
-        "req_active", "key_1", 90, quota_limit=100, completed_tokens=0
-    )
-    assert duplicate == active
+    with pytest.raises(QuotaReservationConflict, match="already been admitted"):
+        store.reserve(
+            "req_active", "key_1", 90, quota_limit=100, completed_tokens=0
+        )
+    assert store.get("req_active") == active
+
     api_keys = FakeApiKeys()
     assert asyncio.run(
         store.commit_completed_usage(completed("req_active", 10), api_keys)
     ) == "settled"
-    assert store.reserve(
-        "req_active", "key_1", 99, quota_limit=100, completed_tokens=10
-    )["state"] == "settled"
+    settled = store.get("req_active")
+    assert settled["state"] == "settled"
+    with pytest.raises(QuotaReservationConflict, match="already been admitted"):
+        store.reserve(
+            "req_active", "key_1", 99, quota_limit=100, completed_tokens=10
+        )
+    assert store.get("req_active") == settled
     store.close()
-
