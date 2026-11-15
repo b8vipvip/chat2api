@@ -91,6 +91,10 @@ def request_record_created_after(row: dict[str, Any], cutoff: datetime) -> bool:
         return False
 
 
+class DuplicateRequestIdentity(ValueError):
+    """A request ID is already bound to a different API response identity."""
+
+
 class TelemetryStore:
     def __init__(self, data_dir: Path, max_items: int = 500) -> None:
         self.path = data_dir / "request_history.jsonl"
@@ -178,6 +182,20 @@ class TelemetryStore:
         async with self.lock:
             request_id = str(record.get("request_id") or "")
             existing = self.get(request_id) if request_id else None
+            if existing:
+                existing_response_id = str(existing.get("response_id") or "")
+                incoming_response_id = str(record.get("response_id") or "")
+                if (
+                    existing_response_id and incoming_response_id
+                    and existing_response_id != incoming_response_id
+                ):
+                    # A request ID is immutable once admitted. Without this
+                    # guard, a second POST could overwrite the queued/running
+                    # row of the first request before Broker/quota admission
+                    # rejects the duplicate dispatch.
+                    raise DuplicateRequestIdentity(
+                        "request_id is already bound to another response"
+                    )
             if merge_diagnostics:
                 # Read AND merge inside the same lock protecting the append.
                 # A passive SSE observer must never overwrite a more recent

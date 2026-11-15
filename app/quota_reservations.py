@@ -22,6 +22,10 @@ class QuotaReservationError(ValueError):
     pass
 
 
+class QuotaReservationConflict(QuotaReservationError):
+    """The request ID has already been admitted and cannot start another dispatch."""
+
+
 class QuotaExceeded(QuotaReservationError):
     pass
 
@@ -140,16 +144,18 @@ class QuotaReservationStore:
                 if existing:
                     value = self._row(existing)
                     if value["key_id"] != key_id:
-                        raise QuotaReservationError("request_id is already reserved by another API key")
-                    # Idempotent retries may observe an in-flight reservation or
-                    # the same completed settlement. A terminal release/expiry
-                    # must never be returned as if it were a fresh reservation:
-                    # otherwise a reused request_id would bypass quota admission.
-                    if value["state"] in {"released", "expired"}:
-                        raise QuotaReservationError(
-                            "request_id belongs to a released or expired reservation and cannot be reused"
+                        raise QuotaReservationConflict(
+                            "request_id has already been admitted under another API key"
                         )
-                    return value
+                    # Reservation idempotency is for settlement/recovery, not
+                    # for dispatch admission. Returning an existing active or
+                    # settled row here permits a second Worker dispatch to
+                    # reuse the same request identity and bypass the new hold.
+                    # Only commit_completed_usage/recover_committing may replay
+                    # an existing request's accounting projection.
+                    raise QuotaReservationConflict(
+                        "request_id has already been admitted and cannot be reused"
+                    )
                 active = self.db.execute(
                     "SELECT COALESCE(SUM(reserved_tokens),0) FROM quota_reservations WHERE key_id=? AND state IN ('reserved','committing')",
                     (key_id,),
