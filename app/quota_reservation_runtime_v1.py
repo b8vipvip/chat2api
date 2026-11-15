@@ -9,7 +9,10 @@ from fastapi import HTTPException
 
 from .quota_reservations import QuotaExceeded, QuotaReservationConflict, QuotaReservationError
 from .token_usage import usage_for
-from .user_commerce import InsufficientWalletBalance, WalletReservationError, _pricing_model_key
+from .user_commerce import (
+    InsufficientWalletBalance, WalletReservationConflict, WalletReservationError,
+    _pricing_model_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +136,11 @@ def reserve_wallet_charge(
         raise
     except InsufficientWalletBalance as error:
         raise HTTPException(status_code=402, detail="账户余额不足，无法预留本次请求预计费用") from error
+    except WalletReservationConflict as error:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "request_id_conflict", "message": str(error)},
+        ) from error
     except WalletReservationError as error:
         raise HTTPException(status_code=503, detail="Wallet reservation failed: " + str(error)) from error
     except OSError as error:
