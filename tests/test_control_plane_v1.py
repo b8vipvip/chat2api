@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -10,6 +12,8 @@ from app.admin_auth import AdminLoginRateLimiter, AdminSessionStore
 from app.config import Settings
 from app.control_plane import ControlPlaneError, ControlPlaneStore, ROLES, permission_for_admin_route
 from app.control_plane_v1_patch import install_control_plane_v1
+from app.tenant_membership_v1_patch import install_tenant_memberships
+from app.model_entitlement_v1_patch import install_model_entitlements
 from app.main import create_app
 from app.user_console_v104_patch import install_user_console_v104_patch
 from app.v17_patch import install_v17_patch
@@ -235,3 +239,112 @@ def test_legacy_admin_session_storage_stays_backward_compatible(tmp_path: Path):
     revived = AdminSessionStore("owner", "password", storage_path=path)
     assert revived.identity(token) == "owner"
     assert revived.authenticate(token)
+
+
+def test_user_role_and_subscription_admin_routes_have_distinct_rbac_permissions():
+    from app.control_plane import permission_for_admin_route
+
+    assert permission_for_admin_route("/api/admin/users/usr_12345/role", "PUT") == "users:write"
+    assert permission_for_admin_route("/api/admin/users/usr_12345/subscription", "GET") == "billing:read"
+    assert permission_for_admin_route("/api/admin/users/usr_12345/subscription", "PUT") == "billing:write"
+    assert permission_for_admin_route("/api/admin/users/usr_12345/subscription", "DELETE") == "billing:write"
+    assert permission_for_admin_route("/api/admin/subscription-plans", "GET") == "billing:read"
+    assert permission_for_admin_route("/api/admin/subscription-plans/pro", "PUT") == "billing:write"
+    assert permission_for_admin_route("/api/admin/model-entitlements/user_role/trusted", "PUT") == "models:write"
+    assert permission_for_admin_route("/api/admin/model-entitlements/subscription_plan/pro", "PUT") == "models:write"
+
+
+def test_user_admin_and_billing_admin_can_only_manage_their_own_identity_domains(tmp_path: Path):
+    app = make_app(tmp_path)
+    install_tenant_memberships(app)
+    install_model_entitlements(app)
+
+    with TestClient(app) as root:
+        assert login(root, "owner", "strong-root-password").status_code == 200
+        created_user = root.post("/api/user/register", json={
+            "email": "policy-user@example.com",
+            "password": "policy-user-password",
+        })
+        assert created_user.status_code == 200, created_user.text
+        user_id = created_user.json()["user"]["user_id"]
+
+        for username, role in (("users_agent", "user_admin"), ("billing_agent", "billing_admin")):
+            created = root.post("/api/admin/control/admins", json={
+                "username": username,
+                "password": "long-enough-admin-password",
+                "role": role,
+            }, headers=ORIGIN)
+            assert created.status_code == 201, created.text
+
+        with TestClient(app) as user_admin:
+            assert login(user_admin, "users_agent", "long-enough-admin-password").status_code == 200
+            changed = user_admin.put(
+                f"/api/admin/users/{user_id}/role",
+                json={"system_role": "trusted"},
+                headers=ORIGIN,
+            )
+            assert changed.status_code == 200, changed.text
+            assert changed.json()["user"]["system_role"] == "trusted"
+            assert user_admin.get(
+                f"/api/admin/users/{user_id}/subscription"
+            ).status_code == 403
+            assert user_admin.put(
+                "/api/admin/subscription-plans/pro",
+                json={"name": "Pro", "enabled": True},
+                headers=ORIGIN,
+            ).status_code == 403
+
+        with TestClient(app) as billing_admin:
+            assert login(billing_admin, "billing_agent", "long-enough-admin-password").status_code == 200
+            plan = billing_admin.put(
+                "/api/admin/subscription-plans/pro",
+                json={"name": "Pro", "enabled": True},
+                headers=ORIGIN,
+            )
+            assert plan.status_code == 200, plan.text
+            assigned = billing_admin.put(
+                f"/api/admin/users/{user_id}/subscription",
+                json={"plan_id": "pro"},
+                headers=ORIGIN,
+            )
+            assert assigned.status_code == 200, assigned.text
+            assert assigned.json()["subscription"]["plan_id"] == "pro"
+            assert billing_admin.put(
+                f"/api/admin/users/{user_id}/role",
+                json={"system_role": "staff"},
+                headers=ORIGIN,
+            ).status_code == 403
+
+    assert app.state.user_accounts.system_role_for(user_id) == "trusted"
+    assert app.state.user_subscriptions.current_plan_for_user(user_id)["plan_id"] == "pro"
+
+
+def test_control_plane_load_repairs_existing_file_permissions(tmp_path: Path):
+    if os.name == "nt":
+        pytest.skip("POSIX file mode bits are not enforced on Windows")
+    store = ControlPlaneStore(tmp_path, "owner")
+    store.create_admin("support_agent", "long-enough-password", "support")
+    os.chmod(store.path, 0o644)
+
+    reopened = ControlPlaneStore(tmp_path, "owner")
+
+    assert reopened.verify_admin("support_agent", "long-enough-password")
+    assert stat.S_IMODE(store.path.stat().st_mode) == 0o600
+
+
+def test_control_plane_atomic_save_never_rolls_memory_back_after_disk_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    store = ControlPlaneStore(tmp_path, "owner")
+
+    def fail_chmod(*_args, **_kwargs):
+        raise OSError("simulated post-commit chmod failure")
+
+    monkeypatch.setattr("app.control_plane.os.chmod", fail_chmod)
+
+    updated = store.update_client({"announcement": "committed"})
+
+    persisted = json.loads(store.path.read_text(encoding="utf-8"))
+    assert updated["announcement"] == "committed"
+    assert store.public_client()["announcement"] == "committed"
+    assert persisted["client"]["announcement"] == "committed"
