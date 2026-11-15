@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import mimetypes
 import os
@@ -300,6 +301,9 @@ class FileStore:
                     payload = handle.read()
                 if len(payload) != item.size:
                     raise FileNotFoundError("Stored file content is incomplete")
+                digest = hashlib.sha256(payload).hexdigest()
+                if not secrets.compare_digest(digest, item.sha256):
+                    raise FileNotFoundError("Stored file content digest does not match the index")
                 return item, payload
             finally:
                 if fd >= 0:

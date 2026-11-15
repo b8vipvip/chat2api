@@ -226,3 +226,18 @@ def test_create_removes_phantom_file_when_index_commit_fails(tmp_path, monkeypat
 
     assert store.items == {}
     assert not list(store.root.glob("file_*"))
+
+
+
+def test_file_store_read_rejects_same_size_content_tampering(tmp_path):
+    store = FileStore(tmp_path)
+    item = _create(store)
+    stored_path = store.root / item.path
+    assert stored_path.stat().st_size == item.size
+
+    # Keep the file length unchanged so size-only integrity checks cannot
+    # detect the modified bytes.
+    stored_path.write_bytes(b"x" * item.size)
+
+    with pytest.raises(FileNotFoundError, match="digest"):
+        store.read(item.file_id)
