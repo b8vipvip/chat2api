@@ -305,31 +305,22 @@ class FileStore:
                 raise PermissionError("File belongs to another API key")
 
             path = self.root / item.path
-            moved_path: Path | None = None
-            # Rename first so a failed index commit can restore the original bytes
-            # atomically without buffering an upload-sized file in memory.
-            if path.exists() or path.is_symlink():
-                moved_path = path.with_name(f".{path.name}.{secrets.token_hex(6)}.delete")
-                path.replace(moved_path)
-
+            # Commit the catalog removal before unlinking content. If the
+            # process exits between these operations, the old index still
+            # points to an intact file; after the index commit, an unlink
+            # failure leaves only an inaccessible orphan, never a live row
+            # whose content was moved out from under it.
             self.items.pop(file_id, None)
             try:
                 self.save_index()
             except Exception:
                 self.items[file_id] = item
-                if moved_path is not None and (moved_path.exists() or moved_path.is_symlink()):
-                    try:
-                        moved_path.replace(path)
-                    except OSError as restore_error:
-                        raise RuntimeError(
-                            "File index update failed and the original file could not be restored"
-                        ) from restore_error
                 raise
 
-            # The index commit is the logical deletion point. If cleanup of the
-            # private tombstone fails, leave an unindexed orphan for offline cleanup.
-            if moved_path is not None:
-                try:
-                    moved_path.unlink(missing_ok=True)
-                except OSError:
-                    pass
+            # The index commit is the logical deletion point. Cleanup is
+            # best-effort: an orphan is safe to remove offline and must never
+            # resurrect a record whose deletion has already committed.
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
