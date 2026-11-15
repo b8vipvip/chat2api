@@ -170,6 +170,11 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
         if request_id is not None and not re.fullmatch(r"voicereq_[A-Za-z0-9_-]{8,120}", request_id):
             raise HTTPException(status_code=400, detail="Invalid voicereq_ request ID")
         request_id = request_id or ("voicereq_" + uuid.uuid4().hex)
+        if telemetry.get(request_id):
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "request_id_conflict", "message": "Duplicate request_id"},
+            )
         response_id = "voice_" + uuid.uuid4().hex
         prompt_policy: dict[str, object] = {}
         if request_type == "voice_generation":
