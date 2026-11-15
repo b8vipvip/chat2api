@@ -224,6 +224,8 @@ class RequestBroker:
 
     async def create(self, request_id: str, client_id: str) -> RequestState:
         async with self.lock:
+            if request_id in self.requests:
+                raise RuntimeError("The request ID is already active")
             if client_id in self.client_requests:
                 raise RuntimeError("The selected extension is busy with another request")
             loop = asyncio.get_running_loop()
