@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from .api_keys import ApiPrincipal
 from . import model_capability_routing_patch as model_routing
+from .telemetry import DuplicateRequestIdentity
 from .token_usage import usage_for
 from .prompt_config import build_speech_prompt
 from .quota_reservation_runtime_v1 import reserve_audio_request_quota
@@ -307,6 +308,11 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
                     "token_usage": token_meta,
                 },
             }
+        except DuplicateRequestIdentity as error:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "request_id_conflict", "message": str(error)},
+            ) from error
         except asyncio.TimeoutError as error:
             state.diagnostics["voice_failure_code"] = "VOICE_SERVER_WAIT_TIMEOUT"
             state.diagnostics["voice_failure_stage"] = str(state.diagnostics.get("voice_stage") or "unknown")
