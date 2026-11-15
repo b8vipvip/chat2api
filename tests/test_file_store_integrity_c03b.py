@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -20,6 +21,52 @@ def _create(store: FileStore):
         owner_key_id="key_owner_123",
         purpose="assistants",
     ))
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits are not portable on Windows")
+def test_uploaded_files_and_index_are_private_to_the_server_account(tmp_path):
+    store = FileStore(tmp_path)
+    item = asyncio.run(store.create(
+        filename="private.txt",
+        data_base64=base64.b64encode(b"private-content").decode("ascii"),
+        mime_type="text/plain",
+        owner_key_id="key_private",
+        purpose="assistants",
+    ))
+    assert store.root.stat().st_mode & 0o777 == 0o700
+    assert (store.root / item.path).stat().st_mode & 0o777 == 0o600
+    assert store.index_path.stat().st_mode & 0o777 == 0o600
+
+
+def test_file_store_rejects_symlinked_index_and_preserves_target(tmp_path):
+    root = tmp_path / "files"
+    root.mkdir()
+    target = tmp_path / "external-index.json"
+    original = b'{"files":[]}'
+    target.write_bytes(original)
+    (root / "index.json").symlink_to(target)
+    with pytest.raises(RuntimeError, match="symbolic link"):
+        asyncio.run(FileStore(tmp_path).load())
+    assert target.read_bytes() == original
+
+
+def test_file_store_read_rejects_symlink_swapped_after_startup(tmp_path):
+    store = FileStore(tmp_path)
+    item = asyncio.run(store.create(
+        filename="owned.txt",
+        data_base64=base64.b64encode(b"owned-content").decode("ascii"),
+        mime_type="text/plain",
+        owner_key_id="key_owner",
+        purpose="assistants",
+    ))
+    secret = tmp_path / "outside-secret.txt"
+    secret.write_bytes(b"must-not-be-served")
+    stored_path = store.root / item.path
+    stored_path.unlink()
+    stored_path.symlink_to(secret)
+    with pytest.raises(FileNotFoundError, match="regular file"):
+        store.read(item.file_id)
+    assert secret.read_bytes() == b"must-not-be-served"
 
 
 def test_concurrent_creates_serialize_index_snapshots_and_preserve_every_file(tmp_path):
