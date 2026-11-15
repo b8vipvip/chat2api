@@ -298,7 +298,7 @@ async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], princi
             requested_output_budget = 0
         try:
             from .quota_reservation_runtime_v1 import reserve_request_quota
-            reserve_request_quota(
+            await reserve_request_quota(
                 app, request_id, principal, prompt,
                 max(4096, requested_output_budget),
             )
