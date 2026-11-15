@@ -160,6 +160,8 @@ class TelemetryStore:
                 })
                 recovered += 1
             except Exception:
+                # Keep the row visible for explicit reconciliation; do not
+                # fail startup because one telemetry callback could not run.
                 continue
         return recovered
 
