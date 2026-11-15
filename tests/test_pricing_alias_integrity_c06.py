@@ -75,6 +75,12 @@ def test_wallet_reservation_snapshot_preserves_exact_alias_prices(tmp_path):
         price_catalog_snapshot=admission_catalog,
         usd_cny_rate=7.2,
     )
+    # Restart between admission and terminal settlement to verify that both
+    # independently priced aliases survive the durable reservation snapshot.
+    billing = BillingStore(tmp_path)
+    persisted_catalog = billing.reservations[request_id]["price_catalog_snapshot"]
+    assert persisted_catalog["gpt-5.6"]["input_usd_per_million"] == 22.0
+    assert persisted_catalog["gpt-5.6-sol"]["input_usd_per_million"] == 11.0
 
     charge = billing.record_charge(
         user_id,
