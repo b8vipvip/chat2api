@@ -2729,6 +2729,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     }} if owned_media else {}),
                 },
             }
+        except DuplicateRequestIdentity as error:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "request_id_conflict", "message": str(error)},
+            ) from error
         except asyncio.TimeoutError as error:
             state.completed_mono = time.perf_counter()
             await telemetry.upsert(
