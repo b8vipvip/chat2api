@@ -59,7 +59,7 @@ def test_file_store_rejects_hardlinked_index_without_changing_target(tmp_path):
     original = b'{"files":[]}'
     target.write_bytes(original)
     (root / "index.json").hardlink_to(target)
-    with pytest.raises(RuntimeError, match="single-link regular file"):
+    with pytest.raises(RuntimeError, match="refusing to discard file metadata"):
         asyncio.run(FileStore(tmp_path).load())
     assert target.read_bytes() == original
 
