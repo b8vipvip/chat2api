@@ -163,7 +163,7 @@ def test_reserved_charge_uses_admission_catalog_and_fx_snapshot_after_restart(tm
     assert restarted.balance_cents("usr_price_snapshot") == 98_600
 
 
-def test_reserved_charge_falls_back_to_requested_admission_price_not_live_price(tmp_path: Path) -> None:
+def test_actual_model_missing_from_admission_catalog_keeps_hold_for_reconciliation(tmp_path: Path) -> None:
     pricing = PricingStore(tmp_path)
     requested = _price_row("requested-model", 10_000.0)
     pricing.update(billing_enabled=True, usd_cny_rate=7.0, models=[requested])
@@ -181,7 +181,8 @@ def test_reserved_charge_falls_back_to_requested_admission_price_not_live_price(
         billing_enabled=True, usd_cny_rate=9.0,
         models=[requested, _price_row("late-added-model", 50_000.0)],
     )
-    charge = BillingStore(tmp_path).record_charge("usr_price_fallback", {
+    restarted = BillingStore(tmp_path)
+    charge = restarted.record_charge("usr_price_fallback", {
         "request_id": "req_price_fallback",
         "status": "completed",
         "requested_model": "requested-model",
@@ -192,8 +193,40 @@ def test_reserved_charge_falls_back_to_requested_admission_price_not_live_price(
         },
     }, pricing)
 
+    # The actual served model had no admission-time price. Do not silently
+    # bill it as the requested model; keep the original hold for reconciliation.
+    assert charge is None
+    assert restarted.charge_for_request("req_price_fallback") is None
+    assert restarted.reservations["req_price_fallback"]["state"] == "reserved"
+    assert restarted.active_reservations_for_user("usr_price_fallback")
+    assert restarted.balance_cents("usr_price_fallback") == 10_000
+
+
+def test_reserved_charge_uses_requested_snapshot_when_actual_model_evidence_is_missing(tmp_path: Path) -> None:
+    pricing = PricingStore(tmp_path)
+    requested = _price_row("requested-model", 10_000.0)
+    pricing.update(billing_enabled=True, usd_cny_rate=7.0, models=[requested])
+    billing = BillingStore(tmp_path)
+    billing.credit("usr_price_fallback_missing_actual", 10_000)
+    billing.reserve_for_request(
+        "usr_price_fallback_missing_actual", "req_price_fallback_missing_actual",
+        model_id="requested-model", estimated_cny_cents=2_000,
+        input_tokens=100, output_tokens=4096,
+        price_snapshot=pricing.model("requested-model") or {},
+        price_catalog_snapshot={},
+        usd_cny_rate=7.0,
+    )
+    charge = BillingStore(tmp_path).record_charge("usr_price_fallback_missing_actual", {
+        "request_id": "req_price_fallback_missing_actual",
+        "status": "completed",
+        "requested_model": "requested-model",
+        "usage": {
+            "prompt_tokens": 100, "completion_tokens": 0,
+            "total_tokens": 100, "cached_input_tokens": 0, "estimated": True,
+        },
+    }, pricing)
+
     assert charge is not None
-    assert charge["model_id"] == "late-added-model"
     assert charge["priced_model_id"] == "requested-model"
     assert charge["price_snapshot"]["input_usd_per_million"] == 10_000.0
     assert charge["usd_cny_rate"] == 7.0
