@@ -14,6 +14,14 @@ from .token_usage import usage_for
 logger = logging.getLogger(__name__)
 
 
+def is_request_id_conflict(error: BaseException) -> bool:
+    """Distinguish a replayed request identity from ordinary quota rejection."""
+    if not isinstance(error, HTTPException) or error.status_code != 409:
+        return False
+    detail = error.detail
+    return isinstance(detail, dict) and detail.get("code") == "request_id_conflict"
+
+
 async def reserve_request_quota(
     app: Any, request_id: str, principal: Any, prompt: str, output_limit: int,
 ) -> dict[str, Any] | None:
