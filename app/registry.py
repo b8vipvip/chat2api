@@ -221,36 +221,49 @@ class ClientRegistry:
                 self.sockets.pop(client_id, None)
                 self.worker_pool_capacity_received_at.pop(client_id, None)
 
-    async def touch(self, client_id: str, metadata: dict[str, Any] | None = None) -> None:
-        client = self.clients.get(client_id)
-        if not client:
-            return
-        client.last_seen_at = utc_now()
-        changed = False
-        if metadata:
-            if metadata.get("worker_pool_admission_revision") == 224:
-                self.worker_pool_capacity_received_at[client_id] = time.monotonic()
-            for key, value in metadata.items():
-                if client.metadata.get(key) != value:
-                    client.metadata[key] = value
-                    changed = True
-            # The persisted version is initially populated at pairing, but a
-            # paired extension can be upgraded in-place without rotating its
-            # device identity. Accept only a bounded manifest-style version
-            # from the already authenticated Worker socket.
-            reported_version = metadata.get("extension_version")
-            if isinstance(reported_version, str):
-                reported_version = reported_version.strip()
-                if re.fullmatch(r"\d{1,3}\.\d{1,3}\.\d{1,5}(?:[-+][A-Za-z0-9._-]{1,20})?", reported_version):
-                    if client.version != reported_version:
-                        client.version = reported_version
+    async def touch(
+        self,
+        client_id: str,
+        metadata: dict[str, Any] | None = None,
+        *,
+        websocket: WebSocket | None = None,
+    ) -> bool:
+        # A replaced socket may remain runnable briefly while its close frame
+        # propagates. It must not refresh the new socket's heartbeat, capacity,
+        # version or device metadata.
+        async with self.lock:
+            if websocket is not None and self.sockets.get(client_id) is not websocket:
+                return False
+            client = self.clients.get(client_id)
+            if not client:
+                return False
+            client.last_seen_at = utc_now()
+            changed = False
+            if metadata:
+                if metadata.get("worker_pool_admission_revision") == 224:
+                    self.worker_pool_capacity_received_at[client_id] = time.monotonic()
+                for key, value in metadata.items():
+                    if client.metadata.get(key) != value:
+                        client.metadata[key] = value
                         changed = True
-            reported_device = str(metadata.get("device_id") or "").strip()
-            if reported_device and client.device_id != reported_device:
-                client.device_id = reported_device
-                changed = True
-        if changed:
-            await self.save()
+                # The persisted version is initially populated at pairing, but a
+                # paired extension can be upgraded in-place without rotating its
+                # device identity. Accept only a bounded manifest-style version
+                # from the already authenticated current Worker socket.
+                reported_version = metadata.get("extension_version")
+                if isinstance(reported_version, str):
+                    reported_version = reported_version.strip()
+                    if re.fullmatch(r"\\d{1,3}\\.\\d{1,3}\\.\\d{1,5}(?:[-+][A-Za-z0-9._-]{1,20})?", reported_version):
+                        if client.version != reported_version:
+                            client.version = reported_version
+                            changed = True
+                reported_device = str(metadata.get("device_id") or "").strip()
+                if reported_device and client.device_id != reported_device:
+                    client.device_id = reported_device
+                    changed = True
+            if changed:
+                await self.save()
+            return True
 
     async def set_connection_enabled(self, client_id: str, enabled: bool) -> PersistedClient:
         async with self.lock:
