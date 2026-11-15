@@ -54,7 +54,11 @@ def test_server_websocket_records_receipt_and_broker_acceptance_only():
     source = (ROOT / "app/main.py").read_text(encoding="utf-8")
     assert 'terminal_transport_server_seen' in source
     assert 'terminal_transport_broker_accepted' in source
-    assert 'accepted = await broker.publish(request_id, message)' in source
+    # Worker-originated events must pass the current-socket and
+    # Broker-assignment identity gate before reaching the terminal queue.
+    assert 'accepted = await broker.publish_worker_event(' in source
+    assert 'current_socket=registry.sockets.get(client_id)' in source
+    assert 'accepted = await broker.publish(request_id, message)' not in source
     assert 'terminal_transport_payload_chars' in source
 
 

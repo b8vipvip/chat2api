@@ -65,8 +65,10 @@ This prevents a broad alias from bypassing a concrete allowlist.
   transport-only gpt-live alias. Unknown or unresolved models are rejected
   whenever a matching policy applies.
 - A failed UserAccountStore owner lookup, failed TenantMembershipStore lookup,
-  or tenant-bound key without an active owner role returns 503. It is never
-  treated as an unowned/unbound key and does not silently drop policy scope.
+  a tenant-bound key without an active owner role, or a stale tenant binding
+  whose recorded owner differs from the current UserAccountStore owner returns
+  503. It is never treated as an unowned/unbound key and does not silently
+  drop or transfer policy scope.
 - Master server API key remains unrestricted for compatibility.
 - Admin policy APIs use the existing administrator Session and same-origin
   ingress; mutations write to the existing AdminAuditStore.
@@ -111,7 +113,6 @@ tenant-store outages, orphaned tenant memberships, the server-owned gpt-image
 target, Speech/Conversation request model context, and Realtime session.start
 model context including deny behavior. Exact-head full CI and production image
 smoke remain required.
-
 
 ## C-03B — tenant/resource authorization audit (2026-11-13)
 
@@ -166,3 +167,17 @@ The following remain outside this slice: explicit resource sharing ACLs, token-U
 ### Release compatibility gate
 
 This branch changes the Worker attachment-fetch protocol by requiring `request_id`. The current production release remains `0.22.291`; do not deploy this route change against an older installed Worker bundle. When this stack is approved for release, bump the unified Server/Worker/Bridge release version (next candidate: `0.22.292`), update the manifest and runtime version contract together, and verify that the new Worker bundle is served before enabling the required request-scoped download parameter. This release/version migration is intentionally deferred from the feature branch.
+
+### C-03B request-scoped Worker attachment reads
+
+- A Worker file-read grant is bound to the exact request, assigned client ID,
+  API-key owner, attached file ID, and original dispatch WebSocket. A newly
+  connected socket reusing the same paired client ID cannot inherit a still
+  running request's attachment grant. The Broker lease and current registry
+  socket must still reference the exact socket that received the dispatch;
+  possession of the paired extension token alone does not preserve a stale
+  dispatch grant after reconnect.
+- Telemetry marked `running` is not sufficient by itself: a missing Broker
+  lease, terminal Broker state, failed dispatch, detached socket, replacement
+  socket, mismatched owner, or file absent from the request attachment list
+  all fail closed.

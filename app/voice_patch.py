@@ -124,6 +124,7 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
         *, request_id: str, response_id: str, client_id: str, principal: ApiPrincipal,
         model: str, request_type: str, prompt: str, transcript: str, state,
         status_value: str, error: str | None = None, audio_bytes: int = 0,
+        input_file_ids: list[str] | None = None,
     ) -> tuple[dict[str, int], dict[str, object]]:
         usage, token_meta = _audio_usage(prompt, transcript)
         diagnostics = dict(state.diagnostics)
@@ -139,6 +140,9 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
                 "requested_model": model,
                 "request_type": request_type,
                 "attachments_count": 1 if request_type == "voice_conversation" else 0,
+                "input_file_ids": list(dict.fromkeys(
+                    str(value) for value in (input_file_ids or []) if value
+                )),
                 "stream": False,
                 "prompt_mode": "voice",
                 "prompt_chars": len(prompt),
@@ -167,6 +171,11 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=400, detail="Invalid voicereq_ request ID")
         request_id = request_id or ("voicereq_" + uuid.uuid4().hex)
         response_id = "voice_" + uuid.uuid4().hex
+        input_file_ids = (
+            [str(audio_spec.get("file_id"))]
+            if isinstance(audio_spec, dict) and audio_spec.get("file_id")
+            else []
+        )
         prompt_policy: dict[str, object] = {}
         if request_type == "voice_generation":
             prompt, prompt_policy = build_speech_prompt(
@@ -200,6 +209,7 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
                 request_id=request_id, response_id=response_id, client_id=selected_client,
                 principal=principal, model=model, request_type=request_type, prompt=prompt,
                 transcript="", state=state, status_value="running",
+                input_file_ids=input_file_ids,
             )
             # The only TTS preset authority is this endpoint. The Worker
             # sees the final prompt unchanged, including across retries.
@@ -245,6 +255,7 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
                 state=state,
                 status_value="completed",
                 audio_bytes=int(voice.get("size") or 0),
+                input_file_ids=input_file_ids,
             )
             return {
                 "id": response_id,
@@ -275,6 +286,7 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
                 principal=principal, model=model, request_type=request_type, prompt=prompt,
                 transcript="", state=state, status_value="error",
                 error="VOICE_SERVER_WAIT_TIMEOUT: Timed out waiting for GPT-Live",
+                input_file_ids=input_file_ids,
             )
             raise HTTPException(status_code=504,
                 detail="VOICE_SERVER_WAIT_TIMEOUT: Timed out waiting for GPT-Live") from error
@@ -289,6 +301,7 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
                 transcript="", state=state,
                 status_value="cancelled" if state.diagnostics.get("playground_cancelled") else "error",
                 error=str(error),
+                input_file_ids=input_file_ids,
             )
             raise HTTPException(status_code=502, detail=str(error)) from error
         finally:

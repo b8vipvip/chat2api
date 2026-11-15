@@ -126,6 +126,45 @@ class TelemetryStore:
         except (OSError, ValueError, TypeError):
             self.items.clear()
 
+    async def recover_queued_after_restart(
+        self, active_request_ids: set[str] | None = None,
+    ) -> int:
+        """Terminalize queued requests left behind by a previous server process.
+
+        A queued row is written before Worker selection and before Broker
+        allocation. It therefore proves that no Worker dispatch occurred.
+        After restart the old admission queue no longer exists, so releasing
+        those admission holds is safe. Running rows are deliberately untouched:
+        they may have consumed provider usage before the process stopped.
+        """
+        active = {str(value) for value in (active_request_ids or set()) if value}
+        recovered = 0
+        for row in self.recent(self.items.maxlen or 500):
+            request_id = str(row.get("request_id") or "")
+            if (
+                not request_id
+                or request_id in active
+                or str(row.get("status") or "").lower() != "queued"
+            ):
+                continue
+            diagnostics = row.get("diagnostics")
+            diagnostics = dict(diagnostics) if isinstance(diagnostics, dict) else {}
+            diagnostics["request_admission_recovery"] = "server-restart-before-worker-dispatch"
+            diagnostics["request_admission_failure_kind"] = "server_restart"
+            try:
+                await self.upsert({
+                    **row,
+                    "status": "stalled",
+                    "error": "Server restarted before Worker dispatch",
+                    "diagnostics": diagnostics,
+                })
+                recovered += 1
+            except Exception:
+                # Keep the row visible for explicit reconciliation; do not
+                # fail startup because one telemetry callback could not run.
+                continue
+        return recovered
+
     async def append(self, item: dict[str, Any]) -> None:
         await self.upsert(item)
 
