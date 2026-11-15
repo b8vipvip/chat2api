@@ -26,6 +26,10 @@ class QuotaExceeded(QuotaReservationError):
     pass
 
 
+class QuotaReservationConflict(QuotaReservationError):
+    """A request ID has already been admitted and cannot start a second request."""
+
+
 class QuotaReservationStore:
     def __init__(self, data_dir: Path | str, *, reservation_ttl_seconds: int = 1800) -> None:
         self.path = Path(data_dir) / "quota_reservations_v1.sqlite3"
@@ -140,16 +144,16 @@ class QuotaReservationStore:
                 if existing:
                     value = self._row(existing)
                     if value["key_id"] != key_id:
-                        raise QuotaReservationError("request_id is already reserved by another API key")
-                    # Idempotent retries may observe an in-flight reservation or
-                    # the same completed settlement. A terminal release/expiry
-                    # must never be returned as if it were a fresh reservation:
-                    # otherwise a reused request_id would bypass quota admission.
-                    if value["state"] in {"released", "expired"}:
-                        raise QuotaReservationError(
-                            "request_id belongs to a released or expired reservation and cannot be reused"
+                        raise QuotaReservationConflict(
+                            "request_id is already bound to another API key"
                         )
-                    return value
+                    # Admission is one-shot, not idempotent: returning an
+                    # existing active/settled hold would let a second POST
+                    # dispatch the same request_id and share/release the
+                    # original request's quota reservation.
+                    raise QuotaReservationConflict(
+                        "request_id has already been admitted and cannot be reused"
+                    )
                 active = self.db.execute(
                     "SELECT COALESCE(SUM(reserved_tokens),0) FROM quota_reservations WHERE key_id=? AND state IN ('reserved','committing')",
                     (key_id,),
