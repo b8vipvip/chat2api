@@ -82,8 +82,8 @@ class FileStore:
             fd = os.open(self.index_path, flags)
             try:
                 metadata = os.fstat(fd)
-                if not stat.S_ISREG(metadata.st_mode):
-                    raise ValueError("file index must be a regular file")
+                if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                    raise ValueError("file index must be a private, single-link regular file")
                 if os.name != "nt" and hasattr(os, "fchmod"):
                     os.fchmod(fd, 0o600)
                 with os.fdopen(fd, "rb") as handle:
@@ -127,8 +127,10 @@ class FileStore:
                     disk_metadata = disk_path.lstat()
                 except FileNotFoundError:
                     disk_metadata = None
-                if disk_metadata is not None and not stat.S_ISREG(disk_metadata.st_mode):
-                    raise ValueError("stored file path must be a regular file")
+                if disk_metadata is not None and (
+                    not stat.S_ISREG(disk_metadata.st_mode) or disk_metadata.st_nlink != 1
+                ):
+                    raise ValueError("stored file path must be a single-link regular file")
                 loaded[item.file_id] = item
                 disk_paths.add(item.path)
 
@@ -281,7 +283,11 @@ class FileStore:
                 raise FileNotFoundError("Stored file content is unavailable") from error
             try:
                 metadata = os.fstat(fd)
-                if not stat.S_ISREG(metadata.st_mode) or metadata.st_size != item.size:
+                if (
+                    not stat.S_ISREG(metadata.st_mode)
+                    or metadata.st_nlink != 1
+                    or metadata.st_size != item.size
+                ):
                     raise FileNotFoundError("Stored file content is not the original regular file")
                 with os.fdopen(fd, "rb") as handle:
                     fd = -1
