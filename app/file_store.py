@@ -140,7 +140,7 @@ class FileStore:
                     or disk_metadata.st_size != item.size
                 ):
                     raise ValueError("stored file path must be a single-link regular file of the indexed size")
-                if "sha256" not in value:
+                if not item.sha256:
                     # Older indexes predate content digests. Migrate only after
                     # reading the original regular file through a no-follow fd.
                     migrated = True
