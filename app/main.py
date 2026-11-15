@@ -72,7 +72,7 @@ from .models import (
 )
 from .prompting import build_prompt
 from .registry import ClientRegistry
-from .telemetry import TelemetryStore, parse_request_since
+from .telemetry import DuplicateRequestIdentity, TelemetryStore, parse_request_since
 from .runtime_contract import SERVER_RUNTIME_VERSION
 from .runtime_code_identity import runtime_code_sha
 from .worker_probe_store import WorkerProbeStore
@@ -123,6 +123,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "Recovered %s queued request(s) from the previous process as stalled",
                 recovered_queued,
             )
+        wallet_reconciler = getattr(app.state, "wallet_charge_reconciler", None)
+        billing_store = getattr(app.state, "user_billing", None)
+        if callable(wallet_reconciler) and billing_store is not None:
+            for user_id in billing_store.active_reservation_user_ids():
+                try:
+                    wallet_reconciler(user_id)
+                except Exception as error:
+                    # An unresolved hold remains reserved; startup must not
+                    # invent a release or prevent unrelated users from serving.
+                    logger.warning(
+                        "Wallet reservation startup recovery deferred error_type=%s",
+                        type(error).__name__,
+                    )
         quota_store = getattr(app.state, "quota_reservations", None)
         if quota_store is not None and getattr(app.state, "quota_reservation_runtime_enabled", False):
             # Recover terminal telemetry before expiring old reservations.
@@ -1047,14 +1060,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             current["response_generated_files_live_checked"] = True
         return current
 
+    def active_playground_run_ids() -> set[str]:
+        manager = getattr(app.state, "playground_run_manager", None)
+        tasks = getattr(manager, "tasks", None)
+        return set(tasks) if isinstance(tasks, dict) else set()
+
     @app.get("/api/admin/tests", dependencies=[Depends(require_admin_key)])
     async def admin_tests(limit: int = Query(default=50, ge=1, le=200)) -> dict[str, object]:
-        await reconcile_playground_runs(test_runs, telemetry, limit=min(200, limit))
+        await reconcile_playground_runs(
+            test_runs, telemetry, limit=min(200, limit),
+            active_run_ids=active_playground_run_ids(),
+        )
         return {"data": [present_playground_run(row) for row in test_runs.recent(limit)]}
 
     @app.get("/api/admin/tests/{run_id}", dependencies=[Depends(require_admin_key)])
     async def admin_test_detail(run_id: str) -> dict[str, object]:
-        await reconcile_playground_runs(test_runs, telemetry, limit=200)
+        await reconcile_playground_runs(
+            test_runs, telemetry, limit=200,
+            active_run_ids=active_playground_run_ids(),
+        )
         row = test_runs.get(run_id)
         if not row:
             raise HTTPException(status_code=404, detail="Test report not found")
@@ -1582,6 +1606,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             await reconcile_playground_request_terminal(
                 test_runs, telemetry, state.request_id,
+                active_run_ids=active_playground_run_ids(),
             )
         except Exception:
             logger.exception(
@@ -1733,6 +1758,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             await reconcile_playground_request_terminal(
                 test_runs, telemetry, request_id,
+                active_run_ids=active_playground_run_ids(),
             )
         except Exception:
             logger.exception(
@@ -2131,15 +2157,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         requested_client = body.client_id or x_chat2api_client
         request_type = "multimodal" if attachments else "text"
 
-        # v220: the request exists from admission ingress, not only after a
-        # capacity slot opens. The queued row remains visible in Request History.
-        await record_request_queued(
-            request_id=request_id, response_id=response_id, requested_model=body.model,
-            prompt=prompt, principal=principal, stream=body.stream,
-            prompt_mode=body.prompt_mode, request_type=request_type,
-            attachments_count=len(attachments),
-            input_file_ids=[str(item["file_id"]) for item in attachments],
-        )
         # Read-only version identity for browser-origin Playground calls.
         # ABCD may legitimately use real SSE even if its final report never
         # arrives. Never reject a request solely for missing that report.
@@ -2161,12 +2178,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 model_id=body.model,
             )
         except HTTPException as quota_error:
-            await record_early_error(
-                request_id=request_id, response_id=response_id, requested_model=body.model,
-                prompt=prompt, principal=principal, stream=body.stream, prompt_mode=body.prompt_mode,
-                started_mono=request_started, error=str(quota_error.detail), request_type=request_type,
-                attachments_count=len(attachments),
-            )
+            # A 409 request-ID conflict belongs to an earlier admission. Do not
+            # append a new error projection under that identity or overwrite
+            # the original request history.
+            if quota_error.status_code != 409:
+                await record_early_error(
+                    request_id=request_id, response_id=response_id, requested_model=body.model,
+                    prompt=prompt, principal=principal, stream=body.stream, prompt_mode=body.prompt_mode,
+                    started_mono=request_started, error=str(quota_error.detail), request_type=request_type,
+                    attachments_count=len(attachments),
+                )
             raise
         if quota_reservation:
             try:
@@ -2182,6 +2203,54 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "Quota reservation diagnostic persistence failed request_id=%s error_type=%s",
                     request_id, type(quota_diagnostic_error).__name__,
                 )
+
+        # Persist request visibility only after durable quota/wallet admission.
+        # Otherwise an old request ID outside TelemetryStore's 500-row cache
+        # could overwrite its history before the persistent reservation journal
+        # rejects the duplicate.
+        def release_admission_holds() -> None:
+            if not quota_reservation:
+                return
+            quota_store = getattr(app.state, "quota_reservations", None)
+            if quota_store is not None:
+                try:
+                    quota_store.release(request_id, principal.key_id)
+                except Exception as release_error:
+                    logger.warning(
+                        "Duplicate request token hold cleanup failed request_id=%s error_type=%s",
+                        request_id, type(release_error).__name__,
+                    )
+            accounts = getattr(app.state, "user_accounts", None)
+            billing = getattr(app.state, "user_billing", None)
+            try:
+                owner = accounts.owner_for_key(principal.key_id) if accounts is not None else None
+                if owner and billing is not None:
+                    billing.release_reservation(
+                        request_id, str(owner), reason="request_admission_projection_conflict",
+                    )
+            except Exception as release_error:
+                logger.warning(
+                    "Duplicate request wallet hold cleanup failed request_id=%s error_type=%s",
+                    request_id, type(release_error).__name__,
+                )
+
+        try:
+            await record_request_queued(
+                request_id=request_id, response_id=response_id, requested_model=body.model,
+                prompt=prompt, principal=principal, stream=body.stream,
+                prompt_mode=body.prompt_mode, request_type=request_type,
+                attachments_count=len(attachments),
+                input_file_ids=[str(item["file_id"]) for item in attachments],
+            )
+        except DuplicateRequestIdentity as error:
+            release_admission_holds()
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "request_id_conflict", "message": str(error)},
+            ) from error
+        except Exception:
+            release_admission_holds()
+            raise
         if origin_evidence:
             try:
                 await telemetry.merge_diagnostics(
@@ -2483,6 +2552,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> dict[str, object]:
         require_scope(principal, "images")
         request_id = accepted_request_id(x_chat2api_request_id, "imgreq_")
+        if telemetry.get(request_id):
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "request_id_conflict", "message": "Duplicate request_id"},
+            )
         attachments = attachment_specs(
             [item.file_id for item in body.attachments], principal, request_id=request_id,
         )
@@ -2703,6 +2777,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     }} if owned_media else {}),
                 },
             }
+        except DuplicateRequestIdentity as error:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "request_id_conflict", "message": str(error)},
+            ) from error
         except asyncio.TimeoutError as error:
             state.completed_mono = time.perf_counter()
             await telemetry.upsert(

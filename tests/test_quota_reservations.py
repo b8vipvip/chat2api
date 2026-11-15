@@ -9,6 +9,7 @@ import pytest
 
 from app.quota_reservations import (
     QuotaExceeded,
+    QuotaReservationConflict,
     QuotaReservationError,
     QuotaReservationStore,
 )
@@ -52,10 +53,11 @@ def completed(request_id="req_1", tokens=35):
 def test_reservations_are_idempotent_and_accounting_owner_stays_api_key_store(tmp_path: Path):
     store = QuotaReservationStore(tmp_path)
     first = store.reserve("req_1", "key_1", 20, quota_limit=100, completed_tokens=0)
-    duplicate = store.reserve("req_1", "key_1", 99, quota_limit=100, completed_tokens=0)
-    assert first["reserved_tokens"] == duplicate["reserved_tokens"] == 20
+    with pytest.raises(QuotaReservationConflict, match="already been admitted"):
+        store.reserve("req_1", "key_1", 99, quota_limit=100, completed_tokens=0)
+    assert first["reserved_tokens"] == 20
     assert store.active_reserved_tokens("key_1") == 20
-    with pytest.raises(QuotaReservationError, match="another API key"):
+    with pytest.raises(QuotaReservationConflict, match="another API key"):
         store.reserve("req_1", "key_2", 1, quota_limit=100, completed_tokens=0)
 
     api_keys = FakeApiKeys()
@@ -66,6 +68,8 @@ def test_reservations_are_idempotent_and_accounting_owner_stays_api_key_store(tm
     assert store.get("req_1")["state"] == "settled"
     assert store.get("req_1")["reserved_tokens"] == 35
     assert store.active_reserved_tokens("key_1") == 0
+    with pytest.raises(QuotaReservationConflict, match="already been admitted"):
+        store.reserve("req_1", "key_1", 1, quota_limit=100, completed_tokens=35)
 
     # Rewritten terminal usage can increase an existing idempotent charge only
     # by the delta, never charge the same request twice.
@@ -174,20 +178,23 @@ def test_released_and_expired_request_ids_cannot_be_reused_for_new_admission(tmp
             "req_expired", "key_1", 1, quota_limit=100, completed_tokens=0
         )
 
-    # Same request ID remains idempotent while active and after settlement.
+    # Admission is one-shot: active and settled IDs cannot start another
+    # dispatch. Accounting replay remains idempotent through commit_completed_usage.
     active = store.reserve(
         "req_active", "key_1", 20, quota_limit=100, completed_tokens=0
     )
-    duplicate = store.reserve(
-        "req_active", "key_1", 90, quota_limit=100, completed_tokens=0
-    )
-    assert duplicate == active
+    with pytest.raises(QuotaReservationConflict, match="already been admitted"):
+        store.reserve("req_active", "key_1", 90, quota_limit=100, completed_tokens=0)
+    assert store.get("req_active") == active
     api_keys = FakeApiKeys()
     assert asyncio.run(
         store.commit_completed_usage(completed("req_active", 10), api_keys)
     ) == "settled"
-    assert store.reserve(
-        "req_active", "key_1", 99, quota_limit=100, completed_tokens=10
-    )["state"] == "settled"
+    with pytest.raises(QuotaReservationConflict, match="already been admitted"):
+        store.reserve("req_active", "key_1", 99, quota_limit=100, completed_tokens=10)
+    assert asyncio.run(
+        store.commit_completed_usage(completed("req_active", 10), api_keys)
+    ) == "settled"
+    assert api_keys.keys["key_1"].tokens_used == 10
     store.close()
 

@@ -7,7 +7,10 @@ import pytest
 from fastapi import FastAPI, HTTPException
 
 from app.quota_reservations import QuotaReservationStore
-from app.quota_reservation_runtime_v1 import install_quota_reservation_runtime_v1, reserve_request_quota
+from app.quota_reservation_runtime_v1 import (
+    install_quota_reservation_runtime_v1, reserve_request_quota, reserve_wallet_charge,
+)
+from app.user_commerce import BillingStore, PricingStore
 
 
 def _assert_mode2_quota_error(response) -> None:
@@ -885,3 +888,47 @@ def test_audio_worker_failure_releases_reserved_quota(tmp_path: Path) -> None:
     assert reservation is not None and reservation["state"] == "released"
     assert app.state.api_keys.keys[public["key_id"]].tokens_used == 0
     app.state.quota_reservations.close()
+
+
+def test_wallet_admission_uses_one_immutable_pricing_snapshot(tmp_path: Path, monkeypatch) -> None:
+    pricing = PricingStore(tmp_path)
+    models = [dict(row) for row in pricing.public()["models"]]
+    selected = next(row for row in models if row["model_id"] == "gpt-5.6-sol")
+    selected["input_usd_per_million"] = 10.0
+    selected["output_usd_per_million"] = 20.0
+    pricing.update(billing_enabled=True, usd_cny_rate=7.2, models=models)
+    snapshot_row = next(
+        row for row in pricing.public()["models"]
+        if row["model_id"] == "gpt-5.6-sol"
+    )
+
+    # Simulate an administrator update after the admission catalog snapshot
+    # was read but before a second live PricingStore.model() lookup.
+    def changed_live_price(_model_id: str):
+        return {**snapshot_row, "input_usd_per_million": 999.0}
+
+    monkeypatch.setattr(pricing, "model", changed_live_price)
+
+    user_id = "usr_atomic_price_snapshot"
+    billing = BillingStore(tmp_path)
+    billing.credit(user_id, 1_000)
+    app = SimpleNamespace(state=SimpleNamespace(
+        user_accounts=SimpleNamespace(owner_for_key=lambda _key_id: user_id),
+        user_billing=billing,
+        user_pricing=pricing,
+    ))
+    principal = SimpleNamespace(kind="managed", key_id="key-atomic-snapshot")
+
+    reservation = reserve_wallet_charge(
+        app, "req_atomic_price_snapshot_123", principal,
+        "gpt-5.6-sol", prompt_tokens=1_000, output_tokens=1_000,
+    )
+
+    assert reservation is not None
+    assert reservation["price_snapshot"]["input_usd_per_million"] == 10.0
+    assert reservation["price_catalog_snapshot"]["gpt-5.6-sol"]["input_usd_per_million"] == 10.0
+    assert reservation["reserved_cny_cents"] == 22
+    billing_file = BillingStore(tmp_path)
+    assert billing_file.reservations["req_atomic_price_snapshot_123"]["price_snapshot"]["input_usd_per_million"] == 10.0
+
+
