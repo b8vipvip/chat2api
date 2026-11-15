@@ -848,6 +848,10 @@ class BillingStore:
                 # A second reservation call must never adopt an old wallet
                 # hold: its caller may later roll back its own failed admission
                 # and accidentally release the original request's funds.
+                if existing.get("state") != "reserved":
+                    raise WalletReservationConflict(
+                        "request_id belongs to a terminal wallet reservation and cannot be reused"
+                    )
                 raise WalletReservationConflict(
                     "request_id already has a wallet reservation and cannot be reused"
                 )
