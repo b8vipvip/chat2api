@@ -249,6 +249,41 @@ def test_legacy_file_index_migrates_content_digest_without_losing_file(tmp_path)
 
 
 
+
+def test_file_store_read_classifies_size_mismatch_as_integrity_failure(tmp_path):
+    store = FileStore(tmp_path)
+    item = _create(store)
+    item.size += 1
+
+    with pytest.raises(FileIntegrityError, match="size"):
+        store.read(item.file_id)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="O_NOFOLLOW is POSIX-specific")
+def test_file_store_read_rejects_symlink_replacement_as_integrity_failure(tmp_path):
+    store = FileStore(tmp_path)
+    item = _create(store)
+    stored_path = store.root / item.path
+    stored_path.unlink()
+    stored_path.symlink_to(tmp_path / "outside")
+
+    with pytest.raises(FileIntegrityError, match="regular file"):
+        store.read(item.file_id)
+
+
+def test_file_store_read_preserves_transient_io_errors(tmp_path, monkeypatch):
+    store = FileStore(tmp_path)
+    item = _create(store)
+
+    def fail_open(*args, **kwargs):
+        raise PermissionError("simulated storage permission failure")
+
+    monkeypatch.setattr("app.file_store.os.open", fail_open)
+    with pytest.raises(PermissionError, match="permission failure"):
+        store.read(item.file_id)
+
+
+
 def test_file_store_read_rejects_same_size_content_tampering(tmp_path):
     store = FileStore(tmp_path)
     item = _create(store)
