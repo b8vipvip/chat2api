@@ -218,7 +218,7 @@ async def test_startup_recovery_replays_completed_telemetry_after_pre_charge_cra
 
     app, store, api_keys = _runtime(tmp_path)
     request_id = "req_replay_completed_terminal_0001"
-    reserve_request_quota(app, request_id, SimpleNamespace(key_id="key-1"), "prompt", 4096)
+    await reserve_request_quota(app, request_id, SimpleNamespace(key_id="key-1"), "prompt", 4096)
     # Simulate a crash after the durable committing transition but before the
     # ApiKeyStore accounting owner wrote charged_requests.
     store.begin_commit(request_id, "key-1", 17)
@@ -276,9 +276,9 @@ async def test_startup_recovery_releases_reserved_terminal_failure(tmp_path: Pat
 
     app, store, api_keys = _runtime(tmp_path)
     request_id = "req_replay_reserved_cancelled_0001"
-    asyncio.run(reserve_request_quota(
+    await reserve_request_quota(
         app, request_id, SimpleNamespace(key_id="key-1"), "prompt", 4096,
-    ))
+    )
     telemetry = TelemetryStore(tmp_path)
     await telemetry.upsert({
         "request_id": request_id, "api_key_id": "key-1", "status": "cancelled",
@@ -295,9 +295,9 @@ async def test_startup_recovery_releases_reserved_terminal_failure(tmp_path: Pat
 def test_reconcile_accepts_store_level_idempotency_ledger_adapter(tmp_path: Path) -> None:
     app, store, api_keys = _runtime(tmp_path)
     request_id = "req_reconcile_store_ledger_0001"
-    reserve_request_quota(
+    asyncio.run(reserve_request_quota(
         app, request_id, SimpleNamespace(key_id="key-1"), "prompt", 4096,
-    )
+    ))
     store.begin_commit(request_id, "key-1", 17)
     # This adapter deliberately exposes the same durable request ledger at
     # store level rather than on each key object.
