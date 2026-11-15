@@ -82,7 +82,40 @@ def test_worker_event_publication_requires_assigned_worker_and_current_socket() 
         )
         assert state.terminal_event_type == "chat.completed"
 
+        # An API/server timeout can close the response before the Worker
+        # terminal arrives. completed_mono is therefore also a terminal
+        # cutoff even when no Worker terminal_event_type was observed.
+        timed_out = await broker.create("req_server_timeout_123", "worker-a")
+        timed_out.dispatch_socket = worker_a_socket
+        timed_out.completed_mono = 123.0
+        late_worker_terminal = {
+            "type": "chat.completed",
+            "request_id": timed_out.request_id,
+            "text": "late after API timeout",
+        }
+        assert not await broker.publish_worker_event(
+            timed_out.request_id,
+            late_worker_terminal,
+            client_id="worker-a",
+            websocket=worker_a_socket,
+            current_socket=worker_a_socket,
+        )
+        assert not await broker.publish(timed_out.request_id, late_worker_terminal)
+        assert timed_out.terminal_event_type is None
+        assert timed_out.queue.empty()
+        assert timed_out.final_future is not None and not timed_out.final_future.done()
+        await broker.release(timed_out.request_id)
+
     asyncio.run(scenario())
+
+
+def test_all_request_scoped_worker_sidecars_require_original_dispatch_socket() -> None:
+    source = (ROOT / "app/main.py").read_text(encoding="utf-8")
+    # File chunks, DOM evidence, native sidecars, probes and generic
+    # Chat/Image progress+terminal ingress must share the exact socket check.
+    assert source.count(".owns_dispatch_socket(") == 5
+    assert "state.completed_mono is None" in source
+    assert "active_state.completed_mono is None" in source
 
 
 def test_extension_websocket_routes_all_request_events_through_worker_binding() -> None:
