@@ -2156,7 +2156,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             *(value for value in requested_output_limits if isinstance(value, int) and not isinstance(value, bool) and value > 0),
         ])
         try:
-            quota_reservation = reserve_request_quota(
+            quota_reservation = await reserve_request_quota(
                 app, request_id, principal, prompt, output_budget,
             )
         except HTTPException as quota_error:
@@ -2495,7 +2495,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         quota_reservation = None
         try:
-            quota_reservation = reserve_image_generation_quota(
+            quota_reservation = await reserve_image_generation_quota(
                 app, request_id, principal, body.prompt, body.n,
             )
         except HTTPException as quota_error:
