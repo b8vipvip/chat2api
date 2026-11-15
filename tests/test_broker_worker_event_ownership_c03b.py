@@ -16,6 +16,8 @@ def test_worker_event_publication_requires_assigned_worker_and_current_socket() 
         worker_a_socket = object()
         worker_b_socket = object()
         stale_worker_a_socket = object()
+        reconnected_worker_a_socket = object()
+        state.dispatch_socket = worker_a_socket
 
         forged_terminal = {
             "type": "chat.completed",
@@ -39,6 +41,15 @@ def test_worker_event_publication_requires_assigned_worker_and_current_socket() 
             client_id="worker-a",
             websocket=stale_worker_a_socket,
             current_socket=worker_a_socket,
+        )
+        # A new socket with the same client_id is still not the socket that
+        # received the original dispatch and cannot inherit the request.
+        assert not await broker.publish_worker_event(
+            state.request_id,
+            forged_terminal,
+            client_id="worker-a",
+            websocket=reconnected_worker_a_socket,
+            current_socket=reconnected_worker_a_socket,
         )
 
         assert state.terminal_event_type is None
