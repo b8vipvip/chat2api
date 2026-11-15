@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,36 @@ def _create(store: FileStore):
         owner_key_id="key_owner_123",
         purpose="assistants",
     ))
+
+
+def test_concurrent_creates_serialize_index_snapshots_and_preserve_every_file(tmp_path):
+    store = FileStore(tmp_path)
+
+    def create(index: int):
+        payload = f"concurrent-file-{index}".encode("ascii")
+        return asyncio.run(store.create(
+            filename=f"concurrent-{index}.txt",
+            data_base64=base64.b64encode(payload).decode("ascii"),
+            mime_type="text/plain",
+            owner_key_id=f"key_owner_{index}",
+            purpose="assistants",
+        ))
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        created = list(pool.map(create, range(16)))
+
+    persisted = json.loads(store.index_path.read_text(encoding="utf-8"))
+    assert len(created) == 16
+    assert len(store.items) == 16
+    assert len(persisted["files"]) == 16
+
+    reopened = FileStore(tmp_path)
+    asyncio.run(reopened.load())
+    assert len(reopened.items) == 16
+    for index, item in enumerate(created):
+        restored, payload = reopened.read(item.file_id)
+        assert restored.owner_key_id == f"key_owner_{index}"
+        assert payload == f"concurrent-file-{index}".encode("ascii")
 
 
 def test_delete_does_not_drop_metadata_when_file_rename_fails(tmp_path, monkeypatch):
