@@ -12,7 +12,8 @@ from app.control_plane import ControlPlaneStore, permission_for_admin_route
 from app.main import create_app
 from app.quota_reservation_admin_v1_patch import install_quota_reservation_admin_v1
 from app.user_commerce import (
-    BillingStore, InsufficientWalletBalance, PricingStore, WalletReservationError,
+    BillingStore, InsufficientWalletBalance, PricingStore,
+    WalletReservationConflict, WalletReservationError,
 )
 from app.user_console_v104_patch import install_user_console_v104_patch
 from app.v17_patch import install_v17_patch
@@ -47,6 +48,35 @@ def _price_row(model_id: str, input_rate: float) -> dict[str, object]:
         "cached_input_usd_per_million": 0.0,
         "output_usd_per_million": 0.0,
     }
+
+
+def test_wallet_reservation_replay_cannot_adopt_or_release_original_hold(tmp_path: Path) -> None:
+    user_id = "usr_wallet_request_identity"
+    price = _price_row("paid-model", 10_000.0)
+    billing = BillingStore(tmp_path)
+    billing.credit(user_id, 2_000)
+    original = billing.reserve_for_request(
+        user_id, "req_wallet_identity",
+        model_id="paid-model", estimated_cny_cents=700,
+        input_tokens=100, output_tokens=4096,
+        price_snapshot=price, price_catalog_snapshot={"paid-model": price},
+        usd_cny_rate=7.0,
+    )
+
+    with pytest.raises(WalletReservationConflict, match="cannot be reused"):
+        billing.reserve_for_request(
+            user_id, "req_wallet_identity",
+            model_id="paid-model", estimated_cny_cents=700,
+            input_tokens=100, output_tokens=4096,
+            price_snapshot=price, price_catalog_snapshot={"paid-model": price},
+            usd_cny_rate=7.0,
+        )
+
+    reopened = BillingStore(tmp_path)
+    assert reopened.reservations["req_wallet_identity"]["state"] == "reserved"
+    assert reopened.reservations["req_wallet_identity"]["reserved_cny_cents"] == original["reserved_cny_cents"]
+    assert reopened.active_reservations_for_user(user_id)
+    assert reopened.balance_cents(user_id) == 2_000
 
 
 def test_concurrent_wallet_reservations_cannot_overcommit_available_balance(tmp_path: Path) -> None:
