@@ -64,6 +64,11 @@ def test_control_plane_store_fails_closed_and_never_persists_raw_password(tmp_pa
 
 def test_role_route_map_is_explicit_and_secret_read_denied_to_key_admin():
     assert permission_for_admin_route("/api/admin/users/u1", "PATCH") == "users:write"
+    assert permission_for_admin_route("/api/admin/users/u1/keys", "GET") == "keys:read"
+    assert permission_for_admin_route("/api/admin/users/u1/keys/id1", "PATCH") == "keys:write"
+    assert permission_for_admin_route("/api/admin/users/u1/keys/id1", "DELETE") == "keys:write"
+    assert "keys:read" not in ROLES["user_admin"]
+    assert "keys:read" in ROLES["api_key_admin"]
     assert permission_for_admin_route("/api/admin/keys/id1", "PATCH") == "keys:write"
     assert permission_for_admin_route("/api/admin/keys/id1/secret", "GET") == "secrets:read"
     assert permission_for_admin_route("/api/admin/keys/id1/settings", "PATCH") == "keys:write"
