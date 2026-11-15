@@ -197,7 +197,7 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
         quota_reservation = None
         if request_type in {"voice_generation", "voice_conversation"}:
             try:
-                quota_reservation = reserve_audio_request_quota(
+                quota_reservation = await reserve_audio_request_quota(
                     app, request_id, principal, prompt,
                 )
             except HTTPException as quota_error:
