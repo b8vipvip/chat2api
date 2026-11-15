@@ -72,7 +72,7 @@ from .models import (
 )
 from .prompting import build_prompt
 from .registry import ClientRegistry
-from .telemetry import TelemetryStore, parse_request_since
+from .telemetry import DuplicateRequestIdentity, TelemetryStore, parse_request_since
 from .runtime_contract import SERVER_RUNTIME_VERSION
 from .runtime_code_identity import runtime_code_sha
 from .worker_probe_store import WorkerProbeStore
@@ -2153,13 +2153,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         # v220: the request exists from admission ingress, not only after a
         # capacity slot opens. The queued row remains visible in Request History.
-        await record_request_queued(
-            request_id=request_id, response_id=response_id, requested_model=body.model,
-            prompt=prompt, principal=principal, stream=body.stream,
-            prompt_mode=body.prompt_mode, request_type=request_type,
-            attachments_count=len(attachments),
-            input_file_ids=[str(item["file_id"]) for item in attachments],
-        )
+        try:
+            await record_request_queued(
+                request_id=request_id, response_id=response_id, requested_model=body.model,
+                prompt=prompt, principal=principal, stream=body.stream,
+                prompt_mode=body.prompt_mode, request_type=request_type,
+                attachments_count=len(attachments),
+                input_file_ids=[str(item["file_id"]) for item in attachments],
+            )
+        except DuplicateRequestIdentity as error:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "request_id_conflict", "message": str(error)},
+            ) from error
         # Read-only version identity for browser-origin Playground calls.
         # ABCD may legitimately use real SSE even if its final report never
         # arrives. Never reject a request solely for missing that report.
