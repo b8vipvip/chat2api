@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.attachment_download_v82_patch import attachment_download_headers
 from app.registry import ClientRegistry
 
 
@@ -40,6 +41,23 @@ def test_worker_attachment_request_id_grammar_matches_responses_server_contract(
     invalid = ("", "short", "bad/request", "bad.request", "x" * 121)
     assert all(SAFE_REQUEST_ID.fullmatch(value) for value in valid)
     assert all(not SAFE_REQUEST_ID.fullmatch(value) for value in invalid)
+
+
+
+def test_worker_decodes_percent_utf8_attachment_filename_header() -> None:
+    filename = "合同 文档-报告.pdf"
+    headers = attachment_download_headers(filename)
+    background = (ROOT / "chrome_extension/background.js").read_text(encoding="utf-8")
+
+    assert headers["X-Chat2API-Filename-Encoding"] == "percent-utf8"
+    assert re.sub(r"%([0-9A-Fa-f]{2})", lambda match: chr(int(match.group(1), 16)), "") == ""
+    from urllib.parse import unquote
+
+    assert unquote(headers["X-Chat2API-Filename"], encoding="utf-8") == filename
+    assert 'response.headers.get("X-Chat2API-Filename-Encoding")' in background
+    assert "filename = decodeURIComponent(encodedFilename)" in background
+    assert "filename = fileId" in background
+
 
 
 def test_voice_worker_fetches_audio_with_the_original_request_id() -> None:
