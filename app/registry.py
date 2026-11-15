@@ -309,7 +309,8 @@ class ClientRegistry:
             raise RuntimeError("Chrome extension connection is disabled")
         request_type = str(payload.get("type") or "") if isinstance(payload, dict) else ""
         if request_type in {
-            "chat.request", "image.request", "voice.request", "voice.live.start", "voice.live.request",
+            "chat.request", "image.request", "voice.request", "voice.live.start",
+            "voice.live.request", "dictation.request",
         } and not self.chatgpt_routing_ready(client_id):
             raise RuntimeError(
                 "Chrome extension is online but ChatGPT is not logged in or the composer is not ready"
@@ -317,11 +318,11 @@ class ClientRegistry:
         lock = self.socket_locks.setdefault(client_id, asyncio.Lock())
         initial_request_types = {
             "chat.request", "image.request", "voice.request",
-            "voice.live.start", "voice.live.request",
+            "voice.live.start", "voice.live.request", "dictation.request",
         }
         request_followup_types = {
-            "chat.cancel", "voice.cancel", "voice.live.audio",
-            "voice.live.text", "voice.live.multimodal",
+            "chat.cancel", "voice.cancel", "dictation.cancel",
+            "voice.live.audio", "voice.live.text", "voice.live.multimodal",
             "voice.live.cancel_response", "voice.live.stop",
         }
         async with lock:
