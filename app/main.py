@@ -2696,23 +2696,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         )
                     if record_terminal_receipt:
                         active_state.diagnostics["terminal_transport_broker_accepted"] = bool(accepted)
-                            # Persist acknowledgement as an observation, never as
-                            # a competing completed/error terminal. If the API
-                            # handler is stuck in archival, the exported log
-                            # now reveals the precise boundary it reached.
-                            active_state.diagnostics["server_terminal_receipt_stage"] = (
-                                "broker-accepted" if accepted else "broker-rejected"
-                            )
-                            active_state.diagnostics["server_terminal_receipt_type"] = str(message_type)
-                            await telemetry.upsert({
-                                "request_id": request_id,
-                                "diagnostics": dict(active_state.diagnostics),
-                            })
-                        if not accepted:
-                            logger.warning(
-                                "Worker terminal not accepted request=%s type=%s active=%s",
-                                request_id, message_type, bool(active_state),
-                            )
+                        # Persist acknowledgement as an observation, never as
+                        # a competing completed/error terminal. If the API
+                        # handler is stuck in archival, the exported log
+                        # now reveals the precise boundary it reached.
+                        active_state.diagnostics["server_terminal_receipt_stage"] = (
+                            "broker-accepted" if accepted else "broker-rejected"
+                        )
+                        active_state.diagnostics["server_terminal_receipt_type"] = str(message_type)
+                        await telemetry.upsert({
+                            "request_id": request_id,
+                            "diagnostics": dict(active_state.diagnostics),
+                        })
+                    if terminal_message and not accepted:
+                        logger.warning(
+                            "Worker terminal not accepted request=%s type=%s active=%s",
+                            request_id, message_type, bool(active_state),
+                        )
         except WebSocketDisconnect:
             pass
         except Exception:
