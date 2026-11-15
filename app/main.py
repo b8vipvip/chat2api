@@ -2503,9 +2503,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     # after the bounded stage write/validation completes.
                     accepted, reason = False, "request-or-socket-not-active"
                     state = broker.requests.get(request_id)
-                    if (state and state.client_id == client_id
-                        and registry.sockets.get(client_id) is websocket
-                        and state.terminal_event_type is None):
+                    if (
+                        state
+                        and state.owns_dispatch_socket(
+                            client_id, websocket, registry.sockets.get(client_id)
+                        )
+                        and state.terminal_event_type is None
+                        and state.completed_mono is None
+                    ):
                         try:
                             await asyncio.to_thread(
                                 generated_staging.ingest,
@@ -2541,9 +2546,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     active_state=broker.requests.get(request_id)
                     row=telemetry.get(request_id) or {}
                     owner=str(row.get("api_key_id") or "")
-                    if (active_state and active_state.client_id == client_id and owner
-                            and registry.sockets.get(client_id) is websocket
-                            and message.get("phase")=="before_terminal"):
+                    if (
+                        active_state
+                        and active_state.owns_dispatch_socket(
+                            client_id, websocket, registry.sockets.get(client_id)
+                        )
+                        and active_state.terminal_event_type is None
+                        and active_state.completed_mono is None
+                        and owner
+                        and message.get("phase") == "before_terminal"
+                    ):
                         try:
                             native_dom_evidence.save(request_id,owner,message.get("report"))
                         except (ValueError, TypeError, OSError):
@@ -2560,8 +2572,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     reason = "request-or-socket-not-active"
                     authorized = (
                         active_state is not None
-                        and active_state.client_id == client_id
-                        and registry.sockets.get(client_id) is websocket
+                        and active_state.owns_dispatch_socket(
+                            client_id, websocket, registry.sockets.get(client_id)
+                        )
+                        and active_state.terminal_event_type is None
+                        and active_state.completed_mono is None
                         and bool(owner)
                     )
                     if authorized:
@@ -2606,7 +2621,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     # request-to-Worker authority; probe events never reach the
                     # request terminal queue.
                     state = broker.requests.get(request_id)
-                    if state and state.client_id == client_id and registry.sockets.get(client_id) is websocket:
+                    if (
+                        state
+                        and state.owns_dispatch_socket(
+                            client_id, websocket, registry.sockets.get(client_id)
+                        )
+                        and state.terminal_event_type is None
+                        and state.completed_mono is None
+                    ):
                         try:
                             result = await worker_probes.ingest(
                                 request_id=request_id, worker_id=probe_worker_id(client_id),
@@ -2634,14 +2656,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "image.completed", "image.error", "image.cancelled",
                     }
                     active_state = broker.requests.get(request_id)
-                    if terminal_message and active_state and active_state.client_id == client_id:
+                    if not active_state or not active_state.owns_dispatch_socket(
+                        client_id, websocket, registry.sockets.get(client_id)
+                    ):
+                        # A valid extension token is not authority over every
+                        # Broker request. Reject cross-Worker, stale and same-ID
+                        # reconnect sockets before mutating request diagnostics.
+                        logger.warning(
+                            "Rejected Worker event without original dispatch socket request=%s client=%s type=%s",
+                            request_id, client_id, message_type,
+                        )
+                        continue
+                    record_terminal_receipt = bool(
+                        terminal_message
+                        and active_state.terminal_event_type is None
+                        and active_state.completed_mono is None
+                    )
+                    if record_terminal_receipt:
                         active_state.diagnostics["terminal_transport_server_seen"] = True
                         active_state.diagnostics["terminal_transport_server_received_at"] = time.time()
                         active_state.diagnostics["terminal_transport_payload_chars"] = len(str(message.get("text") or ""))
-                    # A request ID is not proof that this Worker owns the
-                    # request. Require both the Broker assignment and the exact
-                    # currently authenticated WebSocket before publishing any
-                    # progress or terminal event.
+                    # The Broker repeats the socket/assignment check at its
+                    # publication boundary and rejects any server-finalized state.
                     accepted = await broker.publish_worker_event(
                         request_id,
                         message,
@@ -2658,9 +2694,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         active_state.diagnostics["native_snapshot_persisted"] = bool(
                             owner and native_content.persist(request_id, owner)
                         )
-                    if terminal_message:
-                        if active_state and active_state.client_id == client_id:
-                            active_state.diagnostics["terminal_transport_broker_accepted"] = bool(accepted)
+                    if record_terminal_receipt:
+                        active_state.diagnostics["terminal_transport_broker_accepted"] = bool(accepted)
                             # Persist acknowledgement as an observation, never as
                             # a competing completed/error terminal. If the API
                             # handler is stuck in archival, the exported log
