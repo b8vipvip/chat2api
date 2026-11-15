@@ -1049,11 +1049,31 @@ class BillingStore:
                     catalog.get(_pricing_model_key(model_id))
                     if isinstance(catalog, dict) else None
                 )
-                if isinstance(candidate, dict) and candidate.get("enabled", True) is True:
+                if isinstance(candidate, dict):
+                    if candidate.get("enabled", True) is not True:
+                        # A disabled actual model is not permission to charge
+                        # using the requested model's unrelated price.
+                        return None
                     price = dict(candidate)
                     priced_model_id = str(candidate.get("model_id") or model_id)
                 else:
-                    price = dict(reservation.get("price_snapshot") or {})
+                    observed_model_id = actual_model_id or requested_model_id or reserved_model
+                    if (
+                        _pricing_model_key(observed_model_id)
+                        != _pricing_model_key(reserved_model)
+                    ):
+                        # The Worker served a model that was not in the
+                        # admission-time catalog. Never substitute the
+                        # requested model's price or consult live pricing:
+                        # keep the original hold for explicit reconciliation.
+                        return None
+                    snapshot = reservation.get("price_snapshot")
+                    if not isinstance(snapshot, dict) or snapshot.get("enabled", True) is not True:
+                        return None
+                    snapshot_model_id = str(snapshot.get("model_id") or reserved_model)
+                    if _pricing_model_key(snapshot_model_id) != _pricing_model_key(reserved_model):
+                        return None
+                    price = dict(snapshot)
                     priced_model_id = reserved_model
             else:
                 price = pricing.model(model_id)
