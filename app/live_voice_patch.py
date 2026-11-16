@@ -230,6 +230,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
         effective_model = "gpt-live"
         observed_audio_bytes = 0
         observed_media_count = 0
+        observed_media_ids: list[str] = []
         input_confirmed = 0
         session_ready = False
         error_message = ""
@@ -520,12 +521,42 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                             )
                             if not allowed:
                                 raise ValueError("Live image/file MIME is not supported; send PCM as binary microphone frames")
+                        request_scoped_attachments = [
+                            {**spec, "request_id": request_id} for spec in attachments
+                        ]
+                        next_media_ids = list(dict.fromkeys([
+                            *observed_media_ids,
+                            *(str(spec.get("file_id") or "") for spec in attachments),
+                        ]))
+                        if len(next_media_ids) > 64:
+                            raise ValueError("A Live session may attach at most 64 unique files")
                     except HTTPException as error:
                         await send_json({"type": "error", "code": "MEDIA_ACCESS_DENIED", "message": str(error.detail), "retryable": False})
                         continue
                     except ValueError as error:
                         await send_json({"type": "error", "code": "INVALID_MEDIA_INPUT", "message": str(error), "retryable": False})
                         continue
+                    if attachments:
+                        # The extension download route requires a durable,
+                        # request-scoped file grant before the Worker receives
+                        # the media command. Accumulate grants for the active
+                        # live session so queued turns cannot revoke one another.
+                        try:
+                            await telemetry.upsert({
+                                "request_id": request_id,
+                                "input_file_ids": next_media_ids,
+                                "attachments_count": len(next_media_ids),
+                            })
+                        except Exception as error:
+                            await send_json({
+                                "type": "error",
+                                "code": "MEDIA_GRANT_PERSIST_FAILED",
+                                "message": "Live media authorization could not be persisted",
+                                "retryable": True,
+                            })
+                            continue
+                        observed_media_ids = next_media_ids
+                        attachments = request_scoped_attachments
                     if not input_text and not attachments:
                         await send_json({"type": "error", "code": "EMPTY_INPUT", "message": "Provide text, image or file", "retryable": False})
                         continue

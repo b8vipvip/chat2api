@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import secrets
 import time
 import uuid
@@ -212,6 +213,17 @@ def _message_item(message_id: str, text: str, status: str = "completed") -> dict
     return {"id": message_id, "type": "message", "status": status, "role": "assistant", "content": [{"type": "output_text", "text": text, "annotations": [], "logprobs": []}]}
 
 
+def _store_response(app: FastAPI, response_id: str, response: dict[str, Any], owner_key_id: str) -> None:
+    """Store a Responses object and its owner as one bounded in-process record."""
+    store: OrderedDict[str, dict[str, Any]] = app.state.responses_v108_store
+    owners: dict[str, str] = app.state.responses_v108_owners
+    store[response_id] = response
+    owners[response_id] = str(owner_key_id or "")
+    while len(store) > 256:
+        evicted_id, _ = store.popitem(last=False)
+        owners.pop(evicted_id, None)
+
+
 def _response(response_id: str, body: dict[str, Any], prompt: str, text: str, output: list[dict[str, Any]], created_at: int, status: str = "completed") -> dict[str, Any]:
     return {
         "id": response_id,
@@ -275,7 +287,7 @@ async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], princi
     except (KeyError, ConnectionError) as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     raw_id = str(request_id_override or request.headers.get("x-chat2api-request-id") or "").strip()
-    request_id = raw_id if raw_id and len(raw_id) <= 128 else "resp_req_" + uuid.uuid4().hex
+    request_id = raw_id if re.fullmatch(r"[A-Za-z0-9_-]{6,120}", raw_id) else "resp_req_" + uuid.uuid4().hex
     try:
         state = await broker.create(request_id, client_id)
     except RuntimeError as error:
@@ -315,13 +327,52 @@ async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], princi
             "diagnostics": {"internal_protocol_attempt": True,
                             "parent_request_id": str(body.get("_chat2api_parent_request_id") or "")},
         })
+    scoped_attachments = [
+        {**item, "request_id": request_id}
+        for item in (attachments or [])
+    ]
+    if not (request_id_override and request_id.startswith("resp_repair_")):
+        # Responses owns its Worker request ID too. Persist the exact owner,
+        # assigned Worker and attachment set before dispatch so the extension
+        # download endpoint can enforce the same request-scoped file grant as
+        # Chat Completions and Images.
+        if app.state.telemetry.get(request_id):
+            await broker.release(request_id)
+            raise HTTPException(status_code=409, detail="Duplicate request_id")
+        try:
+            await app.state.telemetry.upsert({
+                "request_id": request_id,
+                "client_id": client_id,
+                "api_key_id": principal.key_id,
+                "api_key_name": principal.name,
+                "auth_kind": principal.kind,
+                "requested_model": str(body.get("model") or "gpt-5.6-sol"),
+                "request_type": "responses",
+                "attachments_count": len(scoped_attachments),
+                "input_file_ids": list(dict.fromkeys(
+                    str(item.get("file_id") or "") for item in scoped_attachments
+                    if item.get("file_id")
+                )),
+                "stream": bool(body.get("stream", False)),
+                "prompt_mode": "responses",
+                "prompt_chars": len(prompt),
+                "completion_chars": 0,
+                "status": "running",
+                "usage": {},
+                "timings": state.timings(),
+                "diagnostics": {"responses_v108_dispatch": True},
+                "error": None,
+            })
+        except Exception:
+            await broker.release(request_id)
+            raise
     registry.busy_clients.add(client_id)
     try:
         await registry.send(client_id, {
             "type": "chat.request",
             "request_id": request_id,
             "prompt": prompt,
-            "attachments": attachments or [],
+            "attachments": scoped_attachments,
             "options": {
                 "auto_switch_text": True,
                 "timeout_seconds": timeout,
@@ -330,8 +381,26 @@ async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], princi
                 "native_tools": native_tools,
             },
         })
-    except Exception:
+    except Exception as error:
         registry.busy_clients.discard(client_id)
+        # A failed socket send is terminal for this dispatch attempt. Mark the
+        # in-memory lease terminal before persisting telemetry so a Worker file
+        # download cannot rely on the earlier "running" row during cleanup.
+        state.completed_mono = time.perf_counter()
+        state.terminal_event_type = "dispatch.failed"
+        try:
+            await app.state.telemetry.upsert({
+                "request_id": request_id,
+                "status": "error",
+                "completion_chars": 0,
+                "error": "Worker dispatch failed (" + type(error).__name__ + ")",
+                "diagnostics": {"responses_v108_dispatch_error_type": type(error).__name__},
+            })
+        except Exception as telemetry_error:
+            logging.getLogger(__name__).warning(
+                "Responses dispatch failure telemetry unavailable request_id=%s error_type=%s",
+                request_id, type(telemetry_error).__name__,
+            )
         await broker.release(request_id)
         raise
     return state, request_id, client_id, timeout
@@ -500,10 +569,7 @@ async def _stream(app: FastAPI, request: Request, state: Any, *, principal: ApiP
         if archived_media:
             completed["chat2api"] = {"media_files": archived_media}
         if bool(body.get("store", True)):
-            store: OrderedDict[str, dict[str, Any]] = app.state.responses_v108_store
-            store[response_id] = completed
-            while len(store) > 256:
-                store.popitem(last=False)
+            _store_response(app, response_id, completed, principal.key_id)
         seq += 1
         yield _sse("response.completed", seq, response=completed)
     except asyncio.TimeoutError:
@@ -563,6 +629,7 @@ def install_responses_v108_patch(app: FastAPI) -> FastAPI:
 
     app.openapi_schema = None
     app.state.responses_v108_store = OrderedDict()
+    app.state.responses_v108_owners = {}
     app.state.responses_v108_installed = True
 
     @app.post("/v1/responses")
@@ -630,10 +697,7 @@ def install_responses_v108_patch(app: FastAPI) -> FastAPI:
             if archived_media:
                 response["chat2api"] = {"media_files": archived_media}
             if bool(body.get("store", True)):
-                store: OrderedDict[str, dict[str, Any]] = app.state.responses_v108_store
-                store[response_id] = response
-                while len(store) > 256:
-                    store.popitem(last=False)
+                _store_response(app, response_id, response, principal.key_id)
             return JSONResponse(response)
         except asyncio.TimeoutError:
             try:
@@ -649,9 +713,16 @@ def install_responses_v108_patch(app: FastAPI) -> FastAPI:
 
     @app.get("/v1/responses/{response_id}")
     async def retrieve_response(response_id: str, request: Request):
-        await _authenticate(app, request)
-        value = app.state.responses_v108_store.get(str(response_id))
-        if not value:
+        principal = await _authenticate(app, request)
+        response_key = str(response_id)
+        value = app.state.responses_v108_store.get(response_key)
+        owner_key_id = app.state.responses_v108_owners.get(response_key)
+        if (
+            not value
+            or not owner_key_id
+            or (principal.kind != "master" and owner_key_id != principal.key_id)
+        ):
+            # Do not reveal whether a response exists under another API key.
             return _error("Response not found", status_code=404, code="response_not_found")
         return JSONResponse(value)
 

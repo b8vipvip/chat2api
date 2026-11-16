@@ -157,3 +157,203 @@ def test_tenant_api_rejects_cross_site_state_change(tmp_path: Path):
         }, headers={"Origin": "https://malicious.example", "Sec-Fetch-Site": "cross-site"})
         assert cross_site.status_code == 403
         assert app.state.tenant_memberships.list_tenants() == []
+
+
+def test_tenant_membership_does_not_grant_cross_user_resource_access(tmp_path: Path):
+    import asyncio
+    import base64
+    import io
+    from PIL import Image
+    from app.user_console_v104_patch import USER_SESSION_COOKIE
+
+    app = app_with_tenants(tmp_path)
+    accounts = app.state.user_accounts
+    alice = accounts.register("alice-resource@example.com", "alice-password-123")
+    bob = accounts.register("bob-resource@example.com", "bob-password-123")
+    charlie = accounts.register("charlie-resource@example.com", "charlie-password-123")
+    alice_id, bob_id, charlie_id = alice["user_id"], bob["user_id"], charlie["user_id"]
+
+    async def seed():
+        alice_key, alice_token = await app.state.api_keys.create("Alice resource key")
+        bob_key, bob_token = await app.state.api_keys.create("Bob resource key")
+        charlie_key, charlie_token = await app.state.api_keys.create("Charlie resource key")
+        file_a = await app.state.file_store.create(
+            filename="alice-private.txt",
+            data_base64=base64.b64encode(b"alice-private-bytes").decode("ascii"),
+            mime_type="text/plain",
+            owner_key_id=alice_key["key_id"],
+            purpose="assistants",
+        )
+        await app.state.telemetry.upsert({
+            "request_id": "req_alice_history_0001",
+            "api_key_id": alice_key["key_id"],
+            "status": "completed",
+            "requested_model": "gpt-4o-mini",
+            "usage": {"prompt_tokens": 12, "completion_tokens": 4, "total_tokens": 16},
+        })
+        await app.state.telemetry.upsert({
+            "request_id": "req_bob_history_0001",
+            "api_key_id": bob_key["key_id"],
+            "status": "completed",
+            "requested_model": "gpt-4o-mini",
+            "usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10},
+        })
+        await app.state.telemetry.upsert({
+            "request_id": "req_alice_native_0001",
+            "api_key_id": alice_key["key_id"],
+            "status": "completed",
+            "response_media": [],
+        })
+        await app.state.telemetry.merge_diagnostics("req_alice_native_0001", {
+            "native_snapshot_terminal_complete": True,
+            "native_capture_revision": 1,
+            "native_final_capture_committed": True,
+            "native_chunk_complete": True,
+            "native_snapshot_persisted": True,
+            "native_reply_scope_verified": True,
+        })
+        return alice_key, alice_token, bob_key, bob_token, charlie_key, charlie_token, file_a
+
+    alice_key, alice_token, bob_key, bob_token, charlie_key, charlie_token, file_a = asyncio.run(seed())
+    accounts.attach_key(alice_id, alice_key["key_id"])
+    accounts.attach_key(bob_id, bob_key["key_id"])
+    accounts.attach_key(charlie_id, charlie_key["key_id"])
+
+    tenants = app.state.tenant_memberships
+    tenant_a = tenants.create("alice-workspace", "Alice Workspace")
+    tenant_b = tenants.create("bob-workspace", "Bob Workspace")
+    tenants.upsert_member(tenant_a["tenant_id"], alice_id, "owner")
+    tenants.upsert_member(tenant_b["tenant_id"], bob_id, "owner")
+    tenants.upsert_member(tenant_a["tenant_id"], charlie_id, "member")
+    tenants.bind_key(tenant_a["tenant_id"], alice_id, alice_key["key_id"])
+    tenants.bind_key(tenant_b["tenant_id"], bob_id, bob_key["key_id"])
+    tenants.bind_key(tenant_a["tenant_id"], charlie_id, charlie_key["key_id"])
+
+    image_buffer = io.BytesIO()
+    with Image.new("RGB", (2, 2), (20, 80, 160)) as image:
+        image.save(image_buffer, format="PNG")
+    media = app.state.media_archive.store_image(
+        image_buffer.getvalue(), "image/png", alice_key["key_id"],
+        "req_alice_native_0001",
+    )
+    generated = app.state.generated_files.store(
+        b"alice generated report", "alice-report.txt", "text/plain",
+        alice_key["key_id"], "req_alice_history_0001",
+    )
+
+    app.state.user_billing.charges["req_alice_history_0001"] = {
+        "request_id": "req_alice_history_0001", "user_id": alice_id,
+        "cost_cny_cents": 11, "debited": False, "created_at": "2026-11-13T00:00:00Z",
+    }
+    app.state.user_billing.charges["req_bob_history_0001"] = {
+        "request_id": "req_bob_history_0001", "user_id": bob_id,
+        "cost_cny_cents": 7, "debited": False, "created_at": "2026-11-13T00:00:01Z",
+    }
+    app.state.user_billing._save()
+
+    snapshot = {
+        "version": 1, "revision": 1,
+        "root": {"tag": "div", "children": [{"tag": "p", "text": "private"}]},
+    }
+    assert app.state.native_content.publish(
+        "req_alice_native_0001", alice_key["key_id"], snapshot,
+    )
+
+    alice_session = accounts.create_session(alice_id)
+    bob_session = accounts.create_session(bob_id)
+    charlie_session = accounts.create_session(charlie_id)
+
+    with TestClient(app) as client:
+        client.cookies.set(USER_SESSION_COOKIE, bob_session)
+        bob_requests = client.get("/api/user/requests")
+        assert bob_requests.status_code == 200
+        assert {row["request_id"] for row in bob_requests.json()["data"]} == {
+            "req_bob_history_0001",
+        }
+        bob_billing = client.get("/api/user/billing")
+        assert bob_billing.status_code == 200
+        assert {row["request_id"] for row in bob_billing.json()["charges"]} == {
+            "req_bob_history_0001",
+        }
+        assert client.get(f"/api/user/keys/{alice_key['key_id']}/secret").status_code == 404
+
+        bob_auth = {"Authorization": f"Bearer {bob_token}"}
+        alice_auth = {"Authorization": f"Bearer {alice_token}"}
+        assert client.get(f"/v1/files/{file_a.file_id}", headers=bob_auth).status_code == 403
+        assert client.get(f"/v1/files/{file_a.file_id}", headers=alice_auth).status_code == 200
+        assert client.delete(f"/v1/files/{file_a.file_id}", headers=bob_auth).status_code == 403
+        assert app.state.file_store.get(file_a.file_id) is not None
+
+        assert client.get(f"/v1/media/{media['id']}", headers=bob_auth).status_code == 404
+        assert client.get(f"/v1/media/{media['id']}", headers=alice_auth).status_code == 200
+        assert client.get(
+            f"/v1/generated-files/{generated['id']}", headers=bob_auth
+        ).status_code == 404
+        assert client.get(
+            f"/v1/generated-files/{generated['id']}", headers=alice_auth
+        ).status_code == 200
+
+        assert client.get(
+            "/v1/native-content/req_alice_native_0001", headers=bob_auth
+        ).status_code == 404
+
+        # Even a member of Alice's tenant gets no implicit access to Alice's
+        # personal files, media, history, billing or native sidecar.
+        charlie_auth = {"Authorization": f"Bearer {charlie_token}"}
+        assert client.get(f"/v1/files/{file_a.file_id}", headers=charlie_auth).status_code == 403
+        assert client.get(f"/v1/media/{media['id']}", headers=charlie_auth).status_code == 404
+        assert client.get(
+            f"/v1/generated-files/{generated['id']}", headers=charlie_auth
+        ).status_code == 404
+        assert client.get(
+            "/v1/native-content/req_alice_native_0001", headers=charlie_auth
+        ).status_code == 404
+        client.cookies.set(USER_SESSION_COOKIE, charlie_session)
+        assert client.get("/api/user/requests").json()["data"] == []
+        assert client.get("/api/user/billing").json()["charges"] == []
+
+        client.cookies.set(USER_SESSION_COOKIE, alice_session)
+        alice_requests = client.get("/api/user/requests")
+        assert alice_requests.status_code == 200
+        assert "req_alice_history_0001" in {
+            row["request_id"] for row in alice_requests.json()["data"]
+        }
+        alice_billing = client.get("/api/user/billing")
+        assert {row["request_id"] for row in alice_billing.json()["charges"]} == {
+            "req_alice_history_0001",
+        }
+        assert client.get(
+            "/v1/native-content/req_alice_native_0001", headers=alice_auth
+        ).status_code == 200
+
+
+def test_non_master_api_key_cannot_delete_master_owned_file(tmp_path: Path):
+    import asyncio
+    import base64
+
+    app = app_with_tenants(tmp_path)
+
+    async def seed():
+        _key, token = await app.state.api_keys.create("ordinary user key")
+        item = await app.state.file_store.create(
+            filename="master-owned.txt",
+            data_base64=base64.b64encode(b"privileged asset").decode("ascii"),
+            mime_type="text/plain",
+            owner_key_id="master",
+            purpose="chat2api",
+        )
+        return token, item
+
+    token, item = asyncio.run(seed())
+    headers = {"Authorization": f"Bearer {token}"}
+
+    with TestClient(app) as client:
+        # Metadata/read and delete must enforce the same owner boundary. A
+        # regular key cannot read a master-owned file and must not be able to
+        # destroy it through the delete endpoint either.
+        assert client.get(f"/v1/files/{item.file_id}", headers=headers).status_code == 403
+        deleted = client.delete(f"/v1/files/{item.file_id}", headers=headers)
+        assert deleted.status_code == 403
+        assert app.state.file_store.get(item.file_id) is not None
+        _stored, payload = app.state.file_store.read(item.file_id)
+        assert payload == b"privileged asset"
