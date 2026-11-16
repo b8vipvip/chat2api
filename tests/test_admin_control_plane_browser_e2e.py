@@ -265,6 +265,7 @@ def test_delegated_admin_browser_navigation_permissions_csrf_and_revocation(tmp_
                         ("GET", "/api/admin/model-entitlements", 200),
                     ],
                     "system_admin": [
+                        ("GET", "/api/admin/users/missing/keys", 403),
                         ("GET", "/api/admin/tenants", 200),
                         ("GET", "/api/admin/model-entitlements", 200),
                         ("GET", "/api/admin/user-payments", 403),
@@ -274,12 +275,15 @@ def test_delegated_admin_browser_navigation_permissions_csrf_and_revocation(tmp_
                         ("GET", "/api/admin/tenants", 403),
                     ],
                     "api_key_admin": [
-                        ("PATCH", "/api/admin/users/missing/keys/missing", 404),
+                        ("GET", "/api/admin/users/missing/keys", 403),
+                        ("PATCH", "/api/admin/users/missing/keys/missing", 403),
                         ("GET", "/api/admin/keys", 200),
                         ("GET", "/api/admin/quota-reservations", 200),
                         ("GET", "/api/admin/keys/missing/secret", 403),
                     ],
                 }
+                assert _request_status(root_page, base_url, "GET", "/api/admin/users/missing/keys") == 404
+
                 for role, checks in expectations.items():
                     for method, path, expected_status in checks:
                         actual = _request_status(pages[role], base_url, method, path, data={} if method not in {"GET", "HEAD"} else None)
