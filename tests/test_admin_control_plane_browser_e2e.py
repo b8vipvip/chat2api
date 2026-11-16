@@ -201,12 +201,40 @@ def test_delegated_admin_browser_navigation_permissions_csrf_and_revocation(tmp_
                         assert button.count() == 1, (role, view)
                         assert button.is_visible() is (view in visible_views[role]), (role, view)
                     target_view = default_views[role]
+                    page_errors = []
+                    console_errors = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.on("console", lambda message: console_errors.append(message.text) if message.type == "error" else None)
                     page.locator(f'.nav button[data-view="{target_view}"]').click()
-                    page.wait_for_function(
-                        "view => document.querySelector('#view-' + view)?.classList.contains('active')",
-                        arg=target_view,
-                        timeout=10000,
-                    )
+                    try:
+                        page.wait_for_function(
+                            "view => document.querySelector('#view-' + view)?.classList.contains('active')",
+                            arg=target_view,
+                            timeout=10000,
+                        )
+                    except Exception as exc:
+                        diagnostics = page.evaluate(
+                            """view => ({
+                              targetView: view,
+                              hash: location.hash,
+                              sessionState: document.querySelector('#adminSessionState')?.textContent || "",
+                              commerceRole: document.documentElement.dataset.adminCommerceRole || "",
+                              commerceReady: document.documentElement.dataset.adminCommerceSessionReady || "",
+                              controlPlaneReady: window.__CHAT2API_CONTROL_PLANE_ADMIN_V1_READY__ === true,
+                              targetExists: !!document.querySelector('#view-' + view),
+                              targetClass: document.querySelector('#view-' + view)?.className || null,
+                              activeViews: Array.from(document.querySelectorAll('.view.active')).map(node => node.id),
+                              navButton: document.querySelector('.nav button[data-view="' + view + '"]')?.outerHTML || null,
+                              pageTitle: document.querySelector('#pageTitle')?.textContent || "",
+                              showType: typeof window.show,
+                              body: document.body.innerText.slice(0, 900)
+                            })""",
+                            target_view,
+                        )
+                        raise AssertionError(
+                            f"admin navigation did not activate view for role={role}: "
+                            + repr({"diagnostics": diagnostics, "page_errors": page_errors, "console_errors": console_errors})
+                        ) from exc
 
                 expectations = {
                     "user_admin": [
