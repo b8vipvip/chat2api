@@ -22,6 +22,7 @@ from .control_plane_integration_v1 import (
     install_control_plane_authority_v1,
     install_control_plane_features_v1,
 )
+from .web_chat_integration_v1 import install_web_chat_features_v1
 from .voice_patch import install_voice_patch
 from .live_voice_patch import install_live_voice_patch
 from .v7_patch import install_v7_patch
@@ -331,6 +332,7 @@ install_native_page_diagnostics(app)
 # One production composition owner wires the independent C-track services only
 # after user accounts, Worker/model routing and the legacy admin auth stack exist.
 install_control_plane_features_v1(app)
+install_web_chat_features_v1(app)
 # The transport-only SSE guard is the final ASGI middleware installation, after
 # every patch that can register a BaseHTTPMiddleware wrapper. The trailing
 # idempotent request-history call only reasserts its table ownership.
