@@ -66,7 +66,11 @@ def _login(page, base_url: str, username: str, password: str, role: str) -> None
     state = page.locator("#adminSessionState").text_content() or ""
     if "未登录管理会话" not in state:
         raise AssertionError(f"unexpected initial admin session state: {state}; page_errors={page_errors}; console_errors={console_errors}")
-    page.wait_for_selector('button[data-view="admin-users"]', timeout=20000)
+    page.wait_for_function(
+        "role => document.documentElement.dataset.adminCommerceSessionReady === 'true' && document.documentElement.dataset.adminCommerceRole === role",
+        arg=role,
+        timeout=20000,
+    )
     page.locator("#adminSessionUser").fill(username)
     page.locator("#adminSessionPassword").fill(password)
     page.locator("#adminSessionLogin").click()
