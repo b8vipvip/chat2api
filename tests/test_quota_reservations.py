@@ -199,4 +199,9 @@ def test_request_ids_are_one_shot_across_active_released_expired_and_settled_sta
             "req_active", "key_1", 99, quota_limit=100, completed_tokens=10
         )
     assert store.get("req_active") == settled
+    # Settlement replay remains idempotent even though a second admission is forbidden.
+    assert asyncio.run(
+        store.commit_completed_usage(completed("req_active", 10), api_keys)
+    ) == "settled"
+    assert api_keys.keys["key_1"].tokens_used == 10
     store.close()

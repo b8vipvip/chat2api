@@ -304,6 +304,19 @@ async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], princi
     # before Worker dispatch so the shared TelemetryStore hook can commit or
     # release it from that terminal. Only the trusted internal tool-repair
     # override is non-billable; a caller-supplied request-id prefix is not.
+    def release_wallet_admission_hold(reason: str) -> None:
+        accounts = getattr(app.state, "user_accounts", None)
+        billing = getattr(app.state, "user_billing", None)
+        try:
+            owner = accounts.owner_for_key(principal.key_id) if accounts is not None else None
+            if owner and billing is not None:
+                billing.release_reservation(request_id, str(owner), reason=reason)
+        except Exception as release_error:
+            logging.getLogger(__name__).warning(
+                "Responses wallet hold cleanup failed request_id=%s error_type=%s",
+                request_id, type(release_error).__name__,
+            )
+
     quota_reservation = None
     if not internal_repair:
         raw_output_budget = body.get("max_output_tokens")
@@ -401,6 +414,7 @@ async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], princi
                         "Responses quota release after duplicate request ID failed request_id=%s",
                         request_id,
                     )
+            release_wallet_admission_hold("request_admission_projection_conflict")
             await broker.release(request_id)
             raise HTTPException(
                 status_code=409,
@@ -415,6 +429,7 @@ async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], princi
                         "Responses quota release after telemetry failure failed request_id=%s",
                         request_id,
                     )
+            release_wallet_admission_hold("request_admission_telemetry_persistence_failed")
             await broker.release(request_id)
             raise
     registry.busy_clients.add(client_id)
@@ -452,6 +467,7 @@ async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], princi
                 "Responses dispatch failure telemetry unavailable request_id=%s error_type=%s",
                 request_id, type(telemetry_error).__name__,
             )
+            release_wallet_admission_hold("responses_dispatch_telemetry_persistence_failed")
         await broker.release(request_id)
         raise
     return state, request_id, client_id, timeout

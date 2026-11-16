@@ -342,6 +342,19 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
                         "Voice quota release after duplicate request ID failed request_id=%s error_type=%s",
                         request_id, type(release_error).__name__,
                     )
+            accounts = getattr(app.state, "user_accounts", None)
+            billing = getattr(app.state, "user_billing", None)
+            try:
+                owner = accounts.owner_for_key(principal.key_id) if accounts is not None else None
+                if owner and billing is not None:
+                    billing.release_reservation(
+                        request_id, str(owner), reason="request_admission_projection_conflict",
+                    )
+            except Exception as release_error:
+                logger.warning(
+                    "Voice wallet hold cleanup after duplicate request ID failed request_id=%s error_type=%s",
+                    request_id, type(release_error).__name__,
+                )
             raise HTTPException(
                 status_code=409,
                 detail={"code": "request_id_conflict", "message": "request_id already exists"},
@@ -387,6 +400,19 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
                     except Exception as release_error:
                         logger.warning(
                             "Voice quota reservation cleanup deferred request_id=%s error_type=%s",
+                            request_id, type(release_error).__name__,
+                        )
+                    accounts = getattr(app.state, "user_accounts", None)
+                    billing = getattr(app.state, "user_billing", None)
+                    try:
+                        owner = accounts.owner_for_key(principal.key_id) if accounts is not None else None
+                        if owner and billing is not None:
+                            billing.release_reservation(
+                                request_id, str(owner), reason="voice_request_not_completed",
+                            )
+                    except Exception as release_error:
+                        logger.warning(
+                            "Voice wallet reservation cleanup deferred request_id=%s error_type=%s",
                             request_id, type(release_error).__name__,
                         )
             await broker.release(request_id)

@@ -3,13 +3,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from typing import Any
 
 from fastapi import HTTPException
 
 from .quota_reservations import QuotaExceeded, QuotaReservationConflict, QuotaReservationError
 from .token_usage import usage_for
-from .user_commerce import InsufficientWalletBalance, WalletReservationError
+from .user_commerce import (
+    InsufficientWalletBalance, WalletReservationConflict, WalletReservationError,
+    _pricing_model_key,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -21,6 +25,31 @@ def is_request_id_conflict(error: BaseException) -> bool:
         return False
     detail = error.detail
     return isinstance(detail, dict) and detail.get("code") == "request_id_conflict"
+
+
+def _price_from_catalog_snapshot(config: dict[str, Any], model_id: str) -> dict[str, Any] | None:
+    """Resolve exact IDs before aliases from one immutable pricing snapshot."""
+    rows = config.get("models")
+    if not isinstance(rows, list):
+        return None
+    requested = str(model_id or "").strip()
+    if not requested:
+        return None
+    requested_key = requested.casefold()
+    for row in rows:
+        if (
+            isinstance(row, dict)
+            and str(row.get("model_id") or "").strip().casefold() == requested_key
+        ):
+            return dict(row)
+    canonical = _pricing_model_key(requested)
+    for row in rows:
+        if (
+            isinstance(row, dict)
+            and _pricing_model_key(row.get("model_id")) == canonical
+        ):
+            return dict(row)
+    return None
 
 
 def reserve_wallet_charge(
@@ -47,21 +76,89 @@ def reserve_wallet_charge(
         raise HTTPException(status_code=503, detail="Wallet reservation is unavailable")
     try:
         config = pricing.public()
-        if not bool(config.get("billing_enabled")):
-            return None
-        price = pricing.model(model_id)
-        if not price:
-            return None
         fx = float(config.get("usd_cny_rate") or 0)
-        if fx <= 0:
+        if not math.isfinite(fx) or fx <= 0:
             raise ValueError("Invalid USD/CNY billing rate")
+        normalized_model_id = str(model_id or "").strip() or "unknown"
+        if not bool(config.get("billing_enabled")):
+            price = _price_from_catalog_snapshot(config, normalized_model_id) or {
+                "model_id": normalized_model_id,
+                "enabled": False,
+                "input_usd_per_million": 0.0,
+                "cached_input_usd_per_million": 0.0,
+                "output_usd_per_million": 0.0,
+            }
+            billing.record_unbilled_admission(
+                str(owner), str(request_id), model_id=normalized_model_id,
+                input_tokens=max(0, int(prompt_tokens)),
+                output_tokens=max(0, int(output_tokens)),
+                reason="billing_disabled_at_admission",
+                price_snapshot=price, usd_cny_rate=fx,
+            )
+            return None
+        price = _price_from_catalog_snapshot(config, normalized_model_id)
+        if not price or price.get("enabled", True) is not True:
+            # Disabled and unpriced rows are both closed to new paid requests.
+            # An intentional free model must have an explicit enabled zero-rate
+            # row; merely disabling its price must not bypass wallet admission.
+            raise HTTPException(
+                status_code=503,
+                detail="Wallet price is not configured or enabled for this model",
+            )
+        # Image and realtime Voice costs are not represented by text-token
+        # usage in the current Worker protocol. A positive per-token price
+        # would therefore undercharge these endpoints; only an explicit
+        # all-zero row may opt them into intentionally free use.
+        if str(model_id or "").strip().lower() in {"gpt-image", "gpt-live", "gpt-live-mini"}:
+            rate_fields = (
+                "input_usd_per_million",
+                "cached_input_usd_per_million",
+                "output_usd_per_million",
+            )
+            if any(float(price.get(field) or 0) > 0 for field in rate_fields):
+                raise HTTPException(
+                    status_code=503,
+                    detail="Provider usage for this model is not metered for wallet billing",
+                )
+        # Cached-token share is unknown at admission. Reserve against the
+        # higher of ordinary and cached input rates so an administrator's
+        # valid (but unusually high) cached-input price cannot make the hold
+        # systematically understate the eventual charge.
+        conservative_input_rate = max(
+            float(price.get("input_usd_per_million") or 0),
+            float(price.get("cached_input_usd_per_million") or 0),
+        )
         usd = (
-            max(0, int(prompt_tokens)) * float(price.get("input_usd_per_million") or 0)
+            max(0, int(prompt_tokens)) * conservative_input_rate
             + max(0, int(output_tokens)) * float(price.get("output_usd_per_million") or 0)
         ) / 1_000_000
-        estimated_cny_cents = max(0, int(round(usd * fx * 100)))
-        if estimated_cny_cents <= 0:
+        rate_fields = (
+            "input_usd_per_million",
+            "cached_input_usd_per_million",
+            "output_usd_per_million",
+        )
+        has_positive_rate = any(float(price.get(field) or 0) > 0 for field in rate_fields)
+        if not has_positive_rate:
+            billing.record_unbilled_admission(
+                str(owner), str(request_id), model_id=normalized_model_id,
+                input_tokens=max(0, int(prompt_tokens)),
+                output_tokens=max(0, int(output_tokens)),
+                reason="zero_price_at_admission",
+                price_snapshot=price, usd_cny_rate=fx,
+            )
             return None
+        # A positive-rate request always gets a durable admission snapshot and
+        # at least a one-cent hold, even when nearest-cent rounding would be 0.
+        estimated_cny_cents = max(1, int(math.ceil(usd * fx * 100)))
+        catalog_snapshot: dict[str, dict[str, Any]] = {}
+        for row in config.get("models") or []:
+            if not isinstance(row, dict):
+                continue
+            # Preserve exact model IDs: gpt-5.6 and gpt-5.6-sol can
+            # intentionally carry different administrator-configured prices.
+            key = str(row.get("model_id") or "").strip().casefold()
+            if key:
+                catalog_snapshot.setdefault(key, dict(row))
         return billing.reserve_for_request(
             str(owner), str(request_id),
             model_id=str(model_id or ""),
@@ -69,12 +166,18 @@ def reserve_wallet_charge(
             input_tokens=max(0, int(prompt_tokens)),
             output_tokens=max(0, int(output_tokens)),
             price_snapshot=price,
+            price_catalog_snapshot=catalog_snapshot,
             usd_cny_rate=fx,
         )
     except HTTPException:
         raise
     except InsufficientWalletBalance as error:
         raise HTTPException(status_code=402, detail="账户余额不足，无法预留本次请求预计费用") from error
+    except WalletReservationConflict as error:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "request_id_conflict", "message": str(error)},
+        ) from error
     except WalletReservationError as error:
         raise HTTPException(status_code=503, detail="Wallet reservation failed: " + str(error)) from error
     except OSError as error:

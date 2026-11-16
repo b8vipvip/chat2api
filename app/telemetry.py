@@ -186,6 +186,20 @@ class TelemetryStore:
             if create_only and not request_id:
                 raise ValueError("create-only telemetry requires a request_id")
             existing = self.get(request_id) if request_id else None
+            if existing:
+                existing_response_id = str(existing.get("response_id") or "")
+                incoming_response_id = str(record.get("response_id") or "")
+                if (
+                    existing_response_id and incoming_response_id
+                    and existing_response_id != incoming_response_id
+                ):
+                    # A request ID is immutable once admitted. Without this
+                    # guard, a second POST could overwrite the queued/running
+                    # row of the first request before Broker/quota admission
+                    # rejects the duplicate dispatch.
+                    raise DuplicateRequestIdentity(
+                        "request_id is already bound to another response"
+                    )
             if create_only and existing:
                 raise DuplicateRequestIdentity("request_id already exists")
             if merge_diagnostics:
