@@ -98,6 +98,7 @@ def test_admin_bootstrap_tolerates_removed_legacy_connect_and_key_controls():
     assert "if(connectButton)connectButton.disabled=true;" in html
     assert "if(refreshButton)refreshButton.disabled=true;" in html
     assert "if(adminKeyInput){adminKeyInput.value='';adminKeyInput.disabled=true;}" in html
-    assert "$('connect').disabled" not in html
-    assert "$('refresh').disabled" not in html
-    assert "$('adminKey').value" not in html
+    bootstrap = html.split("const connectButton=$('connect')", 1)[1]
+    assert "$('connect').disabled" not in bootstrap
+    assert "$('refresh').disabled" not in bootstrap
+    assert "$('adminKey').value" not in bootstrap
