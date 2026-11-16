@@ -319,6 +319,7 @@ async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], princi
             quota_reservation = await reserve_request_quota(
                 app, request_id, principal, prompt,
                 max(4096, requested_output_budget),
+                model_id=str(body.get("model") or ""),
             )
         except Exception:
             await broker.release(request_id)
