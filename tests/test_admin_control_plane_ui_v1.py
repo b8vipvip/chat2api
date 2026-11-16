@@ -91,3 +91,13 @@ def test_commerce_navigation_buttons_join_the_c_track_role_visibility_map():
     for button in ("pricingButton", "paymentButton", "usersButton"):
         assert f'{button}.dataset.cview = "true"' in commerce
     assert 'document.querySelectorAll("[data-cview]")' in c_track
+
+def test_admin_bootstrap_tolerates_removed_legacy_connect_and_key_controls():
+    html = (Path(__file__).resolve().parents[1] / "app" / "admin.py").read_text(encoding="utf-8")
+    assert "const connectButton=$('connect'),refreshButton=$('refresh'),adminKeyInput=$('adminKey');" in html
+    assert "if(connectButton)connectButton.disabled=true;" in html
+    assert "if(refreshButton)refreshButton.disabled=true;" in html
+    assert "if(adminKeyInput){adminKeyInput.value='';adminKeyInput.disabled=true;}" in html
+    assert "$('connect').disabled" not in html
+    assert "$('refresh').disabled" not in html
+    assert "$('adminKey').value" not in html
