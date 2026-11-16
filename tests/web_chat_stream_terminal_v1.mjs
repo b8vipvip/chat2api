@@ -27,6 +27,7 @@ async function send(chunks, close = true, onCancel = () => {}) {
     state: {
       apiToken: "test-token", user: {user_id: "user-a"},
       selectedModel: "test-model", streaming: false,
+      recoveryInFlight: new Set(),
     },
     currentConversation: () => conversation,
     id: () => String(conversation.messages.length),
@@ -41,9 +42,22 @@ async function send(chunks, close = true, onCancel = () => {}) {
     renderMessages() {},
     AbortController,
     TextDecoder,
+    // The production client now requires the recovery module before sending.
+    // Keep the stream-terminal unit test isolated from its separate polling lifecycle.
+    window: {
+      clearTimeout() {},
+      setTimeout() { return 0; },
+      Chat2APIStreamRecoveryV1: {
+        createRequestId: () => "req_request_test",
+        create: () => ({resume: async () => ({status: "recovery_timeout", terminal: false})}),
+      },
+    },
   });
   const sendMessage = vm.runInContext(source.slice(start, end) + "\nsendMessage", context);
   await sendMessage("test question");
+  // The production client deliberately starts recovery without blocking sendMessage.
+  // Let its Promise chain settle before asserting the user-visible recovery notice.
+  await new Promise((resolve) => setImmediate(resolve));
   return {
     messages,
     replies: conversation.messages.filter(({role}) => role === "assistant").map(({content}) => content),
@@ -75,8 +89,8 @@ test("accepts CRLF separators split across chunks and releases the response on D
 });
 
 test("reports truncation even without content or with an unframed DONE marker", async () => {
-  const warning = "连接已结束，但未收到流结束标记；请检查请求记录确认是否完整。";
-  assert.deepEqual(await send([]), {messages: [warning], replies: [], locked: false});
+  const warning = "连接已结束但未收到流结束标记；请求状态：恢复超时";
+  assert.deepEqual(await send([]), {messages: [warning], replies: [""], locked: false});
   assert.deepEqual(await send([delta("partial") + "\n\n" + terminal]),
     {messages: [warning], replies: ["partial"], locked: false});
   assert.deepEqual(await send([terminal + "\n\n"]),
