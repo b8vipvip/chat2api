@@ -16,6 +16,7 @@ from app.voice_patch import install_voice_patch
 from app.model_entitlement_v1_patch import install_model_entitlements
 from app.model_capability_routing_patch import install_model_capability_routing_patch
 from app.model_entitlements import ModelEntitlementError, ModelEntitlementStore
+from app.tenant_membership import TenantMembershipError, TenantMembershipStore
 from app import model_capability_routing_patch as model_routing
 from app import v13_patch
 
@@ -87,12 +88,12 @@ class FakeApiKeys:
         return {"key_id": key_id} if key_id in {"key_1", "key_2"} else None
 
 
-def build_app(tmp_path: Path):
+def build_app(tmp_path: Path, tenant_memberships=None):
     app = FastAPI()
     app.state.settings = SimpleNamespace(data_dir=tmp_path, admin_username="owner")
     app.state.registry = FakeRegistry()
     app.state.user_accounts = FakeAccounts()
-    app.state.tenant_memberships = FakeTenantMemberships()
+    app.state.tenant_memberships = tenant_memberships if tenant_memberships is not None else FakeTenantMemberships()
     app.state.api_keys = FakeApiKeys()
     app.state.admin_sessions = AdminSessionStore(
         "owner", "strong-admin-password", storage_path=tmp_path / "admin_sessions.json"
@@ -373,6 +374,35 @@ def test_tenant_key_binding_must_match_current_authoritative_key_owner(tmp_path:
     finally:
         app.state.user_accounts.owner_for_key = original_owner_lookup
         reset_model_context(tokens)
+
+
+def test_revoked_tenant_member_loses_workspace_model_entitlements(tmp_path: Path):
+    tenants = TenantMembershipStore(tmp_path)
+    app, _ = build_app(tmp_path, tenant_memberships=tenants)
+    user_id = "usr_abcdef123"
+    tenant = tenants.create("revocation-workspace", "Revocation Workspace")
+    tenant_id = tenant["tenant_id"]
+    tenants.upsert_member(tenant_id, user_id, "owner")
+    tenants.upsert_member(tenant_id, "usr_ghijkl789", "owner")
+    tenants.bind_key(tenant_id, user_id, "key_1")
+
+    policies = app.state.model_entitlements
+    policies.upsert("global", "default", "allow", ["gpt-5.5", "gpt-5.6-sol"])
+    policies.upsert("tenant", tenant_id, "allow", ["gpt-5.5"])
+    policies.upsert("tenant_role", "owner", "allow", ["gpt-5.5"])
+
+    app.state.registry.routing_key_context.set("key_1")
+    assert [row["id"] for row in app.state.registry.model_catalog()] == ["gpt-5.5"]
+    with pytest.raises(TenantMembershipError, match="Unbind"):
+        tenants.remove_member(tenant_id, user_id)
+
+    tenants.unbind_key(tenant_id, "key_1")
+    tenants.remove_member(tenant_id, user_id)
+    assert tenants.role_for(tenant_id, user_id) is None
+    assert tenants.tenant_for_key("key_1") is None
+    # Once the binding and membership are revoked, the old workspace and role
+    # allowlists must no longer constrain or grant this user's API key.
+    assert [row["id"] for row in app.state.registry.model_catalog()] == ["gpt-5.5", "gpt-5.6-sol"]
 
 
 def test_admin_entitlement_api_requires_session_audits_and_validates_subjects(tmp_path: Path):
