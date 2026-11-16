@@ -476,6 +476,7 @@ def main():
                 a.pr_number,
                 a.pr_title,
                 a.pr_state,
+                a.pr_draft,
                 a.pr_merged,
                 a.merge_sha,
                 a.run_id,
@@ -500,7 +501,6 @@ def main():
                 pr_ci_actor=a.pr_ci_actor,
                 pr_ci_run_attempt=a.pr_ci_run_attempt,
                 blocked_reason=a.blocked_reason,
-                pr_draft=a.pr_draft,
             ),
             ensure_ascii=False,
         )
