@@ -84,6 +84,7 @@ def _login(page, base_url: str, username: str, password: str, role: str) -> None
         diagnostics = page.evaluate(
             """async () => ({
               sessionState: document.querySelector('#adminSessionState')?.textContent || "",
+              adminV17Authenticated: document.documentElement.dataset.adminV17Authenticated || "",
               commerceRole: document.documentElement.dataset.adminCommerceRole || "",
               commerceSessionReady: document.documentElement.dataset.adminCommerceSessionReady || "",
               session: await fetch('/api/admin/auth/session', {credentials:'same-origin', cache:'no-store'}).then(r => r.json()).catch(error => ({error:String(error)})),
@@ -98,6 +99,10 @@ def _login(page, base_url: str, username: str, password: str, role: str) -> None
             f"commerce role synchronization did not complete for {role}: "
             + repr({"diagnostics": diagnostics, "page_errors": page_errors, "console_errors": console_errors})
         ) from exc
+    page.wait_for_function(
+        "() => document.documentElement.dataset.adminV17Authenticated === 'true'",
+        timeout=10000,
+    )
 
 
 def _request_status(page, base_url: str, method: str, path: str, data=None, *, origin: str | None = None, fetch_site: str = "same-origin") -> int:
