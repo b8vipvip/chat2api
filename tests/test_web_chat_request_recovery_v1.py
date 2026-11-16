@@ -55,8 +55,8 @@ const sendMessage = vm.runInNewContext(readFrame + send + '\nsendMessage', conte
 (async () => {
   await sendMessage('question');
   assert.deepEqual(notices, ['请求失败：Worker failed']);
-  assert.equal(conversation.messages[1].pending, false);
-  assert.equal(conversation.messages[1].recoveryStatus, 'error');
+  assert.deepEqual(conversation.messages.map(message => message.role), ['user']);
+  assert.equal(conversation.messages.some(message => message.role === 'assistant'), false);
   assert.equal(polls, 0);
   assert.equal(body.locked, false);
 })().catch((error) => { console.error(error); process.exitCode = 1; });
