@@ -192,6 +192,8 @@ def test_delegated_admin_browser_navigation_permissions_csrf_and_revocation(tmp_
                 expectations = {
                     "user_admin": [
                         ("GET", "/api/admin/users", 200),
+                        ("GET", "/api/admin/users/missing/keys", 403),
+                        ("PATCH", "/api/admin/users/missing/keys/missing", 403),
                         ("GET", "/api/admin/keys", 403),
                         ("GET", "/api/admin/user-pricing", 403),
                         ("GET", "/api/admin/control/admins", 403),
@@ -203,6 +205,8 @@ def test_delegated_admin_browser_navigation_permissions_csrf_and_revocation(tmp_
                         ("GET", "/api/admin/keys", 403),
                     ],
                     "support": [
+                        ("GET", "/api/admin/users/missing/keys", 404),
+                        ("PATCH", "/api/admin/users/missing/keys/missing", 403),
                         ("GET", "/api/admin/keys", 200),
                         ("GET", "/api/admin/keys/missing/secret", 403),
                         ("GET", "/api/admin/requests", 403),
@@ -218,6 +222,7 @@ def test_delegated_admin_browser_navigation_permissions_csrf_and_revocation(tmp_
                         ("GET", "/api/admin/tenants", 403),
                     ],
                     "api_key_admin": [
+                        ("PATCH", "/api/admin/users/missing/keys/missing", 404),
                         ("GET", "/api/admin/keys", 200),
                         ("GET", "/api/admin/quota-reservations", 200),
                         ("GET", "/api/admin/keys/missing/secret", 403),
@@ -229,6 +234,41 @@ def test_delegated_admin_browser_navigation_permissions_csrf_and_revocation(tmp_
                         assert actual == expected_status, (role, method, path, actual, expected_status)
 
                 user_page = pages["user_admin"]
+                user_page.evaluate(
+                    """() => {
+                      window.__userAdminFetch = window.fetch.bind(window);
+                      window.fetch = async (input, init = {}) => {
+                        const url = typeof input === "string" ? input : input?.url || "";
+                        const method = String(init.method || "GET").toUpperCase();
+                        if (url.startsWith("/api/admin/users?") && method === "GET") {
+                          return new Response(JSON.stringify({
+                            data: [{
+                              user_id: "usr_fixture_123456",
+                              email: "fixture@example.test",
+                              display_name: "Fixture User",
+                              enabled: true,
+                              created_at: "2026-11-16T00:00:00Z",
+                              key_count: 2,
+                              active_sessions: 0,
+                              balance_cents: 0
+                            }],
+                            total: 1
+                          }), {status: 200, headers: {"Content-Type": "application/json"}});
+                        }
+                        return window.__userAdminFetch(input, init);
+                      };
+                    }"""
+                )
+                user_page.locator('.nav button[data-view="admin-users"]').click()
+                user_page.wait_for_function(
+                    "() => document.querySelector('#adminUsersBody')?.textContent.includes('fixture@example.test')",
+                    timeout=10000,
+                )
+                assert user_page.locator('#adminUsersBody button[data-user-action="keys"]').count() == 0
+                assert user_page.locator("#adminUserKeysPanel").is_hidden()
+                user_page.evaluate(
+                    "() => { window.fetch = window.__userAdminFetch; delete window.__userAdminFetch; }"
+                )
                 assert _request_status(
                     user_page, base_url, "PATCH", "/api/admin/users/missing",
                     data={"enabled": False},
