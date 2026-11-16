@@ -9,6 +9,7 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
+from app.admin_audit import AdminAuditError
 from app.admin_auth import AdminSessionStore
 from app.api_keys import ApiPrincipal
 from app.live_voice_patch import install_live_voice_patch
