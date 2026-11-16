@@ -76,6 +76,9 @@ def test_existing_commerce_console_is_the_single_user_and_billing_ui_owner():
     assert "event.detail" in source
     assert "document.documentElement.dataset.adminCommerceSessionReady" in source
     assert "function applyAdminRole()" in source
+    assert 'const canReadUserKeys = () => ["super_admin", "support"].includes(currentAdminRole);' in source
+    assert 'if (!canReadUserKeys()) throw new Error("当前管理员角色无权查看用户 API Key");' in source
+    assert "canReadUserKeys() ? '<button class=" in source
     assert '["super_admin", "billing_admin"]' in source
     assert '["super_admin", "user_admin", "system_admin", "support"]' in source
     assert 'if (canReadAudit()) await loadAudit()' in source
