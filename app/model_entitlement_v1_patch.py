@@ -6,9 +6,10 @@ model request context. It never selects a Worker or asserts served-model truth.
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -22,6 +23,9 @@ from .model_entitlements import (
 )
 from . import model_capability_routing_patch as model_routing
 from . import v13_patch
+
+
+logger = logging.getLogger(__name__)
 
 
 class ModelEntitlementUpdate(BaseModel):
@@ -62,15 +66,26 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=403, detail="Administrator permission denied")
         return str(username)
 
-    def audit_event(actor: str, action: str, subject_type: str, subject_id: str, details: dict[str, Any]) -> None:
+    def audit_event(
+        actor: str, action: str, subject_type: str, subject_id: str, details: dict[str, Any],
+        *, request_id: str = "", required: bool = True,
+    ) -> bool:
         try:
             audit.append(
                 actor=actor, action=action, target_type="model_entitlement",
-                target_id=f"{subject_type}:{subject_id}", request_id="",
+                target_id=f"{subject_type}:{subject_id}", request_id=request_id,
                 details=details,
             )
         except AdminAuditError as exc:
-            raise HTTPException(status_code=503, detail="Administrator audit unavailable; policy change denied") from exc
+            if required:
+                raise HTTPException(status_code=503, detail="Administrator audit unavailable; policy change denied") from exc
+            app.state.admin_audit_completion_pending = True
+            logger.error(
+                "Admin audit completion append failed after model entitlement mutation: subject_type=%s subject_id=%s action=%s",
+                subject_type, subject_id, action,
+            )
+            return False
+        return True
 
     def _validate_subject(subject_type: str, subject_id: str) -> None:
         if subject_type not in SUBJECT_TYPES:
@@ -244,7 +259,7 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
 
     @app.put("/api/admin/model-entitlements/{subject_type}/{subject_id}")
     async def put_model_entitlement(
-        subject_type: str, subject_id: str, body: ModelEntitlementUpdate, request: Request
+        subject_type: str, subject_id: str, body: ModelEntitlementUpdate, request: Request, response: Response
     ) -> dict[str, Any]:
         actor = admin_actor(request)
         try:
@@ -254,18 +269,22 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
         except ModelEntitlementError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         details = {"effect": body.effect, "models": body.models, "enabled": body.enabled}
-        audit_event(actor, "model.entitlement_requested", subject_type, subject_id, details)
+        request_id = str(request.headers.get("x-request-id") or "")
+        audit_event(actor, "model.entitlement_requested", subject_type, subject_id, details, request_id=request_id)
         try:
             rule = store.upsert(subject_type, subject_id, body.effect, body.models, enabled=body.enabled)
         except ModelEntitlementError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        audit_event(actor, "model.entitlement_completed", subject_type, subject_id, {
+        audit_ok = audit_event(actor, "model.entitlement_completed", subject_type, subject_id, {
             "effect": rule["effect"], "models": rule["models"], "enabled": rule["enabled"],
-        })
+        }, request_id=request_id, required=False)
+        response.headers["X-Admin-Audit-Status"] = "complete" if audit_ok else "completion-pending"
         return {"rule": rule}
 
     @app.delete("/api/admin/model-entitlements/{subject_type}/{subject_id}")
-    async def delete_model_entitlement(subject_type: str, subject_id: str, request: Request) -> dict[str, bool]:
+    async def delete_model_entitlement(
+        subject_type: str, subject_id: str, request: Request, response: Response
+    ) -> dict[str, bool]:
         actor = admin_actor(request)
         try:
             _validate_subject(subject_type, subject_id)
@@ -273,12 +292,17 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ModelEntitlementError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        audit_event(actor, "model.entitlement_delete_requested", subject_type, subject_id, {})
+        request_id = str(request.headers.get("x-request-id") or "")
+        audit_event(actor, "model.entitlement_delete_requested", subject_type, subject_id, {}, request_id=request_id)
         try:
             deleted = store.delete(subject_type, subject_id)
         except ModelEntitlementError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        audit_event(actor, "model.entitlement_delete_completed", subject_type, subject_id, {"deleted": deleted})
+        audit_ok = audit_event(
+            actor, "model.entitlement_delete_completed", subject_type, subject_id,
+            {"deleted": deleted}, request_id=request_id, required=False,
+        )
+        response.headers["X-Admin-Audit-Status"] = "complete" if audit_ok else "completion-pending"
         return {"deleted": deleted}
 
     app.state.model_entitlements_installed = True
