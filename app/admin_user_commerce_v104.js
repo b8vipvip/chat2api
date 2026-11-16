@@ -4,13 +4,18 @@
   const content = document.querySelector(".content");
   if (!nav || !content || document.getElementById("view-user-pricing")) return;
   const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[ch]);
+  let adminRoleResolved = false;
   const keyHeader = () => {
+    // Never send a possibly stale root key until the current Session role is
+    // known. A delegated Session must not inherit a prior administrator key.
+    if (!adminRoleResolved || (currentAdminRole && currentAdminRole !== "super_admin")) return {};
     const value = String(document.getElementById("adminKey")?.value || "").trim();
     return value ? {"x-api-key": value} : {};
   };
   async function adminApi(path, options = {}) {
     const response = await fetch(path, {
       credentials: "same-origin",
+      cache: "no-store",
       ...options,
       headers: {"Content-Type":"application/json", ...keyHeader(), ...(options.headers || {})},
     });
@@ -18,6 +23,41 @@
     try { payload = await response.json(); } catch {}
     if (!response.ok) throw new Error(payload.detail || payload?.error?.message || `HTTP ${response.status}`);
     return payload;
+  }
+
+  let currentAdminRole = null;
+  let sessionAuthenticated = false;
+  const canWriteUsers = () => ["super_admin", "user_admin"].includes(currentAdminRole);
+  const canReadAudit = () => currentAdminRole === "super_admin";
+  async function refreshAdminRole() {
+    let sessionCheckSucceeded = false;
+    try {
+      const response = await fetch("/api/admin/auth/session", {credentials:"same-origin", cache:"no-store"});
+      if (!response.ok) throw new Error("Admin session lookup failed");
+      const session = await response.json();
+      sessionAuthenticated = !!session.authenticated;
+      currentAdminRole = sessionAuthenticated ? (session.role || "unknown") : null;
+      sessionCheckSucceeded = true;
+    } catch (_) {
+      currentAdminRole = null;
+    }
+    if (sessionCheckSucceeded && !sessionAuthenticated && !currentAdminRole && String(document.getElementById("adminKey")?.value || "").trim()) {
+      currentAdminRole = "super_admin";
+    }
+    adminRoleResolved = sessionCheckSucceeded;
+    pricingButton.hidden = !["super_admin", "billing_admin"].includes(currentAdminRole);
+    paymentButton.hidden = !["super_admin", "billing_admin"].includes(currentAdminRole);
+    usersButton.hidden = !["super_admin", "user_admin", "system_admin", "support"].includes(currentAdminRole);
+    const auditPanel = document.getElementById("adminAuditPanel");
+    if (auditPanel) auditPanel.hidden = !canReadAudit();
+    const canWritePaymentSecrets = currentAdminRole === "super_admin";
+    document.querySelectorAll("#view-user-payments input, #view-user-payments select, #view-user-payments textarea").forEach((node) => {
+      node.disabled = !canWritePaymentSecrets;
+    });
+    ["commerceSavePayment", "commerceTestPayment"].forEach((id) => {
+      const node = document.getElementById(id);
+      if (node) node.disabled = !canWritePaymentSecrets;
+    });
   }
 
   const pricingButton = document.createElement("button");
@@ -51,7 +91,7 @@
     <section class="view" id="view-user-payments">
       <div class="panel">
         <h2>用户端支付配置</h2>
-        <div class="muted">当前接入 ZPAY，用于用户费用中心的支付宝 / 微信充值。商户密钥加密保存，读取配置时不会返回明文。</div>
+        <div class="muted">当前接入 ZPAY，用于用户费用中心的支付宝 / 微信充值。商户密钥加密保存，读取配置时不会返回明文。受 G0 DataKeyring 迁移门禁约束：Billing Admin 仅可查看，旧版支付密钥及其配置修改暂时仅允许 root Super Admin。</div>
         <div class="panels" style="margin-top:14px">
           <div class="panel">
             <h3>基础配置</h3>
@@ -101,7 +141,7 @@
         </table></div>
         <p class="muted">此处只显示 Key 元数据，不显示或恢复完整密钥。</p>
       </div>
-      <div class="panel" style="margin-top:14px">
+      <div class="panel" id="adminAuditPanel" style="margin-top:14px">
         <div class="toolbar"><h3 style="margin:0;flex:1">最近管理审计</h3><button class="action" id="adminAuditReload">刷新审计</button></div>
         <div class="scroll"><table>
           <thead><tr><th>时间</th><th>操作</th><th>操作者</th><th>目标</th><th>详情</th><th>事件哈希</th></tr></thead>
@@ -111,6 +151,12 @@
     </section>`);
 
   function activate(view) {
+    const allowed = {
+      "user-pricing": ["super_admin", "billing_admin"],
+      "user-payments": ["super_admin", "billing_admin"],
+      "admin-users": ["super_admin", "user_admin", "system_admin", "support"]
+    };
+    if (allowed[view] && !allowed[view].includes(currentAdminRole)) return;
     document.querySelectorAll(".nav button").forEach((button) => button.classList.toggle("active", button.dataset.view === view));
     document.querySelectorAll(".view").forEach((section) => section.classList.toggle("active", section.id === `view-${view}`));
     const title = document.getElementById("pageTitle");
@@ -167,7 +213,7 @@
     adminUserTotal = Number(payload.total || 0);
     renderUsers();
     status.textContent = "共 " + adminUserTotal + " 个用户";
-    await loadAudit();
+    if (canReadAudit()) await loadAudit();
   }
   async function loadAudit() {
     const payload = await adminApi("/api/admin/audit?limit=50");
@@ -193,7 +239,11 @@
     }
     body.innerHTML = adminUserRows.map((user) => {
       const enabled = Boolean(user.enabled);
-      const balance = (Number(user.balance_cents || 0) / 100).toFixed(2);
+      const balance = user.balance_cents == null ? "—" : "¥" + (Number(user.balance_cents) / 100).toFixed(2);
+      const writeActions = canWriteUsers()
+        ? '<button class="action ' + (enabled ? 'danger' : 'good') + '" data-user-action="toggle" data-user-id="' + esc(user.user_id) + '" data-enabled="' + (enabled ? 'false' : 'true') + '">' + (enabled ? '停用' : '启用') + '</button>' +
+          '<button class="action" data-user-action="revoke" data-user-id="' + esc(user.user_id) + '">撤销会话</button>'
+        : '';
       return '<tr>' +
         '<td>' + esc(user.email) + '</td>' +
         '<td>' + esc(user.display_name) + '</td>' +
@@ -202,10 +252,8 @@
         '<td>' + esc(user.created_at || '-') + '</td>' +
         '<td>' + Number(user.key_count || 0) + '</td>' +
         '<td>' + Number(user.active_sessions || 0) + '</td>' +
-        '<td>¥' + balance + '</td>' +
-        '<td><div class="rowactions">' +
-        '<button class="action ' + (enabled ? 'danger' : 'good') + '" data-user-action="toggle" data-user-id="' + esc(user.user_id) + '" data-enabled="' + (enabled ? 'false' : 'true') + '">' + (enabled ? '停用' : '启用') + '</button>' +
-        '<button class="action" data-user-action="revoke" data-user-id="' + esc(user.user_id) + '">撤销会话</button>' +
+        '<td>' + balance + '</td>' +
+        '<td><div class="rowactions">' + writeActions +
         '<button class="action" data-user-action="keys" data-user-id="' + esc(user.user_id) + '">查看 Key</button>' +
         '</div></td></tr>';
     }).join("");
@@ -232,11 +280,13 @@
       const cannotEnable = !configuredEnabled && (key.expired || key.quota_exhausted);
       const actions = key.revoked_at
         ? '<span class="muted">不可操作</span>'
-        : '<div class="rowactions">' +
-          '<button class="action ' + (configuredEnabled ? 'danger' : 'good') + '" data-admin-key-action="toggle" data-key-id="' + esc(key.key_id) + '" data-enabled="' + (configuredEnabled ? 'false' : 'true') + '"' + (cannotEnable ? ' disabled title="Key 已过期或额度耗尽"' : '') + '>' + (configuredEnabled ? '停用' : '启用') + '</button>' +
-          '<button class="action" data-admin-key-action="quota" data-key-id="' + esc(key.key_id) + '" data-current-quota="' + (key.token_quota == null ? '' : String(Number(key.token_quota))) + '">设置额度</button>' +
-          '<button class="action danger" data-admin-key-action="revoke" data-key-id="' + esc(key.key_id) + '">永久撤销</button>' +
-          '</div>';
+        : !canWriteUsers()
+          ? '<span class="muted">只读</span>'
+          : '<div class="rowactions">' +
+            '<button class="action ' + (configuredEnabled ? 'danger' : 'good') + '" data-admin-key-action="toggle" data-key-id="' + esc(key.key_id) + '" data-enabled="' + (configuredEnabled ? 'false' : 'true') + '"' + (cannotEnable ? ' disabled title="Key 已过期或额度耗尽"' : '') + '>' + (configuredEnabled ? '停用' : '启用') + '</button>' +
+            '<button class="action" data-admin-key-action="quota" data-key-id="' + esc(key.key_id) + '" data-current-quota="' + (key.token_quota == null ? '' : String(Number(key.token_quota))) + '">设置额度</button>' +
+            '<button class="action danger" data-admin-key-action="revoke" data-key-id="' + esc(key.key_id) + '">永久撤销</button>' +
+            '</div>';
       return '<tr><td>' + esc(key.name) + '</td>' +
         '<td><code>' + esc(key.prefix) + '</code></td>' +
         '<td>' + esc(state) + '</td>' +
@@ -351,7 +401,7 @@
     document.getElementById("adminUserKeysPanel").style.display = "none";
   });
   document.getElementById("adminAuditReload").addEventListener("click", () => {
-    loadAudit().catch(showUserError);
+    if (canReadAudit()) loadAudit().catch(showUserError);
   });
 
   async function loadPricing() {
@@ -415,4 +465,26 @@
   document.getElementById("commerceSavePricing").onclick = () => savePricing().catch(showPricingError);
   document.getElementById("commerceSavePayment").onclick = () => savePayments().catch(showPaymentError);
   document.getElementById("commerceTestPayment").onclick = () => testPayments().catch(showPaymentError);
+  function activateRoleDefault() {
+    const initial = location.hash.replace(/^#/, "");
+    const allowed = {
+      "user-pricing": ["super_admin", "billing_admin"],
+      "user-payments": ["super_admin", "billing_admin"],
+      "admin-users": ["super_admin", "user_admin", "system_admin", "support"]
+    };
+    if (allowed[initial] && allowed[initial].includes(currentAdminRole)) {
+      activate(initial);
+    } else if (currentAdminRole === "user_admin") {
+      location.hash = "admin-users";
+      activate("admin-users");
+    } else if (currentAdminRole === "billing_admin") {
+      location.hash = "user-pricing";
+      activate("user-pricing");
+    }
+  }
+  window.addEventListener("chat2api-admin-session-changed", async () => {
+    await refreshAdminRole();
+    activateRoleDefault();
+  });
+  refreshAdminRole().then(activateRoleDefault);
 })();

@@ -18,6 +18,10 @@ except BaseException:
 # Reuse the pre-acquired lock for the full ASGI lifespan; acquire() is
 # idempotent on this guard and release happens after the existing lifespan.
 install_single_process_runtime_guard(app, guard=_runtime_guard)
+from .control_plane_integration_v1 import (
+    install_control_plane_authority_v1,
+    install_control_plane_features_v1,
+)
 from .voice_patch import install_voice_patch
 from .live_voice_patch import install_live_voice_patch
 from .v7_patch import install_v7_patch
@@ -122,6 +126,9 @@ install_v13_patch(app)
 install_v14_patch(app)
 install_v15_patch(app)
 install_v16_patch(app)
+# C-01 must establish the RBAC policy store before v17 installs the shared
+# administrator-session and route-authorization boundary.
+install_control_plane_authority_v1(app)
 install_v17_patch(app)
 install_v17_crypto_patch(app)
 install_v17_route_migration_patch(app)
@@ -321,6 +328,9 @@ install_legacy_mini_default_alias(app)
 install_worker_probe_ui_v1(app)
 # Standalone diagnosis has its own audit trail, not the request terminal.
 install_native_page_diagnostics(app)
+# One production composition owner wires the independent C-track services only
+# after user accounts, Worker/model routing and the legacy admin auth stack exist.
+install_control_plane_features_v1(app)
 # The transport-only SSE guard is the final ASGI middleware installation, after
 # every patch that can register a BaseHTTPMiddleware wrapper. The trailing
 # idempotent request-history call only reasserts its table ownership.

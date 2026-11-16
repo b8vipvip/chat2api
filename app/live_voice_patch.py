@@ -14,6 +14,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 
 from .api_keys import ApiPrincipal
+from . import model_capability_routing_patch as model_routing
 from .responses_multimodal_input_v183 import attachment_specs
 
 LIVE_PROTOCOL_VERSION = "chat2api-live-v1"
@@ -162,26 +163,32 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 return False
         return client_id not in registry.busy_clients
 
-    def resolve_idle_client(requested: str | None, principal: ApiPrincipal) -> str:
+    def resolve_idle_client(
+        requested: str | None, principal: ApiPrincipal, requested_model: str,
+    ) -> str:
         registry.set_routing_key(principal.key_id)
-        if requested:
-            selected = registry.resolve_client(requested)
-            if not can_accept(selected, LIVE_CAPACITY_WEIGHT):
-                raise LookupError("Requested Chrome extension has no GPT-Live capacity")
-            return selected
+        # session.start is the only place the Realtime protocol supplies its
+        # requested model. Preserve that identity through the existing resolver
+        # so key/user/tenant entitlements apply before a Worker is selected.
+        with model_routing.model_target_context(requested_model):
+            if requested:
+                selected = registry.resolve_client(requested)
+                if not can_accept(selected, LIVE_CAPACITY_WEIGHT):
+                    raise LookupError("Requested Chrome extension has no GPT-Live capacity")
+                return selected
 
-        online = registry.online_client_ids()
-        if not online:
-            raise ConnectionError("No Chrome extension is online. Open Chrome with a paired chat2api extension.")
-        idle = [client_id for client_id in online if can_accept(client_id, LIVE_CAPACITY_WEIGHT)]
-        if not idle:
-            raise LookupError("All online Chrome extensions are at GPT-Live capacity")
-        previous = registry.route_for_key(principal.key_id)
-        if previous in idle:
-            return previous
-        selected = secrets.choice(idle)
-        # Resolve explicitly so the existing registry persists the API-key sticky route.
-        return registry.resolve_client(selected)
+            online = registry.online_client_ids()
+            if not online:
+                raise ConnectionError("No Chrome extension is online. Open Chrome with a paired chat2api extension.")
+            idle = [client_id for client_id in online if can_accept(client_id, LIVE_CAPACITY_WEIGHT)]
+            if not idle:
+                raise LookupError("All online Chrome extensions are at GPT-Live capacity")
+            previous = registry.route_for_key(principal.key_id)
+            if previous in idle:
+                return previous
+            selected = secrets.choice(idle)
+            # Resolve explicitly so the existing registry persists the API-key sticky route.
+            return registry.resolve_client(selected)
 
     @app.post("/v1/audio/realtime/sessions")
     async def create_live_voice_session(request: Request) -> dict[str, object]:
@@ -400,7 +407,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     return
                 request_id = provided_request_id
             requested_client = str(start.get("client_id") or client_id or "").strip() or None
-            selected_client = resolve_idle_client(requested_client, principal)
+            selected_client = resolve_idle_client(requested_client, principal, requested_model)
             state = await broker.create(request_id, selected_client)
             registry.busy_clients.add(selected_client)
             await telemetry.append({
@@ -559,6 +566,18 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
             error_message = "SESSION_START_TIMEOUT"
             with suppress(Exception):
                 await send_json({"type": "error", "code": "SESSION_START_TIMEOUT", "message": "Timed out waiting for session.start"})
+        except HTTPException as error:
+            error_message = str(error.detail)
+            detail = error.detail if isinstance(error.detail, dict) else {}
+            code = str(detail.get("code") or (
+                "REQUEST_NOT_AUTHORIZED" if error.status_code == 403 else "REQUEST_UNAVAILABLE"
+            ))
+            message = str(detail.get("message") or error.detail)
+            with suppress(Exception):
+                await send_json({
+                    "type": "error", "code": code, "message": message,
+                    "retryable": error.status_code >= 500,
+                })
         except (LookupError, KeyError, ConnectionError, RuntimeError) as error:
             error_message = str(error)
             with suppress(Exception):
