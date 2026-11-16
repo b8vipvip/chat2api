@@ -101,9 +101,14 @@ class _Telemetry:
     def get(self, request_id: str) -> dict | None:
         return next((row for row in reversed(self.rows) if row.get("request_id") == request_id), None)
 
-    async def upsert(self, row: dict) -> dict:
-        existing = self.get(row["request_id"]) or {}
-        merged = {**existing, **row}
+    async def upsert(
+        self, row: dict, *, merge_diagnostics: bool = False, create_only: bool = False,
+    ) -> dict:
+        from app.telemetry import DuplicateRequestIdentity
+        existing = self.get(row["request_id"])
+        if create_only and existing is not None:
+            raise DuplicateRequestIdentity("request_id already exists")
+        merged = {**(existing or {}), **row}
         self.rows.append(merged)
         return merged
 
