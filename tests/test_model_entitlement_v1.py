@@ -9,6 +9,7 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
+from app.admin_audit import AdminAuditError
 from app.admin_auth import AdminSessionStore
 from app.api_keys import ApiPrincipal
 from app.live_voice_patch import install_live_voice_patch
@@ -16,6 +17,7 @@ from app.voice_patch import install_voice_patch
 from app.model_entitlement_v1_patch import install_model_entitlements
 from app.model_capability_routing_patch import install_model_capability_routing_patch
 from app.model_entitlements import ModelEntitlementError, ModelEntitlementStore
+from app.tenant_membership import TenantMembershipError, TenantMembershipStore
 from app import model_capability_routing_patch as model_routing
 from app import v13_patch
 
@@ -87,12 +89,12 @@ class FakeApiKeys:
         return {"key_id": key_id} if key_id in {"key_1", "key_2"} else None
 
 
-def build_app(tmp_path: Path):
+def build_app(tmp_path: Path, tenant_memberships=None):
     app = FastAPI()
     app.state.settings = SimpleNamespace(data_dir=tmp_path, admin_username="owner")
     app.state.registry = FakeRegistry()
     app.state.user_accounts = FakeAccounts()
-    app.state.tenant_memberships = FakeTenantMemberships()
+    app.state.tenant_memberships = tenant_memberships if tenant_memberships is not None else FakeTenantMemberships()
     app.state.api_keys = FakeApiKeys()
     app.state.admin_sessions = AdminSessionStore(
         "owner", "strong-admin-password", storage_path=tmp_path / "admin_sessions.json"
@@ -375,6 +377,35 @@ def test_tenant_key_binding_must_match_current_authoritative_key_owner(tmp_path:
         reset_model_context(tokens)
 
 
+def test_revoked_tenant_member_loses_workspace_model_entitlements(tmp_path: Path):
+    tenants = TenantMembershipStore(tmp_path)
+    app, _ = build_app(tmp_path, tenant_memberships=tenants)
+    user_id = "usr_abcdef123"
+    tenant = tenants.create("revocation-workspace", "Revocation Workspace")
+    tenant_id = tenant["tenant_id"]
+    tenants.upsert_member(tenant_id, user_id, "owner")
+    tenants.upsert_member(tenant_id, "usr_ghijkl789", "owner")
+    tenants.bind_key(tenant_id, user_id, "key_1")
+
+    policies = app.state.model_entitlements
+    policies.upsert("global", "default", "allow", ["gpt-5.5", "gpt-5.6-sol"])
+    policies.upsert("tenant", tenant_id, "allow", ["gpt-5.5"])
+    policies.upsert("tenant_role", "owner", "allow", ["gpt-5.5"])
+
+    app.state.registry.routing_key_context.set("key_1")
+    assert [row["id"] for row in app.state.registry.model_catalog()] == ["gpt-5.5"]
+    with pytest.raises(TenantMembershipError, match="Unbind"):
+        tenants.remove_member(tenant_id, user_id)
+
+    tenants.unbind_key(tenant_id, "key_1")
+    tenants.remove_member(tenant_id, user_id)
+    assert tenants.role_for(tenant_id, user_id) is None
+    assert tenants.tenant_for_key("key_1") is None
+    # Once the binding and membership are revoked, the old workspace and role
+    # allowlists must no longer constrain or grant this user's API key.
+    assert [row["id"] for row in app.state.registry.model_catalog()] == ["gpt-5.5", "gpt-5.6-sol"]
+
+
 def test_admin_entitlement_api_requires_session_audits_and_validates_subjects(tmp_path: Path):
     app, token = build_app(tmp_path)
     with TestClient(app) as client:
@@ -430,6 +461,47 @@ def test_admin_entitlement_api_requires_session_audits_and_validates_subjects(tm
         assert deleted.status_code == 200 and deleted.json()["deleted"] is True
         events = app.state.admin_audit.recent(20)
         assert any(row["action"] == "model.entitlement_completed" for row in events)
+
+
+def test_model_entitlement_audit_completion_failure_is_reported_without_false_http_failure(tmp_path: Path, monkeypatch):
+    app, token = build_app(tmp_path)
+    audit = app.state.admin_audit
+    original_append = audit.append
+    headers = {"Cookie": f"chat2api_admin_session={token}", "X-Request-ID": "model-audit-123"}
+
+    def fail_requested(**kwargs):
+        if kwargs["action"] == "model.entitlement_requested":
+            raise AdminAuditError("simulated audit failure")
+        return original_append(**kwargs)
+
+    monkeypatch.setattr(audit, "append", fail_requested)
+    with TestClient(app) as client:
+        denied = client.put(
+            "/api/admin/model-entitlements/key/key_1",
+            headers=headers,
+            json={"effect": "allow", "models": ["gpt-5.5"]},
+        )
+        assert denied.status_code == 503
+        assert app.state.model_entitlements.list_rules() == []
+
+        def fail_completion(**kwargs):
+            if kwargs["action"] == "model.entitlement_completed":
+                raise AdminAuditError("simulated completion failure")
+            return original_append(**kwargs)
+
+        monkeypatch.setattr(audit, "append", fail_completion)
+        committed = client.put(
+            "/api/admin/model-entitlements/key/key_1",
+            headers=headers,
+            json={"effect": "allow", "models": ["gpt-5.5"]},
+        )
+        assert committed.status_code == 200, committed.text
+        assert committed.headers["X-Admin-Audit-Status"] == "completion-pending"
+        assert app.state.model_entitlements.list_rules()[0]["models"] == ["gpt-5.5"]
+        assert app.state.admin_audit_completion_pending is True
+        rows = audit.recent(20)
+        assert any(row["action"] == "model.entitlement_requested" and row["request_id"] == "model-audit-123" for row in rows)
+        assert not any(row["action"] == "model.entitlement_completed" for row in rows)
 
 
 def test_images_generation_entitlement_uses_server_owned_gpt_image_target(tmp_path: Path):

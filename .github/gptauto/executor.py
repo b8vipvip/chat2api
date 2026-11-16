@@ -127,11 +127,17 @@ def next_action(task: Task) -> dict:
 
     # Approval-required workflow runs are user-action gates, not repair evidence.
     if authority["phase"] == "USER_ACTION_REQUIRED" or conclusion == "action_required":
+        blocked_reason = str(meta.get("blocked_reason") or "workflow_approval_required")
+        reason = (
+            "PR remains Draft; waiting for a maintainer to mark it ready for review"
+            if blocked_reason == "pr_draft_waiting_for_review"
+            else "GitHub workflow requires maintainer approval or another explicit user action"
+        )
         return _with_lease(
             task,
             {
                 "action": "user_action_required",
-                "reason": "GitHub workflow requires maintainer approval or another explicit user action",
+                "reason": reason,
                 "task_id": task.task_id,
                 "pr_number": str(meta.get("pr_number") or ""),
                 "run_id": str(meta.get("run_id") or meta.get("pr_ci_run_id") or ""),

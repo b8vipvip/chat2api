@@ -5,6 +5,7 @@
   if (!nav || !content || document.getElementById("view-user-pricing")) return;
   const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[ch]);
   let adminRoleResolved = false;
+  let adminRoleRefreshGeneration = 0;
   const keyHeader = () => {
     // Never send a possibly stale root key until the current Session role is
     // known. A delegated Session must not inherit a prior administrator key.
@@ -26,30 +27,33 @@
   }
 
   let currentAdminRole = null;
+  let currentAdminUsername = null;
   let sessionAuthenticated = false;
   const canWriteUsers = () => ["super_admin", "user_admin"].includes(currentAdminRole);
+  const canReadUserKeys = () => ["super_admin", "support"].includes(currentAdminRole);
   const canReadAudit = () => currentAdminRole === "super_admin";
-  async function refreshAdminRole() {
-    let sessionCheckSucceeded = false;
-    try {
-      const response = await fetch("/api/admin/auth/session", {credentials:"same-origin", cache:"no-store"});
-      if (!response.ok) throw new Error("Admin session lookup failed");
-      const session = await response.json();
-      sessionAuthenticated = !!session.authenticated;
-      currentAdminRole = sessionAuthenticated ? (session.role || "unknown") : null;
-      sessionCheckSucceeded = true;
-    } catch (_) {
-      currentAdminRole = null;
-    }
-    if (sessionCheckSucceeded && !sessionAuthenticated && !currentAdminRole && String(document.getElementById("adminKey")?.value || "").trim()) {
-      currentAdminRole = "super_admin";
-    }
-    adminRoleResolved = sessionCheckSucceeded;
+  function applyAdminRole() {
+    // Expose only the non-secret role/readiness state for deterministic UI
+    // synchronization. Server-side route middleware remains authoritative.
+    document.documentElement.dataset.adminCommerceRole = currentAdminRole || "";
+    document.documentElement.dataset.adminCommerceSessionReady = adminRoleResolved ? "true" : "false";
     pricingButton.hidden = !["super_admin", "billing_admin"].includes(currentAdminRole);
     paymentButton.hidden = !["super_admin", "billing_admin"].includes(currentAdminRole);
     usersButton.hidden = !["super_admin", "user_admin", "system_admin", "support"].includes(currentAdminRole);
     const auditPanel = document.getElementById("adminAuditPanel");
     if (auditPanel) auditPanel.hidden = !canReadAudit();
+    if (!canReadAudit()) {
+      const auditBody = document.getElementById("adminAuditBody");
+      if (auditBody) auditBody.textContent = "";
+    }
+    if (!canReadUserKeys()) {
+      adminUserKeyLoadGeneration += 1;
+      const keysPanel = document.getElementById("adminUserKeysPanel");
+      const keysBody = document.getElementById("adminUserKeysBody");
+      if (keysPanel) keysPanel.style.display = "none";
+      if (keysBody) keysBody.textContent = "";
+      activeAdminUserId = "";
+    }
     const canWritePaymentSecrets = currentAdminRole === "super_admin";
     document.querySelectorAll("#view-user-payments input, #view-user-payments select, #view-user-payments textarea").forEach((node) => {
       node.disabled = !canWritePaymentSecrets;
@@ -60,16 +64,48 @@
     });
   }
 
+  async function refreshAdminRole() {
+    const generation = ++adminRoleRefreshGeneration;
+    let sessionCheckSucceeded = false;
+    let session = null;
+    try {
+      const response = await fetch("/api/admin/auth/session", {credentials:"same-origin", cache:"no-store"});
+      if (!response.ok) throw new Error("Admin session lookup failed");
+      session = await response.json();
+      if (generation !== adminRoleRefreshGeneration) return;
+      sessionCheckSucceeded = true;
+    } catch (_) {
+      if (generation !== adminRoleRefreshGeneration) return;
+    }
+    const nextAuthenticated = sessionCheckSucceeded && !!session?.authenticated;
+    let nextRole = nextAuthenticated ? (session.role || "unknown") : null;
+    const nextUsername = nextAuthenticated ? (session.username || null) : null;
+    if (sessionCheckSucceeded && !nextAuthenticated && !nextRole && String(document.getElementById("adminKey")?.value || "").trim()) {
+      nextRole = "super_admin";
+    }
+    if (currentAdminRole !== nextRole || sessionAuthenticated !== nextAuthenticated || currentAdminUsername !== nextUsername) {
+      clearUserAdminData();
+    }
+    sessionAuthenticated = nextAuthenticated;
+    currentAdminRole = nextRole;
+    currentAdminUsername = nextUsername;
+    adminRoleResolved = sessionCheckSucceeded;
+    applyAdminRole();
+  }
+
   const pricingButton = document.createElement("button");
   pricingButton.dataset.view = "user-pricing";
+  pricingButton.dataset.cview = "true";
   pricingButton.textContent = "价格配置";
   nav.appendChild(pricingButton);
   const paymentButton = document.createElement("button");
   paymentButton.dataset.view = "user-payments";
+  paymentButton.dataset.cview = "true";
   paymentButton.textContent = "支付配置";
   nav.appendChild(paymentButton);
   const usersButton = document.createElement("button");
   usersButton.dataset.view = "admin-users";
+  usersButton.dataset.cview = "true";
   usersButton.textContent = "用户管理";
   nav.appendChild(usersButton);
 
@@ -202,13 +238,50 @@
   let adminUserOffset = 0;
   const adminUserLimit = 100;
   let adminUserTotal = 0;
+  let adminUserLoadGeneration = 0;
+  let adminUserKeyLoadGeneration = 0;
+
+  function clearUserAdminData() {
+    adminUserLoadGeneration += 1;
+    adminUserKeyLoadGeneration += 1;
+    adminUserRows = [];
+    adminUserTotal = 0;
+    adminUserOffset = 0;
+    activeAdminUserId = "";
+    const rows = document.getElementById("adminUsersBody");
+    if (rows) rows.replaceChildren();
+    const status = document.getElementById("adminUserStatus");
+    if (status) status.textContent = "";
+    const page = document.getElementById("adminUserPage");
+    if (page) page.textContent = "0-0 / 0";
+    const previous = document.getElementById("adminUserPrev");
+    const next = document.getElementById("adminUserNext");
+    if (previous) previous.disabled = true;
+    if (next) next.disabled = true;
+    const keysPanel = document.getElementById("adminUserKeysPanel");
+    if (keysPanel) keysPanel.style.display = "none";
+    const keysBody = document.getElementById("adminUserKeysBody");
+    if (keysBody) keysBody.textContent = "";
+  }
+
   async function loadUsers() {
+    const generation = ++adminUserLoadGeneration;
+    const ownerRole = currentAdminRole;
+    const ownerUsername = currentAdminUsername;
+    if (!adminRoleResolved || !ownerRole) return;
     const status = document.getElementById("adminUserStatus");
     status.textContent = "正在加载用户…";
     const query = document.getElementById("adminUserSearch").value.trim();
     const params = new URLSearchParams({limit:String(adminUserLimit),offset:String(adminUserOffset)});
     if (query) params.set("q", query);
-    const payload = await adminApi("/api/admin/users?" + params.toString());
+    let payload;
+    try {
+      payload = await adminApi("/api/admin/users?" + params.toString());
+    } catch (error) {
+      if (generation !== adminUserLoadGeneration || !adminRoleResolved || currentAdminRole !== ownerRole || currentAdminUsername !== ownerUsername) return;
+      throw error;
+    }
+    if (generation !== adminUserLoadGeneration || !adminRoleResolved || currentAdminRole !== ownerRole || currentAdminUsername !== ownerUsername) return;
     adminUserRows = payload.data || [];
     adminUserTotal = Number(payload.total || 0);
     renderUsers();
@@ -254,7 +327,7 @@
         '<td>' + Number(user.active_sessions || 0) + '</td>' +
         '<td>' + balance + '</td>' +
         '<td><div class="rowactions">' + writeActions +
-        '<button class="action" data-user-action="keys" data-user-id="' + esc(user.user_id) + '">查看 Key</button>' +
+        (canReadUserKeys() ? '<button class="action" data-user-action="keys" data-user-id="' + esc(user.user_id) + '">查看 Key</button>' : '') +
         '</div></td></tr>';
     }).join("");
     const page = document.getElementById("adminUserPage");
@@ -268,11 +341,22 @@
     document.getElementById("adminUserStatus").textContent = "错误：" + error.message;
   }
   async function loadUserKeys(userId) {
+    if (!canReadUserKeys()) throw new Error("当前管理员角色无权查看用户 API Key");
+    const generation = ++adminUserKeyLoadGeneration;
+    const ownerRole = currentAdminRole;
+    const ownerUsername = currentAdminUsername;
     activeAdminUserId = String(userId || "");
     const panel = document.getElementById("adminUserKeysPanel");
     const user = adminUserRows.find((row) => row.user_id === activeAdminUserId);
     document.getElementById("adminUserKeysTitle").textContent = "用户 API Key · " + (user?.email || activeAdminUserId);
-    const payload = await adminApi("/api/admin/users/" + encodeURIComponent(activeAdminUserId) + "/keys");
+    let payload;
+    try {
+      payload = await adminApi("/api/admin/users/" + encodeURIComponent(activeAdminUserId) + "/keys");
+    } catch (error) {
+      if (generation !== adminUserKeyLoadGeneration || !adminRoleResolved || !canReadUserKeys() || currentAdminRole !== ownerRole || currentAdminUsername !== ownerUsername) return;
+      throw error;
+    }
+    if (generation !== adminUserKeyLoadGeneration || !adminRoleResolved || !canReadUserKeys() || currentAdminRole !== ownerRole || currentAdminUsername !== ownerUsername) return;
     const body = document.getElementById("adminUserKeysBody");
     body.innerHTML = (payload.data || []).map((key) => {
       const configuredEnabled = Boolean(key.configured_enabled);
@@ -482,8 +566,29 @@
       activate("user-pricing");
     }
   }
-  window.addEventListener("chat2api-admin-session-changed", async () => {
-    await refreshAdminRole();
+  // The C-track session is authoritative. Consume its event detail rather
+  // than issuing a second racing lookup that could overwrite a newer login.
+  window.addEventListener("chat2api-admin-session-changed", (event) => {
+    adminRoleRefreshGeneration += 1;
+    const session = event.detail;
+    if (!session || typeof session.authenticated !== "boolean") {
+      refreshAdminRole().then(activateRoleDefault);
+      return;
+    }
+    const nextAuthenticated = !!session.authenticated;
+    let nextRole = nextAuthenticated ? (session.role || "unknown") : null;
+    const nextUsername = nextAuthenticated ? (session.username || null) : null;
+    if (!nextAuthenticated && !nextRole && String(document.getElementById("adminKey")?.value || "").trim()) {
+      nextRole = "super_admin";
+    }
+    if (currentAdminRole !== nextRole || sessionAuthenticated !== nextAuthenticated || currentAdminUsername !== nextUsername) {
+      clearUserAdminData();
+    }
+    sessionAuthenticated = nextAuthenticated;
+    currentAdminRole = nextRole;
+    currentAdminUsername = nextUsername;
+    adminRoleResolved = true;
+    applyAdminRole();
     activateRoleDefault();
   });
   refreshAdminRole().then(activateRoleDefault);

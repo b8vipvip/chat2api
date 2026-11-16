@@ -1,12 +1,17 @@
 """C-05a product Plugin Registry API: metadata only, execution disabled."""
 from __future__ import annotations
 
+import logging
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 
 from .admin_audit import AdminAuditError, AdminAuditStore
+from .admin_auth import SESSION_COOKIE
 from .plugin_registry import PluginRegistry, PluginRegistryError
+
+
+logger = logging.getLogger(__name__)
 
 
 def install_plugin_registry(app: FastAPI) -> FastAPI:
@@ -16,23 +21,25 @@ def install_plugin_registry(app: FastAPI) -> FastAPI:
     app.state.product_plugin_registry = registry
     app.state.product_plugin_registry_installed = True
 
-    def record(request: Request, action: str, pid: str, version: str) -> None:
+    def admin_actor(request: Request) -> str:
+        sessions = getattr(app.state, "admin_sessions", None)
+        token = request.cookies.get(SESSION_COOKIE)
+        if sessions is None or not sessions.authenticate(token):
+            raise HTTPException(status_code=401, detail="Administrator login required")
+        identity = getattr(sessions, "identity", None)
+        username = identity(token) if callable(identity) else app.state.settings.admin_username
+        return str(username or app.state.settings.admin_username)
+
+    def record(
+        request: Request, actor: str, action: str, pid: str, version: str, *, required: bool = True
+    ) -> bool:
         audit = getattr(app.state, "admin_audit", None)
         if audit is None:
             audit = AdminAuditStore(app.state.settings.data_dir)
             app.state.admin_audit = audit
-        sessions = getattr(app.state, "admin_sessions", None)
-        token = request.cookies.get("chat2api_admin_session")
-        if sessions is None or not sessions.authenticate(token):
-            raise HTTPException(status_code=401, detail="Administrator login required")
-        # C-05 branches from main independently of C-01 RBAC. Legacy v17
-        # sessions authenticate the configured root; the new C-01 identity()
-        # method is used only after that parallel PR has been integrated.
-        identity = getattr(sessions, "identity", None)
-        username = identity(token) if callable(identity) else app.state.settings.admin_username
         try:
             audit.append(
-                actor=str(username or app.state.settings.admin_username),
+                actor=actor,
                 action=action,
                 target_type="plugin_manifest",
                 target_id=pid,
@@ -40,14 +47,22 @@ def install_plugin_registry(app: FastAPI) -> FastAPI:
                 request_id=str(request.headers.get("x-request-id") or ""),
             )
         except AdminAuditError as exc:
-            raise HTTPException(status_code=503, detail="Administrator audit unavailable; registry write denied") from exc
+            if required:
+                raise HTTPException(status_code=503, detail="Administrator audit unavailable; registry write denied") from exc
+            app.state.admin_audit_completion_pending = True
+            logger.error(
+                "Admin audit completion append failed after plugin manifest registration: plugin_id=%s version=%s",
+                pid, version,
+            )
+            return False
+        return True
 
     @app.get("/api/admin/plugins")
     async def list_plugins() -> dict[str, Any]:
         return {"data": registry.list_public_metadata(), "execution_enabled": False}
 
     @app.post("/api/admin/plugins", status_code=201)
-    async def register_manifest(request: Request, manifest: dict[str, Any]) -> dict[str, Any]:
+    async def register_manifest(request: Request, manifest: dict[str, Any], response: Response) -> dict[str, Any]:
         try:
             # Validate before recording a bounded audit event; the full manifest
             # (including schema descriptions) must never enter audit records.
@@ -56,12 +71,14 @@ def install_plugin_registry(app: FastAPI) -> FastAPI:
         except PluginRegistryError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         pid, version = validated["id"], validated["version"]
-        record(request, "plugin.manifest_requested", pid, version)
+        actor = admin_actor(request)
+        record(request, actor, "plugin.manifest_requested", pid, version)
         try:
             created = registry.add(validated)
         except PluginRegistryError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        record(request, "plugin.manifest_completed", pid, version)
+        audit_ok = record(request, actor, "plugin.manifest_completed", pid, version, required=False)
+        response.headers["X-Admin-Audit-Status"] = "complete" if audit_ok else "completion-pending"
         return {"plugin": created}
 
     @app.get("/api/admin/plugins/{plugin_id}/versions/{version}")

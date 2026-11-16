@@ -22,6 +22,7 @@ from typing import Any
 EMAIL_RE = re.compile(r"^[^@\s]{1,64}@[^@\s.]+(?:\.[^@\s.]+)+$")
 MIN_TTL_SECONDS = 300
 MAX_TTL_SECONDS = 30 * 24 * 60 * 60
+RESERVATION_TTL_SECONDS = 30 * 60
 
 
 class InvitationError(ValueError):
@@ -67,6 +68,7 @@ class InvitationStore:
                 """)
                 conn.execute("CREATE INDEX IF NOT EXISTS invitations_created_idx ON invitations(created_at DESC)")
                 conn.execute("CREATE INDEX IF NOT EXISTS invitations_status_idx ON invitations(status, expires_at)")
+                conn.execute("CREATE INDEX IF NOT EXISTS invitations_reservation_lease_idx ON invitations(status, reserved_at)")
             finally:
                 conn.close()
         try:
@@ -164,6 +166,13 @@ class InvitationStore:
             conn = self._connect()
             try:
                 conn.execute("BEGIN IMMEDIATE")
+                # A crashed registration may leave a reservation behind. Expire
+                # the lease after 30 minutes; never silently make that code reusable.
+                conn.execute(
+                    """UPDATE invitations SET status='expired',reservation_id=NULL
+                       WHERE status='reserved' AND reserved_at IS NOT NULL AND reserved_at<=?""",
+                    (now - RESERVATION_TTL_SECONDS,),
+                )
                 row = conn.execute(
                     "SELECT invitation_id,email,status,expires_at FROM invitations WHERE token_hash=?",
                     (digest,),
@@ -179,9 +188,9 @@ class InvitationStore:
                             "UPDATE invitations SET status='expired' WHERE invitation_id=? AND status='issued'",
                             (str(row["invitation_id"]),),
                         )
-                        conn.commit()
-                    else:
-                        conn.rollback()
+                    # Commit stale-reservation cleanup even when this supplied
+                    # code is invalid, expired, or bound to a different email.
+                    conn.commit()
                     raise InvitationError("Invitation code is invalid or unavailable")
                 conn.execute(
                     """UPDATE invitations SET status='reserved',reservation_id=?,reserved_at=?
@@ -202,14 +211,20 @@ class InvitationStore:
         with self.lock:
             conn = self._connect()
             try:
+                now = int(time.time())
                 conn.execute("BEGIN IMMEDIATE")
+                conn.execute(
+                    """UPDATE invitations SET status='expired',reservation_id=NULL
+                       WHERE reservation_id=? AND status='reserved' AND reserved_at<=?""",
+                    (str(reservation_id), now - RESERVATION_TTL_SECONDS),
+                )
                 cursor = conn.execute(
                     """UPDATE invitations SET status='consumed',consumed_at=?
                        WHERE reservation_id=? AND status='reserved'""",
-                    (int(time.time()), str(reservation_id)),
+                    (now, str(reservation_id)),
                 )
                 if cursor.rowcount != 1:
-                    conn.rollback()
+                    conn.commit()
                     raise InvitationError("Invitation reservation is no longer active")
                 conn.commit()
             except InvitationError:
@@ -227,13 +242,14 @@ class InvitationStore:
             try:
                 conn.execute("BEGIN IMMEDIATE")
                 row = conn.execute(
-                    "SELECT invitation_id,expires_at FROM invitations WHERE reservation_id=? AND status='reserved'",
+                    "SELECT invitation_id,expires_at,reserved_at FROM invitations WHERE reservation_id=? AND status='reserved'",
                     (str(reservation_id),),
                 ).fetchone()
                 if row is None:
                     conn.rollback()
                     return False
-                status = "issued" if int(row["expires_at"]) > now else "expired"
+                lease_active = row["reserved_at"] is not None and int(row["reserved_at"]) > now - RESERVATION_TTL_SECONDS
+                status = "issued" if int(row["expires_at"]) > now and lease_active else "expired"
                 cursor = conn.execute(
                     """UPDATE invitations SET status=?,reservation_id=NULL,reserved_at=NULL
                        WHERE invitation_id=? AND status='reserved' AND reservation_id=?""",
@@ -271,14 +287,24 @@ class InvitationStore:
         with self.lock:
             conn = self._connect()
             try:
+                conn.execute("BEGIN IMMEDIATE")
                 conn.execute(
                     "UPDATE invitations SET status='expired' WHERE status='issued' AND expires_at<=?",
                     (now,),
+                )
+                conn.execute(
+                    """UPDATE invitations SET status='expired',reservation_id=NULL
+                       WHERE status='reserved' AND reserved_at IS NOT NULL AND reserved_at<=?""",
+                    (now - RESERVATION_TTL_SECONDS,),
                 )
                 rows = conn.execute(
                     "SELECT * FROM invitations ORDER BY created_at DESC, rowid DESC LIMIT ?",
                     (bounded,),
                 ).fetchall()
+                conn.commit()
                 return [self._public(row) for row in rows]
+            except Exception:
+                conn.rollback()
+                raise
             finally:
                 conn.close()

@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from app.admin_audit import AdminAuditError, AdminAuditStore
 from app.config import Settings
 from app.main import create_app
 from app.plugin_registry import PluginRegistry, PluginRegistryError, validate_manifest
@@ -80,6 +81,46 @@ def test_manifest_rejects_unsafe_or_unsupported_metadata(bad):
     item = {**manifest(), **bad}
     with pytest.raises(PluginRegistryError):
         validate_manifest(item)
+
+
+def test_plugin_registration_audit_completion_failure_does_not_report_failed_creation(tmp_path: Path, monkeypatch):
+    app = make_app(tmp_path)
+    app.state.admin_audit = AdminAuditStore(tmp_path)
+    audit = app.state.admin_audit
+    original_append = audit.append
+
+    def fail_requested(**kwargs):
+        if kwargs["action"] == "plugin.manifest_requested":
+            raise AdminAuditError("simulated audit failure")
+        return original_append(**kwargs)
+
+    monkeypatch.setattr(audit, "append", fail_requested)
+    with TestClient(app) as client:
+        login = client.post("/api/admin/auth/login", json={
+            "username": "owner", "password": "strong-root-password",
+        }, headers=ORIGIN)
+        assert login.status_code == 200
+
+        denied = client.post("/api/admin/plugins", json=manifest(), headers=ORIGIN)
+        assert denied.status_code == 503
+        assert app.state.product_plugin_registry.list_public_metadata() == []
+
+        def fail_completion(**kwargs):
+            if kwargs["action"] == "plugin.manifest_completed":
+                raise AdminAuditError("simulated completion failure")
+            return original_append(**kwargs)
+
+        monkeypatch.setattr(audit, "append", fail_completion)
+        committed = client.post(
+            "/api/admin/plugins", json=manifest(), headers={**ORIGIN, "X-Request-ID": "plugin-audit-123"}
+        )
+        assert committed.status_code == 201, committed.text
+        assert committed.headers["X-Admin-Audit-Status"] == "completion-pending"
+        assert len(app.state.product_plugin_registry.list_public_metadata()) == 1
+        assert app.state.admin_audit_completion_pending is True
+        rows = audit.recent(20)
+        assert any(row["action"] == "plugin.manifest_requested" and row["request_id"] == "plugin-audit-123" for row in rows)
+        assert not any(row["action"] == "plugin.manifest_completed" for row in rows)
 
 
 def test_plugin_admin_endpoints_use_existing_session_and_csrf_gate(tmp_path: Path):

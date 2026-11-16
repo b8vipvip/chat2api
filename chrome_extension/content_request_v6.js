@@ -2650,8 +2650,38 @@
     return true;
   }
 
+  const shortReplyStabilityPolicy =
+    globalThis.__CHAT2API_SHORT_REPLY_STABILITY_POLICY_V1__ || null;
+
   function abortedReplyStableThreshold(rendered) {
-    return rendered?.shortTextVerified ? 4500 : 8000;
+    return shortReplyStabilityPolicy?.requiredStableMs(rendered) ?? 8000;
+  }
+
+  function abortedReplyMonotonicNow() {
+    try {
+      const now = shortReplyStabilityPolicy?.now?.() ?? globalThis.performance?.now?.();
+      if (Number.isFinite(now)) return now;
+    } catch (_) {}
+    return Date.now();
+  }
+
+  function abortedReplyStableSince(startedAt, rendered) {
+    if (shortReplyStabilityPolicy) {
+      return shortReplyStabilityPolicy.isStable(rendered, startedAt);
+    }
+    const elapsed = abortedReplyStableElapsedMs(startedAt);
+    return elapsed !== null && elapsed >= 8000;
+  }
+
+  function abortedReplyStableElapsedMs(startedAt) {
+    try {
+      const now = abortedReplyMonotonicNow();
+      const start = Number(startedAt);
+      return Number.isFinite(start) && Number.isFinite(now) && now >= start
+        ? now - start : null;
+    } catch (_) {
+      return null;
+    }
   }
 
   // #560: a failed native click is a transport attempt, not a verdict on
@@ -2682,7 +2712,7 @@
     let verifiedRenderedCandidate = "";
     let verifiedRenderedCandidateSince = 0;
     let abortedRenderedCandidate = "";
-    let abortedRenderedCandidateSince = 0;
+    let abortedRenderedCandidateSince = null;
     let lastAbortedRenderedCaptureAt = 0;
     const imageCreationRequested = isImageCreationRequest(active.prompt);
     const fileCreationRequested = isFileCreationRequest(active.prompt);
@@ -3266,8 +3296,8 @@
                 && !promptStillPresent(active) && !upstreamStillWorking()) {
               if (finalText !== abortedRenderedCandidate) {
                 abortedRenderedCandidate = finalText;
-                abortedRenderedCandidateSince = Date.now();
-              } else if (Date.now() - abortedRenderedCandidateSince >= abortedReplyStableThreshold(rendered)
+                abortedRenderedCandidateSince = abortedReplyMonotonicNow();
+              } else if (abortedReplyStableSince(abortedRenderedCandidateSince, rendered)
                   && Date.now() - Number(active.networkObservedAt || 0) >= 12000
                   && rendered.finishAction?.isConnected
                   && responseFinishActions().includes(rendered.finishAction)
@@ -3321,15 +3351,15 @@
                     response_terminal_dom_reconciled: true,
                     response_integrity_evidence: rendered.rolelessRichVerified
                       ? (rendered.shortTextVerified
-                        ? "fresh-roleless-H4-pair+whole-compact-DIV+SSE-overlap+fresh-toolbar+8s-stable"
-                        : "fresh-roleless-H4-pair+whole-next-DIV+fresh-toolbar+8s-stable+aborted-sse")
+                        ? `fresh-roleless-H4-pair+whole-compact-DIV+SSE-overlap+fresh-toolbar+${abortedReplyStableThreshold(rendered)}ms-stable`
+                        : `fresh-roleless-H4-pair+whole-next-DIV+fresh-toolbar+${abortedReplyStableThreshold(rendered)}ms-stable+aborted-sse`)
                       : rendered.shortTextVerified
-                      ? "same-request-short-sse+fresh-scope-toolbar+8s-stable+aborted-sse"
-                      : "fresh-rendered-baseline+new-finish-action+8s-stable+aborted-sse",
+                      ? `same-request-short-sse+fresh-scope-toolbar+${abortedReplyStableThreshold(rendered)}ms-stable+aborted-sse`
+                      : `fresh-rendered-baseline+new-finish-action+${abortedReplyStableThreshold(rendered)}ms-stable+aborted-sse`,
                     response_epoch_candidate_reason: rendered.reason,
                     response_terminal_final_chars: finalText.length,
                     response_terminal_plain_roleless_fallback: Boolean(plainFallback),
-                    response_terminal_stable_ms: Date.now() - abortedRenderedCandidateSince,
+                    response_terminal_stable_ms: abortedReplyStableElapsedMs(abortedRenderedCandidateSince),
                     response_terminal_required_stable_ms: abortedReplyStableThreshold(rendered),
                     response_finish_action_count: rendered.finishActionCount,
                     response_integrity_scope: "same-answer-container-before-toolbar-v206",
@@ -3349,13 +3379,13 @@
                 active.completed = true;
                 return;
               }
-            } else { abortedRenderedCandidate = ""; abortedRenderedCandidateSince = 0; }
+            } else { abortedRenderedCandidate = ""; abortedRenderedCandidateSince = null; }
           } catch (_) {
             active.abortRecoveryReadOnly = {response_recovery_capture_error:true};
             abortedRenderedCandidate = "";
-            abortedRenderedCandidateSince = 0;
+            abortedRenderedCandidateSince = null;
           }
-        } else if (!rendered) { abortedRenderedCandidate = ""; abortedRenderedCandidateSince = 0; }
+        } else if (!rendered) { abortedRenderedCandidate = ""; abortedRenderedCandidateSince = null; }
         if (!active.abortRecoveryReportedAt || Date.now() - active.abortRecoveryReportedAt >= 20000) {
           active.abortRecoveryReportedAt = Date.now();
           await diagnostic(active, "aborted-sse-dom-recovery", {
@@ -3383,15 +3413,15 @@
               ? responseFinishActions().filter(button =>
                   !active.baselineFinishActions.has(button)
                   && replyScopeForFinishAction(current.latest, button)).length : 0,
-            response_recovery_stable_ms: abortedRenderedCandidateSince
-              ? Date.now() - abortedRenderedCandidateSince : 0,
+            response_recovery_stable_ms: abortedRenderedCandidateSince !== null
+              ? abortedReplyStableElapsedMs(abortedRenderedCandidateSince) : 0,
             response_recovery_network_quiet_ms: Date.now() - active.networkObservedAt,
             network_stream_error: String(active.networkTerminalTransportErrorReason || ""),
           });
         }
       } else {
         abortedRenderedCandidate = "";
-        abortedRenderedCandidateSince = 0;
+        abortedRenderedCandidateSince = null;
       }
 
       // A DOM pause or a missing Stop button cannot override an observed SSE

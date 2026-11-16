@@ -93,12 +93,17 @@ def test_images_only_key_can_complete_hosted_image_tool_but_not_text():
         assert full.status_code == 200
         assert len(calls) == 2
 
-        # Retrieval retains the original chat-scope policy until its stored
-        # response owner is independently verified by the retrieval endpoint.
-        assert client.get(
+        # An Images-only key may retrieve its own image-generation result,
+        # but this exception must not widen text or tool-response access.
+        retrieved = client.get(
             "/v1/responses/" + result["id"],
             headers={"Authorization": "Bearer key-images"},
-        ).status_code == 403
+        )
+        assert retrieved.status_code == 200
+        assert all(
+            item["type"] == "image_generation_call"
+            for item in retrieved.json()["output"]
+        )
 
 
 def test_images_only_key_streams_one_image_request():

@@ -17,6 +17,7 @@ def test_admin_console_exposes_c_views_and_one_control_plane_asset():
     assert 'data-view="model-entitlements"' in html
     assert 'data-view="plugins"' in html
     assert 'data-view="quota-ledger"' in html
+    assert ".nav button[hidden]{display:none!important}" in html
     assert 'data-view="api-keys"' in html
     assert 'id="view-api-keys"' in html
     assert 'id="view-users"' not in html
@@ -67,9 +68,26 @@ def test_admin_console_rejects_unknown_initial_view():
 
 def test_existing_commerce_console_is_the_single_user_and_billing_ui_owner():
     source = (Path(__file__).resolve().parents[1] / "app" / "admin_user_commerce_v104.js").read_text(encoding="utf-8")
-    assert 'sessionAuthenticated ? (session.role || "unknown") : null' in source
+    assert 'let nextRole = nextAuthenticated ? (session.role || "unknown") : null' in source
+    assert 'currentAdminRole = nextRole' in source
     assert 'currentAdminRole !== "super_admin"' in source
     assert 'adminRoleResolved = sessionCheckSucceeded' in source
+    assert "let adminRoleRefreshGeneration = 0" in source
+    assert "if (generation !== adminRoleRefreshGeneration) return" in source
+    assert "event.detail" in source
+    assert "document.documentElement.dataset.adminCommerceSessionReady" in source
+    assert "function applyAdminRole()" in source
+    assert "let currentAdminUsername = null" in source
+    assert "let adminUserLoadGeneration = 0" in source
+    assert "let adminUserKeyLoadGeneration = 0" in source
+    assert "if (generation !== adminUserKeyLoadGeneration" in source
+    assert "let adminUserKeyLoadGeneration = 0" in source
+    assert "function clearUserAdminData()" in source
+    assert "currentAdminUsername !== ownerUsername" in source
+    assert "if (generation !== adminUserLoadGeneration" in source
+    assert 'const canReadUserKeys = () => ["super_admin", "support"].includes(currentAdminRole);' in source
+    assert 'if (!canReadUserKeys()) throw new Error("当前管理员角色无权查看用户 API Key");' in source
+    assert "canReadUserKeys() ? '<button class=" in source
     assert '["super_admin", "billing_admin"]' in source
     assert '["super_admin", "user_admin", "system_admin", "support"]' in source
     assert 'if (canReadAudit()) await loadAudit()' in source
@@ -79,3 +97,36 @@ def test_existing_commerce_console_is_the_single_user_and_billing_ui_owner():
     assert 'currentAdminRole === "super_admin"' in payment_source
     assert 'node.disabled = !canEditSecrets' in payment_source
     assert 'currentAdminRole !== "super_admin"' in payment_source
+
+def test_commerce_navigation_buttons_join_the_c_track_role_visibility_map():
+    root = Path(__file__).resolve().parents[1]
+    c_track = (root / "app" / "admin_control_plane_admin_v1.js").read_text(encoding="utf-8")
+    commerce = (root / "app" / "admin_user_commerce_v104.js").read_text(encoding="utf-8")
+
+    assert '"user-pricing": ["super_admin", "billing_admin"]' in c_track
+    assert '"user-payments": ["super_admin", "billing_admin"]' in c_track
+    assert '"admin-users": ["super_admin", "user_admin", "system_admin", "support"]' in c_track
+    for button in ("pricingButton", "paymentButton", "usersButton"):
+        assert f'{button}.dataset.cview = "true"' in commerce
+    assert 'document.querySelectorAll("[data-cview]")' in c_track
+
+def test_admin_v17_consumes_window_session_events_and_ignores_stale_bootstrap_reads():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "app" / "admin_v17.js").read_text(encoding="utf-8")
+    assert 'window.addEventListener("chat2api-admin-session-changed"' in source
+    assert 'document.addEventListener("chat2api-admin-session-changed"' not in source
+    assert "let authStateGeneration = 0" in source
+    assert "if (generation !== authStateGeneration) return" in source
+    assert 'dataset.adminV17Authenticated = adminLoggedIn ? "true" : "false"' in source
+
+
+def test_admin_bootstrap_tolerates_removed_legacy_connect_and_key_controls():
+    html = (Path(__file__).resolve().parents[1] / "app" / "admin.py").read_text(encoding="utf-8")
+    assert "const connectButton=$('connect'),refreshButton=$('refresh'),adminKeyInput=$('adminKey');" in html
+    assert "if(connectButton)connectButton.disabled=true;" in html
+    assert "if(refreshButton)refreshButton.disabled=true;" in html
+    assert "if(adminKeyInput){adminKeyInput.value='';adminKeyInput.disabled=true;}" in html
+    bootstrap = html.split("const connectButton=$('connect')", 1)[1]
+    assert "$('connect').disabled" not in bootstrap
+    assert "$('refresh').disabled" not in bootstrap
+    assert "$('adminKey').value" not in bootstrap

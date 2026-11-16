@@ -88,3 +88,56 @@ def test_responses_owner_metadata_is_evicted_with_bounded_response_store() -> No
     assert "resp_owner_scope_000" not in app.state.responses_v108_store
     assert "resp_owner_scope_000" not in app.state.responses_v108_owners
     assert app.state.responses_v108_owners["resp_owner_scope_256"] == "key_256"
+
+def test_images_only_key_can_retrieve_own_image_generation_response_but_not_text_response(tmp_path: Path) -> None:
+    app = create_app(Settings(
+        CHAT2API_API_KEY="master-secret",
+        CHAT2API_DATA_DIR=str(tmp_path),
+    ))
+    install_responses_v108_patch(app)
+
+    with TestClient(app) as client:
+        key, token = asyncio.run(app.state.api_keys.create("Images-only response key"))
+        app.state.api_keys.keys[key["key_id"]].scopes = ["images"]
+
+        image_id = "resp_images_only_owned_123"
+        _store_response(app, image_id, {
+            "id": image_id,
+            "object": "response",
+            "output": [{"id": "ig_images_only", "type": "image_generation_call", "status": "completed"}],
+        }, key["key_id"])
+        image_response = client.get(
+            f"/v1/responses/{image_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert image_response.status_code == 200
+        assert image_response.json()["output"][0]["type"] == "image_generation_call"
+
+        text_id = "resp_images_only_text_123"
+        _store_response(app, text_id, {
+            "id": text_id,
+            "object": "response",
+            "output": [{"id": "msg_images_only", "type": "message", "content": []}],
+        }, key["key_id"])
+        text_response = client.get(
+            f"/v1/responses/{text_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert text_response.status_code == 403
+
+        mixed_id = "resp_images_only_mixed_123"
+        _store_response(app, mixed_id, {
+            "id": mixed_id,
+            "object": "response",
+            "output_text": "private text must not be exposed",
+            "output": [
+                {"id": "ig_mixed", "type": "image_generation_call", "status": "completed"},
+                {"id": "msg_mixed", "type": "message", "content": [{"type": "output_text", "text": "private"}]},
+            ],
+        }, key["key_id"])
+        mixed_response = client.get(
+            f"/v1/responses/{mixed_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert mixed_response.status_code == 403
+
