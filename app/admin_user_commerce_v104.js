@@ -5,6 +5,7 @@
   if (!nav || !content || document.getElementById("view-user-pricing")) return;
   const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[ch]);
   let adminRoleResolved = false;
+  let adminRoleRefreshGeneration = 0;
   const keyHeader = () => {
     // Never send a possibly stale root key until the current Session role is
     // known. A delegated Session must not inherit a prior administrator key.
@@ -29,22 +30,11 @@
   let sessionAuthenticated = false;
   const canWriteUsers = () => ["super_admin", "user_admin"].includes(currentAdminRole);
   const canReadAudit = () => currentAdminRole === "super_admin";
-  async function refreshAdminRole() {
-    let sessionCheckSucceeded = false;
-    try {
-      const response = await fetch("/api/admin/auth/session", {credentials:"same-origin", cache:"no-store"});
-      if (!response.ok) throw new Error("Admin session lookup failed");
-      const session = await response.json();
-      sessionAuthenticated = !!session.authenticated;
-      currentAdminRole = sessionAuthenticated ? (session.role || "unknown") : null;
-      sessionCheckSucceeded = true;
-    } catch (_) {
-      currentAdminRole = null;
-    }
-    if (sessionCheckSucceeded && !sessionAuthenticated && !currentAdminRole && String(document.getElementById("adminKey")?.value || "").trim()) {
-      currentAdminRole = "super_admin";
-    }
-    adminRoleResolved = sessionCheckSucceeded;
+  function applyAdminRole() {
+    // Expose only the non-secret role/readiness state for deterministic UI
+    // synchronization. Server-side route middleware remains authoritative.
+    document.documentElement.dataset.adminCommerceRole = currentAdminRole || "";
+    document.documentElement.dataset.adminCommerceSessionReady = adminRoleResolved ? "true" : "false";
     pricingButton.hidden = !["super_admin", "billing_admin"].includes(currentAdminRole);
     paymentButton.hidden = !["super_admin", "billing_admin"].includes(currentAdminRole);
     usersButton.hidden = !["super_admin", "user_admin", "system_admin", "support"].includes(currentAdminRole);
@@ -58,6 +48,29 @@
       const node = document.getElementById(id);
       if (node) node.disabled = !canWritePaymentSecrets;
     });
+  }
+
+  async function refreshAdminRole() {
+    const generation = ++adminRoleRefreshGeneration;
+    let sessionCheckSucceeded = false;
+    try {
+      const response = await fetch("/api/admin/auth/session", {credentials:"same-origin", cache:"no-store"});
+      if (!response.ok) throw new Error("Admin session lookup failed");
+      const session = await response.json();
+      if (generation !== adminRoleRefreshGeneration) return;
+      sessionAuthenticated = !!session.authenticated;
+      currentAdminRole = sessionAuthenticated ? (session.role || "unknown") : null;
+      sessionCheckSucceeded = true;
+    } catch (_) {
+      if (generation !== adminRoleRefreshGeneration) return;
+      sessionAuthenticated = false;
+      currentAdminRole = null;
+    }
+    if (sessionCheckSucceeded && !sessionAuthenticated && !currentAdminRole && String(document.getElementById("adminKey")?.value || "").trim()) {
+      currentAdminRole = "super_admin";
+    }
+    adminRoleResolved = sessionCheckSucceeded;
+    applyAdminRole();
   }
 
   const pricingButton = document.createElement("button");
@@ -485,8 +498,22 @@
       activate("user-pricing");
     }
   }
-  window.addEventListener("chat2api-admin-session-changed", async () => {
-    await refreshAdminRole();
+  // The C-track session is authoritative. Consume its event detail rather
+  // than issuing a second racing lookup that could overwrite a newer login.
+  window.addEventListener("chat2api-admin-session-changed", (event) => {
+    adminRoleRefreshGeneration += 1;
+    const session = event.detail;
+    if (!session || typeof session.authenticated !== "boolean") {
+      refreshAdminRole().then(activateRoleDefault);
+      return;
+    }
+    sessionAuthenticated = !!session.authenticated;
+    currentAdminRole = sessionAuthenticated ? (session.role || "unknown") : null;
+    if (!sessionAuthenticated && !currentAdminRole && String(document.getElementById("adminKey")?.value || "").trim()) {
+      currentAdminRole = "super_admin";
+    }
+    adminRoleResolved = true;
+    applyAdminRole();
     activateRoleDefault();
   });
   refreshAdminRole().then(activateRoleDefault);
