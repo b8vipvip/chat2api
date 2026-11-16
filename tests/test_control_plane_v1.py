@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from app.admin_audit import AdminAuditError
 from app.admin_auth import AdminLoginRateLimiter, AdminSessionStore
 from app.config import Settings
 from app.control_plane import ControlPlaneError, ControlPlaneStore, ROLES, permission_for_admin_route
@@ -58,6 +59,45 @@ def test_control_plane_store_fails_closed_and_never_persists_raw_password(tmp_pa
     with pytest.raises(ControlPlaneError, match="corrupt or unreadable"):
         ControlPlaneStore(tmp_path, "owner")
     assert store.path.read_text(encoding="utf-8") == "{broken"
+
+
+def test_client_policy_audit_completion_failure_preserves_committed_success(tmp_path: Path, monkeypatch):
+    app = make_app(tmp_path)
+    audit = app.state.admin_audit
+    original_append = audit.append
+
+    def fail_requested(**kwargs):
+        if kwargs["action"] == "client.policy_requested":
+            raise AdminAuditError("simulated audit failure")
+        return original_append(**kwargs)
+
+    monkeypatch.setattr(audit, "append", fail_requested)
+    with TestClient(app) as client:
+        assert login(client, "owner", "strong-root-password").status_code == 200
+        denied = client.put(
+            "/api/admin/control/client", headers=ORIGIN, json={"announcement": "maintenance"}
+        )
+        assert denied.status_code == 503
+        assert app.state.control_plane.public_client()["announcement"] == ""
+
+        def fail_completion(**kwargs):
+            if kwargs["action"] == "client.policy_completed":
+                raise AdminAuditError("simulated completion failure")
+            return original_append(**kwargs)
+
+        monkeypatch.setattr(audit, "append", fail_completion)
+        committed = client.put(
+            "/api/admin/control/client",
+            headers={**ORIGIN, "X-Request-ID": "control-audit-123"},
+            json={"announcement": "maintenance"},
+        )
+        assert committed.status_code == 200, committed.text
+        assert committed.headers["X-Admin-Audit-Status"] == "completion-pending"
+        assert app.state.control_plane.public_client()["announcement"] == "maintenance"
+        assert app.state.admin_audit_completion_pending is True
+        rows = audit.recent(20)
+        assert any(row["action"] == "client.policy_requested" and row["request_id"] == "control-audit-123" for row in rows)
+        assert not any(row["action"] == "client.policy_completed" for row in rows)
 
 
 def test_role_route_map_is_explicit_and_secret_read_denied_to_key_admin():
