@@ -110,6 +110,16 @@ def test_commerce_navigation_buttons_join_the_c_track_role_visibility_map():
         assert f'{button}.dataset.cview = "true"' in commerce
     assert 'document.querySelectorAll("[data-cview]")' in c_track
 
+def test_admin_v17_consumes_window_session_events_and_ignores_stale_bootstrap_reads():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "app" / "admin_v17.js").read_text(encoding="utf-8")
+    assert 'window.addEventListener("chat2api-admin-session-changed"' in source
+    assert 'document.addEventListener("chat2api-admin-session-changed"' not in source
+    assert "let authStateGeneration = 0" in source
+    assert "if (generation !== authStateGeneration) return" in source
+    assert 'dataset.adminV17Authenticated = adminLoggedIn ? "true" : "false"' in source
+
+
 def test_admin_bootstrap_tolerates_removed_legacy_connect_and_key_controls():
     html = (Path(__file__).resolve().parents[1] / "app" / "admin.py").read_text(encoding="utf-8")
     assert "const connectButton=$('connect'),refreshButton=$('refresh'),adminKeyInput=$('adminKey');" in html
