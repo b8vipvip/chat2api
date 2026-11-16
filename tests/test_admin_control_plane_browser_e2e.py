@@ -269,6 +269,65 @@ def test_delegated_admin_browser_navigation_permissions_csrf_and_revocation(tmp_
                 user_page.evaluate(
                     "() => { window.fetch = window.__userAdminFetch; delete window.__userAdminFetch; }"
                 )
+
+                # A pending user-list response from the old session must not
+                # repopulate user data after that session logs out.
+                race_context = browser.new_context()
+                race_page = race_context.new_page()
+                race_username, race_password = accounts["user_admin"]
+                _login(race_page, base_url, race_username, race_password, "user_admin")
+                race_page.evaluate(
+                    """() => {
+                      window.__raceOriginalFetch = window.fetch.bind(window);
+                      window.__raceResolveUserList = null;
+                      window.__raceResponseReleased = false;
+                      window.fetch = (input, init = {}) => {
+                        const url = typeof input === "string" ? input : input?.url || "";
+                        const method = String(init.method || "GET").toUpperCase();
+                        if (url.startsWith("/api/admin/users?") && method === "GET") {
+                          return new Promise(resolve => {
+                            window.__raceResolveUserList = (response) => {
+                              resolve(response);
+                              window.__raceResponseReleased = true;
+                            };
+                          });
+                        }
+                        return window.__raceOriginalFetch(input, init);
+                      };
+                    }"""
+                )
+                race_page.locator('.nav button[data-view="admin-users"]').click()
+                race_page.wait_for_function(
+                    "() => typeof window.__raceResolveUserList === 'function'",
+                    timeout=10000,
+                )
+                race_page.locator("#adminSessionLogout").click()
+                race_page.wait_for_function(
+                    "() => document.querySelector('#adminSessionState')?.textContent.includes('未登录管理会话')",
+                    timeout=10000,
+                )
+                race_page.evaluate(
+                    """() => window.__raceResolveUserList(new Response(JSON.stringify({
+                      data: [{
+                        user_id: "usr_stale_123456",
+                        email: "stale@example.test",
+                        display_name: "Stale User",
+                        enabled: true,
+                        created_at: "2026-11-16T00:00:00Z",
+                        key_count: 1,
+                        active_sessions: 0,
+                        balance_cents: 0
+                      }],
+                      total: 1
+                    }), {status: 200, headers: {"Content-Type": "application/json"}}))"""
+                )
+                race_page.evaluate(
+                    "() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))"
+                )
+                assert "stale@example.test" not in race_page.locator("#adminUsersBody").inner_text()
+                assert race_page.locator("#adminUserStatus").text_content() == ""
+                race_context.close()
+
                 assert _request_status(
                     user_page, base_url, "PATCH", "/api/admin/users/missing",
                     data={"enabled": False},
