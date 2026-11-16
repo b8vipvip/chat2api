@@ -27,6 +27,7 @@ async function send(chunks, close = true, onCancel = () => {}) {
     state: {
       apiToken: "test-token", user: {user_id: "user-a"},
       selectedModel: "test-model", streaming: false,
+      recoveryInFlight: new Set(),
     },
     currentConversation: () => conversation,
     id: () => String(conversation.messages.length),
@@ -41,6 +42,16 @@ async function send(chunks, close = true, onCancel = () => {}) {
     renderMessages() {},
     AbortController,
     TextDecoder,
+    // The production client now requires the recovery module before sending.
+    // Keep the stream-terminal unit test isolated from its separate polling lifecycle.
+    window: {
+      clearTimeout() {},
+      setTimeout() { return 0; },
+      Chat2APIStreamRecoveryV1: {
+        createRequestId: () => "request-test",
+        create: () => ({resume: () => new Promise(() => {})}),
+      },
+    },
   });
   const sendMessage = vm.runInContext(source.slice(start, end) + "\nsendMessage", context);
   await sendMessage("test question");
