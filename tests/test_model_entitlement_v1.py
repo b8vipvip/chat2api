@@ -462,6 +462,47 @@ def test_admin_entitlement_api_requires_session_audits_and_validates_subjects(tm
         assert any(row["action"] == "model.entitlement_completed" for row in events)
 
 
+def test_model_entitlement_audit_completion_failure_is_reported_without_false_http_failure(tmp_path: Path, monkeypatch):
+    app, token = build_app(tmp_path)
+    audit = app.state.admin_audit
+    original_append = audit.append
+    headers = {"Cookie": f"chat2api_admin_session={token}", "X-Request-ID": "model-audit-123"}
+
+    def fail_requested(**kwargs):
+        if kwargs["action"] == "model.entitlement_requested":
+            raise AdminAuditError("simulated audit failure")
+        return original_append(**kwargs)
+
+    monkeypatch.setattr(audit, "append", fail_requested)
+    with TestClient(app) as client:
+        denied = client.put(
+            "/api/admin/model-entitlements/key/key_1",
+            headers=headers,
+            json={"effect": "allow", "models": ["gpt-5.5"]},
+        )
+        assert denied.status_code == 503
+        assert app.state.model_entitlements.list_rules() == []
+
+        def fail_completion(**kwargs):
+            if kwargs["action"] == "model.entitlement_completed":
+                raise AdminAuditError("simulated completion failure")
+            return original_append(**kwargs)
+
+        monkeypatch.setattr(audit, "append", fail_completion)
+        committed = client.put(
+            "/api/admin/model-entitlements/key/key_1",
+            headers=headers,
+            json={"effect": "allow", "models": ["gpt-5.5"]},
+        )
+        assert committed.status_code == 200, committed.text
+        assert committed.headers["X-Admin-Audit-Status"] == "completion-pending"
+        assert app.state.model_entitlements.list_rules()[0]["models"] == ["gpt-5.5"]
+        assert app.state.admin_audit_completion_pending is True
+        rows = audit.recent(20)
+        assert any(row["action"] == "model.entitlement_requested" and row["request_id"] == "model-audit-123" for row in rows)
+        assert not any(row["action"] == "model.entitlement_completed" for row in rows)
+
+
 def test_images_generation_entitlement_uses_server_owned_gpt_image_target(tmp_path: Path):
     app, _ = build_app(tmp_path)
     install_model_capability_routing_patch(app)
