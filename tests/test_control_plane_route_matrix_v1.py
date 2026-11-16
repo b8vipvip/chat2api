@@ -18,7 +18,7 @@ EXPECTED_ROLE_PERMISSIONS = {
     "billing_admin": frozenset({"billing:read", "billing:write", "quota:read", "admin:self_password"}),
     "plugin_admin": frozenset({"plugins:read", "plugins:write", "admin:self_password"}),
     "support": frozenset({
-        "users:read", "keys:read", "models:read", "clients:read",
+        "users:read", "keys:read", "user_keys:read", "models:read", "clients:read",
         "diagnostics:read", "admin:self_password",
     }),
 }
@@ -62,9 +62,9 @@ ROUTE_MATRIX = (
     ("POST", "/api/admin/users", "users:write"),
     ("PATCH", "/api/admin/users/usr_1", "users:write"),
     ("POST", "/api/admin/users/usr_1/sessions/revoke", "users:write"),
-    ("GET", "/api/admin/users/usr_1/keys", "keys:read"),
-    ("PATCH", "/api/admin/users/usr_1/keys/key_1", "keys:write"),
-    ("DELETE", "/api/admin/users/usr_1/keys/key_1", "keys:write"),
+    ("GET", "/api/admin/users/usr_1/keys", "user_keys:read"),
+    ("PATCH", "/api/admin/users/usr_1/keys/key_1", "user_keys:write"),
+    ("DELETE", "/api/admin/users/usr_1/keys/key_1", "user_keys:write"),
     ("GET", "/api/admin/keys", "keys:read"),
     ("POST", "/api/admin/keys", "keys:write"),
     ("PATCH", "/api/admin/keys/key_1", "keys:write"),
