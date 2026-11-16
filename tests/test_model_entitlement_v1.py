@@ -125,7 +125,8 @@ def install_voice_test_runtime(app):
     app.state.settings.api_key = "master-test-secret"
     app.state.settings.request_timeout_seconds = 30
     app.state.broker = StopBeforeWorkerDispatchBroker()
-    app.state.telemetry = SimpleNamespace()
+    # The voice handler checks request-ID ownership before asking Broker to dispatch.
+    app.state.telemetry = SimpleNamespace(get=lambda _request_id: None)
     app.state.file_store = SimpleNamespace(get=lambda _file_id: SimpleNamespace(
         file_id="file_audio", filename="audio.wav", mime_type="audio/wav",
         size=10, owner_key_id="key_1",
