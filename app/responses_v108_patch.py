@@ -730,10 +730,12 @@ def install_responses_v108_patch(app: FastAPI) -> FastAPI:
             output = value.get("output")
             image_result = (
                 isinstance(output, list)
-                and any(
+                and bool(output)
+                and all(
                     isinstance(item, dict) and item.get("type") == "image_generation_call"
                     for item in output
                 )
+                and not str(value.get("output_text") or "").strip()
             )
             if "images" not in principal.scopes or not image_result:
                 raise HTTPException(status_code=403, detail="API key does not have chat scope")
