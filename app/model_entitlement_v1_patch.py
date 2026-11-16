@@ -7,10 +7,11 @@ from __future__ import annotations
 
 import contextvars
 import json
+import logging
 import secrets
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -25,6 +26,9 @@ from .model_entitlements import (
 )
 from . import model_capability_routing_patch as model_routing
 from . import v13_patch
+
+
+logger = logging.getLogger(__name__)
 
 
 _API_KEY_CONTEXT_CAPTURE = contextvars.ContextVar(
@@ -170,15 +174,33 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
     def audit_event(
         actor: str, action: str, subject_type: str, subject_id: str,
         details: dict[str, Any], *, target_type: str = "model_entitlement",
-    ) -> None:
+        request_id: str = "", required: bool = True,
+    ) -> bool:
         try:
             audit.append(
                 actor=actor, action=action, target_type=target_type,
-                target_id=f"{subject_type}:{subject_id}", request_id="",
+                target_id=f"{subject_type}:{subject_id}", request_id=request_id,
                 details=details,
             )
         except AdminAuditError as exc:
-            raise HTTPException(status_code=503, detail="Administrator audit unavailable; policy change denied") from exc
+            if required:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Administrator audit unavailable; policy change denied",
+                ) from exc
+            # The authoritative mutation has committed. Return its actual
+            # result and expose the missing completion record explicitly;
+            # returning 503 here would invite a misleading retry.
+            app.state.admin_audit_completion_pending = True
+            logger.error(
+                "Admin audit completion append failed after C-03A mutation: action=%s subject_type=%s subject_id=%s",
+                action,
+                subject_type,
+                subject_id,
+                exc_info=True,
+            )
+            return False
+        return True
 
     def _validate_subject(subject_type: str, subject_id: str) -> None:
         if subject_type not in SUBJECT_TYPES:
@@ -461,7 +483,8 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
 
     @app.put("/api/admin/model-entitlements/{subject_type}/{subject_id}")
     async def put_model_entitlement(
-        subject_type: str, subject_id: str, body: ModelEntitlementUpdate, request: Request
+        subject_type: str, subject_id: str, body: ModelEntitlementUpdate,
+        request: Request, response: Response,
     ) -> dict[str, Any]:
         actor = admin_actor(request)
         try:
@@ -471,14 +494,21 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
         except ModelEntitlementError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         details = {"effect": body.effect, "models": body.models, "enabled": body.enabled}
-        audit_event(actor, "model.entitlement_requested", subject_type, subject_id, details)
+        request_id = str(request.headers.get("x-request-id") or "")
+        audit_event(
+            actor, "model.entitlement_requested", subject_type, subject_id,
+            details, request_id=request_id,
+        )
         try:
             rule = store.upsert(subject_type, subject_id, body.effect, body.models, enabled=body.enabled)
         except ModelEntitlementError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        audit_event(actor, "model.entitlement_completed", subject_type, subject_id, {
-            "effect": rule["effect"], "models": rule["models"], "enabled": rule["enabled"],
-        })
+        audit_ok = audit_event(
+            actor, "model.entitlement_completed", subject_type, subject_id,
+            {"effect": rule["effect"], "models": rule["models"], "enabled": rule["enabled"]},
+            request_id=request_id, required=False,
+        )
+        response.headers["X-Admin-Audit-Status"] = "complete" if audit_ok else "completion-pending"
         return {"rule": rule}
 
     @app.get("/api/admin/subscription-plans")
@@ -488,27 +518,30 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
 
     @app.put("/api/admin/subscription-plans/{plan_id}")
     async def put_subscription_plan(
-        plan_id: str, body: SubscriptionPlanUpdate, request: Request,
+        plan_id: str, body: SubscriptionPlanUpdate, request: Request, response: Response,
     ) -> dict[str, Any]:
         actor = admin_actor(request)
+        request_id = str(request.headers.get("x-request-id") or "")
         audit_event(
             actor, "subscription.plan_update_requested", "subscription_plan", plan_id,
-            {"name": body.name, "enabled": body.enabled}, target_type="subscription_plan",
+            {"name": body.name, "enabled": body.enabled},
+            target_type="subscription_plan", request_id=request_id,
         )
         try:
             plan = subscriptions.upsert_plan(plan_id, body.name, enabled=body.enabled)
         except UserSubscriptionError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        audit_event(
+        audit_ok = audit_event(
             actor, "subscription.plan_update_completed", "subscription_plan", plan_id,
             {"name": plan["name"], "enabled": plan["enabled"]},
-            target_type="subscription_plan",
+            target_type="subscription_plan", request_id=request_id, required=False,
         )
+        response.headers["X-Admin-Audit-Status"] = "complete" if audit_ok else "completion-pending"
         return {"plan": plan}
 
     @app.put("/api/admin/users/{user_id}/role")
     async def put_user_system_role(
-        user_id: str, body: UserSystemRoleUpdate, request: Request,
+        user_id: str, body: UserSystemRoleUpdate, request: Request, response: Response,
     ) -> dict[str, Any]:
         actor = admin_actor(request)
         if accounts.admin_get(user_id) is None:
@@ -521,10 +554,11 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
             previous_role = accounts.system_role_for(user_id)
         except Exception as exc:
             raise HTTPException(status_code=503, detail="User role authority unavailable") from exc
+        request_id = str(request.headers.get("x-request-id") or "")
         audit_event(
             actor, "user.system_role_update_requested", "user", user_id,
             {"previous_system_role": previous_role, "system_role": role},
-            target_type="user",
+            target_type="user", request_id=request_id,
         )
         try:
             user = accounts.set_system_role(user_id, role)
@@ -532,11 +566,12 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=404, detail="User not found") from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        audit_event(
+        audit_ok = audit_event(
             actor, "user.system_role_update_completed", "user", user_id,
             {"previous_system_role": previous_role, "system_role": role},
-            target_type="user",
+            target_type="user", request_id=request_id, required=False,
         )
+        response.headers["X-Admin-Audit-Status"] = "complete" if audit_ok else "completion-pending"
         return {"user": user}
 
     @app.get("/api/admin/users/{user_id}/subscription")
@@ -551,7 +586,7 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
 
     @app.put("/api/admin/users/{user_id}/subscription")
     async def put_user_subscription(
-        user_id: str, body: UserSubscriptionAssign, request: Request,
+        user_id: str, body: UserSubscriptionAssign, request: Request, response: Response,
     ) -> dict[str, Any]:
         actor = admin_actor(request)
         if accounts.admin_get(user_id) is None:
@@ -565,9 +600,10 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
             "plan_id": body.plan_id,
             "expires_at": body.expires_at,
         }
+        request_id = str(request.headers.get("x-request-id") or "")
         audit_event(
             actor, "subscription.assignment_requested", "user_subscription", user_id,
-            details, target_type="user_subscription",
+            details, target_type="user_subscription", request_id=request_id,
         )
         try:
             subscription = subscriptions.assign(
@@ -577,19 +613,22 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except UserSubscriptionError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        audit_event(
+        audit_ok = audit_event(
             actor, "subscription.assignment_completed", "user_subscription", user_id,
             {
                 "subscription_id": subscription["subscription_id"],
                 "previous_plan_id": previous_plan.get("plan_id"),
                 "plan_id": subscription["plan_id"],
             },
-            target_type="user_subscription",
+            target_type="user_subscription", request_id=request_id, required=False,
         )
+        response.headers["X-Admin-Audit-Status"] = "complete" if audit_ok else "completion-pending"
         return {"subscription": subscription}
 
     @app.delete("/api/admin/users/{user_id}/subscription")
-    async def delete_user_subscription(user_id: str, request: Request) -> dict[str, Any]:
+    async def delete_user_subscription(
+        user_id: str, request: Request, response: Response,
+    ) -> dict[str, Any]:
         actor = admin_actor(request)
         if accounts.admin_get(user_id) is None:
             raise HTTPException(status_code=404, detail="User not found")
@@ -597,21 +636,25 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
             previous_plan = subscriptions.current_plan_for_user(user_id)
         except Exception as exc:
             raise HTTPException(status_code=503, detail="Subscription authority unavailable") from exc
+        request_id = str(request.headers.get("x-request-id") or "")
         audit_event(
             actor, "subscription.cancellation_requested", "user_subscription", user_id,
             {"previous_plan_id": previous_plan.get("plan_id")},
-            target_type="user_subscription",
+            target_type="user_subscription", request_id=request_id,
         )
         cancelled = subscriptions.cancel_active(user_id)
-        audit_event(
+        audit_ok = audit_event(
             actor, "subscription.cancellation_completed", "user_subscription", user_id,
             {"cancelled": cancelled, "previous_plan_id": previous_plan.get("plan_id")},
-            target_type="user_subscription",
+            target_type="user_subscription", request_id=request_id, required=False,
         )
+        response.headers["X-Admin-Audit-Status"] = "complete" if audit_ok else "completion-pending"
         return {"cancelled": bool(cancelled)}
 
     @app.delete("/api/admin/model-entitlements/{subject_type}/{subject_id}")
-    async def delete_model_entitlement(subject_type: str, subject_id: str, request: Request) -> dict[str, bool]:
+    async def delete_model_entitlement(
+        subject_type: str, subject_id: str, request: Request, response: Response,
+    ) -> dict[str, bool]:
         actor = admin_actor(request)
         try:
             _validate_subject(subject_type, subject_id)
@@ -619,12 +662,20 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ModelEntitlementError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        audit_event(actor, "model.entitlement_delete_requested", subject_type, subject_id, {})
+        request_id = str(request.headers.get("x-request-id") or "")
+        audit_event(
+            actor, "model.entitlement_delete_requested", subject_type, subject_id, {},
+            request_id=request_id,
+        )
         try:
             deleted = store.delete(subject_type, subject_id)
         except ModelEntitlementError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        audit_event(actor, "model.entitlement_delete_completed", subject_type, subject_id, {"deleted": deleted})
+        audit_ok = audit_event(
+            actor, "model.entitlement_delete_completed", subject_type, subject_id,
+            {"deleted": deleted}, request_id=request_id, required=False,
+        )
+        response.headers["X-Admin-Audit-Status"] = "complete" if audit_ok else "completion-pending"
         return {"deleted": deleted}
 
     app.state.model_entitlements_installed = True
