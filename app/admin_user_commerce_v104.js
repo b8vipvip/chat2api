@@ -62,14 +62,17 @@
 
   const pricingButton = document.createElement("button");
   pricingButton.dataset.view = "user-pricing";
+  pricingButton.dataset.cview = "true";
   pricingButton.textContent = "价格配置";
   nav.appendChild(pricingButton);
   const paymentButton = document.createElement("button");
   paymentButton.dataset.view = "user-payments";
+  paymentButton.dataset.cview = "true";
   paymentButton.textContent = "支付配置";
   nav.appendChild(paymentButton);
   const usersButton = document.createElement("button");
   usersButton.dataset.view = "admin-users";
+  usersButton.dataset.cview = "true";
   usersButton.textContent = "用户管理";
   nav.appendChild(usersButton);
 
