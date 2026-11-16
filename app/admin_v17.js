@@ -2,6 +2,7 @@
   const VERSION = "0.17.0";
   const SESSION_MARKER = "__chat2api_admin_session__";
   let adminLoggedIn = false;
+  let authStateGeneration = 0;
 
   const brandSmall = document.querySelector(".brand small");
   if (brandSmall) brandSmall.textContent = `Server Console · v${VERSION}`;
@@ -74,6 +75,7 @@
 
   function setAuthenticated(value, username = "") {
     adminLoggedIn = Boolean(value);
+    document.documentElement.dataset.adminV17Authenticated = adminLoggedIn ? "true" : "false";
     gate.style.display = adminLoggedIn || hasSessionLogin ? "none" : "flex";
     const identity = document.getElementById("adminIdentity");
     if (identity) identity.textContent = adminLoggedIn ? `管理员 · ${username || "admin"}` : "";
@@ -82,25 +84,33 @@
     if (!adminLoggedIn && !hasSessionLogin) status("请登录管理员账号", "muted");
   }
 
-  document.addEventListener("chat2api-admin-session-changed", event => {
+  // C-track dispatches this event on window. Listening on document misses
+  // the event entirely and leaves the v17 show() guard permanently logged out.
+  window.addEventListener("chat2api-admin-session-changed", event => {
+    authStateGeneration += 1;
     const session = event.detail || {};
     setAuthenticated(Boolean(session.authenticated), session.username || "");
   });
 
   async function checkSession() {
+    const generation = ++authStateGeneration;
     try {
       const response = await nativeFetch("/api/admin/auth/session", {cache: "no-store", credentials: "same-origin"});
       const data = await response.json();
+      // A slower bootstrap read must never overwrite a newer login/logout event.
+      if (generation !== authStateGeneration) return;
       setAuthenticated(Boolean(data.authenticated), data.username || "");
       if (data.authenticated) {
         await show((location.hash || "#overview").slice(1));
       }
     } catch (_) {
+      if (generation !== authStateGeneration) return;
       setAuthenticated(false);
     }
   }
 
   document.getElementById("adminLoginButton").onclick = async () => {
+    const generation = ++authStateGeneration;
     const errorBox = document.getElementById("adminLoginError");
     errorBox.textContent = "";
     try {
@@ -115,6 +125,7 @@
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || "登录失败");
+      if (generation !== authStateGeneration) return;
       document.getElementById("adminPassword").value = "";
       setAuthenticated(true, data.username || "admin");
       await show((location.hash || "#overview").slice(1));
@@ -126,7 +137,9 @@
     if (event.key === "Enter") document.getElementById("adminLoginButton").click();
   });
   document.getElementById("adminLogout").onclick = async () => {
+    const generation = ++authStateGeneration;
     await nativeFetch("/api/admin/auth/logout", {method: "POST", credentials: "same-origin"}).catch(() => {});
+    if (generation !== authStateGeneration) return;
     setAuthenticated(false);
   };
 
