@@ -2705,7 +2705,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "usage": {**usage, **token_meta}, "timings": state.timings(),
                     "diagnostics": image_diagnostics(), "error": None,
                 },
-                create_only=True,
             )
             # The standalone Images API already archived verified bytes.
             # Reuse those exact records; do not capture or upload images twice.
