@@ -10,7 +10,10 @@
     "model-entitlements": ["super_admin", "system_admin", "support"],
     "plugins": ["super_admin", "plugin_admin"],
     "quota-ledger": ["super_admin", "system_admin", "api_key_admin", "billing_admin"],
-    "api-keys": ["super_admin", "api_key_admin", "support"]
+    "api-keys": ["super_admin", "api_key_admin", "support"],
+    "user-pricing": ["super_admin", "billing_admin"],
+    "user-payments": ["super_admin", "billing_admin"],
+    "admin-users": ["super_admin", "user_admin", "system_admin", "support"]
   };
   let adminSession = null;
   let roleCatalogue = {};
