@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from app.admin_audit import AdminAuditError, AdminAuditStore
 from app.config import Settings
 from app.main import create_app
 from app.tenant_membership import TenantMembershipError, TenantMembershipStore
@@ -144,6 +145,47 @@ def test_admin_and_user_routes_enforce_session_csrf_and_scoped_member_discovery(
         # No change to the existing Mode 2 business API's auth contract.
         assert root.get("/v1/models").status_code == 401
         assert any(x["action"] == "tenant.member_change_completed" for x in app.state.admin_audit.recent(20))
+
+
+def test_tenant_mutation_audit_failure_does_not_report_a_committed_change_as_failed(tmp_path: Path, monkeypatch):
+    app = app_with_tenants(tmp_path)
+    app.state.admin_audit = AdminAuditStore(tmp_path)
+    audit = app.state.admin_audit
+    original_append = audit.append
+
+    def fail_requested(**kwargs):
+        if kwargs["action"] == "tenant.create_requested":
+            raise AdminAuditError("simulated pre-mutation audit failure")
+        return original_append(**kwargs)
+
+    monkeypatch.setattr(audit, "append", fail_requested)
+    with TestClient(app) as client:
+        login = client.post("/api/admin/auth/login", json={
+            "username": "owner", "password": "strong-admin-password",
+        }, headers=ORIGIN)
+        assert login.status_code == 200
+
+        denied = client.post("/api/admin/tenants", headers=ORIGIN, json={
+            "slug": "org-denied", "display_name": "Denied",
+        })
+        assert denied.status_code == 503
+        assert app.state.tenant_memberships.list_tenants() == []
+
+        def fail_completion(**kwargs):
+            if kwargs["action"] == "tenant.create_completed":
+                raise AdminAuditError("simulated post-mutation audit failure")
+            return original_append(**kwargs)
+
+        monkeypatch.setattr(audit, "append", fail_completion)
+        committed = client.post("/api/admin/tenants", headers=ORIGIN, json={
+            "slug": "org-committed", "display_name": "Committed",
+        })
+        assert committed.status_code == 201, committed.text
+        assert committed.headers["X-Admin-Audit-Status"] == "completion-pending"
+        assert len(app.state.tenant_memberships.list_tenants()) == 1
+        assert app.state.admin_audit_completion_pending is True
+        assert any(row["action"] == "tenant.create_requested" for row in audit.recent(20))
+        assert not any(row["action"] == "tenant.create_completed" for row in audit.recent(20))
 
 
 def test_tenant_api_rejects_cross_site_state_change(tmp_path: Path):
