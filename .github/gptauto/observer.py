@@ -64,7 +64,6 @@ def observation_dispatch_key(task: Task, phase: str) -> str:
         "release_required": bool(m.get("release_required")),
         "blocked_reason": m.get("blocked_reason") or "",
         "pr_draft": bool(m.get("pr_draft")),
-
     }
     payload = json.dumps(identity, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
@@ -96,7 +95,6 @@ def capture(
     pr_number="",
     pr_title="",
     pr_state="",
-    pr_draft="false",
     pr_merged="false",
     merge_sha="",
     run_id="",
@@ -122,6 +120,7 @@ def capture(
     pr_ci_actor="",
     pr_ci_run_attempt="",
     blocked_reason="",
+    pr_draft="false",
 ):
     tid = observed_task_id(repo, pr_number, head_sha, merge_sha)
     goal = pr_title.strip() or ("Observe repository change " + (merge_sha or head_sha)[:12])
@@ -476,7 +475,6 @@ def main():
                 a.pr_number,
                 a.pr_title,
                 a.pr_state,
-                a.pr_draft,
                 a.pr_merged,
                 a.merge_sha,
                 a.run_id,
@@ -501,6 +499,7 @@ def main():
                 pr_ci_actor=a.pr_ci_actor,
                 pr_ci_run_attempt=a.pr_ci_run_attempt,
                 blocked_reason=a.blocked_reason,
+                pr_draft=a.pr_draft,
             ),
             ensure_ascii=False,
         )
