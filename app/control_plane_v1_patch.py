@@ -5,11 +5,16 @@ middleware is the single ingress gate. This module owns only its new routes.
 """
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException, Request
+import logging
+
+from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from .admin_audit import AdminAuditError, AdminAuditStore
 from .control_plane import ControlPlaneError, ControlPlaneStore, ROLES
+
+
+logger = logging.getLogger(__name__)
 
 
 class AdminCreate(BaseModel):
@@ -47,7 +52,9 @@ def install_control_plane_v1(app: FastAPI) -> FastAPI:
     app.state.admin_audit = audit
     app.state.control_plane_installed = True
 
-    def audit_event(request: Request, action: str, target_type: str, target_id: str, details: dict) -> None:
+    def audit_event(
+        request: Request, action: str, target_type: str, target_id: str, details: dict, *, required: bool = True
+    ) -> bool:
         try:
             audit.append(
                 actor=str(getattr(request.state, "admin_username", "") or app.state.settings.admin_username),
@@ -56,7 +63,15 @@ def install_control_plane_v1(app: FastAPI) -> FastAPI:
                 details=details,
             )
         except AdminAuditError as exc:
-            raise HTTPException(status_code=503, detail="Administrator audit unavailable; change denied") from exc
+            if required:
+                raise HTTPException(status_code=503, detail="Administrator audit unavailable; change denied") from exc
+            app.state.admin_audit_completion_pending = True
+            logger.error(
+                "Admin audit completion append failed after control-plane mutation: action=%s target_type=%s target_id=%s",
+                action, target_type, target_id,
+            )
+            return False
+        return True
 
     @app.get("/api/admin/control/roles")
     async def roles() -> dict:
@@ -70,17 +85,18 @@ def install_control_plane_v1(app: FastAPI) -> FastAPI:
         ]}
 
     @app.post("/api/admin/control/admins", status_code=201)
-    async def create_admin(body: AdminCreate, request: Request) -> dict:
+    async def create_admin(body: AdminCreate, request: Request, response: Response) -> dict:
         audit_event(request, "admin.create_requested", "admin", body.username, {"role": body.role})
         try:
             admin = store.create_admin(body.username, body.password, body.role)
         except ControlPlaneError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        audit_event(request, "admin.create_completed", "admin", body.username, {"role": body.role})
+        audit_ok = audit_event(request, "admin.create_completed", "admin", body.username, {"role": body.role}, required=False)
+        response.headers["X-Admin-Audit-Status"] = "complete" if audit_ok else "completion-pending"
         return {"admin": admin}
 
     @app.patch("/api/admin/control/admins/{username}")
-    async def update_admin(username: str, body: AdminUpdate, request: Request) -> dict:
+    async def update_admin(username: str, body: AdminUpdate, request: Request, response: Response) -> dict:
         changes = body.model_dump(exclude_none=True)
         if not changes:
             raise HTTPException(status_code=400, detail="No administrator change supplied")
@@ -96,12 +112,13 @@ def install_control_plane_v1(app: FastAPI) -> FastAPI:
             sessions = getattr(app.state, "admin_sessions", None)
             if sessions is not None:
                 revoked = sessions.revoke_username(username)
-        audit_event(request, "admin.update_completed", "admin", username, {**changes, "revoked_sessions": revoked})
+        audit_ok = audit_event(request, "admin.update_completed", "admin", username, {**changes, "revoked_sessions": revoked}, required=False)
+        response.headers["X-Admin-Audit-Status"] = "complete" if audit_ok else "completion-pending"
         return {"admin": admin, "revoked_sessions": revoked}
 
     @app.post("/api/admin/control/admins/{username}/password")
     async def rotate_admin_password(
-        username: str, body: AdminPasswordUpdate, request: Request
+        username: str, body: AdminPasswordUpdate, request: Request, response: Response
     ) -> dict:
         actor = str(getattr(request.state, "admin_username", "") or "")
         if username.casefold() == app.state.settings.admin_username.casefold():
@@ -128,14 +145,15 @@ def install_control_plane_v1(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         sessions = getattr(app.state, "admin_sessions", None)
         revoked = sessions.revoke_username(username) if sessions is not None else 0
-        audit_event(
+        audit_ok = audit_event(
             request, "admin.password_rotation_completed", "admin", username,
-            {"revoked_sessions": revoked},
+            {"revoked_sessions": revoked}, required=False,
         )
+        response.headers["X-Admin-Audit-Status"] = "complete" if audit_ok else "completion-pending"
         return {"admin": admin, "revoked_sessions": revoked}
 
     @app.post("/api/admin/control/self/password")
-    async def rotate_own_admin_password(body: AdminPasswordUpdate, request: Request) -> dict:
+    async def rotate_own_admin_password(body: AdminPasswordUpdate, request: Request, response: Response) -> dict:
         actor = str(getattr(request.state, "admin_username", "") or "")
         if not actor or actor.casefold() == app.state.settings.admin_username.casefold():
             raise HTTPException(
@@ -156,10 +174,11 @@ def install_control_plane_v1(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         sessions = getattr(app.state, "admin_sessions", None)
         revoked = sessions.revoke_username(actor) if sessions is not None else 0
-        audit_event(
+        audit_ok = audit_event(
             request, "admin.self_password_rotation_completed", "admin", actor,
-            {"revoked_sessions": revoked},
+            {"revoked_sessions": revoked}, required=False,
         )
+        response.headers["X-Admin-Audit-Status"] = "complete" if audit_ok else "completion-pending"
         return {"admin": admin, "revoked_sessions": revoked}
 
     @app.get("/api/admin/control/client")
@@ -167,7 +186,7 @@ def install_control_plane_v1(app: FastAPI) -> FastAPI:
         return store.public_client()
 
     @app.put("/api/admin/control/client")
-    async def update_client_policy(body: ClientPolicyUpdate, request: Request) -> dict:
+    async def update_client_policy(body: ClientPolicyUpdate, request: Request, response: Response) -> dict:
         changes = body.model_dump(exclude_none=True)
         if not changes:
             raise HTTPException(status_code=400, detail="Empty client policy update")
@@ -176,7 +195,8 @@ def install_control_plane_v1(app: FastAPI) -> FastAPI:
             result = store.update_client(changes)
         except ControlPlaneError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        audit_event(request, "client.policy_completed", "client", "default", changes)
+        audit_ok = audit_event(request, "client.policy_completed", "client", "default", changes, required=False)
+        response.headers["X-Admin-Audit-Status"] = "complete" if audit_ok else "completion-pending"
         return result
 
     @app.get("/api/client/config")
