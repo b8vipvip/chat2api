@@ -79,3 +79,15 @@ def test_existing_commerce_console_is_the_single_user_and_billing_ui_owner():
     assert 'currentAdminRole === "super_admin"' in payment_source
     assert 'node.disabled = !canEditSecrets' in payment_source
     assert 'currentAdminRole !== "super_admin"' in payment_source
+
+def test_commerce_navigation_buttons_join_the_c_track_role_visibility_map():
+    root = Path(__file__).resolve().parents[1]
+    c_track = (root / "app" / "admin_control_plane_admin_v1.js").read_text(encoding="utf-8")
+    commerce = (root / "app" / "admin_user_commerce_v104.js").read_text(encoding="utf-8")
+
+    assert '"user-pricing": ["super_admin", "billing_admin"]' in c_track
+    assert '"user-payments": ["super_admin", "billing_admin"]' in c_track
+    assert '"admin-users": ["super_admin", "user_admin", "system_admin", "support"]' in c_track
+    for button in ("pricingButton", "paymentButton", "usersButton"):
+        assert f'{button}.dataset.cview = "true"' in commerce
+    assert 'document.querySelectorAll("[data-cview]")' in c_track
