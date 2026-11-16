@@ -80,6 +80,8 @@ def test_existing_commerce_console_is_the_single_user_and_billing_ui_owner():
     assert "let currentAdminUsername = null" in source
     assert "let adminUserLoadGeneration = 0" in source
     assert "let adminUserKeyLoadGeneration = 0" in source
+    assert "if (generation !== adminUserKeyLoadGeneration" in source
+    assert "let adminUserKeyLoadGeneration = 0" in source
     assert "function clearUserAdminData()" in source
     assert "currentAdminUsername !== ownerUsername" in source
     assert "if (generation !== adminUserLoadGeneration" in source
