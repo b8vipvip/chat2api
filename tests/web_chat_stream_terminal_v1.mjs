@@ -49,7 +49,7 @@ async function send(chunks, close = true, onCancel = () => {}) {
       setTimeout() { return 0; },
       Chat2APIStreamRecoveryV1: {
         createRequestId: () => "request-test",
-        create: () => ({resume: () => new Promise(() => {})}),
+        create: () => ({resume: async () => ({status: "recovery_timeout", terminal: false})}),
       },
     },
   });
@@ -86,8 +86,8 @@ test("accepts CRLF separators split across chunks and releases the response on D
 });
 
 test("reports truncation even without content or with an unframed DONE marker", async () => {
-  const warning = "连接已结束，但未收到流结束标记；请检查请求记录确认是否完整。";
-  assert.deepEqual(await send([]), {messages: [warning], replies: [], locked: false});
+  const warning = "连接已结束但未收到流结束标记；请求状态：恢复超时";
+  assert.deepEqual(await send([]), {messages: [warning], replies: [""], locked: false});
   assert.deepEqual(await send([delta("partial") + "\n\n" + terminal]),
     {messages: [warning], replies: ["partial"], locked: false});
   assert.deepEqual(await send([terminal + "\n\n"]),
