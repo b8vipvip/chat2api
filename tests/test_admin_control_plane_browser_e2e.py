@@ -72,7 +72,7 @@ def _login(page, base_url: str, username: str, password: str, role: str) -> None
     page.locator("#adminSessionLogin").click()
     page.wait_for_function(
         "role => document.querySelector('#adminSessionState')?.textContent.includes(role)",
-        role,
+        arg=role,
         timeout=20000,
     )
 
@@ -181,7 +181,7 @@ def test_delegated_admin_browser_navigation_permissions_csrf_and_revocation(tmp_
                     page.locator(f'.nav button[data-view="{target_view}"]').click()
                     page.wait_for_function(
                         "view => document.querySelector('#view-' + view)?.classList.contains('active')",
-                        target_view,
+                        arg=target_view,
                         timeout=10000,
                     )
 
