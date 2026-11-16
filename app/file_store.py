@@ -54,6 +54,10 @@ class StoredFile:
         }
 
 
+class FileIntegrityError(OSError):
+    """Stored bytes do not match the authoritative file-index digest."""
+
+
 class FileStore:
     def __init__(self, data_dir: Path, max_file_bytes: int = 20 * 1024 * 1024) -> None:
         self.root = data_dir / "files"
@@ -332,10 +336,12 @@ class FileStore:
                 raise FileNotFoundError("Stored file content is unavailable") from error
             except OSError as error:
                 if error.errno == errno.ELOOP:
-                    raise FileNotFoundError(
+                    raise FileIntegrityError(
                         "Stored file content is not the original regular file"
                     ) from error
-                raise FileNotFoundError("Stored file content is unavailable") from error
+                # Permission, device and transient I/O failures are service
+                # errors. Do not disguise them as a caller's missing file.
+                raise
             try:
                 metadata = os.fstat(fd)
                 if (
@@ -343,15 +349,17 @@ class FileStore:
                     or metadata.st_nlink != 1
                     or metadata.st_size != item.size
                 ):
-                    raise FileNotFoundError("Stored file content is not the original regular file")
+                    raise FileIntegrityError(
+                        "Stored file content size or file identity does not match the index"
+                    )
                 with os.fdopen(fd, "rb") as handle:
                     fd = -1
                     payload = handle.read()
                 if len(payload) != item.size:
-                    raise FileNotFoundError("Stored file content is incomplete")
+                    raise FileIntegrityError("Stored file content length does not match the index")
                 digest = hashlib.sha256(payload).hexdigest()
                 if not secrets.compare_digest(digest, item.sha256):
-                    raise FileNotFoundError("Stored file content digest does not match the index")
+                    raise FileIntegrityError("Stored file content digest does not match the index")
                 return item, payload
             finally:
                 if fd >= 0:

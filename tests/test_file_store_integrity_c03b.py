@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from app.file_store import FileStore
+from app.file_store import FileIntegrityError, FileStore
 
 
 def _create(store: FileStore):
@@ -74,7 +74,7 @@ def test_file_store_read_rejects_hardlinked_content(tmp_path):
     stored_path = store.root / item.path
     stored_path.unlink()
     os.link(secret, stored_path)
-    with pytest.raises(FileNotFoundError, match="original regular file"):
+    with pytest.raises(FileIntegrityError, match="file identity"):
         store.read(item.file_id)
     assert secret.read_bytes() == b"important file bytes"
 
@@ -92,7 +92,7 @@ def test_file_store_read_rejects_fifo_swapped_after_startup(tmp_path):
     stored_path = store.root / item.path
     stored_path.unlink()
     os.mkfifo(stored_path)
-    with pytest.raises(FileNotFoundError, match="regular file"):
+    with pytest.raises(FileIntegrityError, match="file identity"):
         store.read(item.file_id)
 
 
@@ -111,7 +111,7 @@ def test_file_store_read_rejects_symlink_swapped_after_startup(tmp_path):
     stored_path = store.root / item.path
     stored_path.unlink()
     stored_path.symlink_to(secret)
-    with pytest.raises(FileNotFoundError, match="regular file"):
+    with pytest.raises(FileIntegrityError, match="original regular file"):
         store.read(item.file_id)
     assert secret.read_bytes() == b"must-not-be-served"
 
@@ -249,6 +249,41 @@ def test_legacy_file_index_migrates_content_digest_without_losing_file(tmp_path)
 
 
 
+
+def test_file_store_read_classifies_size_mismatch_as_integrity_failure(tmp_path):
+    store = FileStore(tmp_path)
+    item = _create(store)
+    item.size += 1
+
+    with pytest.raises(FileIntegrityError, match="size"):
+        store.read(item.file_id)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="O_NOFOLLOW is POSIX-specific")
+def test_file_store_read_rejects_symlink_replacement_as_integrity_failure(tmp_path):
+    store = FileStore(tmp_path)
+    item = _create(store)
+    stored_path = store.root / item.path
+    stored_path.unlink()
+    stored_path.symlink_to(tmp_path / "outside")
+
+    with pytest.raises(FileIntegrityError, match="regular file"):
+        store.read(item.file_id)
+
+
+def test_file_store_read_preserves_transient_io_errors(tmp_path, monkeypatch):
+    store = FileStore(tmp_path)
+    item = _create(store)
+
+    def fail_open(*args, **kwargs):
+        raise PermissionError("simulated storage permission failure")
+
+    monkeypatch.setattr("app.file_store.os.open", fail_open)
+    with pytest.raises(PermissionError, match="permission failure"):
+        store.read(item.file_id)
+
+
+
 def test_file_store_read_rejects_same_size_content_tampering(tmp_path):
     store = FileStore(tmp_path)
     item = _create(store)
@@ -259,5 +294,5 @@ def test_file_store_read_rejects_same_size_content_tampering(tmp_path):
     # detect the modified bytes.
     stored_path.write_bytes(b"x" * item.size)
 
-    with pytest.raises(FileNotFoundError, match="digest"):
+    with pytest.raises(FileIntegrityError, match="digest"):
         store.read(item.file_id)

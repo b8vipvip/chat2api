@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import io
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -8,6 +9,7 @@ from fastapi.testclient import TestClient
 from app.config import Settings
 from app.main import create_app
 from app.attachment_download_v82_patch import install_attachment_download_v82_patch
+from PIL import Image
 
 
 def settings(tmp_path: Path) -> Settings:
@@ -19,6 +21,20 @@ def settings(tmp_path: Path) -> Settings:
         CHAT2API_REQUEST_TIMEOUT_SECONDS=10,
         CHAT2API_DESKTOP_WAKE_TIMEOUT_SECONDS=2,
     )
+
+
+def _png_bytes() -> bytes:
+    output = io.BytesIO()
+    Image.new("RGB", (2, 2), (30, 120, 90)).save(output, format="PNG")
+    return output.getvalue()
+
+
+def _error_message(response) -> str:
+    payload = response.json()
+    error = payload.get("error") if isinstance(payload, dict) else None
+    if isinstance(error, dict) and error.get("message"):
+        return str(error["message"])
+    return str(payload.get("detail") or "")
 
 
 def admin_headers() -> dict[str, str]:
@@ -201,7 +217,7 @@ def test_worker_attachment_grant_requires_a_live_nonterminal_broker_lease(tmp_pa
 def test_inline_data_url_image_is_materialized_as_attachment(tmp_path: Path) -> None:
     with TestClient(create_app(settings(tmp_path))) as client:
         client_id, token = pair(client)
-        data_url = "data:image/png;base64," + base64.b64encode(b"inline-image").decode("ascii")
+        data_url = "data:image/png;base64," + base64.b64encode(_png_bytes()).decode("ascii")
         with client.websocket_connect(f"/ws/extensions/{client_id}?token={token}") as websocket:
             websocket.receive_json()
 
@@ -416,3 +432,80 @@ def test_master_api_can_attach_another_key_owned_file_with_request_scoped_worker
 
         assert response.status_code == 200
         assert response.json()["choices"][0]["message"]["content"] == "managed image"
+
+
+def test_image_url_file_id_is_forwarded_as_a_scoped_attachment(tmp_path: Path) -> None:
+    with TestClient(create_app(settings(tmp_path))) as client:
+        image = upload(client, "web-chat-image.png", "image/png", _png_bytes(), "vision")
+        client_id, token = pair(client)
+        with client.websocket_connect(f"/ws/extensions/{client_id}?token={token}") as websocket:
+            websocket.receive_json()
+
+            def request():
+                return client.post(
+                    "/v1/chat/completions",
+                    headers=admin_headers(),
+                    json={
+                        "model": "default",
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "text", "text": "describe this image"},
+                                    {"type": "image_url", "image_url": {"url": image["id"]}},
+                                ],
+                            }
+                        ],
+                        "stream": False,
+                    },
+                )
+
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(request)
+                message = websocket.receive_json()
+                assert message["type"] == "chat.request"
+                assert message["attachments"][0]["file_id"] == image["id"]
+                assert message["attachments"][0]["mime_type"] == "image/png"
+                websocket.send_json(
+                    {"type": "chat.completed", "request_id": message["request_id"], "text": "image received"}
+                )
+                response = future.result(timeout=5)
+
+        assert response.status_code == 200, response.text
+        assert response.json()["choices"][0]["message"]["content"] == "image received"
+        records = client.get("/api/admin/requests?limit=5", headers=admin_headers()).json()["data"]
+        assert records[0]["request_type"] == "multimodal"
+        assert records[0]["attachments_count"] == 1
+
+
+def test_chat_image_url_rejects_non_vision_and_invalid_raster_files(tmp_path: Path) -> None:
+    with TestClient(create_app(settings(tmp_path))) as client:
+        non_vision = upload(client, "not-vision.png", "image/png", _png_bytes(), "chat2api")
+        response = client.post(
+            "/v1/chat/completions",
+            headers=admin_headers(),
+            json={"messages":[{"role":"user","content":[{"type":"text","text":"Describe this image."},{"type":"image_url","image_url":{"url":non_vision["id"]}}]}]},
+        )
+        assert response.status_code == 400
+        assert "vision image attachment" in _error_message(response)
+
+        invalid_raster = upload(client, "invalid.png", "image/png", b"not a raster image", "vision")
+        response = client.post(
+            "/v1/chat/completions",
+            headers=admin_headers(),
+            json={"messages":[{"role":"user","content":[{"type":"text","text":"Describe this image."},{"type":"image_url","image_url":{"url":invalid_raster["id"]}}]}]},
+        )
+        assert response.status_code == 400
+        assert "valid raster image" in _error_message(response)
+
+
+def test_chat_inline_data_url_rejects_invalid_raster_bytes(tmp_path: Path) -> None:
+    invalid = "data:image/png;base64," + base64.b64encode(b"not a raster image").decode("ascii")
+    with TestClient(create_app(settings(tmp_path))) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            headers=admin_headers(),
+            json={"messages":[{"role":"user","content":[{"type":"text","text":"Describe this image."},{"type":"image_url","image_url":{"url":invalid}}]}]},
+        )
+    assert response.status_code == 400
+    assert "valid raster image" in _error_message(response)
