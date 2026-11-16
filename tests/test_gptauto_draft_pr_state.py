@@ -88,7 +88,7 @@ def test_gptauto_workflows_wake_on_review_transition_and_never_merge_draft():
     assert "converted_to_draft" in observer
     assert '--pr-draft "$PR_DRAFT"' in observer
     assert "PR_DRAFT=\"$(jq -r '.draft // false'" in observer
-    assert 'if [[ "$(jq -r \' .draft' not in executor  # Guard against accidental template corruption.
+    assert 'if [[ "$(jq -r \'.draft\' <<<"$pr")" == "true" ]]; then' in executor
     assert 'PR #$PR_NUMBER is still Draft; merge deferred until ready_for_review' in executor
     assert 'BLOCKED_REASON: ${{ steps.state.outputs.blocked-reason }}' in executor
     assert "pr_draft_waiting_for_review" in executor
