@@ -33,6 +33,37 @@
   const canReadUserKeys = () => ["super_admin", "support"].includes(currentAdminRole);
   const canReadAudit = () => currentAdminRole === "super_admin";
   function applyAdminRole() {
+    // Expose the resolved, non-secret role for diagnostics and deterministic
+    // UI readiness checks; server middleware remains the authorization gate.
+    document.documentElement.dataset.adminCommerceRole = currentAdminRole || "";
+    document.documentElement.dataset.adminCommerceSessionReady = adminRoleResolved ? "true" : "false";
+    pricingButton.hidden = !["super_admin", "billing_admin"].includes(currentAdminRole);
+    paymentButton.hidden = !["super_admin", "billing_admin"].includes(currentAdminRole);
+    usersButton.hidden = !["super_admin", "user_admin", "system_admin", "support"].includes(currentAdminRole);
+    const auditPanel = document.getElementById("adminAuditPanel");
+    if (auditPanel) auditPanel.hidden = !canReadAudit();
+    if (!canReadAudit()) {
+      const auditBody = document.getElementById("adminAuditBody");
+      if (auditBody) auditBody.textContent = "";
+    }
+    if (!canReadUserKeys()) {
+      const keysPanel = document.getElementById("adminUserKeysPanel");
+      const keysBody = document.getElementById("adminUserKeysBody");
+      if (keysPanel) keysPanel.style.display = "none";
+      if (keysBody) keysBody.textContent = "";
+      activeAdminUserId = "";
+    }
+    const canWritePaymentSecrets = currentAdminRole === "super_admin";
+    document.querySelectorAll("#view-user-payments input, #view-user-payments select, #view-user-payments textarea").forEach((node) => {
+      node.disabled = !canWritePaymentSecrets;
+    });
+    ["commerceSavePayment", "commerceTestPayment"].forEach((id) => {
+      const node = document.getElementById(id);
+      if (node) node.disabled = !canWritePaymentSecrets;
+    });
+  }
+
+  function applyAdminRole() {
     // Expose only the non-secret role/readiness state for deterministic UI
     // synchronization. Server-side route middleware remains authoritative.
     document.documentElement.dataset.adminCommerceRole = currentAdminRole || "";
@@ -509,6 +540,9 @@
   function showPricingError(error) { document.getElementById("commercePricingStatus").textContent = `错误：${error.message}`; }
 
   async function loadPayments() {
+    // The V106 payment console owns this view when it has replaced the legacy
+    // form. Do not dereference controls that no longer exist.
+    if (!document.getElementById("commercePayEnabled")) return;
     const payload = await adminApi("/api/admin/user-payments");
     document.getElementById("commercePayEnabled").value = String(Boolean(payload.enabled));
     document.getElementById("commercePid").value = payload.pid || "";
@@ -522,6 +556,9 @@
     document.getElementById("commercePaymentStatus").textContent = payload.configured ? `ZPAY 已配置 · PID ${payload.pid_hint || ""}` : "ZPAY 尚未配置完整";
   }
   async function savePayments() {
+    if (!document.getElementById("commercePayEnabled")) {
+      throw new Error("Payment settings are managed by the V106 payment console");
+    }
     const body = {
       enabled: document.getElementById("commercePayEnabled").value === "true",
       pid: document.getElementById("commercePid").value.trim(),

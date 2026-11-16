@@ -30,13 +30,16 @@ async function send(chunks, close = true, onCancel = () => {}) {
       recoveryInFlight: new Set(),
       pendingImages: [],
       pendingImagesConversationId: "",
+      pendingFiles: [],
+      pendingFilesConversationId: "",
     },
     currentConversation: () => conversation,
-    // Image-attachment helpers are outside the extracted sendMessage slice.
+    // Image/document attachment helpers are outside the extracted sendMessage slice.
     selectedKeyId: () => "test-key",
     selectedKeyHasScope: () => true,
     setConnection() {},
     renderPendingImages() {},
+    renderPendingFiles() {},
     showOnly() {},
     id: () => String(conversation.messages.length),
     apiJson: async () => ({user: {user_id: "user-a"}}),
