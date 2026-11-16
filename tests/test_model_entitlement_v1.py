@@ -13,6 +13,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
+from app.admin_audit import AdminAuditError
 from app.admin_auth import AdminSessionStore
 from app.api_keys import ApiPrincipal
 from app.models import ChatCompletionRequest
@@ -775,13 +776,23 @@ def test_user_role_and_subscription_plan_are_authoritative_entitlement_dimension
 def test_user_role_and_subscription_plan_admin_routes_are_audited_and_separated(tmp_path: Path):
     app, token = build_app(tmp_path)
     with TestClient(app) as client:
+        role_request_id = "req_c03a_role_audit_001"
         role = client.put(
             "/api/admin/users/usr_abcdef123/role",
             cookies={"chat2api_admin_session": token},
+            headers={"X-Request-ID": role_request_id},
             json={"system_role": "trusted"},
         )
         assert role.status_code == 200
+        assert role.headers["X-Admin-Audit-Status"] == "complete"
         assert role.json()["user"]["system_role"] == "trusted"
+        role_events = [
+            row for row in app.state.admin_audit.recent(30)
+            if row["request_id"] == role_request_id
+        ]
+        assert {row["action"] for row in role_events} == {
+            "user.system_role_update_requested", "user.system_role_update_completed"
+        }
 
         plan = client.put(
             "/api/admin/subscription-plans/pro",
@@ -977,3 +988,113 @@ def test_responses_text_model_context_reaches_entitlement_gate(tmp_path: Path):
             registry.routing_key_context.reset(routing_token)
 
     asyncio.run(scenario())
+
+
+def test_c03a_committed_admin_mutations_report_pending_audit_without_false_503(tmp_path: Path, monkeypatch):
+    app, token = build_app(tmp_path)
+    original_append = app.state.admin_audit.append
+
+    def fail_completion(**kwargs):
+        if str(kwargs.get("action", "")).endswith("_completed"):
+            raise AdminAuditError("injected completion audit failure")
+        return original_append(**kwargs)
+
+    monkeypatch.setattr(app.state.admin_audit, "append", fail_completion)
+    cookies = {"chat2api_admin_session": token}
+    with TestClient(app) as client:
+        plan = client.put(
+            "/api/admin/subscription-plans/pro",
+            cookies=cookies,
+            headers={"X-Request-ID": "req_c03a_plan_001"},
+            json={"name": "Pro", "enabled": True},
+        )
+        assert plan.status_code == 200
+        assert plan.headers["X-Admin-Audit-Status"] == "completion-pending"
+        assert app.state.user_subscriptions.plan_exists("pro")
+
+        role = client.put(
+            "/api/admin/users/usr_abcdef123/role",
+            cookies=cookies,
+            headers={"X-Request-ID": "req_c03a_role_002"},
+            json={"system_role": "trusted"},
+        )
+        assert role.status_code == 200
+        assert role.headers["X-Admin-Audit-Status"] == "completion-pending"
+        assert app.state.user_accounts.system_role_for("usr_abcdef123") == "trusted"
+
+        policy = client.put(
+            "/api/admin/model-entitlements/user_role/trusted",
+            cookies=cookies,
+            headers={"X-Request-ID": "req_c03a_policy_003"},
+            json={"effect": "allow", "models": ["gpt-5.5"]},
+        )
+        assert policy.status_code == 200
+        assert policy.headers["X-Admin-Audit-Status"] == "completion-pending"
+        assert any(
+            row["subject_type"] == "user_role" and row["subject_id"] == "trusted"
+            for row in app.state.model_entitlements.list_rules()
+        )
+
+        assigned = client.put(
+            "/api/admin/users/usr_abcdef123/subscription",
+            cookies=cookies,
+            headers={"X-Request-ID": "req_c03a_assign_004"},
+            json={"plan_id": "pro"},
+        )
+        assert assigned.status_code == 200
+        assert assigned.headers["X-Admin-Audit-Status"] == "completion-pending"
+        assert app.state.user_subscriptions.current_plan_for_user(
+            "usr_abcdef123"
+        )["plan_id"] == "pro"
+
+        cancelled = client.delete(
+            "/api/admin/users/usr_abcdef123/subscription",
+            cookies=cookies,
+            headers={"X-Request-ID": "req_c03a_cancel_005"},
+        )
+        assert cancelled.status_code == 200
+        assert cancelled.headers["X-Admin-Audit-Status"] == "completion-pending"
+        assert app.state.user_subscriptions.current_plan_for_user(
+            "usr_abcdef123"
+        )["plan_id"] == "free"
+
+        deleted = client.delete(
+            "/api/admin/model-entitlements/user_role/trusted",
+            cookies=cookies,
+            headers={"X-Request-ID": "req_c03a_policy_delete_006"},
+        )
+        assert deleted.status_code == 200
+        assert deleted.headers["X-Admin-Audit-Status"] == "completion-pending"
+        assert deleted.json()["deleted"] is True
+        assert not any(
+            row["subject_type"] == "user_role" and row["subject_id"] == "trusted"
+            for row in app.state.model_entitlements.list_rules()
+        )
+
+    assert app.state.admin_audit_completion_pending is True
+    events = app.state.admin_audit.recent(100)
+    for request_id in (
+        "req_c03a_plan_001", "req_c03a_role_002", "req_c03a_policy_003",
+        "req_c03a_assign_004", "req_c03a_cancel_005", "req_c03a_policy_delete_006",
+    ):
+        assert any(row["request_id"] == request_id and row["action"].endswith("_requested") for row in events)
+
+
+def test_c03a_request_audit_failure_blocks_role_mutation(tmp_path: Path, monkeypatch):
+    app, token = build_app(tmp_path)
+
+    def fail_requested(**kwargs):
+        if str(kwargs.get("action", "")).endswith("_requested"):
+            raise AdminAuditError("injected request audit failure")
+        raise AssertionError("No role mutation should be attempted")
+
+    monkeypatch.setattr(app.state.admin_audit, "append", fail_requested)
+    with TestClient(app) as client:
+        response = client.put(
+            "/api/admin/users/usr_abcdef123/role",
+            cookies={"chat2api_admin_session": token},
+            headers={"X-Request-ID": "req_c03a_role_block_007"},
+            json={"system_role": "trusted"},
+        )
+        assert response.status_code == 503
+        assert app.state.user_accounts.system_role_for("usr_abcdef123") == "user"
