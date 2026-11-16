@@ -260,13 +260,18 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
     original_upsert = telemetry.upsert
 
     async def metered_upsert(
-        item: dict[str, Any], *, merge_diagnostics: bool = False,
+        item: dict[str, Any], *,
+        merge_diagnostics: bool = False,
+        create_only: bool = False,
     ) -> dict[str, Any]:
-        # TelemetryStore.upsert accepts the keyword-only merge_diagnostics
-        # contract. The billing wrapper must preserve it verbatim: otherwise
-        # new passive SSE/Playground diagnostics crash *before Worker dispatch*
-        # (real 2026-11-07 HTTP 500, metered_upsert unexpected keyword).
-        row = await original_upsert(item, merge_diagnostics=merge_diagnostics)
+        # Preserve TelemetryStore's complete keyword-only write contract.
+        # Request admission uses create_only to prevent a replay from replacing
+        # an existing request row; diagnostic observers use merge_diagnostics.
+        row = await original_upsert(
+            item,
+            merge_diagnostics=merge_diagnostics,
+            create_only=create_only,
+        )
         # Read-only telemetry must never trigger repeated charging on a
         # request already marked completed.
         if not merge_diagnostics and str(row.get("status") or "") == "completed":
