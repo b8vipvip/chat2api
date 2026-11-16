@@ -28,7 +28,7 @@ ROLES: dict[str, frozenset[str]] = {
     "api_key_admin": frozenset({"keys:read", "keys:write", "quota:read", "quota:write", "admin:self_password"}),
     "billing_admin": frozenset({"billing:read", "billing:write", "quota:read", "admin:self_password"}),
     "plugin_admin": frozenset({"plugins:read", "plugins:write", "admin:self_password"}),
-    "support": frozenset({"users:read", "keys:read", "models:read", "clients:read", "diagnostics:read", "admin:self_password"}),
+    "support": frozenset({"users:read", "keys:read", "user_keys:read", "models:read", "clients:read", "diagnostics:read", "admin:self_password"}),
 }
 ADMIN_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{2,63}$")
 ITERATIONS = 310_000
@@ -85,10 +85,11 @@ def permission_for_admin_route(path: str, method: str) -> str | None:
         r"/api/admin/users/[^/]+(?:/sessions/revoke)?", path
     ):
         return "users:" + suffix
-    # User-owned API keys have their own permission boundary. A user manager
-    # must not gain key visibility or mutation rights through /users/{id}/keys.
+    # User-owned API keys are distinct from platform-managed API keys.
+    # Only support (read-only) and super_admin (wildcard) may inspect them;
+    # api_key_admin must not gain cross-user access through keys:read.
     if re.fullmatch(r"/api/admin/users/[^/]+/keys(?:/[^/]+)?", path):
-        return "keys:" + suffix
+        return "user_keys:" + suffix
     if re.fullmatch(r"/api/admin/keys/[^/]+/secret", path):
         return "secrets:read"
     if re.fullmatch(r"/api/admin/keys/[^/]+/settings", path):
