@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from app.config import Settings
 from app.control_plane_v1_patch import install_control_plane_v1
 from app.main import create_app
-from app.registration_invitations import InvitationError, InvitationStore
+from app.registration_invitations import InvitationError, InvitationStore, RESERVATION_TTL_SECONDS
 from app.registration_invitations_v1_patch import install_registration_invitations
 from app.user_console_v104_patch import install_user_console_v104_patch
 from app.v17_patch import install_v17_patch
@@ -101,9 +101,28 @@ def test_revocation_does_not_interrupt_a_reserved_registration(tmp_path: Path):
     created = store.create("alice@example.com", "root")
     invitation_id = created["invitation"]["invitation_id"]
     reservation = store.reserve(created["code"], "alice@example.com")
+    assert store.list_invitations()[0]["status"] == "reserved"
     assert store.revoke(invitation_id) is False
     store.consume(reservation)
     assert store.list_invitations()[0]["status"] == "consumed"
+
+
+def test_abandoned_invitation_reservation_expires_and_is_never_reissued(tmp_path: Path, monkeypatch):
+    store = InvitationStore(tmp_path)
+    created = store.create("alice@example.com", "root", expires_in_seconds=3600)
+    reservation = store.reserve(created["code"], "alice@example.com")
+    original = __import__("time").time
+    monkeypatch.setattr(
+        "app.registration_invitations.time.time",
+        lambda: original() + RESERVATION_TTL_SECONDS + 1,
+    )
+
+    with pytest.raises(InvitationError):
+        store.reserve(created["code"], "alice@example.com")
+    assert store.list_invitations()[0]["status"] == "expired"
+    assert store.release(reservation) is False
+    with pytest.raises(InvitationError):
+        store.consume(reservation)
 
 
 def test_invitation_reservation_is_atomic_under_concurrent_use(tmp_path: Path):
