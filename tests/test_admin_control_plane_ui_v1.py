@@ -17,6 +17,7 @@ def test_admin_console_exposes_c_views_and_one_control_plane_asset():
     assert 'data-view="model-entitlements"' in html
     assert 'data-view="plugins"' in html
     assert 'data-view="quota-ledger"' in html
+    assert ".nav button[hidden]{display:none!important}" in html
     assert 'data-view="api-keys"' in html
     assert 'id="view-api-keys"' in html
     assert 'id="view-users"' not in html
