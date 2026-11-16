@@ -2216,54 +2216,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     attachments_count=len(attachments),
                 )
             raise
-        try:
-            await record_request_queued(
-                request_id=request_id, response_id=response_id, requested_model=body.model,
-                prompt=prompt, principal=principal, stream=body.stream,
-                prompt_mode=body.prompt_mode, request_type=request_type,
-                attachments_count=len(attachments),
-                input_file_ids=[str(item["file_id"]) for item in attachments],
-            )
-        except DuplicateRequestIdentity as error:
-            if quota_reservation:
-                try:
-                    app.state.quota_reservations.release(request_id, principal.key_id)
-                except Exception as release_error:
-                    logger.warning(
-                        "Quota reservation release after duplicate request ID failed request_id=%s error_type=%s",
-                        request_id, type(release_error).__name__,
-                    )
-            raise HTTPException(
-                status_code=409,
-                detail={"code": "request_id_conflict", "message": "request_id already exists"},
-            ) from error
-        except Exception as error:
-            if quota_reservation:
-                try:
-                    app.state.quota_reservations.release(request_id, principal.key_id)
-                except Exception as release_error:
-                    logger.warning(
-                        "Quota reservation release after admission persistence failure request_id=%s error_type=%s",
-                        request_id, type(release_error).__name__,
-                    )
-            raise HTTPException(
-                status_code=503, detail="Request admission could not be persisted",
-            ) from error
-        if quota_reservation:
-            try:
-                await telemetry.merge_diagnostics(request_id, {
-                    "quota_reservation_v1": {
-                        "state": "reserved",
-                        "reserved_tokens": int(quota_reservation.get("reserved_tokens") or 0),
-                        "estimate_policy": "prompt_tokens_plus_conservative_4096_output_floor_v1",
-                    },
-                })
-            except Exception as quota_diagnostic_error:
-                logger.warning(
-                    "Quota reservation diagnostic persistence failed request_id=%s error_type=%s",
-                    request_id, type(quota_diagnostic_error).__name__,
-                )
-
         # Persist request visibility only after durable quota/wallet admission.
         # Otherwise an old request ID outside TelemetryStore's 500-row cache
         # could overwrite its history before the persistent reservation journal
@@ -2311,6 +2263,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except Exception:
             release_admission_holds()
             raise
+        if quota_reservation:
+            try:
+                await telemetry.merge_diagnostics(request_id, {
+                    "quota_reservation_v1": {
+                        "state": "reserved",
+                        "reserved_tokens": int(quota_reservation.get("reserved_tokens") or 0),
+                        "estimate_policy": "prompt_tokens_plus_conservative_4096_output_floor_v1",
+                    },
+                })
+            except Exception as quota_diagnostic_error:
+                logger.warning(
+                    "Quota reservation diagnostic persistence failed request_id=%s error_type=%s",
+                    request_id, type(quota_diagnostic_error).__name__,
+                )
         if origin_evidence:
             try:
                 await telemetry.merge_diagnostics(
