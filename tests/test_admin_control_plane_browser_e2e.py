@@ -509,13 +509,9 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
 
                 # Authenticate as the environment-managed root and create a real
                 # delegated support administrator through the production UI.
-                page.locator("#adminUsername").fill(root_username)
-                page.locator("#adminPassword").fill(root_password)
-                page.locator("#adminLoginButton").click()
-                page.wait_for_function(
-                    "() => document.getElementById('adminLoginGate')?.style.display === 'none'",
-                    timeout=10000,
-                )
+                page.locator("#adminSessionUser").fill(root_username)
+                page.locator("#adminSessionPassword").fill(root_password)
+                page.locator("#adminSessionLogin").click()
                 page.wait_for_function(
                     "() => document.getElementById('adminSessionState')?.textContent.includes('super_admin')",
                     timeout=10000,
@@ -590,11 +586,7 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                 )
                 assert user_password not in page.locator("#cAdminRows").inner_text()
 
-                page.locator("#adminLogout").click()
-                page.wait_for_function(
-                    "() => document.getElementById('adminLoginGate')?.style.display === 'flex'",
-                    timeout=10000,
-                )
+                page.locator("#adminSessionLogout").click()
                 page.wait_for_function(
                     "() => document.getElementById('adminSessionState')?.textContent.includes('未登录')",
                     timeout=10000,
@@ -604,18 +596,15 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                 # session. Delegated login must clear it before legacy requests.
                 page.evaluate(
                     """() => {
-                      // The production login gate removes the legacy master-key
-                      // input entirely; seed only the persisted stale credential.
+                      // The production v17 shell replaces the legacy master-key
+                      // controls with session identity controls; seed only the
+                      // persisted stale credential before delegated login.
                       sessionStorage.setItem("chat2api_admin_key", "stale-root-key");
                     }"""
                 )
-                page.locator("#adminUsername").fill(support_username)
-                page.locator("#adminPassword").fill(support_password)
-                page.locator("#adminLoginButton").click()
-                page.wait_for_function(
-                    "() => document.getElementById('adminLoginGate')?.style.display === 'none'",
-                    timeout=10000,
-                )
+                page.locator("#adminSessionUser").fill(support_username)
+                page.locator("#adminSessionPassword").fill(support_password)
+                page.locator("#adminSessionLogin").click()
                 page.wait_for_function(
                     "() => document.getElementById('adminSessionState')?.textContent.includes('support_agent')",
                     timeout=10000,
@@ -673,7 +662,7 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                 page.evaluate(
                     "() => { window.fetch = window.__c07_users_fetch; delete window.__c07_users_fetch; }"
                 )
-                # The legacy gate replaces the master-key controls with
+                # The v17 shell replaces the master-key controls with
                 # session identity controls; delegated login must also purge
                 # the stale persisted credential.
                 assert page.locator("#adminKey").count() == 0
@@ -720,18 +709,14 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                     "clientPolicyWrite": 403,
                 }
 
-                page.locator("#adminLogout").click()
-                page.wait_for_function(
-                    "() => document.getElementById('adminLoginGate')?.style.display === 'flex'",
-                    timeout=10000,
-                )
+                page.locator("#adminSessionLogout").click()
                 page.wait_for_function(
                     "() => document.getElementById('adminSessionState')?.textContent.includes('未登录')",
                     timeout=10000,
                 )
-                page.locator("#adminUsername").fill(billing_username)
-                page.locator("#adminPassword").fill(billing_password)
-                page.locator("#adminLoginButton").click()
+                page.locator("#adminSessionUser").fill(billing_username)
+                page.locator("#adminSessionPassword").fill(billing_password)
+                page.locator("#adminSessionLogin").click()
                 page.wait_for_function(
                     "() => document.getElementById('adminSessionState')?.textContent.includes('billing_admin')",
                     timeout=10000,
@@ -796,19 +781,15 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                 }
                 assert not page_errors, "Unexpected browser exceptions: " + repr(page_errors)
 
-                page.locator("#adminLogout").click()
-                page.wait_for_function(
-                    "() => document.getElementById('adminLoginGate')?.style.display === 'flex'",
-                    timeout=10000,
-                )
+                page.locator("#adminSessionLogout").click()
                 page.wait_for_function(
                     "() => document.getElementById('adminSessionState')?.textContent.includes('未登录')",
                     timeout=10000,
                 )
-                page.locator("#adminUsername").fill(user_username)
-                page.locator("#adminPassword").fill(user_password)
+                page.locator("#adminSessionUser").fill(user_username)
+                page.locator("#adminSessionPassword").fill(user_password)
                 auth_responses.clear()
-                page.locator("#adminLoginButton").click()
+                page.locator("#adminSessionLogin").click()
                 try:
                     page.wait_for_function(
                         "() => document.getElementById('adminSessionState')?.textContent.includes('user_operator')",
@@ -817,15 +798,14 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                 except Exception as error:
                     diagnostics = page.evaluate(
                         """() => ({
-                          loginError: document.getElementById("adminLoginError")?.textContent || "",
-                          sessionState: document.getElementById("adminSessionState")?.textContent || "",
-                          loginGateDisplay: document.getElementById("adminLoginGate")?.style.display || "",
+                          sessionLoginStatus: document.getElementById("adminSessionState")?.textContent || "",
+                          loginFormVisibility: document.getElementById("adminSessionUser")?.getClientRects().length ? "visible" : "hidden",
                           commerceRole: document.documentElement.dataset.adminCommerceRole || "",
                           commerceSessionReady: document.documentElement.dataset.adminCommerceSessionReady || "",
                           adminUiReady: window.__CHAT2API_CONTROL_PLANE_ADMIN_V1_READY__ === true,
-                          loginButtonDisabled: Boolean(document.getElementById("adminLoginButton")?.disabled),
-                          usernameValue: document.getElementById("adminUsername")?.value || "",
-                          passwordLength: document.getElementById("adminPassword")?.value?.length || 0
+                          loginButtonDisabled: Boolean(document.getElementById("adminSessionLogin")?.disabled),
+                          usernameValue: document.getElementById("adminSessionUser")?.value || "",
+                          passwordLength: document.getElementById("adminSessionPassword")?.value?.length || 0
                         })"""
                     )
                     raise AssertionError(
