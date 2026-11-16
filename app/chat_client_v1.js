@@ -777,6 +777,12 @@
       if (error instanceof StreamResponseError) {
         assistant.pending = false;
         assistant.recoveryStatus = "error";
+        // Do not leave an empty assistant placeholder when the server failed
+        // before delivering any content; preserve the message when partial
+        // content was already streamed.
+        if (!assistant.content) {
+          conversation.messages = conversation.messages.filter((message) => message.id !== assistant.id);
+        }
         toast("请求失败：" + error.message);
         return;
       }
