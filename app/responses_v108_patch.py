@@ -17,6 +17,7 @@ from .api_keys import ApiPrincipal
 from .responses_multimodal_input_v183 import needs_multimodal, resolve_responses_attachments
 from .media_handoff import StreamMediaMarkerGate
 from .token_usage import usage_for
+from .telemetry import DuplicateRequestIdentity
 
 
 PATCH_REVISION = 108
@@ -288,10 +289,40 @@ async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], princi
         raise HTTPException(status_code=503, detail=str(error)) from error
     raw_id = str(request_id_override or request.headers.get("x-chat2api-request-id") or "").strip()
     request_id = raw_id if re.fullmatch(r"[A-Za-z0-9_-]{6,120}", raw_id) else "resp_req_" + uuid.uuid4().hex
+    internal_repair = bool(request_id_override and request_id.startswith("resp_repair_"))
+    if not internal_repair and app.state.telemetry.get(request_id):
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "request_id_conflict", "message": "request_id already exists"},
+        )
     try:
         state = await app.state.chat_request_service.reserve(request_id, client_id)
     except RuntimeError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
+    # Responses is metered by the outer Responses middleware, which writes the
+    # authoritative terminal usage row under this same request_id. Reserve
+    # before Worker dispatch so the shared TelemetryStore hook can commit or
+    # release it from that terminal. Only the trusted internal tool-repair
+    # override is non-billable; a caller-supplied request-id prefix is not.
+    quota_reservation = None
+    if not internal_repair:
+        raw_output_budget = body.get("max_output_tokens")
+        try:
+            requested_output_budget = (
+                0 if isinstance(raw_output_budget, bool)
+                else max(0, int(raw_output_budget or 0))
+            )
+        except (TypeError, ValueError):
+            requested_output_budget = 0
+        try:
+            from .quota_reservation_runtime_v1 import reserve_request_quota
+            quota_reservation = await reserve_request_quota(
+                app, request_id, principal, prompt,
+                max(4096, requested_output_budget),
+            )
+        except Exception:
+            await broker.release(request_id)
+            raise
     trace_scope = getattr(request, "scope", None)
     trace = trace_scope.get("chat2api.responses_trace") if isinstance(trace_scope, dict) else None
     if isinstance(trace, dict):
@@ -336,9 +367,6 @@ async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], princi
         # assigned Worker and attachment set before dispatch so the extension
         # download endpoint can enforce the same request-scoped file grant as
         # Chat Completions and Images.
-        if app.state.telemetry.get(request_id):
-            await broker.release(request_id)
-            raise HTTPException(status_code=409, detail="Duplicate request_id")
         try:
             await app.state.telemetry.upsert({
                 "request_id": request_id,
@@ -362,8 +390,30 @@ async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], princi
                 "timings": state.timings(),
                 "diagnostics": {"responses_v108_dispatch": True},
                 "error": None,
-            })
+            }, create_only=True)
+        except DuplicateRequestIdentity as error:
+            if quota_reservation:
+                try:
+                    app.state.quota_reservations.release(request_id, principal.key_id)
+                except Exception:
+                    logging.getLogger(__name__).warning(
+                        "Responses quota release after duplicate request ID failed request_id=%s",
+                        request_id,
+                    )
+            await broker.release(request_id)
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "request_id_conflict", "message": "request_id already exists"},
+            ) from error
         except Exception:
+            if quota_reservation:
+                try:
+                    app.state.quota_reservations.release(request_id, principal.key_id)
+                except Exception:
+                    logging.getLogger(__name__).warning(
+                        "Responses quota release after telemetry failure failed request_id=%s",
+                        request_id,
+                    )
             await broker.release(request_id)
             raise
     registry.busy_clients.add(client_id)

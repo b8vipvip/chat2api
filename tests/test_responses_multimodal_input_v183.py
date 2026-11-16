@@ -152,9 +152,15 @@ def test_responses_dispatch_transfers_canonical_attachments_to_one_worker(tmp_pa
             self.rows = {}
         def get(self, request_id):
             return self.rows.get(request_id)
-        async def upsert(self, row):
-            self.rows[row["request_id"]] = dict(row)
-            return dict(row)
+        async def upsert(self, row, *, merge_diagnostics=False, create_only=False):
+            from app.telemetry import DuplicateRequestIdentity
+            request_id = row["request_id"]
+            previous = self.rows.get(request_id)
+            if create_only and previous is not None:
+                raise DuplicateRequestIdentity("request_id already exists")
+            value = {**(previous or {}), **row}
+            self.rows[request_id] = value
+            return dict(value)
     telemetry = FakeTelemetry()
     broker = SimpleNamespace(create=create, release=release, requests=requests)
     app = SimpleNamespace(state=SimpleNamespace(
@@ -249,10 +255,14 @@ def test_responses_dispatch_failure_terminalizes_request_scoped_attachment_grant
             self.rows = {}
         def get(self, request_id):
             return self.rows.get(request_id)
-        async def upsert(self, row):
-            previous = self.rows.get(row["request_id"], {})
-            self.rows[row["request_id"]] = {**previous, **row}
-            return dict(self.rows[row["request_id"]])
+        async def upsert(self, row, *, merge_diagnostics=False, create_only=False):
+            from app.telemetry import DuplicateRequestIdentity
+            request_id = row["request_id"]
+            previous = self.rows.get(request_id)
+            if create_only and previous is not None:
+                raise DuplicateRequestIdentity("request_id already exists")
+            self.rows[request_id] = {**(previous or {}), **row}
+            return dict(self.rows[request_id])
 
     async def fail_send(_client_id, _message):
         raise ConnectionError("simulated Worker socket send failure")

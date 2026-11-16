@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import secrets
 import time
@@ -17,7 +18,10 @@ from .api_keys import ApiPrincipal
 from . import model_capability_routing_patch as model_routing
 from .token_usage import usage_for
 from .prompt_config import build_speech_prompt
+from .quota_reservation_runtime_v1 import is_request_id_conflict, reserve_audio_request_quota
+from .telemetry import DuplicateRequestIdentity
 
+logger = logging.getLogger(__name__)
 PATCH_VERSION = "0.6.0"
 
 
@@ -125,11 +129,12 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
         model: str, request_type: str, prompt: str, transcript: str, state,
         status_value: str, error: str | None = None, audio_bytes: int = 0,
         input_file_ids: list[str] | None = None,
+        create_only: bool = False,
     ) -> tuple[dict[str, int], dict[str, object]]:
         usage, token_meta = _audio_usage(prompt, transcript)
         diagnostics = dict(state.diagnostics)
         diagnostics["audio_bytes"] = int(audio_bytes)
-        await telemetry.append(
+        await telemetry.upsert(
             {
                 "request_id": request_id,
                 "response_id": response_id,
@@ -154,7 +159,8 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
                 "timings": state.timings(),
                 "diagnostics": diagnostics,
                 "error": error,
-            }
+            },
+            create_only=create_only,
         )
         return usage, token_meta
 
@@ -195,10 +201,64 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
                 selected_client = resolve_client(client_id)
         finally:
             registry.routing_key_context.reset(route_token)
+        if telemetry.get(request_id):
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "request_id_conflict", "message": "request_id already exists"},
+            )
         try:
             state = await broker.create(request_id, selected_client)
         except RuntimeError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+
+        quota_reservation = None
+        if request_type in {"voice_generation", "voice_conversation"}:
+            try:
+                quota_reservation = await reserve_audio_request_quota(
+                    app, request_id, principal, prompt,
+                )
+            except HTTPException as quota_error:
+                state.completed_mono = time.perf_counter()
+                state.diagnostics["quota_reservation_v1"] = {
+                    "state": "rejected",
+                    "http_status": quota_error.status_code,
+                    "estimate_policy": "text_input_tokens_plus_4096_audio_admission_floor_v1",
+                }
+                if not is_request_id_conflict(quota_error):
+                    try:
+                        await record_voice(
+                            request_id=request_id, response_id=response_id, client_id=selected_client,
+                            principal=principal, model=model, request_type=request_type, prompt=prompt,
+                            transcript="", state=state, status_value="error",
+                            error=str(quota_error.detail), input_file_ids=input_file_ids, create_only=True,
+                        )
+                    except DuplicateRequestIdentity:
+                        await broker.release(request_id)
+                        raise HTTPException(
+                            status_code=409,
+                            detail={"code": "request_id_conflict", "message": "request_id already exists"},
+                        ) from quota_error
+                    except Exception as telemetry_error:
+                        logger.warning(
+                            "Voice quota rejection could not be persisted request_id=%s error_type=%s",
+                            request_id, type(telemetry_error).__name__,
+                        )
+                try:
+                    await broker.release(request_id)
+                except Exception as release_error:
+                    logger.warning(
+                        "Voice quota rejection broker release failed request_id=%s error_type=%s",
+                        request_id, type(release_error).__name__,
+                    )
+                raise
+
+            if quota_reservation:
+                state.diagnostics["quota_reservation_v1"] = {
+                    "state": "reserved",
+                    "reserved_tokens": int(quota_reservation.get("reserved_tokens") or 0),
+                    "estimate_policy": "text_input_tokens_plus_4096_audio_admission_floor_v1",
+                    "provider_usage_verified": False,
+                }
         registry.busy_clients.add(selected_client)
         if prompt_policy:
             state.diagnostics.update(prompt_policy)
@@ -208,7 +268,7 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
             await record_voice(
                 request_id=request_id, response_id=response_id, client_id=selected_client,
                 principal=principal, model=model, request_type=request_type, prompt=prompt,
-                transcript="", state=state, status_value="running",
+                transcript="", state=state, status_value="running", create_only=True,
                 input_file_ids=input_file_ids,
             )
             # The only TTS preset authority is this endpoint. The Worker
@@ -273,6 +333,19 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
                     "token_usage": token_meta,
                 },
             }
+        except DuplicateRequestIdentity as error:
+            if quota_reservation:
+                try:
+                    app.state.quota_reservations.release(request_id, principal.key_id)
+                except Exception as release_error:
+                    logger.warning(
+                        "Voice quota release after duplicate request ID failed request_id=%s error_type=%s",
+                        request_id, type(release_error).__name__,
+                    )
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "request_id_conflict", "message": "request_id already exists"},
+            ) from error
         except asyncio.TimeoutError as error:
             state.diagnostics["voice_failure_code"] = "VOICE_SERVER_WAIT_TIMEOUT"
             state.diagnostics["voice_failure_stage"] = str(state.diagnostics.get("voice_stage") or "unknown")
@@ -306,6 +379,16 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=502, detail=str(error)) from error
         finally:
             registry.busy_clients.discard(selected_client)
+            if quota_reservation:
+                current = telemetry.get(request_id)
+                if str((current or {}).get("status") or "") != "completed":
+                    try:
+                        app.state.quota_reservations.release(request_id, principal.key_id)
+                    except Exception as release_error:
+                        logger.warning(
+                            "Voice quota reservation cleanup deferred request_id=%s error_type=%s",
+                            request_id, type(release_error).__name__,
+                        )
             await broker.release(request_id)
 
     @app.post("/v1/audio/speech")

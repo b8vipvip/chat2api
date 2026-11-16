@@ -72,7 +72,7 @@ from .models import (
 )
 from .prompting import build_prompt
 from .registry import ClientRegistry
-from .telemetry import TelemetryStore, parse_request_since
+from .telemetry import DuplicateRequestIdentity, TelemetryStore, parse_request_since
 from .runtime_contract import SERVER_RUNTIME_VERSION
 from .runtime_code_identity import runtime_code_sha
 from .worker_probe_store import WorkerProbeStore
@@ -82,6 +82,11 @@ from .playground_truth_v170 import (reconcile_playground_runs, reconcile_playgro
 from .playground_stream_contract_v293 import playground_stream_attribution
 from .playground_request_evidence_v207 import request_test_index, playground_link
 from .token_usage import usage_for
+from .quota_reservation_runtime_v1 import (
+    is_request_id_conflict,
+    reserve_image_generation_quota,
+    reserve_request_quota,
+)
 
 logger = logging.getLogger("chat2api")
 APP_VERSION = "0.5.0"
@@ -122,6 +127,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "Recovered %s queued request(s) from the previous process as stalled",
                 recovered_queued,
             )
+        quota_store = getattr(app.state, "quota_reservations", None)
+        if quota_store is not None and getattr(app.state, "quota_reservation_runtime_enabled", False):
+            # Recover terminal telemetry before expiring old reservations.
+            # TelemetryStore persists a terminal row before its accounting
+            # callback; a crash in that gap leaves the reservation reserved,
+            # not committing, and must not lose a completed charge.
+            replayed_reservations = await quota_store.recover_committing(telemetry, api_keys)
+            reconciled_reservations = quota_store.reconcile(api_keys)
+            expired_reservations = quota_store.expire_reservations()
+            if expired_reservations or replayed_reservations or reconciled_reservations:
+                logger.info(
+                    "Quota reservation startup recovery expired=%s replayed=%s reconciled=%s",
+                    expired_reservations, replayed_reservations, reconciled_reservations,
+                )
         await file_store.load()
         await test_runs.load()
         recovered_runs = await test_runs.recover_interrupted()
@@ -1623,7 +1642,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "timings": {},
             "diagnostics": {"request_admission_stage": "selecting-worker"},
             "error": None,
-        })
+        }, create_only=True)
         logger.info(
             "API request queued before Worker selection request_id=%s model=%s key=%s",
             request_id, requested_model, principal.key_id,
@@ -1721,7 +1740,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "timings": {"total_ms": round((time.perf_counter() - started_mono) * 1000, 1)},
                 "diagnostics": diagnostics,
                 "error": error,
-            }
+            },
+            create_only=not bool(existing),
         )
         # Early admission failures (e.g. no connected Chrome Worker) have
         # no RequestState or later Worker finalizer. Reconcile that exact
@@ -2128,15 +2148,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         requested_client = body.client_id or x_chat2api_client
         request_type = "multimodal" if attachments else "text"
 
-        # v220: the request exists from admission ingress, not only after a
-        # capacity slot opens. The queued row remains visible in Request History.
-        await record_request_queued(
-            request_id=request_id, response_id=response_id, requested_model=body.model,
-            prompt=prompt, principal=principal, stream=body.stream,
-            prompt_mode=body.prompt_mode, request_type=request_type,
-            attachments_count=len(attachments),
-            input_file_ids=[str(item["file_id"]) for item in attachments],
-        )
         # Read-only version identity for browser-origin Playground calls.
         # ABCD may legitimately use real SSE even if its final report never
         # arrives. Never reject a request solely for missing that report.
@@ -2144,6 +2155,74 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             request_id=request_id, stream=body.stream,
             headers=request.headers, test_runs=test_runs,
         )
+        requested_output_limits = [
+            getattr(body, "max_tokens", None),
+            getattr(body, "max_completion_tokens", None),
+        ]
+        output_budget = max([
+            4096,
+            *(value for value in requested_output_limits if isinstance(value, int) and not isinstance(value, bool) and value > 0),
+        ])
+        try:
+            quota_reservation = await reserve_request_quota(
+                app, request_id, principal, prompt, output_budget,
+            )
+        except HTTPException as quota_error:
+            if not is_request_id_conflict(quota_error):
+                await record_early_error(
+                    request_id=request_id, response_id=response_id, requested_model=body.model,
+                    prompt=prompt, principal=principal, stream=body.stream, prompt_mode=body.prompt_mode,
+                    started_mono=request_started, error=str(quota_error.detail), request_type=request_type,
+                    attachments_count=len(attachments),
+                )
+            raise
+        try:
+            await record_request_queued(
+                request_id=request_id, response_id=response_id, requested_model=body.model,
+                prompt=prompt, principal=principal, stream=body.stream,
+                prompt_mode=body.prompt_mode, request_type=request_type,
+                attachments_count=len(attachments),
+                input_file_ids=[str(item["file_id"]) for item in attachments],
+            )
+        except DuplicateRequestIdentity as error:
+            if quota_reservation:
+                try:
+                    app.state.quota_reservations.release(request_id, principal.key_id)
+                except Exception as release_error:
+                    logger.warning(
+                        "Quota reservation release after duplicate request ID failed request_id=%s error_type=%s",
+                        request_id, type(release_error).__name__,
+                    )
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "request_id_conflict", "message": "request_id already exists"},
+            ) from error
+        except Exception as error:
+            if quota_reservation:
+                try:
+                    app.state.quota_reservations.release(request_id, principal.key_id)
+                except Exception as release_error:
+                    logger.warning(
+                        "Quota reservation release after admission persistence failure request_id=%s error_type=%s",
+                        request_id, type(release_error).__name__,
+                    )
+            raise HTTPException(
+                status_code=503, detail="Request admission could not be persisted",
+            ) from error
+        if quota_reservation:
+            try:
+                await telemetry.merge_diagnostics(request_id, {
+                    "quota_reservation_v1": {
+                        "state": "reserved",
+                        "reserved_tokens": int(quota_reservation.get("reserved_tokens") or 0),
+                        "estimate_policy": "prompt_tokens_plus_conservative_4096_output_floor_v1",
+                    },
+                })
+            except Exception as quota_diagnostic_error:
+                logger.warning(
+                    "Quota reservation diagnostic persistence failed request_id=%s error_type=%s",
+                    request_id, type(quota_diagnostic_error).__name__,
+                )
         if origin_evidence:
             try:
                 await telemetry.merge_diagnostics(
@@ -2451,10 +2530,68 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response_id = "img_" + uuid.uuid4().hex
         started = time.perf_counter()
         client_id = resolve_client_now(body.client_id or x_chat2api_client)
+        if telemetry.get(request_id):
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "request_id_conflict", "message": "request_id already exists"},
+            )
         try:
             state = await broker.create(request_id, client_id)
         except RuntimeError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+
+        quota_reservation = None
+        try:
+            quota_reservation = await reserve_image_generation_quota(
+                app, request_id, principal, body.prompt, body.n,
+            )
+        except HTTPException as quota_error:
+            state.completed_mono = time.perf_counter()
+            if not is_request_id_conflict(quota_error):
+                try:
+                    await telemetry.upsert({
+                        "request_id": request_id, "response_id": response_id, "client_id": client_id,
+                        "api_key_id": principal.key_id, "api_key_name": principal.name, "auth_kind": principal.kind,
+                        "requested_model": "gpt-image", "request_type": "image_generation",
+                        "attachments_count": len(attachments), "stream": False, "prompt_mode": "image",
+                        "prompt_chars": len(body.prompt), "completion_chars": 0, "status": "error",
+                        "usage": {}, "timings": state.timings(),
+                        "diagnostics": {"quota_reservation_v1": {
+                            "state": "rejected", "http_status": quota_error.status_code,
+                            "estimate_policy": "prompt_tokens_plus_4096_per_image_admission_floor_v1",
+                        }},
+                        "error": str(quota_error.detail),
+                    }, create_only=True)
+                except DuplicateRequestIdentity:
+                    # A concurrent request won this identity. Never replace
+                    # its history with the losing admission's quota error.
+                    pass
+                except Exception as telemetry_error:
+                    logger.warning(
+                        "Image quota rejection could not be persisted request_id=%s error_type=%s",
+                        request_id, type(telemetry_error).__name__,
+                    )
+            try:
+                await broker.release(request_id)
+            except Exception as release_error:
+                logger.warning(
+                    "Image quota rejection broker release failed request_id=%s error_type=%s",
+                    request_id, type(release_error).__name__,
+                )
+            raise
+
+        quota_diagnostics = {}
+        if quota_reservation:
+            quota_diagnostics = {"quota_reservation_v1": {
+                "state": "reserved",
+                "reserved_tokens": int(quota_reservation.get("reserved_tokens") or 0),
+                "estimate_policy": "prompt_tokens_plus_4096_per_image_admission_floor_v1",
+                "provider_usage_verified": False,
+            }}
+
+        def image_diagnostics() -> dict[str, Any]:
+            return {**dict(state.diagnostics), **quota_diagnostics}
+
         registry.busy_clients.add(client_id)
         state.probe_policy = probe_policy(client_id)
         timeout_seconds = body.timeout or max(config.request_timeout_seconds, 300)
@@ -2468,8 +2605,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "input_file_ids": [str(item["file_id"]) for item in attachments],
                     "stream": False, "prompt_mode": "image",
                     "prompt_chars": len(body.prompt), "completion_chars": 0, "status": "running",
-                    "usage": {}, "timings": state.timings(), "diagnostics": dict(state.diagnostics), "error": None,
-                }
+                    "usage": {}, "timings": state.timings(), "diagnostics": image_diagnostics(), "error": None,
+                },
+                create_only=True,
             )
             await registry.send(
                 client_id,
@@ -2577,8 +2715,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "attachments_count": len(attachments), "stream": False, "prompt_mode": "image",
                     "prompt_chars": len(body.prompt), "completion_chars": 0, "status": "completed",
                     "usage": {**usage, **token_meta}, "timings": state.timings(),
-                    "diagnostics": dict(state.diagnostics), "error": None,
-                }
+                    "diagnostics": image_diagnostics(), "error": None,
+                },
             )
             # The standalone Images API already archived verified bytes.
             # Reuse those exact records; do not capture or upload images twice.
@@ -2605,7 +2743,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "request_id": request_id,
                     "client_id": client_id,
                     "timings": state.timings(),
-                    "diagnostics": state.diagnostics,
+                    "diagnostics": image_diagnostics(),
                     "token_usage": token_meta,
                     "media_files": archived_media,
                     "owned_media": owned_media,
@@ -2616,6 +2754,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     }} if owned_media else {}),
                 },
             }
+        except DuplicateRequestIdentity as error:
+            state.completed_mono = time.perf_counter()
+            if quota_reservation:
+                try:
+                    app.state.quota_reservations.release(request_id, principal.key_id)
+                except Exception as release_error:
+                    logger.warning(
+                        "Image quota release after duplicate request ID failed request_id=%s error_type=%s",
+                        request_id, type(release_error).__name__,
+                    )
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "request_id_conflict", "message": "request_id already exists"},
+            ) from error
         except asyncio.TimeoutError as error:
             state.completed_mono = time.perf_counter()
             await telemetry.upsert(
@@ -2624,7 +2776,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                  "requested_model": "gpt-image", "request_type": "image_generation",
                  "attachments_count": len(attachments), "stream": False, "prompt_mode": "image",
                  "prompt_chars": len(body.prompt), "completion_chars": 0, "status": "error",
-                 "usage": {}, "timings": state.timings(), "diagnostics": state.diagnostics,
+                 "usage": {}, "timings": state.timings(), "diagnostics": image_diagnostics(),
                  "error": "Timed out waiting for ChatGPT Images"}
             )
             raise HTTPException(status_code=504, detail="Timed out waiting for ChatGPT Images") from error
@@ -2637,11 +2789,42 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                  "attachments_count": len(attachments), "stream": False, "prompt_mode": "image",
                  "prompt_chars": len(body.prompt), "completion_chars": 0,
                  "status": failure_status(state, message=str(error)),
-                 "usage": {}, "timings": state.timings(), "diagnostics": state.diagnostics, "error": str(error)}
+                 "usage": {}, "timings": state.timings(), "diagnostics": image_diagnostics(), "error": str(error)}
             )
             raise HTTPException(status_code=502, detail=str(error)) from error
+        except Exception as error:
+            current = telemetry.get(request_id)
+            current_status = str((current or {}).get("status") or "")
+            if current_status not in {"completed", "error", "cancelled", "stalled", "failed", "timeout"}:
+                state.completed_mono = state.completed_mono or time.perf_counter()
+                try:
+                    await telemetry.upsert({
+                        "request_id": request_id, "response_id": response_id, "client_id": client_id,
+                        "api_key_id": principal.key_id, "api_key_name": principal.name, "auth_kind": principal.kind,
+                        "requested_model": "gpt-image", "request_type": "image_generation",
+                        "attachments_count": len(attachments), "stream": False, "prompt_mode": "image",
+                        "prompt_chars": len(body.prompt), "completion_chars": 0, "status": "error",
+                        "usage": {}, "timings": state.timings(), "diagnostics": image_diagnostics(),
+                        "error": type(error).__name__,
+                    })
+                except Exception as telemetry_error:
+                    logger.warning(
+                        "Image request failure telemetry could not be persisted request_id=%s error_type=%s",
+                        request_id, type(telemetry_error).__name__,
+                    )
+            raise
         finally:
             registry.busy_clients.discard(client_id)
+            if quota_reservation:
+                current = telemetry.get(request_id)
+                if str((current or {}).get("status") or "") != "completed":
+                    try:
+                        app.state.quota_reservations.release(request_id, principal.key_id)
+                    except Exception as release_error:
+                        logger.warning(
+                            "Image quota reservation cleanup deferred request_id=%s error_type=%s",
+                            request_id, type(release_error).__name__,
+                        )
             await broker.release(request_id)
 
     # Both Images and Responses image_generation use this exact Worker/Broker

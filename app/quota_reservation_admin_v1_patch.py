@@ -1,17 +1,13 @@
 """Admin read/reconcile API for the C-06a reservation journal."""
 from __future__ import annotations
 
-import logging
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query, Request, Response
+from fastapi import FastAPI, HTTPException, Query, Request
 
 from .admin_audit import AdminAuditError, AdminAuditStore
 from .admin_auth import SESSION_COOKIE
 from .quota_reservations import QuotaReservationError, QuotaReservationStore
-
-
-logger = logging.getLogger(__name__)
 
 
 def install_quota_reservation_admin_v1(app: FastAPI) -> FastAPI:
@@ -42,9 +38,7 @@ def install_quota_reservation_admin_v1(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=403, detail="Administrator permission denied")
         return str(username)
 
-    def audit_event(
-        actor: str, action: str, request: Request, details: dict[str, Any], *, required: bool = True
-    ) -> bool:
+    def audit_event(actor: str, action: str, request: Request, details: dict[str, Any]) -> None:
         try:
             audit.append(
                 actor=actor,
@@ -55,12 +49,7 @@ def install_quota_reservation_admin_v1(app: FastAPI) -> FastAPI:
                 details=details,
             )
         except AdminAuditError as exc:
-            if required:
-                raise HTTPException(status_code=503, detail="Administrator audit unavailable; operation denied") from exc
-            app.state.admin_audit_completion_pending = True
-            logger.error("Admin audit completion append failed after quota reservation reconciliation")
-            return False
-        return True
+            raise HTTPException(status_code=503, detail="Administrator audit unavailable; operation denied") from exc
 
     @app.get("/api/admin/quota-reservations")
     async def list_quota_reservations(
@@ -82,20 +71,23 @@ def install_quota_reservation_admin_v1(app: FastAPI) -> FastAPI:
             "data": rows,
             "active_reserved_tokens_in_result": active,
             "runtime_integration_enabled": bool(app.state.quota_reservation_runtime_enabled),
+            "runtime_coverage": list(getattr(app.state, "quota_reservation_runtime_coverage", [])),
             "accounting_owner": "ApiKeyStore.account_completed_usage",
         }
 
     @app.post("/api/admin/quota-reservations/reconcile")
-    async def reconcile_quota_reservations(request: Request, response: Response) -> dict[str, int]:
+    async def reconcile_quota_reservations(request: Request) -> dict[str, int]:
         actor = admin_actor(request, write=True)
         audit_event(actor, "quota.reservation_reconcile_requested", request, {})
         try:
-            count = store.reconcile(api_keys)
+            replayed = await store.recover_committing(getattr(app.state, "telemetry", None), api_keys)
+            reconciled = store.reconcile(api_keys)
+            count = replayed + reconciled
         except Exception as exc:
             raise HTTPException(status_code=503, detail="Quota reservation reconciliation failed") from exc
-        audit_ok = audit_event(
-            actor, "quota.reservation_reconcile_completed", request, {"settled": count}, required=False
-        )
+        audit_ok = audit_event(actor, "quota.reservation_reconcile_completed", request, {
+            "settled": count, "replayed_from_telemetry": replayed, "reconciled_from_api_key_ledger": reconciled,
+        }, required=False)
         response.headers["X-Admin-Audit-Status"] = "complete" if audit_ok else "completion-pending"
         return {"settled": count}
 
