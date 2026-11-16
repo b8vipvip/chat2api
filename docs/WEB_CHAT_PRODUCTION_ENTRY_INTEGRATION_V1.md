@@ -87,5 +87,4 @@ The Web Chat integration branch is stacked on C-03B resource authorization. The 
 The shared Worker request boundary requires one-time binding to the actual dispatch socket. A terminal browser `image.error` / `image.cancelled` may permit only the same original socket to send `voice.live.stop` cleanup; it must not reopen generation or permit a second terminal. Request-scoped file reads remain limited to the attached file IDs, assigned Worker, original/current socket, and matching owner key.
 
 ## 2026-11-15 · Current W03 parent synchronization
-
 The current parent PR #825 head is `d76880950e5863747606bf9f266f191a3b43b082`. This W01 branch must be evaluated against that exact parent head; previous green checks on the older parent snapshot are not inherited. Do not resolve parent changes by copying the entire W01 tree over the W03 branch. Re-run the complete image attachment, Web Chat browser, SDK, and production smoke checks after GitHub refreshes the PR merge base.
