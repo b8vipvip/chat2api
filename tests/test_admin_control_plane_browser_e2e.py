@@ -34,11 +34,38 @@ def _wait_for_server(base_url: str, process: subprocess.Popen, log_path: Path) -
 
 
 def _login(page, base_url: str, username: str, password: str, role: str) -> None:
-    page.goto(base_url + "/admin", wait_until="domcontentloaded")
-    page.wait_for_function(
-        "() => document.querySelector('#adminSessionState')?.textContent.includes('未登录管理会话')",
-        timeout=20000,
-    )
+    page_errors = []
+    console_errors = []
+    page.on("pageerror", lambda error: page_errors.append(str(error)))
+    page.on("console", lambda message: console_errors.append(message.text) if message.type == "error" else None)
+    response = page.goto(base_url + "/admin", wait_until="domcontentloaded")
+    try:
+        page.wait_for_function(
+            "() => { const node = document.querySelector('#adminSessionState'); return !!node && node.textContent !== '未检查管理会话'; }",
+            timeout=15000,
+        )
+    except Exception as exc:
+        state = page.locator("#adminSessionState").text_content() if page.locator("#adminSessionState").count() else None
+        scripts = page.locator("script").evaluate_all("(nodes) => nodes.map(node => node.src || '[inline]')")
+        session_probe = page.request.get(base_url + "/api/admin/auth/session")
+        asset_probe = page.request.get(base_url + "/assets/chat2api-control-plane-admin-v1.js")
+        diagnostics = {
+            "page_status": response.status if response else None,
+            "url": page.url,
+            "title": page.title(),
+            "session_state": state,
+            "scripts": scripts,
+            "session_status": session_probe.status,
+            "session_body": session_probe.text(),
+            "asset_status": asset_probe.status,
+            "page_errors": page_errors,
+            "console_errors": console_errors,
+            "body": page.locator("body").inner_text()[:1200],
+        }
+        raise AssertionError(f"admin session bootstrap did not complete: {diagnostics}") from exc
+    state = page.locator("#adminSessionState").text_content() or ""
+    if "未登录管理会话" not in state:
+        raise AssertionError(f"unexpected initial admin session state: {state}; page_errors={page_errors}; console_errors={console_errors}")
     page.wait_for_selector('button[data-view="admin-users"]', timeout=20000)
     page.locator("#adminSessionUser").fill(username)
     page.locator("#adminSessionPassword").fill(password)
