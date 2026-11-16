@@ -125,3 +125,19 @@ def test_images_only_key_can_retrieve_own_image_generation_response_but_not_text
         )
         assert text_response.status_code == 403
 
+        mixed_id = "resp_images_only_mixed_123"
+        _store_response(app, mixed_id, {
+            "id": mixed_id,
+            "object": "response",
+            "output_text": "private text must not be exposed",
+            "output": [
+                {"id": "ig_mixed", "type": "image_generation_call", "status": "completed"},
+                {"id": "msg_mixed", "type": "message", "content": [{"type": "output_text", "text": "private"}]},
+            ],
+        }, key["key_id"])
+        mixed_response = client.get(
+            f"/v1/responses/{mixed_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert mixed_response.status_code == 403
+
