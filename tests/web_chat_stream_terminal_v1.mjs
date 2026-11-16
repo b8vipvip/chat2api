@@ -48,13 +48,16 @@ async function send(chunks, close = true, onCancel = () => {}) {
       clearTimeout() {},
       setTimeout() { return 0; },
       Chat2APIStreamRecoveryV1: {
-        createRequestId: () => "request-test",
+        createRequestId: () => "req_request_test",
         create: () => ({resume: async () => ({status: "recovery_timeout", terminal: false})}),
       },
     },
   });
   const sendMessage = vm.runInContext(source.slice(start, end) + "\nsendMessage", context);
   await sendMessage("test question");
+  // The production client deliberately starts recovery without blocking sendMessage.
+  // Let its Promise chain settle before asserting the user-visible recovery notice.
+  await new Promise((resolve) => setImmediate(resolve));
   return {
     messages,
     replies: conversation.messages.filter(({role}) => role === "assistant").map(({content}) => content),
