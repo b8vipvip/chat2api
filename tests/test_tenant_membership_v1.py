@@ -177,14 +177,14 @@ def test_tenant_mutation_audit_failure_does_not_report_a_committed_change_as_fai
             return original_append(**kwargs)
 
         monkeypatch.setattr(audit, "append", fail_completion)
-        committed = client.post("/api/admin/tenants", headers=ORIGIN, json={
+        committed = client.post("/api/admin/tenants", headers={**ORIGIN, "X-Request-ID": "audit-commit-123"}, json={
             "slug": "org-committed", "display_name": "Committed",
         })
         assert committed.status_code == 201, committed.text
         assert committed.headers["X-Admin-Audit-Status"] == "completion-pending"
         assert len(app.state.tenant_memberships.list_tenants()) == 1
         assert app.state.admin_audit_completion_pending is True
-        assert any(row["action"] == "tenant.create_requested" for row in audit.recent(20))
+        assert any(row["action"] == "tenant.create_requested" and row["request_id"] == "audit-commit-123" for row in audit.recent(20))
         assert not any(row["action"] == "tenant.create_completed" for row in audit.recent(20))
 
 
