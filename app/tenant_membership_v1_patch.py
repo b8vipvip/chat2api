@@ -56,7 +56,7 @@ def install_tenant_memberships(app: FastAPI) -> FastAPI:
         return str(username)
 
     def audit_write(
-        actor: str, action: str, kind: str, target: str, details: dict, *, required: bool = True
+        request: Request, actor: str, action: str, kind: str, target: str, details: dict, *, required: bool = True
     ) -> bool:
         audit = getattr(app.state, "admin_audit", None)
         if audit is None:
@@ -65,7 +65,7 @@ def install_tenant_memberships(app: FastAPI) -> FastAPI:
         try:
             audit.append(
                 actor=actor, action=action, target_type=kind, target_id=target,
-                request_id="", details=details,
+                request_id=str(request.headers.get("x-request-id") or ""), details=details,
             )
         except AdminAuditError as exc:
             if required:
@@ -88,12 +88,12 @@ def install_tenant_memberships(app: FastAPI) -> FastAPI:
     @app.post("/api/admin/tenants", status_code=201)
     async def admin_create_tenant(body: TenantCreate, request: Request, response: Response) -> dict[str, Any]:
         actor = admin_actor(request)
-        audit_write(actor, "tenant.create_requested", "tenant", body.slug, {})
+        audit_write(request, actor, "tenant.create_requested", "tenant", body.slug, {})
         try:
             tenant = store.create(body.slug, body.display_name)
         except TenantMembershipError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        audit_ok = audit_write(actor, "tenant.create_completed", "tenant", tenant["tenant_id"], {"slug": body.slug}, required=False)
+        audit_ok = audit_write(request, actor, "tenant.create_completed", "tenant", tenant["tenant_id"], {"slug": body.slug}, required=False)
         response.headers["X-Admin-Audit-Status"] = "complete" if audit_ok else "completion-pending"
         return {"tenant": tenant}
 
@@ -109,7 +109,7 @@ def install_tenant_memberships(app: FastAPI) -> FastAPI:
         if accounts.admin_get(body.user_id) is None:
             raise HTTPException(status_code=404, detail="Unknown user")
         actor = admin_actor(request)
-        audit_write(actor, "tenant.member_change_requested", "membership", tenant_id, {
+        audit_write(request, actor, "tenant.member_change_requested", "membership", tenant_id, {
             "user_id": body.user_id, "role": body.role,
         })
         try:
@@ -118,7 +118,7 @@ def install_tenant_memberships(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=404, detail="Unknown tenant") from exc
         except TenantMembershipError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        audit_ok = audit_write(actor, "tenant.member_change_completed", "membership", tenant_id, {
+        audit_ok = audit_write(request, actor, "tenant.member_change_completed", "membership", tenant_id, {
             "user_id": body.user_id, "role": body.role,
         }, required=False)
         response.headers["X-Admin-Audit-Status"] = "complete" if audit_ok else "completion-pending"
@@ -127,14 +127,14 @@ def install_tenant_memberships(app: FastAPI) -> FastAPI:
     @app.delete("/api/admin/tenants/{tenant_id}/members/{user_id}")
     async def admin_remove_member(tenant_id: str, user_id: str, request: Request, response: Response) -> dict[str, bool]:
         actor = admin_actor(request)
-        audit_write(actor, "tenant.member_remove_requested", "membership", tenant_id, {"user_id": user_id})
+        audit_write(request, actor, "tenant.member_remove_requested", "membership", tenant_id, {"user_id": user_id})
         try:
             store.remove_member(tenant_id, user_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Unknown membership") from exc
         except TenantMembershipError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        audit_ok = audit_write(actor, "tenant.member_remove_completed", "membership", tenant_id, {"user_id": user_id}, required=False)
+        audit_ok = audit_write(request, actor, "tenant.member_remove_completed", "membership", tenant_id, {"user_id": user_id}, required=False)
         response.headers["X-Admin-Audit-Status"] = "complete" if audit_ok else "completion-pending"
         return {"removed": True}
 
@@ -161,7 +161,7 @@ def install_tenant_memberships(app: FastAPI) -> FastAPI:
         if not store.exists(tenant_id):
             raise HTTPException(status_code=404, detail="Unknown tenant")
         actor = admin_actor(request)
-        audit_write(actor, "tenant.api_key_bind_requested", "tenant_api_key", tenant_id, {
+        audit_write(request, actor, "tenant.api_key_bind_requested", "tenant_api_key", tenant_id, {
             "user_id": body.user_id, "key_id": key_id,
         })
         try:
@@ -170,7 +170,7 @@ def install_tenant_memberships(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=409, detail="User must be a member of the tenant before binding a key") from exc
         except TenantMembershipError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        audit_ok = audit_write(actor, "tenant.api_key_bind_completed", "tenant_api_key", tenant_id, {
+        audit_ok = audit_write(request, actor, "tenant.api_key_bind_completed", "tenant_api_key", tenant_id, {
             "user_id": body.user_id, "key_id": key_id,
         }, required=False)
         response.headers["X-Admin-Audit-Status"] = "complete" if audit_ok else "completion-pending"
@@ -181,14 +181,14 @@ def install_tenant_memberships(app: FastAPI) -> FastAPI:
         tenant_id: str, key_id: str, request: Request, response: Response
     ) -> dict[str, bool]:
         actor = admin_actor(request)
-        audit_write(actor, "tenant.api_key_unbind_requested", "tenant_api_key", tenant_id, {
+        audit_write(request, actor, "tenant.api_key_unbind_requested", "tenant_api_key", tenant_id, {
             "key_id": key_id,
         })
         try:
             store.unbind_key(tenant_id, key_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Unknown tenant API key binding") from exc
-        audit_ok = audit_write(actor, "tenant.api_key_unbind_completed", "tenant_api_key", tenant_id, {
+        audit_ok = audit_write(request, actor, "tenant.api_key_unbind_completed", "tenant_api_key", tenant_id, {
             "key_id": key_id,
         }, required=False)
         response.headers["X-Admin-Audit-Status"] = "complete" if audit_ok else "completion-pending"
