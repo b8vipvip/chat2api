@@ -246,11 +246,18 @@
     adminUserKeyLoadGeneration += 1;
     adminUserRows = [];
     adminUserTotal = 0;
+    adminUserOffset = 0;
     activeAdminUserId = "";
     const rows = document.getElementById("adminUsersBody");
     if (rows) rows.replaceChildren();
     const status = document.getElementById("adminUserStatus");
     if (status) status.textContent = "";
+    const page = document.getElementById("adminUserPage");
+    if (page) page.textContent = "0-0 / 0";
+    const previous = document.getElementById("adminUserPrev");
+    const next = document.getElementById("adminUserNext");
+    if (previous) previous.disabled = true;
+    if (next) next.disabled = true;
     const keysPanel = document.getElementById("adminUserKeysPanel");
     if (keysPanel) keysPanel.style.display = "none";
     const keysBody = document.getElementById("adminUserKeysBody");
