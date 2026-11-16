@@ -12,7 +12,7 @@ const delta = (text) => "data: " + JSON.stringify({choices: [{delta: {content: t
 const terminal = "data: [DONE]";
 
 async function send(chunks, close = true, onCancel = () => {}) {
-  const conversation = {messages: []};
+  const conversation = {id: "conversation-test", messages: []};
   const messages = [];
   const body = new ReadableStream({
     start(controller) {
@@ -28,8 +28,16 @@ async function send(chunks, close = true, onCancel = () => {}) {
       apiToken: "test-token", user: {user_id: "user-a"},
       selectedModel: "test-model", streaming: false,
       recoveryInFlight: new Set(),
+      pendingImages: [],
+      pendingImagesConversationId: "",
     },
     currentConversation: () => conversation,
+    // Image-attachment helpers are outside the extracted sendMessage slice.
+    selectedKeyId: () => "test-key",
+    selectedKeyHasScope: () => true,
+    setConnection() {},
+    renderPendingImages() {},
+    showOnly() {},
     id: () => String(conversation.messages.length),
     apiJson: async () => ({user: {user_id: "user-a"}}),
     fetch: async () => ({ok: true, body}),
