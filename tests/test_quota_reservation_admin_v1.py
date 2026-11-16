@@ -2,6 +2,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from app.admin_audit import AdminAuditError
 from app.config import Settings
 from app.main import create_app
 from app.quota_reservation_admin_v1_patch import install_quota_reservation_admin_v1
@@ -47,6 +48,38 @@ def test_admin_reservation_api_requires_session_and_audits_reconcile(tmp_path: P
 
         events = app.state.admin_audit.recent(10)
         assert any(row["action"] == "quota.reservation_reconcile_completed" for row in events)
+
+
+def test_reconcile_completion_audit_failure_does_not_turn_operation_into_http_failure(tmp_path: Path, monkeypatch):
+    app = create_app(Settings(
+        CHAT2API_DATA_DIR=str(tmp_path),
+        CHAT2API_ADMIN_USERNAME="owner",
+        CHAT2API_ADMIN_PASSWORD="strong-root-password",
+    ))
+    install_v17_patch(app)
+    app.state.quota_reservations = QuotaReservationStore(tmp_path)
+    install_quota_reservation_admin_v1(app)
+    audit = app.state.admin_audit
+    original_append = audit.append
+
+    def fail_completion(**kwargs):
+        if kwargs["action"] == "quota.reservation_reconcile_completed":
+            raise AdminAuditError("simulated completion failure")
+        return original_append(**kwargs)
+
+    monkeypatch.setattr(audit, "append", fail_completion)
+    with TestClient(app) as client:
+        login = client.post("/api/admin/auth/login", json={
+            "username": "owner", "password": "strong-root-password",
+        }, headers=ORIGIN)
+        assert login.status_code == 200
+        response = client.post("/api/admin/quota-reservations/reconcile", headers=ORIGIN)
+        assert response.status_code == 200, response.text
+        assert response.headers["X-Admin-Audit-Status"] == "completion-pending"
+        assert app.state.admin_audit_completion_pending is True
+        rows = audit.recent(20)
+        assert any(row["action"] == "quota.reservation_reconcile_requested" for row in rows)
+        assert not any(row["action"] == "quota.reservation_reconcile_completed" for row in rows)
 
 
 def test_reservation_list_is_bounded_and_filterable(tmp_path: Path):
