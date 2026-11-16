@@ -30,6 +30,26 @@ def _admin_headers() -> dict[str, str]:
     return {"Authorization": "Bearer web-chat-document-master-key"}
 
 
+def _api_error_message(response) -> str:
+    """Mode 2 exposes the standard OpenAI error envelope for /v1 routes."""
+    payload = response.json()
+    assert "detail" not in payload, payload
+    error = payload["error"]
+    assert error["type"] in {
+        "invalid_request_error", "permission_error", "authentication_error", "server_error",
+    }, payload
+    assert isinstance(error["message"], str) and error["message"], payload
+    return error["message"]
+
+
+def _assert_storage_integrity_unavailable(response) -> None:
+    assert response.status_code == 503, response.text
+    payload = response.json()
+    assert "detail" not in payload, payload
+    assert payload["error"]["type"] == "server_error", payload
+    assert payload["error"]["code"] == "stored_file_integrity_unavailable", payload
+
+
 def _pair(client: TestClient) -> tuple[str, str]:
     response = client.post(
         "/api/extensions/register",
@@ -171,7 +191,7 @@ def test_document_content_part_rejects_non_assistants_and_unsupported_mime_files
                 },
             )
             assert response.status_code == 400, response.text
-            assert "assistants document" in response.json()["detail"]
+            assert "assistants document" in _api_error_message(response)
 
 
 def test_document_content_part_rejects_corrupt_size_metadata(tmp_path: Path) -> None:
@@ -197,10 +217,7 @@ def test_document_content_part_rejects_corrupt_size_metadata(tmp_path: Path) -> 
         )
         # A stored size mismatch is a server-side integrity failure, not
         # malformed client input. Never pass potentially corrupted bytes on.
-        assert response.status_code == 503, response.text
-        assert response.json()["detail"] == {
-            "code": "stored_file_integrity_unavailable",
-        }
+        _assert_storage_integrity_unavailable(response)
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX symlinks are unavailable on Windows")
 def test_document_content_part_rejects_symlink_replacement_as_storage_integrity_failure(tmp_path: Path) -> None:
@@ -228,10 +245,7 @@ def test_document_content_part_rejects_symlink_replacement_as_storage_integrity_
             },
         )
 
-        assert response.status_code == 503, response.text
-        assert response.json()["detail"] == {
-            "code": "stored_file_integrity_unavailable",
-        }
+        _assert_storage_integrity_unavailable(response)
         assert outside.read_bytes() == b"must not be sent to the Worker"
 
 
@@ -255,7 +269,7 @@ def test_chat_completion_enforces_four_combined_file_input_limit(tmp_path: Path)
             },
         )
         assert response.status_code == 400, response.text
-        assert "At most four image/file inputs" in response.json()["detail"]
+        assert "At most four image/file inputs" in _api_error_message(response)
 
 
 def test_document_file_part_is_bound_to_the_uploading_api_key(tmp_path: Path) -> None:
@@ -316,7 +330,7 @@ def test_document_file_part_is_bound_to_the_uploading_api_key(tmp_path: Path) ->
             },
         )
         assert response.status_code == 403, response.text
-        assert "belongs to another API key" in response.json()["detail"]
+        assert "belongs to another API key" in _api_error_message(response)
 
         deleted = client.delete(
             f"/api/user/files/{file_id}",
@@ -347,7 +361,7 @@ def test_chat_completion_preflights_combined_file_and_inline_image_count(tmp_pat
             },
         )
         assert response.status_code == 400, response.text
-        assert "At most four image/file inputs" in response.json()["detail"]
+        assert "At most four image/file inputs" in _api_error_message(response)
         assert set(client.app.state.file_store.items) == before
 
 def test_chat_completion_enforces_twenty_mib_combined_attachment_limit(tmp_path: Path) -> None:
@@ -372,7 +386,7 @@ def test_chat_completion_enforces_twenty_mib_combined_attachment_limit(tmp_path:
             },
         )
         assert response.status_code == 400, response.text
-        assert "20 MiB" in response.json()["detail"]
+        assert "20 MiB" in _api_error_message(response)
 
 def test_document_and_image_integrity_failures_return_service_unavailable(
     tmp_path: Path, monkeypatch,
@@ -413,10 +427,7 @@ def test_document_and_image_integrity_failures_return_service_unavailable(
                 "stream": False,
             },
         )
-        assert document_response.status_code == 503, document_response.text
-        assert document_response.json()["detail"] == {
-            "code": "stored_file_integrity_unavailable",
-        }
+        _assert_storage_integrity_unavailable(document_response)
 
         image_response = client.post(
             "/v1/chat/completions",
@@ -433,8 +444,24 @@ def test_document_and_image_integrity_failures_return_service_unavailable(
                 "stream": False,
             },
         )
-        assert image_response.status_code == 503, image_response.text
-        assert image_response.json()["detail"] == {
-            "code": "stored_file_integrity_unavailable",
-        }
+        _assert_storage_integrity_unavailable(image_response)
 
+def test_mode2_multipart_rejects_invalid_metadata_without_creating_file(tmp_path: Path) -> None:
+    # The multipart form branch uses explicit Pydantic validation; reject bad
+    # metadata with an OpenAI-compatible 422 instead of leaking a server 500.
+    with TestClient(create_app(_settings(tmp_path))) as client:
+        before = set(client.app.state.file_store.items)
+        for filename, mime in (
+            ("x" * 181 + ".txt", "text/plain"),
+            ("report.txt", "application/" + "x" * 170),
+        ):
+            response = client.post(
+                "/v1/files",
+                headers=_admin_headers(),
+                files={"file": (filename, b"private multipart bytes", mime)},
+                data={"purpose": "assistants"},
+            )
+            assert response.status_code == 422, response.text
+            assert "Invalid multipart file upload metadata" in _api_error_message(response)
+            assert filename not in response.text
+            assert set(client.app.state.file_store.items) == before

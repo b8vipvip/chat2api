@@ -329,6 +329,14 @@
   }
 
   $("cAdminCreate")?.addEventListener("click", async () => {
+    const createButton = $("cAdminCreate");
+    // Do not leave a prior success visible while the next administrator is
+    // still being persisted. Otherwise an E2E client (or human operator) can
+    // mistake the previous account's result for this request and log out
+    // before its server-side creation has completed.
+    if (createButton.disabled) return;
+    createButton.disabled = true;
+    setStatus("cAdminStatus", "正在创建管理员…");
     try {
       await sessionApi("/api/admin/control/admins", {
         method: "POST",
@@ -341,7 +349,11 @@
       $("cAdminPassword").value = "";
       await loadAdmins();
       setStatus("cAdminStatus", "管理员已创建；密码不会再次显示");
-    } catch (error) { setStatus("cAdminStatus", error.message, true); }
+    } catch (error) {
+      setStatus("cAdminStatus", error.message, true);
+    } finally {
+      createButton.disabled = false;
+    }
   });
   $("cAdminReload")?.addEventListener("click", loadAdmins);
 
