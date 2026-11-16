@@ -66,11 +66,6 @@ def _login(page, base_url: str, username: str, password: str, role: str) -> None
     state = page.locator("#adminSessionState").text_content() or ""
     if "未登录管理会话" not in state:
         raise AssertionError(f"unexpected initial admin session state: {state}; page_errors={page_errors}; console_errors={console_errors}")
-    page.wait_for_function(
-        "role => document.documentElement.dataset.adminCommerceSessionReady === 'true' && document.documentElement.dataset.adminCommerceRole === role",
-        arg=role,
-        timeout=20000,
-    )
     page.locator("#adminSessionUser").fill(username)
     page.locator("#adminSessionPassword").fill(password)
     page.locator("#adminSessionLogin").click()
@@ -79,6 +74,30 @@ def _login(page, base_url: str, username: str, password: str, role: str) -> None
         arg=role,
         timeout=20000,
     )
+    try:
+        page.wait_for_function(
+            "role => document.documentElement.dataset.adminCommerceSessionReady === 'true' && document.documentElement.dataset.adminCommerceRole === role",
+            arg=role,
+            timeout=20000,
+        )
+    except Exception as exc:
+        diagnostics = page.evaluate(
+            """async () => ({
+              sessionState: document.querySelector('#adminSessionState')?.textContent || "",
+              commerceRole: document.documentElement.dataset.adminCommerceRole || "",
+              commerceSessionReady: document.documentElement.dataset.adminCommerceSessionReady || "",
+              session: await fetch('/api/admin/auth/session', {credentials:'same-origin', cache:'no-store'}).then(r => r.json()).catch(error => ({error:String(error)})),
+              scripts: Array.from(document.scripts).map(script => script.src || '[inline]'),
+              adminUsersButton: document.querySelector('button[data-view="admin-users"]')?.outerHTML || null,
+              loginButtonDisabled: Boolean(document.querySelector('#adminSessionLogin')?.disabled),
+              controlPlaneReady: window.__CHAT2API_CONTROL_PLANE_ADMIN_V1_READY__ === true,
+              body: document.body.innerText.slice(0, 1400)
+            })"""
+        )
+        raise AssertionError(
+            f"commerce role synchronization did not complete for {role}: "
+            + repr({"diagnostics": diagnostics, "page_errors": page_errors, "console_errors": console_errors})
+        ) from exc
 
 
 def _request_status(page, base_url: str, method: str, path: str, data=None, *, origin: str | None = None, fetch_site: str = "same-origin") -> int:
