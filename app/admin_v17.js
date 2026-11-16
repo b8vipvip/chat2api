@@ -46,6 +46,7 @@
   };
 
   const auth = document.querySelector(".auth");
+  const hasSessionLogin = Boolean(document.getElementById("adminSessionLogin"));
   if (auth) {
     auth.innerHTML = `
       <span id="adminIdentity" class="muted" style="align-self:center;white-space:nowrap"></span>
@@ -73,13 +74,18 @@
 
   function setAuthenticated(value, username = "") {
     adminLoggedIn = Boolean(value);
-    gate.style.display = adminLoggedIn ? "none" : "flex";
+    gate.style.display = adminLoggedIn || hasSessionLogin ? "none" : "flex";
     const identity = document.getElementById("adminIdentity");
     if (identity) identity.textContent = adminLoggedIn ? `管理员 · ${username || "admin"}` : "";
     const logout = document.getElementById("adminLogout");
-    if (logout) logout.style.display = adminLoggedIn ? "inline-block" : "none";
-    if (!adminLoggedIn) status("请登录管理员账号", "muted");
+    if (logout) logout.style.display = adminLoggedIn && !hasSessionLogin ? "inline-block" : "none";
+    if (!adminLoggedIn && !hasSessionLogin) status("请登录管理员账号", "muted");
   }
+
+  document.addEventListener("chat2api-admin-session-changed", event => {
+    const session = event.detail || {};
+    setAuthenticated(Boolean(session.authenticated), session.username || "");
+  });
 
   async function checkSession() {
     try {
