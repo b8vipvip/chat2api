@@ -141,7 +141,22 @@
   globalThis.addEventListener("message", event => {
     if (event.source !== globalThis) return;
     const detail = event.data;
-    if (!detail || detail.source !== SOURCE) return;
+    if (!detail) return;
+    if (detail.source === AUTHORITY_SOURCE) {
+      // The main-world observer reports completion of the exact /conversation
+      // fetch it bound to the active API request. Clear only that request:
+      // an older stream finishing late must not revoke a newer request's
+      // model authority.
+      const completedRequestId = String(detail.request_id || "");
+      if (detail.authority == null && completedRequestId
+          && completedRequestId === activeRequestId) {
+        activeRequestId = "";
+        activeAuthority = null;
+        broadcastAuthority("", null);
+      }
+      return;
+    }
+    if (detail.source !== SOURCE) return;
     const row = bind(detail.stream_id);
     if (!row) return;
     if (detail.phase === "request") {
@@ -178,13 +193,20 @@
       return;
     }
     if (detail.phase === "error" || detail.phase === "done"
-        || detail.phase === "limit") {
+        || detail.phase === "limit" || detail.phase === "unavailable") {
       // A bounded MAIN-world clone ending at the 16 MB evidence cap is
       // NOT a ChatGPT-native Fetch EOF and cannot provide model terminal
       // authority. Retain the best already-observed model facts, then
       // release only this observer's per-stream tracking row.
       if (Object.keys(row.evidence).length) publishEvidence(row, detail).catch(() => {});
       setTimeout(() => rows.delete(row.streamId), 15000);
+      // Model rewriting is request-scoped, not a permanent page setting.
+      // Stop applying it as soon as this response's evidence lifecycle ends.
+      if (row.requestId && row.requestId === activeRequestId) {
+        activeRequestId = "";
+        activeAuthority = null;
+        broadcastAuthority("", null);
+      }
     }
   });
 
@@ -192,7 +214,9 @@
     if (message?.type === "chat2api.request") {
       activeRequestId = String(message.requestId || "");
       activeAuthority = authorityFrom(message);
-      if (activeAuthority) broadcastAuthority(activeRequestId, activeAuthority);
+      // Always replace/clear the main-world authority. A request without a
+      // concrete model must not inherit the previous request's routing rule.
+      broadcastAuthority(activeRequestId, activeAuthority);
     } else if (message?.type === "chat2api.cancel" && String(message.requestId || "") === activeRequestId) {
       activeRequestId = "";
       activeAuthority = null;
