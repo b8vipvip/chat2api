@@ -634,6 +634,26 @@
           } };
       }
     }
+    if (active && ["chat.completed", "chat.error", "chat.cancelled"].includes(event?.type)) {
+      // Snapshot the final request-v6 dispatch stages on the terminal itself.
+      // Nonblocking diagnostic messages can still be in flight when the
+      // Broker accepts this terminal, after which late diagnostics are rejected.
+      // Keep this self-contained: the terminal delivery harness and older
+      // isolated observers execute emit without the stage helper closure.
+      const dispatchStartedAt = Number(active.dispatchTimingStartedAt || 0);
+      const dispatchNow = typeof performance !== "undefined"
+        && typeof performance.now === "function" ? performance.now() : NaN;
+      const dispatchElapsed = dispatchStartedAt > 0
+        && Number.isFinite(dispatchNow) && dispatchNow >= dispatchStartedAt
+        ? Math.round((dispatchNow - dispatchStartedAt) * 10) / 10 : null;
+      event = { ...event, diagnostics: {
+        ...(event.diagnostics || {}),
+        request_controller: "request-v6",
+        request_v6_dispatch_timing_version: 1,
+        request_v6_dispatch_elapsed_ms: dispatchElapsed,
+        request_v6_dispatch_stage_evidence_v1: { ...(active.dispatchStageEvidence || {}) },
+      } };
+    }
     if (event?.type === "chat.completed" && active) {
       // DOM observers are optional. Even if ChatGPT changes structure in
       // the middle of scanning, they must never throw across the sole
@@ -893,6 +913,74 @@
         ...extra,
       },
     });
+  }
+
+  function dispatchElapsedMs(active, at = performance.now()) {
+    const startedAt = Number(active?.dispatchTimingStartedAt || 0);
+    if (!startedAt || !Number.isFinite(startedAt) || !Number.isFinite(at) || at < startedAt) return null;
+    return Math.round((at - startedAt) * 10) / 10;
+  }
+
+  // The background ACK means only that request-v6 accepted the message. Keep
+  // the subsequent browser-side readiness/submit stages visible so a long gap
+  // before chat.started can be attributed without creating another dispatcher
+  // or terminal authority.
+  // Stage probes are evidence-only. Never await the extension/background
+  // diagnostic round trip before writing or submitting a user's prompt.
+  // Each published stage is a snapshot, so later updates cannot mutate it.
+  function reportDispatchStage(active, elapsed) {
+    void diagnostic(active, "dispatch-stage", {
+      request_v6_dispatch_timing_version: 1,
+      request_v6_dispatch_elapsed_ms: elapsed,
+      request_v6_dispatch_stage_evidence_v1: { ...(active.dispatchStageEvidence || {}) },
+    }).catch(() => {});
+  }
+
+  async function runDispatchStage(active, stage, task) {
+    const startedAt = performance.now();
+    const startedElapsed = dispatchElapsedMs(active, startedAt);
+    const evidence = active.dispatchStageEvidence || (active.dispatchStageEvidence = {});
+    if (typeof task !== "function") {
+      evidence[stage] = {
+        status: "skipped",
+        started_elapsed_ms: startedElapsed,
+        duration_ms: null,
+        completed_elapsed_ms: dispatchElapsedMs(active),
+      };
+      reportDispatchStage(active, dispatchElapsedMs(active));
+      return;
+    }
+
+    evidence[stage] = {
+      status: "started",
+      started_elapsed_ms: startedElapsed,
+      duration_ms: null,
+      completed_elapsed_ms: null,
+    };
+    reportDispatchStage(active, startedElapsed);
+    try {
+      const result = await task();
+      const completedAt = performance.now();
+      evidence[stage] = {
+        status: "completed",
+        started_elapsed_ms: startedElapsed,
+        duration_ms: Math.max(0, Math.round((completedAt - startedAt) * 10) / 10),
+        completed_elapsed_ms: dispatchElapsedMs(active, completedAt),
+      };
+      reportDispatchStage(active, dispatchElapsedMs(active, completedAt));
+      return result;
+    } catch (error) {
+      const failedAt = performance.now();
+      evidence[stage] = {
+        status: "failed",
+        started_elapsed_ms: startedElapsed,
+        duration_ms: Math.max(0, Math.round((failedAt - startedAt) * 10) / 10),
+        completed_elapsed_ms: dispatchElapsedMs(active, failedAt),
+        error_type: String(error?.name || "Error").slice(0, 60),
+      };
+      reportDispatchStage(active, dispatchElapsedMs(active, failedAt));
+      throw error;
+    }
   }
 
   function dispatchEnter(element) {
@@ -2245,6 +2333,10 @@
         send_prompt_match_source: ready.promptMatchSource,
         send_attempts: attempts,
         submit_wait_ms: Math.round((performance.now() - readyStarted) * 10) / 10,
+        request_v6_dispatch_submit_click_elapsed_ms:
+          Number.isFinite(Number(active.dispatchTimingStartedAt))
+            ? Math.max(0, Math.round((performance.now() - Number(active.dispatchTimingStartedAt)) * 10) / 10)
+            : null,
         hydration_safe_baseline: true,
         historical_assistant_count: active.baselineCount,
       });
@@ -2315,7 +2407,17 @@
   async function ensureResponseStarted(active, responseStarted, source) {
     if (responseStarted) return true;
     active.responseStarted = true;
-    await emit({ type: "chat.started", request_id: active.requestId, diagnostics: { response_epoch_revision: 69, response_start_source: source } });
+    await emit({
+      type: "chat.started",
+      request_id: active.requestId,
+      diagnostics: {
+        response_epoch_revision: 69,
+        response_start_source: source,
+        request_v6_dispatch_timing_version: 1,
+        request_v6_dispatch_to_response_started_ms: dispatchElapsedMs(active),
+        request_v6_dispatch_stage_evidence_v1: { ...(active.dispatchStageEvidence || {}) },
+      },
+    });
     return true;
   }
 
@@ -3636,6 +3738,8 @@
       networkStreamEndedWithoutTerminalAt: 0,
       networkUnverifiedStreamId: "",
       networkUnverifiedWaitReportedAt: 0,
+      dispatchTimingStartedAt: performance.now(),
+      dispatchStageEvidence: {},
     };
     state.active = active;
     if (v5) v5.active = active;
@@ -3643,17 +3747,28 @@
     try { probeSupervisor?.begin?.(active); } catch (_) {}
 
     try {
-      // UI interruption resolution is readiness work owned by the request
-      // controller, not a separate message listener with its own ACK/terminal.
+      // Diagnostic delivery is intentionally nonblocking; it must never delay
+      // request startup or distort the dispatch stages being measured.
+      void diagnostic(active, "dispatch-started", {
+        request_v6_dispatch_timing_version: 1,
+        request_v6_dispatch_elapsed_ms: 0,
+        request_v6_dispatch_stage_evidence_v1: {},
+      }).catch(() => {});
+
       const interruption = globalThis.__CHAT2API_INTERRUPTION_GUARD_V72__;
-      if (typeof interruption?.resolveBlockingInterruption === "function") {
-        await interruption.resolveBlockingInterruption({force:true,phase:"before-request"});
-      }
-      const attachmentSpecs = Array.isArray(message.attachments) ? message.attachments : [];
-      if (attachmentSpecs.length) {
-        // The server grants this Worker access only to the files attached to
-        // this exact live request. Prepare them before writing/submitting the
-        // prompt, and carry the same request ID through the download bridge.
+      await runDispatchStage(
+        active,
+        "resolve_blocking_interruption",
+        typeof interruption?.resolveBlockingInterruption === "function"
+          ? () => interruption.resolveBlockingInterruption({force:true,phase:"before-request"})
+          : null,
+      );
+
+      await runDispatchStage(active, "prepare_attachments", async () => {
+        const attachmentSpecs = Array.isArray(message.attachments) ? message.attachments : [];
+        if (!attachmentSpecs.length) return;
+        // The server grants this Worker access only to files attached to this
+        // exact live request; preserve the same request ID through the bridge.
         const multimodal = globalThis.__CHAT2API_MULTIMODAL_V4__;
         if (typeof multimodal?.attach !== "function") {
           throw new Error("The request-scoped multimodal attachment controller is unavailable");
@@ -3671,17 +3786,27 @@
           attachment_verification_revision: Number(prepared.attachment_verification_revision || 0),
           attachment_names: Array.isArray(prepared.attachment_names) ? prepared.attachment_names : [],
         };
-        await diagnostic(active, "attachments-prepared", active.attachmentPrepare);
-      }
-      await writePrompt(active, prompt);
-      await submitAndConfirm(active);
+        void diagnostic(active, "attachments-prepared", active.attachmentPrepare).catch(() => {});
+      });
+
+      await runDispatchStage(active, "write_prompt", async () => {
+        await writePrompt(active, prompt);
+      });
+      await runDispatchStage(active, "submit_and_confirm", () => submitAndConfirm(active));
       await monitor(active);
     } catch (error) {
       await emit({
         type: "chat.error",
         request_id: active.requestId,
         error: String(error?.message || error),
-        diagnostics: { request_controller: "request-v6", response_epoch_revision: 69, ...(error?.diagnostics || {}) },
+        diagnostics: {
+          request_controller: "request-v6",
+          response_epoch_revision: 69,
+          request_v6_dispatch_timing_version: 1,
+          request_v6_dispatch_elapsed_ms: dispatchElapsedMs(active),
+          request_v6_dispatch_stage_evidence_v1: { ...(active.dispatchStageEvidence || {}) },
+          ...(error?.diagnostics || {}),
+        },
       });
     } finally {
       if (state.active === active) {
