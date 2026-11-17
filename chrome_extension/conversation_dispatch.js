@@ -10,6 +10,10 @@
   const elapsedMs = started => Math.max(0, Math.round((monotonicNow() - started) * 10) / 10);
   const timingValue = value => typeof value === "number" && Number.isFinite(value) && value >= 0
     ? Math.round(value * 10) / 10 : null;
+  function recordRouteReallocation(message, started) {
+    const previous = timingValue(message.__chat2api_worker_route_reallocation_ms) ?? 0;
+    message.__chat2api_worker_route_reallocation_ms = Math.round((previous + elapsedMs(started)) * 10) / 10;
+  }
 
   resolveTargetTab = async function resolveCurrentConversationTarget() {
     if (state.currentTab?.id) {
@@ -36,27 +40,33 @@
     // The single conversation router remains the sole allocation owner.
     // Repair a tab that disappears BEFORE content dispatch exactly once;
     // never replay a request that could already have reached the composer.
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const tab = typeof resolver === "function"
-        ? await resolver(message) : await baseResolveTargetTab();
-      if (!tab?.id) throw new Error("Per-key conversation router returned no usable ChatGPT tab");
-      const live = await chrome.tabs.get(tab.id).catch(() => null);
-      if (live?.id && live.windowId === tab.windowId) {
-        if (requestId) state.requestTabs.set(requestId, { tabId: live.id, windowId: live.windowId });
-        await chrome.storage.local.set({ boundTabId: live.id, autoBind: false, modelsUpdatedAt: 0 });
-        return live;
+    let reallocationStarted = null;
+    try {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const tab = typeof resolver === "function"
+          ? await resolver(message) : await baseResolveTargetTab();
+        if (!tab?.id) throw new Error("Per-key conversation router returned no usable ChatGPT tab");
+        const live = await chrome.tabs.get(tab.id).catch(() => null);
+        if (live?.id && live.windowId === tab.windowId) {
+          if (requestId) state.requestTabs.set(requestId, { tabId: live.id, windowId: live.windowId });
+          await chrome.storage.local.set({ boundTabId: live.id, autoBind: false, modelsUpdatedAt: 0 });
+          return live;
+        }
+        if (attempt === 0 && requestId) {
+          reallocationStarted = monotonicNow();
+          const router = globalThis.__CHAT2API_CONVERSATION_ROUTING_V1__;
+          await router?.failRequest?.(requestId, "tab-closed-before-dispatch-v153");
+          continue;
+        }
+        const error = new Error("Routed ChatGPT tab disappeared before request dispatch");
+        error.code = "routed_tab_closed_before_dispatch";
+        error.stage = "route-readiness";
+        throw error;
       }
-      if (attempt === 0 && requestId) {
-        const router = globalThis.__CHAT2API_CONVERSATION_ROUTING_V1__;
-        await router?.failRequest?.(requestId, "tab-closed-before-dispatch-v153");
-        continue;
-      }
-      const error = new Error("Routed ChatGPT tab disappeared before request dispatch");
-      error.code = "routed_tab_closed_before_dispatch";
-      error.stage = "route-readiness";
-      throw error;
+      throw new Error("Routed ChatGPT tab was not available");
+    } finally {
+      if (reallocationStarted !== null) recordRouteReallocation(message, reallocationStarted);
     }
-    throw new Error("Routed ChatGPT tab was not available");
   }
 
   function enqueueDispatch(taskFactory) {
@@ -140,7 +150,7 @@
         await router.failRequest(requestId, "lost-tab-before-content-ack-v153");
         replacement = await resolveRoutedTab(message);
       } finally {
-        message.__chat2api_worker_route_reallocation_ms = elapsedMs(reallocationStarted);
+        recordRouteReallocation(message, reallocationStarted);
         message.__chat2api_worker_route_resolve_ms = elapsedMs(routeStarted);
       }
       await trySendSocket({
