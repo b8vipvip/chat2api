@@ -142,6 +142,18 @@
     if (event.source !== globalThis) return;
     const detail = event.data;
     if (!detail) return;
+    if (detail.source === AUTHORITY_SOURCE) {
+      // Only request-v6's terminal lifecycle may release the active model
+      // authority. A /conversation SSE EOF can be an intermediate tool turn.
+      const terminalRequestId = String(detail.request_id || "");
+      if (detail.terminal === true && detail.authority == null
+          && terminalRequestId && terminalRequestId === activeRequestId) {
+        activeRequestId = "";
+        activeAuthority = null;
+        broadcastAuthority("", null);
+      }
+      return;
+    }
     if (detail.source !== SOURCE) return;
     const row = bind(detail.stream_id);
     if (!row) return;
@@ -186,13 +198,6 @@
       // release only this observer's per-stream tracking row.
       if (Object.keys(row.evidence).length) publishEvidence(row, detail).catch(() => {});
       setTimeout(() => rows.delete(row.streamId), 15000);
-      // Model rewriting is request-scoped, not a permanent page setting.
-      // Stop applying it as soon as this response's evidence lifecycle ends.
-      if (row.requestId && row.requestId === activeRequestId) {
-        activeRequestId = "";
-        activeAuthority = null;
-        broadcastAuthority("", null);
-      }
     }
   });
 
