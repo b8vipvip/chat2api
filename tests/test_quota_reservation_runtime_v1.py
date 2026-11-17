@@ -1009,7 +1009,6 @@ def test_wallet_dispatch_fails_closed_when_owned_key_has_no_admission(tmp_path: 
 
     assert error.value.status_code == 503
     assert "could not be persisted" in str(error.value.detail)
-    billing.close()
 
 
 def test_wallet_dispatch_fails_closed_when_billing_store_is_missing_for_owned_key() -> None:
@@ -1038,4 +1037,3 @@ def test_wallet_dispatch_keeps_legacy_unowned_key_without_reservation_compatible
     principal = SimpleNamespace(kind="managed", key_id="legacy-key")
 
     assert authorize_wallet_dispatch(app, "req_legacy_unowned", principal) is False
-    billing.close()
