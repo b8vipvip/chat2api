@@ -41,6 +41,11 @@ def canonical_phase(task: Task) -> str:
     if failed or current_failure or current_pr_ci_failure:
         return "REPAIR_REQUIRED"
 
+    # A passing Draft PR is waiting for an explicit human review decision,
+    # not eligible for autonomous merge. ready_for_review will wake the task.
+    if bool(task.metadata.get("pr_draft")) and bool(task.metadata.get("pr_number")):
+        return "USER_ACTION_REQUIRED"
+
     merge = _step(task, Gate.MERGE)
     main_ci = _step(task, Gate.MAIN_CI)
     release = _step(task, Gate.RELEASE)

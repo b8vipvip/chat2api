@@ -1,10 +1,21 @@
 from pathlib import Path
+import shutil
+import subprocess
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import create_app
 from app.user_console_v104_patch import install_user_console_v104_patch
+
+
+def test_chat_client_stream_terminal_handling() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required for the Web Chat stream regression")
+    root = Path(__file__).resolve().parents[1]
+    subprocess.run([node, "--test", "tests/web_chat_stream_terminal_v1.mjs"], cwd=root, check=True, timeout=20)
 
 
 def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:

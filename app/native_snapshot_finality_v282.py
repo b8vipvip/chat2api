@@ -394,9 +394,9 @@ def native_terminal_view(row: dict[str, Any], broker_state: Any) -> dict[str, An
     """Use a request-owned Broker terminal even before telemetry is finalized.
 
     A Worker terminal may precede 180 seconds of file archival while the row
-    still says running. Only correlate a Broker state when its client id
-    *exactly* equals the existing telemetry row's Worker client id. Never
-    allow an unrelated/new same-header request to override an older row.
+    still says running. Correlate a Broker state only when both request_id
+    and client_id exactly equal the existing telemetry row. A shared Worker
+    identity alone is not sufficient to authorize another request's projection.
     """
     if not isinstance(row, dict) or row.get("status") in TERMINAL:
         return row
@@ -404,6 +404,13 @@ def native_terminal_view(row: dict[str, Any], broker_state: Any) -> dict[str, An
         return row
     terminal = getattr(broker_state, "terminal_event_type", None)
     if terminal not in {"chat.completed", "chat.error", "chat.cancelled"}:
+        return row
+    # Matching only Worker identity is insufficient: one Worker may handle
+    # another request immediately after the first, and its late state must
+    # never authorize a different reply's native-finality projection.
+    row_request_id = row.get("request_id")
+    if (not isinstance(row_request_id, str) or not row_request_id
+            or getattr(broker_state, "request_id", None) != row_request_id):
         return row
     client_id = row.get("client_id")
     if not isinstance(client_id, str) or not client_id:
