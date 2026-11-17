@@ -634,6 +634,18 @@
           } };
       }
     }
+    if (active && ["chat.completed", "chat.error", "chat.cancelled"].includes(event?.type)) {
+      // Snapshot the final request-v6 dispatch stages on the terminal itself.
+      // Nonblocking diagnostic messages can still be in flight when the
+      // Broker accepts this terminal, after which late diagnostics are rejected.
+      event = { ...event, diagnostics: {
+        ...(event.diagnostics || {}),
+        request_controller: "request-v6",
+        request_v6_dispatch_timing_version: 1,
+        request_v6_dispatch_elapsed_ms: dispatchElapsedMs(active),
+        request_v6_dispatch_stage_evidence_v1: { ...(active.dispatchStageEvidence || {}) },
+      } };
+    }
     if (event?.type === "chat.completed" && active) {
       // DOM observers are optional. Even if ChatGPT changes structure in
       // the middle of scanning, they must never throw across the sole
