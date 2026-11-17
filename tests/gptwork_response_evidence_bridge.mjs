@@ -293,7 +293,7 @@ assert.equal(unscopedBroadcast.authority,null);
 async function verifyMainWorldAuthorityClear(clearMessage) {
   const emitted=[], listeners=[], sentBodies=[];
   const mainContext={
-    URL, Request, TextDecoder, Response,
+    URL, Request, Headers, TextDecoder, Response,
     location:{href:"https://chatgpt.com/"},
     document:{documentElement:{setAttribute(){}}},
     fetch:async(_input,init)=>{
