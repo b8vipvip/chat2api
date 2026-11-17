@@ -70,6 +70,8 @@ def test_only_broker_accepted_events_can_change_model_evidence(monkeypatch) -> N
                 "request_id": request_id,
                 "diagnostics": {"model_evidence_v144": {
                     "served_model": served_model,
+                    "response_ok": True,
+                    "response_status": 200,
                     "evidence_source": "network_response_metadata",
                 }},
             }
