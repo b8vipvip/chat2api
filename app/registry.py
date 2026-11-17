@@ -333,6 +333,11 @@ class ClientRegistry:
             if broker and request_id and request_type in initial_request_types
             else None
         )
+        # Bind the send operation to the exact Broker lease observed before
+        # waiting for the socket lock. A missing lease must not become valid
+        # later merely because another request reuses the same correlation ID.
+        if request_id and broker is not None and request_type in initial_request_types and dispatch_state is None:
+            raise RuntimeError("Request lease is no longer active")
         # Start the queue clock before waiting for the per-Worker send lock.
         if dispatch_state is not None and getattr(
             dispatch_state, "dispatch_socket_lock_wait_started_mono", None,
@@ -358,7 +363,7 @@ class ClientRegistry:
                 # A request can be cancelled, timed out or released while it
                 # waits behind another send on this Worker socket. Never send
                 # an orphaned initial dispatch after its Broker lease vanished.
-                if request_id and broker is not None and state is None:
+                if request_id and broker is not None and state is not dispatch_state:
                     raise RuntimeError("Request lease is no longer active")
                 if state is not None:
                     if str(getattr(state, "client_id", "") or "") != client_id:
