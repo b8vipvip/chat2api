@@ -58,10 +58,17 @@ const context={
   String,
 };
 vm.runInNewContext(dispatch+"\nglobalThis.dispatch=routedDispatch;",context);
-assert.equal(await context.globalThis.dispatch({request_id:"request1"}),"ok");
+const dispatchMessage={request_id:"request1"};
+assert.equal(await context.globalThis.dispatch(dispatchMessage),"ok");
 assert.equal(allocated,2);
 assert.equal(retires,1);
 assert.equal(delivered,2);
+assert.equal(dispatchMessage.__chat2api_worker_route_reallocation_ms,1,
+  "pre-ACK recovery must expose the reallocation duration separately");
+assert.equal(dispatchMessage.__chat2api_worker_route_resolve_ms,4,
+  "total route time must include the initial allocation and the recovery attempt");
+assert.match(bridgeSource,/worker_route_reallocation_ms:\s*timing\(message\.__chat2api_worker_route_reallocation_ms\)/,
+  "background diagnostics must preserve the reallocation duration");
 assert.match(dispatchSource,/throw new Error\(\`No tab with id: \$\{routedId\}\`\)/,
   "routed missing tab must not fall back to a different tab");
 assert.match(bridgeSource,/error\.code = "routed_tab_disappeared_before_ack"/);
