@@ -145,29 +145,60 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             for hold in unstarted_wallet_holds:
                 request_id = str(hold.get("request_id") or "")
                 user_id = str(hold.get("user_id") or "")
-                token_row = (
-                    await asyncio.to_thread(quota_store.get, request_id)
-                    if quota_store is not None and request_id else None
-                )
+                token_row = None
+                if quota_store is not None and request_id:
+                    try:
+                        token_row = await asyncio.to_thread(quota_store.get, request_id)
+                    except Exception as error:
+                        logger.warning(
+                            "Pre-dispatch token reservation lookup deferred request_id=%s error_type=%s",
+                            request_id, type(error).__name__,
+                        )
                 key_id = str((token_row or {}).get("key_id") or "")
                 existing = telemetry.get(request_id) if request_id else None
+                if existing is None and request_id:
+                    persisted_lookup = getattr(telemetry, "get_many_persisted", None)
+                    if callable(persisted_lookup):
+                        try:
+                            existing = (await asyncio.to_thread(
+                                persisted_lookup, {request_id},
+                            )).get(request_id)
+                        except Exception as error:
+                            logger.warning(
+                                "Pre-dispatch telemetry lookup deferred request_id=%s error_type=%s",
+                                request_id, type(error).__name__,
+                            )
+                existing_key_id = str((existing or {}).get("api_key_id") or "")
+                if key_id and existing_key_id and key_id != existing_key_id:
+                    logger.error(
+                        "Pre-dispatch wallet/token identity conflict request_id=%s",
+                        request_id,
+                    )
+                    continue
+                if str((existing or {}).get("status") or "").lower() == "completed":
+                    logger.error(
+                        "Pre-dispatch wallet marker conflicts with completed telemetry request_id=%s",
+                        request_id,
+                    )
+                    continue
                 row_payload = {
+                    **(existing or {}),
                     "request_id": request_id,
                     "status": "stalled",
                     "error": "Server restarted before Worker dispatch",
                     "diagnostics": {
+                        **((existing or {}).get("diagnostics") or {}),
                         "request_admission_recovery": "server-restart-before-worker-dispatch",
                         "request_admission_failure_kind": "server_restart",
                     },
                 }
-                if key_id:
-                    row_payload["api_key_id"] = key_id
-                elif isinstance(existing, dict) and existing.get("api_key_id"):
-                    row_payload["api_key_id"] = str(existing["api_key_id"])
+                if key_id or existing_key_id:
+                    row_payload["api_key_id"] = key_id or existing_key_id
                 try:
                     recovered_row = await telemetry.upsert(row_payload)
                 except Exception as error:
                     recovered_row = telemetry.get(request_id) if request_id else None
+                    recovered_row = recovered_row or existing
                     logger.warning(
                         "Wallet pre-dispatch telemetry recovery failed request_id=%s error_type=%s",
                         request_id, type(error).__name__,
@@ -175,12 +206,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 # The first persisted completed terminal always wins. Do not
                 # release a hold if contradictory completion evidence exists;
                 # leave it for normal charge reconciliation instead.
-                if str((recovered_row or {}).get("status") or "").lower() == "completed":
-                    logger.error(
-                        "Pre-dispatch wallet marker conflicts with completed telemetry request_id=%s",
-                        request_id,
-                    )
-                    continue
                 if quota_store is not None and key_id:
                     try:
                         await asyncio.to_thread(quota_store.release, request_id, key_id)

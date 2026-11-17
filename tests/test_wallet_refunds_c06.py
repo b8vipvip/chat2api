@@ -119,6 +119,7 @@ def test_wallet_pre_dispatch_hold_recovery_is_versioned_and_durable(tmp_path: Pa
     assert reopened.reservations["req_dispatched"]["dispatch_authorized_at"]
     assert reopened.reservations["req_legacy"]["state"] == "reserved"
     assert reopened.active_reservations_for_user(user_id) == [
+        reopened.reservations["req_unstarted"],
         reopened.reservations["req_dispatched"],
         reopened.reservations["req_legacy"],
     ]
