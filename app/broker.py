@@ -20,9 +20,6 @@ class RequestState:
     final_future: asyncio.Future[str] | None = None
     text: str = ""
     created_mono: float = field(default_factory=time.perf_counter)
-    # The exact authenticated socket used to dispatch this request. Events
-    # arriving on another/reconnected Worker socket must not publish into it.
-    dispatch_socket: Any | None = field(default=None, repr=False, compare=False)
     # Server-side dispatch clocks only. A successful registry.send is not
     # proof that the Worker acknowledged or started the browser request.
     dispatch_socket_lock_wait_started_mono: float | None = None
