@@ -169,6 +169,40 @@ def test_extension_contains_visual_error_guard_voice_and_nonfocusing_routing() -
     assert "cleanupPreviousAutomationDraft" in request_v3 and "enter-fallback" in request_v3
 
 
+def test_voice_dispatch_marker_storage_failure_preserves_503_and_never_sends(tmp_path: Path) -> None:
+    app = app_v6(tmp_path)
+    app.state.user_accounts = SimpleNamespace(owner_for_key=lambda _key_id: "usr_voice_dispatch")
+
+    def fail_dispatch_marker(_request_id: str, _user_id: str) -> bool:
+        raise OSError("simulated wallet marker storage failure")
+
+    app.state.user_billing = SimpleNamespace(mark_dispatch_authorized=fail_dispatch_marker)
+    sent: list[dict] = []
+
+    async def fake_send(client_id: str, payload: dict) -> None:
+        sent.append(payload)
+
+    app.state.registry.send = fake_send
+    with TestClient(app) as client:
+        client_id, extension_token = pair_extension(client)
+        with client.websocket_connect(f"/ws/extensions/{client_id}?token={extension_token}") as websocket:
+            websocket.receive_json()
+            response = client.post(
+                "/v1/audio/speech", headers=headers(),
+                json={"model": "gpt-live", "input": "marker failure must fail closed", "timeout": 30},
+            )
+
+    assert response.status_code == 503, response.text
+    assert sent == []
+    row = next(
+        item for item in app.state.telemetry.recent(20)
+        if item.get("request_type") == "voice_generation"
+    )
+    assert row["status"] == "error"
+    assert "wallet dispatch authorization" in row["error"].lower()
+    assert not app.state.broker.requests
+
+
 def test_gpt_live_stage_failure_is_propagated_and_not_misclassified_as_timeout(tmp_path: Path) -> None:
     with TestClient(app_v6(tmp_path)) as client:
         client_id, extension_token = pair_extension(client)
