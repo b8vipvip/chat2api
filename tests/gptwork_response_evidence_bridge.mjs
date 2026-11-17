@@ -86,11 +86,11 @@ assert.equal(longConflict.model_field,null);
 // served/default/reasoning facts after an authoritative later conflict.
 const isolatedCode=fs.readFileSync(
   new URL("../chrome_extension/content_model_evidence_v144.js",import.meta.url),"utf8");
-const isolatedEmits=[], messageListeners=[], bridgeRequests=[];
+const isolatedEmits=[], messageListeners=[], bridgeRequests=[], authorityBroadcasts=[];
 const storedEvidence=[];
 let stallNextEvidenceWrite=false,releaseStalledEvidenceWrite=null;
 const isolatedContext={
-  Date, setTimeout, clearTimeout, postMessage(){},
+  Date, setTimeout, clearTimeout, postMessage(message){authorityBroadcasts.push(message);},
   chrome:{
     runtime:{
       onMessage:{addListener(fn){bridgeRequests.push(fn)}},
@@ -223,8 +223,98 @@ bridged=await takeLast();
 assert.equal(bridged.served_model,null,
   "older async model proof cannot overwrite a later conflict");
 assert.equal(bridged.model_conflict,true);
-assert.equal(storedEvidence.at(-1).served_model,null);
-assert.equal(storedEvidence.at(-1).model_conflict,true);
+
+  assert.equal(storedEvidence.at(-1).model_conflict,true);
+  
+// A request's model authority must not leak into the next native ChatGPT
+// conversation. The exact stream's completion clears only its own active
+// request; a late older stream must not clear a newer request's authority.
+issueRequest("req_terminal_clear123");
+dispatch("stream-terminal","request",{request_model:"gpt-6",
+  request_wire_model:"gpt-6"});
+await takeLast();
+const beforeTerminalBroadcasts=authorityBroadcasts.length;
+dispatch("stream-terminal","done");
+await takeLast();
+const clearBroadcast=authorityBroadcasts.slice(beforeTerminalBroadcasts)
+  .find(message=>message.source==="chat2api-model-authority-v144"
+    && message.authority===null);
+assert.ok(clearBroadcast,"completed response must broadcast cleared model authority");
+assert.equal(clearBroadcast.request_id,"");
+
+// If an older stream ends after a newer request has started, it must not
+// clear the newer request's model authority.
+issueRequest("req_old_stream123");
+dispatch("stream-old","request",{request_model:"gpt-6"});
+await takeLast();
+issueRequest("req_new_stream123");
+dispatch("stream-new","request",{request_model:"gpt-5.6-sol"});
+await takeLast();
+const beforeOldDone=authorityBroadcasts.length;
+dispatch("stream-old","done");
+await takeLast();
+assert.equal(authorityBroadcasts.length,beforeOldDone,
+  "late completion from an older stream must not clear newer authority");
+dispatch("stream-new","done");
+await takeLast();
+assert.equal(authorityBroadcasts.length,beforeOldDone+1,
+  "the matching newer stream must clear its own authority");
+
+// A new request with no explicit model authority must explicitly clear the
+// prior main-world rule rather than inherit the previous request's model.
+bridgeRequests[0]({type:"chat2api.request",requestId:"req_unscoped123"});
+const unscopedBroadcast=authorityBroadcasts.at(-1);
+assert.equal(unscopedBroadcast.source,"chat2api-model-authority-v144");
+assert.equal(unscopedBroadcast.request_id,"req_unscoped123");
+assert.equal(unscopedBroadcast.authority,null);
+
+// Feed the actual clear message emitted by the isolated bridge into the
+// MAIN-world observer. Its next native conversation request must remain
+// untouched instead of being rewritten with the previous API model.
+async function verifyMainWorldAuthorityClear(clearMessage) {
+  const emitted=[], listeners=[], sentBodies=[];
+  const mainContext={
+    URL, Request, TextDecoder, Response,
+    location:{href:"https://chatgpt.com/"},
+    document:{documentElement:{setAttribute(){}}},
+    fetch:async(_input,init)=>{
+      sentBodies.push(JSON.parse(String(init?.body||"{}")));
+      return new Response("data: [DONE]\\n\\n",{status:200});
+    },
+    postMessage(message){emitted.push(message);},
+    addEventListener(name,handler){if(name==="message")listeners.push(handler);},
+    globalThis:null,
+  };
+  mainContext.globalThis=mainContext;
+  vm.runInNewContext(code,mainContext);
+  assert.equal(listeners.length,1);
+  const deliver=message=>listeners[0]({
+    source:mainContext,
+    data:{source:"chat2api-model-authority-v144",...message},
+  });
+  deliver({
+    request_id:"req_authority_lifecycle123",
+    authority:{requested_model:"gpt-5.6-sol",routed_model:"gpt-5.6-sol",
+      transport_model:"gpt-5.6-sol-wm"},
+  });
+  await mainContext.fetch("https://chatgpt.com/backend-api/conversation",{
+    method:"POST",body:JSON.stringify({model:"gpt-6"}),
+  });
+  for(let i=0;i<12&&!emitted.some(e=>e.phase==="done");i++)
+    await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(sentBodies[0].model,"gpt-5.6-sol-wm",
+    "active request authority should rewrite its own conversation request");
+  deliver(clearMessage);
+  await mainContext.fetch("https://chatgpt.com/backend-api/conversation",{
+    method:"POST",body:JSON.stringify({model:"gpt-6"}),
+  });
+  assert.equal(sentBodies[1].model,"gpt-6",
+    "after the matching response ends, later native ChatGPT requests must not inherit its model");
+}
+await verifyMainWorldAuthorityClear(clearBroadcast);
+console.log("Worker isolated bridge: terminal request releases only its own model authority");
+console.log("Main-world observer: completed API request does not rewrite later native ChatGPT conversations");
+
 console.log("Worker isolated bridge: stale async storage/publish cannot overwrite model conflict");
 
 console.log("Worker isolated bridge: conflicting evidence clears old model; header-only proof is status-bound");
