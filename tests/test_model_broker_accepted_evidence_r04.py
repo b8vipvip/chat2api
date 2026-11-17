@@ -108,6 +108,43 @@ def test_only_broker_accepted_events_can_change_model_evidence(monkeypatch) -> N
     asyncio.run(exercise())
 
 
+def test_model_authority_snapshot_is_released_with_server_owned_broker_lease(monkeypatch) -> None:
+    async def exercise() -> None:
+        app = FastAPI()
+        broker = RequestBroker()
+        telemetry = _Telemetry()
+
+        async def send(_client_id: str, _message: dict) -> None:
+            return None
+
+        app.state.registry = SimpleNamespace(send=send)
+        app.state.broker = broker
+        app.state.telemetry = telemetry
+        monkeypatch.setattr(model_patch, "install_worker_model_library_v145_patch", lambda app: app)
+        monkeypatch.setattr(model_patch, "_patch_admin_html", lambda: None)
+        model_patch.install_model_observability_v144_patch(app)
+
+        request_id = "req_r04_server_owned_release"
+        await broker.create(request_id, "ext_r04")
+        token = routing._MODEL_CONTEXT.set({
+            "requested_model": "gpt-6", "routed_model": "gpt-6",
+        })
+        try:
+            await app.state.registry.send("ext_r04", {
+                "type": "chat.request", "request_id": request_id,
+            })
+        finally:
+            routing._MODEL_CONTEXT.reset(token)
+
+        assert request_id in app.state.model_authorities_v144
+        # A server timeout/cancellation can release the lease without a
+        # Worker terminal event; this must still discard request-local state.
+        await broker.release(request_id)
+        assert request_id not in app.state.model_authorities_v144
+
+    asyncio.run(exercise())
+
+
 def test_model_projection_keeps_source_unknown_without_served_evidence() -> None:
     trace = model_patch._trace(
         {"requested_model": "gpt-6", "routed_model": "gpt-6"},
