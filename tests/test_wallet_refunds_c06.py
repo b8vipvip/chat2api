@@ -82,12 +82,24 @@ def test_wallet_reservation_replay_cannot_adopt_or_release_original_hold(tmp_pat
 
 
 def test_wallet_dispatch_authorization_fails_closed_when_owner_lookup_fails(tmp_path: Path) -> None:
+    user_id = "usr_owner_lookup_failure"
+    billing = BillingStore(tmp_path)
+    billing.credit(user_id, 2_000)
+    price = _price_row("paid-model", 10_000.0)
+    billing.reserve_for_request(
+        user_id, "req_owner_lookup_failure",
+        model_id="paid-model", estimated_cny_cents=100,
+        input_tokens=10, output_tokens=4096,
+        price_snapshot=price, price_catalog_snapshot={"paid-model": price},
+        usd_cny_rate=7.0,
+    )
+
     def fail_owner_lookup(_key_id: str) -> str:
         raise OSError("account store unavailable")
 
     app = SimpleNamespace(state=SimpleNamespace(
         user_accounts=SimpleNamespace(owner_for_key=fail_owner_lookup),
-        user_billing=BillingStore(tmp_path),
+        user_billing=billing,
     ))
     with pytest.raises(HTTPException) as error:
         authorize_wallet_dispatch(
@@ -95,6 +107,7 @@ def test_wallet_dispatch_authorization_fails_closed_when_owner_lookup_fails(tmp_
             SimpleNamespace(kind="user", key_id="key-owner-failure"),
         )
     assert error.value.status_code == 503
+    assert billing.reservations["req_owner_lookup_failure"]["dispatch_authorized_at"] is None
 
 
 def test_wallet_dispatch_authorization_fails_closed_if_owner_disappears_after_admission(tmp_path: Path) -> None:
