@@ -169,8 +169,9 @@ def test_worker_event_ingress_requires_exact_request_client_and_socket() -> None
     source = (ROOT / "app/main.py").read_text(encoding="utf-8")
     ingress = source[source.index('if request_id and message_type in {'):]
     ownership_gate = ingress.index("active_state.owns_dispatch_socket(")
-    broker_publish = ingress.index("await broker.publish(request_id, message)")
+    broker_publish = ingress.index("await broker.publish_worker_event(")
     assert ownership_gate < broker_publish
+    assert "current_socket=registry.sockets.get(client_id)" in ingress
 
 
 
@@ -224,6 +225,7 @@ def test_registry_send_binds_the_exact_socket_for_every_broker_request_family(tm
         )
         states = {
             f"req_r06_{index}": SimpleNamespace(
+                client_id="ext_r06",
                 dispatch_socket=None,
                 dispatch_socket_lock_wait_started_mono=None,
                 dispatch_socket_lock_acquired_mono=None,
@@ -319,6 +321,7 @@ def test_registry_dispatch_timing_is_not_reset_by_followup_control_messages(tmp_
         registry.sockets["ext_r06"] = socket
         registry.chatgpt_routing_ready = lambda _client_id: True
         state = SimpleNamespace(
+            client_id="ext_r06",
             dispatch_socket=None,
             dispatch_send_started_mono=None,
             dispatch_send_completed_mono=None,
@@ -350,6 +353,7 @@ def test_registry_measures_socket_lock_wait_separately_from_send(tmp_path) -> No
         await lock.acquire()
         registry.socket_locks["ext_r06"] = lock
         state = SimpleNamespace(
+            client_id="ext_r06",
             dispatch_socket=None,
             dispatch_socket_lock_wait_started_mono=None,
             dispatch_socket_lock_acquired_mono=None,
