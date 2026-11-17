@@ -638,11 +638,19 @@
       // Snapshot the final request-v6 dispatch stages on the terminal itself.
       // Nonblocking diagnostic messages can still be in flight when the
       // Broker accepts this terminal, after which late diagnostics are rejected.
+      // Keep this self-contained: the terminal delivery harness and older
+      // isolated observers execute emit without the stage helper closure.
+      const dispatchStartedAt = Number(active.dispatchTimingStartedAt || 0);
+      const dispatchNow = typeof performance !== "undefined"
+        && typeof performance.now === "function" ? performance.now() : NaN;
+      const dispatchElapsed = dispatchStartedAt > 0
+        && Number.isFinite(dispatchNow) && dispatchNow >= dispatchStartedAt
+        ? Math.round((dispatchNow - dispatchStartedAt) * 10) / 10 : null;
       event = { ...event, diagnostics: {
         ...(event.diagnostics || {}),
         request_controller: "request-v6",
         request_v6_dispatch_timing_version: 1,
-        request_v6_dispatch_elapsed_ms: dispatchElapsedMs(active),
+        request_v6_dispatch_elapsed_ms: dispatchElapsed,
         request_v6_dispatch_stage_evidence_v1: { ...(active.dispatchStageEvidence || {}) },
       } };
     }
