@@ -640,10 +640,11 @@
       // Broker accepts this terminal, after which late diagnostics are rejected.
       // Keep this self-contained: the terminal delivery harness and older
       // isolated observers execute emit without the stage helper closure.
-      const dispatchStartedAt = Number(active.dispatchTimingStartedAt || 0);
+      const dispatchStartedAt = active.dispatchTimingStartedAt;
       const dispatchNow = typeof performance !== "undefined"
         && typeof performance.now === "function" ? performance.now() : NaN;
-      const dispatchElapsed = dispatchStartedAt > 0
+      const dispatchElapsed = typeof dispatchStartedAt === "number"
+        && Number.isFinite(dispatchStartedAt) && dispatchStartedAt >= 0
         && Number.isFinite(dispatchNow) && dispatchNow >= dispatchStartedAt
         ? Math.round((dispatchNow - dispatchStartedAt) * 10) / 10 : null;
       event = { ...event, diagnostics: {
@@ -916,8 +917,9 @@
   }
 
   function dispatchElapsedMs(active, at = performance.now()) {
-    const startedAt = Number(active?.dispatchTimingStartedAt || 0);
-    if (!startedAt || !Number.isFinite(startedAt) || !Number.isFinite(at) || at < startedAt) return null;
+    const startedAt = active?.dispatchTimingStartedAt;
+    if (typeof startedAt !== "number" || !Number.isFinite(startedAt)
+        || startedAt < 0 || !Number.isFinite(at) || at < startedAt) return null;
     return Math.round((at - startedAt) * 10) / 10;
   }
 
