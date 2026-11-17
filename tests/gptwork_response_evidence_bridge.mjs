@@ -209,13 +209,28 @@ dispatch("stream-3","response",{ok:false,status:403,
 await takeLast();
 assert.equal(isolatedEmits.length,beforeError,
   "failed HTTP responses must not create served-model proof");
-dispatch("stream-3","evidence",{response_ok:false,response_status:403,
+dispatch("stream-3","evidence",{response_ok:true,response_status:403,
   served_model:"gpt-6",model_field:"resolved_model_slug",
   evidence_source:"network_response_metadata"});
 bridged=await takeLast();
-assert.equal(bridged.response_ok,false);
+assert.equal(bridged.response_ok,false,
+  "a contradictory response_ok=true must not override HTTP 403");
 assert.equal(bridged.served_model,null,
   "body evidence from a failed HTTP response must not create served-model proof");
+assert.equal(bridged.model_conflict,false,
+  "error-body model conflicts are not served-model evidence");
+
+// Legacy or malformed evidence without an HTTP status remains unverified.
+issueRequest("req_missingstatus123");
+dispatch("stream-4","request",{request_model:"gpt-6"});
+await takeLast();
+dispatch("stream-4","evidence",{response_ok:true,served_model:"gpt-6",
+  model_field:"resolved_model_slug",evidence_source:"network_response_metadata"});
+bridged=await takeLast();
+assert.equal(bridged.response_ok,false);
+assert.equal(bridged.response_status,null);
+assert.equal(bridged.served_model,null,
+  "a success flag without an HTTP status cannot prove the served model");
 // Deliberately delay an earlier model proof's session storage write. The
 // network parser may publish a conflict while this async write is pending.
 // The *last* stored and emitted state must be the latest conflict, never A.
