@@ -360,6 +360,8 @@ def _merge_request_v6_dispatch_diagnostics(
                     continue
                 previous_elapsed = previous.get("completed_elapsed_ms")
                 next_elapsed = next_entry.get("completed_elapsed_ms")
+                if previous_elapsed is not None and next_elapsed is None:
+                    continue
                 if (isinstance(previous_elapsed, (int, float))
                         and isinstance(next_elapsed, (int, float))
                         and next_elapsed < previous_elapsed):
