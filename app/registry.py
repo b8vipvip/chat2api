@@ -355,9 +355,19 @@ class ClientRegistry:
 
             state = getattr(broker, "requests", {}).get(request_id) if broker and request_id else None
             if request_type in initial_request_types:
+                # A request can be cancelled, timed out or released while it
+                # waits behind another send on this Worker socket. Never send
+                # an orphaned initial dispatch after its Broker lease vanished.
+                if request_id and broker is not None and state is None:
+                    raise RuntimeError("Request lease is no longer active")
                 if state is not None:
                     if str(getattr(state, "client_id", "") or "") != client_id:
                         raise RuntimeError("Request is not assigned to this Worker")
+                    if (
+                        getattr(state, "terminal_event_type", None) is not None
+                        or getattr(state, "completed_mono", None) is not None
+                    ):
+                        raise RuntimeError("Request is already terminal")
                     # Bind once to the socket that received the initial
                     # dispatch. R-06 timing must never rebind a request after
                     # reconnect or weaken the exact-socket ownership gate.
