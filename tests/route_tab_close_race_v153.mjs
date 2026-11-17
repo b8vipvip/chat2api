@@ -12,6 +12,36 @@ function section(source,start,end) {
  return source.slice(a,b);
 }
 const retirement=section(routerSource,"  async function retireRoute(key, route, requestId, reason) {","  async function failRequest");
+
+// A tab found closed during the pre-dispatch readiness probe is also a
+// reallocation. Measure the router retirement plus the second resolution,
+// not just the later tabs.sendMessage recovery path.
+const routeHelpers=section(dispatchSource,"  function recordRouteReallocation(message, started) {","  function enqueueDispatch(taskFactory) {");
+let readinessClock=0,readinessAllocations=0,readinessRetires=0;
+const readinessContext={
+  globalThis:{
+    resolveTargetTabForRequest:async()=>({id:++readinessAllocations,windowId:77}),
+    __CHAT2API_CONVERSATION_ROUTING_V1__:{failRequest:async()=>{readinessRetires++;return true;}},
+  },
+  state:{requestTabs:new Map()},
+  monotonicNow:()=>++readinessClock,
+  elapsedMs:started=>Math.max(0,++readinessClock-started),
+  timingValue:value=>typeof value==="number"&&Number.isFinite(value)&&value>=0?Math.round(value*10)/10:null,
+  chrome:{
+    tabs:{get:async id=>id===1?null:{id,windowId:77}},
+    storage:{local:{set:async()=>{}}},
+  },
+  String,Error,
+};
+vm.runInNewContext(routeHelpers+"\\nglobalThis.resolve=resolveRoutedTab;",readinessContext);
+const readinessMessage={request_id:"readiness-reallocation"};
+const readinessTab=await readinessContext.globalThis.resolve(readinessMessage);
+assert.equal(readinessTab.id,2);
+assert.equal(readinessAllocations,2);
+assert.equal(readinessRetires,1);
+assert.equal(readinessMessage.__chat2api_worker_route_reallocation_ms,1,
+  "pre-dispatch tab-readiness retry must expose its own duration");
+
 async function runRetirement({supersedeDuringAlarm=false,takeDuringPersist=false}={}) {
  const route={window_id:32,tab_id:12,inflight_request_id:"old"};
  const calls=[];
@@ -51,6 +81,8 @@ const context={
   globalThis:{__CHAT2API_CONVERSATION_ROUTING_V1__:{failRequest:async()=>{retires++;return true;}}},
   monotonicNow:()=>++monotonicClock,
   elapsedMs:started=>Math.max(0,++monotonicClock-started),
+  timingValue:value=>typeof value==="number"&&Number.isFinite(value)&&value>=0?Math.round(value*10)/10:null,
+  recordRouteReallocation:(message,started)=>{const prior=typeof message.__chat2api_worker_route_reallocation_ms==="number"?message.__chat2api_worker_route_reallocation_ms:0;message.__chat2api_worker_route_reallocation_ms=Math.round((prior+Math.max(0,++monotonicClock-started))*10)/10;},
   resolveRoutedTab:async()=>({id:++allocated,windowId:100+allocated}),
   withCurrentTab:async(_,fn)=>fn(),
   baseHandleServerMessage:async()=>{delivered++;if(delivered===1){const e=new Error("No tab with id: 1");e.code="routed_tab_disappeared_before_ack";throw e;}return "ok";},
