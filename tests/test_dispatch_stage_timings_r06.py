@@ -273,6 +273,79 @@ def test_out_of_order_dispatch_stage_snapshots_cannot_regress_completed_evidence
     asyncio.run(exercise())
 
 
+def test_dispatch_stage_terminal_status_cannot_flip_on_later_snapshots() -> None:
+    async def exercise() -> None:
+        broker = RequestBroker()
+        state = await broker.create("req_r06_terminal_immutable", "ext_r06")
+        accepted = await broker.publish("req_r06_terminal_immutable", {
+            "type": "chat.diagnostics",
+            "request_id": "req_r06_terminal_immutable",
+            "diagnostics": {
+                "request_v6_dispatch_stage_evidence_v1": {
+                    "resolve_blocking_interruption": {
+                        "status": "completed", "started_elapsed_ms": 1.0,
+                        "duration_ms": 2.0, "completed_elapsed_ms": 3.0,
+                    },
+                    "prepare_attachments": {
+                        "status": "failed", "started_elapsed_ms": 4.0,
+                        "duration_ms": 5.0, "completed_elapsed_ms": 9.0,
+                        "error_type": "TimeoutError",
+                    },
+                    "write_prompt": {
+                        "status": "skipped", "started_elapsed_ms": 10.0,
+                        "completed_elapsed_ms": 10.0,
+                    },
+                    "submit_and_confirm": {
+                        "status": "completed", "started_elapsed_ms": 11.0,
+                        "duration_ms": 2.0, "completed_elapsed_ms": 13.0,
+                    },
+                },
+            },
+        })
+        assert accepted is True
+
+        # A later snapshot with a larger clock cannot change a stage's
+        # already-terminal outcome. Only a later observation of the SAME
+        # terminal status may refine its timing.
+        accepted = await broker.publish("req_r06_terminal_immutable", {
+            "type": "chat.diagnostics",
+            "request_id": "req_r06_terminal_immutable",
+            "diagnostics": {
+                "request_v6_dispatch_stage_evidence_v1": {
+                    "resolve_blocking_interruption": {
+                        "status": "failed", "started_elapsed_ms": 1.0,
+                        "duration_ms": 20.0, "completed_elapsed_ms": 21.0,
+                        "error_type": "Error",
+                    },
+                    "prepare_attachments": {
+                        "status": "completed", "started_elapsed_ms": 4.0,
+                        "duration_ms": 30.0, "completed_elapsed_ms": 34.0,
+                    },
+                    "write_prompt": {
+                        "status": "completed", "started_elapsed_ms": 10.0,
+                        "duration_ms": 40.0, "completed_elapsed_ms": 50.0,
+                    },
+                    "submit_and_confirm": {
+                        "status": "completed", "started_elapsed_ms": 11.0,
+                        "duration_ms": 5.0, "completed_elapsed_ms": 16.0,
+                    },
+                },
+            },
+        })
+        assert accepted is True
+        evidence = state.diagnostics["request_v6_dispatch_stage_evidence_v1"]
+        assert evidence["resolve_blocking_interruption"]["status"] == "completed"
+        assert evidence["prepare_attachments"]["status"] == "failed"
+        assert evidence["prepare_attachments"]["error_type"] == "TimeoutError"
+        assert evidence["write_prompt"]["status"] == "skipped"
+        assert evidence["submit_and_confirm"]["status"] == "completed"
+        assert evidence["submit_and_confirm"]["completed_elapsed_ms"] == 16.0
+
+        await broker.release("req_r06_terminal_immutable")
+
+    asyncio.run(exercise())
+
+
 def test_completed_terminal_retains_bounded_request_v6_dispatch_evidence() -> None:
     async def exercise() -> None:
         broker = RequestBroker()
