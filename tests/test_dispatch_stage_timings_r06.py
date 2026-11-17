@@ -13,7 +13,7 @@ from app.registry import ClientRegistry
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_dispatch_stage_timing_separates_the_160s_browser_gap() -> None:
+def test_dispatch_stage_timing_separates_the_160s_response_start_gap() -> None:
     state = RequestState(
         request_id="req_r06_slow_start", client_id="ext_r06",
         created_mono=100.0,
@@ -22,7 +22,7 @@ def test_dispatch_stage_timing_separates_the_160s_browser_gap() -> None:
         dispatch_send_started_mono=101.30,
         dispatch_send_completed_mono=101.35,
         worker_content_ack_mono=105.0,
-        browser_started_mono=264.30,
+        response_started_mono=264.30,
         completed_mono=268.30,
         diagnostics={"request_admission_wait_ms": 1300.0},
     )
@@ -33,11 +33,16 @@ def test_dispatch_stage_timing_separates_the_160s_browser_gap() -> None:
     assert durations["server_dispatch_send_ms"] == 50.0
     assert durations["server_send_start_to_worker_content_ack_ms"] == 3700.0
     assert durations["server_send_to_worker_content_ack_ms"] == 3650.0
+    assert durations["worker_content_ack_to_response_started_ms"] == 159300.0
+    assert durations["server_send_to_response_started_ms"] == 162950.0
+    assert durations["response_started_ms"] == 164300.0
+    # Legacy names remain aliases for old request-history consumers; they
+    # never represented Chrome process startup, only the chat.started event.
     assert durations["worker_content_ack_to_browser_started_ms"] == 159300.0
     assert durations["server_send_to_browser_started_ms"] == 162950.0
     assert durations["browser_started_ms"] == 164300.0
     assert durations["total_ms"] == 168300.0
-    # Browser startup latency is not incorrectly charged to the socket send.
+    # Response-start latency is not incorrectly charged to the socket send.
     assert durations["server_dispatch_send_ms"] < durations["server_send_to_browser_started_ms"]
 
 
@@ -61,11 +66,13 @@ def test_dispatch_timing_missing_or_overlapping_events_are_unknown() -> None:
         dispatch_send_started_mono=101.0,
         dispatch_send_completed_mono=103.0,
         worker_content_ack_mono=103.5,
-        browser_started_mono=102.0,
+        response_started_mono=102.0,
         completed_mono=104.0,
     )
     assert overlap.timings()["server_send_start_to_worker_content_ack_ms"] == 2500.0
     assert overlap.timings()["server_send_to_worker_content_ack_ms"] == 500.0
+    assert overlap.timings()["worker_content_ack_to_response_started_ms"] is None
+    assert overlap.timings()["server_send_to_response_started_ms"] is None
     assert overlap.timings()["worker_content_ack_to_browser_started_ms"] is None
     assert overlap.timings()["server_send_to_browser_started_ms"] is None
 
@@ -77,11 +84,13 @@ def test_dispatch_timing_missing_or_overlapping_events_are_unknown() -> None:
         dispatch_send_started_mono=101.0,
         dispatch_send_completed_mono=103.0,
         worker_content_ack_mono=102.0,
-        browser_started_mono=104.0,
+        response_started_mono=104.0,
         completed_mono=105.0,
     )
     assert early_ack.timings()["server_send_start_to_worker_content_ack_ms"] == 1000.0
     assert early_ack.timings()["server_send_to_worker_content_ack_ms"] is None
+    assert early_ack.timings()["worker_content_ack_to_response_started_ms"] == 2000.0
+    assert early_ack.timings()["server_send_to_response_started_ms"] == 1000.0
     assert early_ack.timings()["worker_content_ack_to_browser_started_ms"] == 2000.0
     assert early_ack.timings()["server_send_to_browser_started_ms"] == 1000.0
 
