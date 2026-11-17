@@ -224,8 +224,9 @@ assert.equal(bridged.served_model,null,
   "older async model proof cannot overwrite a later conflict");
 assert.equal(bridged.model_conflict,true);
 
-  assert.equal(storedEvidence.at(-1).model_conflict,true);
-  
+assert.equal(storedEvidence.at(-1).served_model,null);
+assert.equal(storedEvidence.at(-1).model_conflict,true);
+
 // A request's model authority must not leak into the next native ChatGPT
 // conversation. The exact stream's completion clears only its own active
 // request; a late older stream must not clear a newer request's authority.
