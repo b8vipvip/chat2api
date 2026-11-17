@@ -156,7 +156,7 @@ def test_model_evidence_requires_current_main_world_transport_envelope() -> None
         assert model_patch._evidence_from_event(event) is None
 
 
-def test_model_authority_snapshot_is_released_with_server_owned_broker_lease(monkeypatch) -> None
+def test_model_authority_snapshot_is_released_with_server_owned_broker_lease(monkeypatch) -> None:
     async def exercise() -> None:
         app = FastAPI()
         broker = RequestBroker()
