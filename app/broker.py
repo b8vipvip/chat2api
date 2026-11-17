@@ -304,6 +304,89 @@ _REQUEST_V6_DISPATCH_STAGES = (
 )
 
 
+def _safe_request_v6_dispatch_stage_entry(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    status = value.get("status")
+    if not isinstance(status, str) or status not in {"started", "completed", "failed", "skipped"}:
+        return None
+    result: dict[str, Any] = {"status": status}
+    for key in ("started_elapsed_ms", "duration_ms", "completed_elapsed_ms"):
+        number = value.get(key)
+        if isinstance(number, (int, float)) and not isinstance(number, bool):
+            try:
+                numeric = float(number)
+            except (OverflowError, ValueError):
+                continue
+            if math.isfinite(numeric) and 0 <= numeric <= 900000:
+                result[key] = round(numeric, 1)
+    error_type = value.get("error_type")
+    if isinstance(error_type, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_.]{0,59}", error_type):
+        result["error_type"] = error_type
+    return result
+
+
+def _merge_request_v6_dispatch_diagnostics(
+    target: dict[str, Any], incoming: dict[str, Any],
+) -> None:
+    """Merge asynchronous stage snapshots without allowing stale snapshots to regress them."""
+    evidence_key = "request_v6_dispatch_stage_evidence_v1"
+    elapsed_key = "request_v6_dispatch_elapsed_ms"
+    incoming_evidence = incoming.get(evidence_key)
+    incoming_elapsed = incoming.get(elapsed_key)
+    update = dict(incoming)
+    update.pop(evidence_key, None)
+    update.pop(elapsed_key, None)
+    target.update(update)
+
+    if isinstance(incoming_evidence, dict):
+        current_evidence = target.get(evidence_key)
+        merged: dict[str, dict[str, Any]] = {}
+        if isinstance(current_evidence, dict):
+            for stage_name in _REQUEST_V6_DISPATCH_STAGES:
+                safe = _safe_request_v6_dispatch_stage_entry(current_evidence.get(stage_name))
+                if safe is not None:
+                    merged[stage_name] = safe
+        for stage_name in _REQUEST_V6_DISPATCH_STAGES:
+            next_entry = _safe_request_v6_dispatch_stage_entry(incoming_evidence.get(stage_name))
+            if next_entry is None:
+                continue
+            previous = merged.get(stage_name)
+            previous_status = previous.get("status") if previous else None
+            next_status = next_entry["status"]
+            terminal_statuses = {"completed", "failed", "skipped"}
+            if previous_status in terminal_statuses:
+                if next_status == "started":
+                    continue
+                previous_elapsed = previous.get("completed_elapsed_ms")
+                next_elapsed = next_entry.get("completed_elapsed_ms")
+                if (isinstance(previous_elapsed, (int, float))
+                        and isinstance(next_elapsed, (int, float))
+                        and next_elapsed < previous_elapsed):
+                    continue
+                if previous_elapsed is None and next_elapsed is None:
+                    continue
+            merged[stage_name] = next_entry
+        if merged:
+            target[evidence_key] = merged
+
+    if isinstance(incoming_elapsed, (int, float)) and not isinstance(incoming_elapsed, bool):
+        try:
+            numeric_elapsed = float(incoming_elapsed)
+        except (OverflowError, ValueError):
+            numeric_elapsed = -1
+        if math.isfinite(numeric_elapsed) and 0 <= numeric_elapsed <= 900000:
+            previous_elapsed = target.get(elapsed_key)
+            if isinstance(previous_elapsed, (int, float)) and not isinstance(previous_elapsed, bool):
+                try:
+                    previous_numeric = float(previous_elapsed)
+                except (OverflowError, ValueError):
+                    previous_numeric = -1
+                if math.isfinite(previous_numeric) and 0 <= previous_numeric <= 900000:
+                    numeric_elapsed = max(numeric_elapsed, previous_numeric)
+            target[elapsed_key] = round(numeric_elapsed, 1)
+
+
 def _worker_dispatch_failure_provenance(event: dict[str, Any]) -> dict[str, Any]:
     """Keep bounded dispatch diagnostics from terminal errors, never raw page data."""
     raw = event.get("diagnostics")
@@ -457,7 +540,7 @@ class RequestBroker:
         if event_type in {"chat.diagnostics", "image.diagnostics"}:
             diagnostics = event.get("diagnostics")
             if isinstance(diagnostics, dict):
-                state.diagnostics.update(diagnostics)
+                _merge_request_v6_dispatch_diagnostics(state.diagnostics, diagnostics)
                 if (event_type == "chat.diagnostics"
                         and diagnostics.get("worker_content_dispatch_ack_v1") is True
                         and diagnostics.get("worker_content_dispatch_ack_source")
