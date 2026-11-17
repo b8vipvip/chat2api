@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Awaitable, Callable
 
 from fastapi import FastAPI
@@ -8,6 +9,8 @@ from . import admin as admin_module
 from . import model_capability_routing_patch as model_routing
 from .model_catalog import model_transport_id, normalize_concrete_model_id, normalize_model_id, normalize_reasoning_level
 from .worker_model_library_v145_patch import install_worker_model_library_v145_patch
+
+logger = logging.getLogger(__name__)
 
 PATCH_ID = "final-model-authority-v144"
 PATCH_REVISION = 144
@@ -186,20 +189,49 @@ def install_model_observability_v144_patch(app: FastAPI) -> FastAPI:
                 message["routing"] = routing
                 if request_id:
                     authorities[request_id] = authority
-                    await telemetry.upsert({"request_id": request_id, **_trace(authority, None), "client_id": client_id})
+                    try:
+                        await telemetry.upsert({
+                            "request_id": request_id,
+                            **_trace(authority, None),
+                            "client_id": client_id,
+                        })
+                    except Exception:
+                        # Model routing metadata is carried by the request and
+                        # in-memory authority map; telemetry must not block the
+                        # actual Worker dispatch when its store is unavailable.
+                        logger.exception(
+                            "Failed to persist model routing projection request_id=%s",
+                            request_id,
+                        )
         await base_send(client_id, message)
 
     async def publish_with_model_evidence(request_id: str, event: dict[str, Any]) -> bool:
-        evidence = _evidence_from_event(event)
-        if evidence:
-            authority = authorities.get(str(request_id))
-            trace = _trace(authority, evidence)
-            state = broker.requests.get(str(request_id))
-            if state is not None:
-                state.diagnostics.update(trace)
-                state.diagnostics["model_evidence_v144"] = evidence
-            await telemetry.upsert({"request_id": str(request_id), **trace})
+        # The Broker is the sole authority on whether an event belongs to an
+        # active request and is still admissible. A late Worker diagnostic or
+        # second terminal must never overwrite the accepted model provenance.
+        # Publish first; the evidence is an optional projection, not a second
+        # decision maker or a reason to fail a client-facing request.
         published = await base_publish(request_id, event)
+        if published:
+            try:
+                evidence = _evidence_from_event(event)
+                if evidence:
+                    authority = authorities.get(str(request_id))
+                    trace = _trace(authority, evidence)
+                    state = broker.requests.get(str(request_id))
+                    if state is not None:
+                        state.diagnostics.update(trace)
+                        state.diagnostics["model_evidence_v144"] = evidence
+                    # Telemetry is a best-effort projection. Once Broker has
+                    # accepted an event, an observability-store outage must not
+                    # turn that accepted event into an apparent Worker failure
+                    # or cause a duplicate terminal retry.
+                    await telemetry.upsert({"request_id": str(request_id), **trace})
+            except Exception:
+                logger.exception(
+                    "Accepted Broker event but failed to project model evidence request_id=%s",
+                    request_id,
+                )
         if str(event.get("type") or "") in {"chat.completed", "chat.error", "chat.cancelled"}:
             authorities.pop(str(request_id), None)
         return published
