@@ -454,6 +454,50 @@ def test_registry_send_binds_the_exact_socket_for_every_broker_request_family(tm
     asyncio.run(exercise())
 
 
+def test_initial_dispatch_is_rejected_if_broker_lease_releases_while_waiting_for_socket_lock(tmp_path) -> None:
+    class FakeSocket:
+        def __init__(self) -> None:
+            self.sent = []
+
+        async def send_json(self, payload) -> None:
+            self.sent.append(payload)
+
+    async def exercise() -> None:
+        registry = ClientRegistry(tmp_path)
+        broker = RequestBroker()
+        request_id = "req_r06_released_while_queued"
+        await broker.create(request_id, "ext_r06")
+        socket = FakeSocket()
+        registry.clients["ext_r06"] = SimpleNamespace(connection_enabled=True)
+        registry.sockets["ext_r06"] = socket
+        registry.request_broker = broker
+        registry.chatgpt_routing_ready = lambda _client_id: True
+
+        lock = asyncio.Lock()
+        await lock.acquire()
+        registry.socket_locks["ext_r06"] = lock
+        send_task = asyncio.create_task(registry.send("ext_r06", {
+            "type": "chat.request", "request_id": request_id,
+        }))
+        await asyncio.sleep(0)
+        assert broker.requests[request_id].dispatch_socket_lock_wait_started_mono is not None
+
+        # A timeout/cancel path may release the request before the queued
+        # sender acquires the per-Worker lock. It must not dispatch orphaned
+        # work after the lease has disappeared.
+        await broker.release(request_id)
+        lock.release()
+        try:
+            await send_task
+        except RuntimeError as error:
+            assert str(error) == "Request lease is no longer active"
+        else:
+            raise AssertionError("released request was dispatched to the Worker")
+        assert socket.sent == []
+
+    asyncio.run(exercise())
+
+
 def test_every_request_scoped_worker_sidecar_uses_dispatch_socket_ownership() -> None:
     source = (ROOT / "app/main.py").read_text(encoding="utf-8")
     # File chunks, native DOM evidence, native sidecars, probe events and the
