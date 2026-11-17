@@ -340,6 +340,7 @@ def _terminal_provenance(event: dict[str, Any]) -> dict[str, Any]:
 _WORKER_DISPATCH_FAILURE_TIMINGS = (
     "worker_dispatch_queue_wait_ms",
     "worker_route_resolve_ms",
+    "worker_route_reallocation_ms",
     "worker_target_tab_lookup_ms",
     "worker_ensure_content_ms",
     "worker_tabs_send_message_ms",
