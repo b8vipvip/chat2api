@@ -74,6 +74,11 @@ assert app.state.quota_reservation_runtime_coverage == [
     "/v1/audio/speech",
     "/v1/audio/conversations",
 ]
+
+# Startup must reconcile each user's durable wallet holds exactly once.
+wallet_reconcile_calls = []
+app.state.user_billing.active_reservation_user_ids = lambda: ["startup-recovery-user"]
+app.state.wallet_charge_reconciler = lambda user_id: wallet_reconcile_calls.append(user_id)
 for path in ("/v1/images/generations", "/v1/audio/speech", "/v1/audio/conversations"):
     assert len([
         route for route in app.routes
@@ -82,6 +87,7 @@ for path in ("/v1/images/generations", "/v1/audio/speech", "/v1/audio/conversati
     ]) == 1
 
 with TestClient(app) as client:
+    assert wallet_reconcile_calls == ["startup-recovery-user"], wallet_reconcile_calls
     assert client.get("/api/client/plugins").json() == {
         "data": [], "execution_enabled": False,
     }
