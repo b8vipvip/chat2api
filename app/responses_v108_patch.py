@@ -328,7 +328,9 @@ async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], princi
         except (TypeError, ValueError):
             requested_output_budget = 0
         try:
-            from .quota_reservation_runtime_v1 import reserve_request_quota
+            from .quota_reservation_runtime_v1 import (
+                authorize_wallet_dispatch, reserve_request_quota,
+            )
             quota_reservation = await reserve_request_quota(
                 app, request_id, principal, prompt,
                 max(4096, requested_output_budget),
@@ -434,6 +436,9 @@ async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], princi
             raise
     registry.busy_clients.add(client_id)
     try:
+        await asyncio.to_thread(
+            authorize_wallet_dispatch, app, request_id, principal,
+        )
         await app.state.chat_request_service.dispatch(
             client_id,
             request_id=request_id,

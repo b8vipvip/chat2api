@@ -18,7 +18,9 @@ from .api_keys import ApiPrincipal
 from . import model_capability_routing_patch as model_routing
 from .token_usage import usage_for
 from .prompt_config import build_speech_prompt
-from .quota_reservation_runtime_v1 import is_request_id_conflict, reserve_audio_request_quota
+from .quota_reservation_runtime_v1 import (
+    authorize_wallet_dispatch, is_request_id_conflict, reserve_audio_request_quota,
+)
 from .telemetry import DuplicateRequestIdentity
 
 logger = logging.getLogger(__name__)
@@ -281,6 +283,9 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
                     "final_prompt_chars": len(prompt),
                     "prompt_config_revision": prompt_policy.get("speech_prefix_revision"),
                 })
+            await asyncio.to_thread(
+                authorize_wallet_dispatch, app, request_id, principal,
+            )
             await registry.send(
                 selected_client,
                 {

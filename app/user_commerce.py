@@ -902,6 +902,21 @@ class BillingStore:
             for reservation in reservations.values():
                 if reservation.get("state") not in {"reserved", "settled", "released"}:
                     raise ValueError("billing ledger reservations.state is unsupported")
+                admission_protocol = reservation.get("admission_protocol_version")
+                if admission_protocol is not None:
+                    if (
+                        type(admission_protocol) is not int
+                        or admission_protocol != 1
+                        or "dispatch_authorized_at" not in reservation
+                    ):
+                        raise ValueError("billing ledger reservation admission protocol is invalid")
+                    authorized_at = reservation.get("dispatch_authorized_at")
+                    if authorized_at is not None and (
+                        not isinstance(authorized_at, str) or not authorized_at
+                    ):
+                        raise ValueError("billing ledger reservation dispatch authorization timestamp is invalid")
+                elif "dispatch_authorized_at" in reservation:
+                    raise ValueError("legacy wallet reservation cannot contain a dispatch authorization marker")
                 reserved_amount = reservation["reserved_cny_cents"]
                 if (
                     not isinstance(reservation.get("model_id"), str) or not reservation["model_id"]
@@ -1019,6 +1034,74 @@ class BillingStore:
                 if row.get("state") == "reserved" and row.get("user_id")
             })
 
+    def mark_dispatch_authorized(self, request_id: str, user_id: str) -> bool:
+        """Durably mark that an admitted wallet request may now reach a Worker.
+
+        The marker is written only after the request-history row is durable and
+        immediately before the first Worker send. Startup may safely release
+        protocol-v1 holds that never reached this point. Legacy holds remain
+        untouched because their dispatch phase cannot be reconstructed.
+        """
+        normalized_id = str(request_id or "")
+        with self.lock:
+            row = self.reservations.get(normalized_id)
+            if row is None:
+                return False
+            if str(row.get("user_id") or "") != str(user_id or ""):
+                raise WalletReservationError("Request wallet reservation belongs to another user")
+            if row.get("state") != "reserved":
+                return False
+            if row.get("admission_protocol_version") != 1:
+                return False
+            if row.get("dispatch_authorized_at"):
+                return True
+            previous = dict(row)
+            row.update({
+                "dispatch_authorized_at": _now(),
+                "updated_at": _now(),
+            })
+            try:
+                self._save()
+            except Exception:
+                self.reservations[normalized_id] = previous
+                raise
+            return True
+
+    def release_unstarted_admissions(self) -> int:
+        """Release only new-protocol wallet holds proven not to have been dispatched.
+
+        This runs before the server accepts traffic. Protocol-v1 reservations
+        start without a dispatch marker; every production API writes its
+        request-history row and then durably marks dispatch authorization
+        before sending to a Worker. An absent marker therefore proves that the
+        previous process never authorized Worker dispatch. Legacy reservations
+        are deliberately preserved because they lack this proof.
+        """
+        with self.lock:
+            candidates = {
+                request_id: dict(row)
+                for request_id, row in self.reservations.items()
+                if row.get("state") == "reserved"
+                and row.get("admission_protocol_version") == 1
+                and row.get("dispatch_authorized_at") is None
+            }
+            if not candidates:
+                return 0
+            now = _now()
+            for request_id in candidates:
+                self.reservations[request_id].update({
+                    "state": "released",
+                    "release_reason": "server_restart_before_worker_dispatch",
+                    "updated_at": now,
+                })
+            try:
+                self._save()
+            except Exception:
+                for request_id, previous in candidates.items():
+                    self.reservations[request_id] = previous
+                raise
+            return len(candidates)
+
     def available_balance_cents(self, user_id: str) -> int:
         with self.lock:
             reserved = sum(
@@ -1098,6 +1181,8 @@ class BillingStore:
                 "price_catalog_snapshot": catalog_snapshot,
                 "usd_cny_rate": float(usd_cny_rate),
                 "state": "reserved",
+                "admission_protocol_version": 1,
+                "dispatch_authorized_at": None,
                 "created_at": now,
                 "updated_at": now,
             }

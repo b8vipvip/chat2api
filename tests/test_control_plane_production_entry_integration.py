@@ -75,8 +75,27 @@ assert app.state.quota_reservation_runtime_coverage == [
     "/v1/audio/conversations",
 ]
 
-# Startup must reconcile each user's durable wallet holds exactly once.
+# Startup must release a new-protocol hold that never reached Worker dispatch,
+# preserve an authorized in-flight hold, and reconcile each owner only once.
 wallet_reconcile_calls = []
+startup_price = {
+    "model_id": "startup-paid-model", "enabled": True,
+    "input_usd_per_million": 1.0, "cached_input_usd_per_million": 0.0,
+    "output_usd_per_million": 1.0,
+}
+app.state.user_billing.credit("startup-recovery-user", 100)
+for request_id in ("req_startup_unstarted", "req_startup_dispatched"):
+    app.state.user_billing.reserve_for_request(
+        "startup-recovery-user", request_id,
+        model_id="startup-paid-model", estimated_cny_cents=1,
+        input_tokens=1, output_tokens=1,
+        price_snapshot=startup_price,
+        price_catalog_snapshot={"startup-paid-model": startup_price},
+        usd_cny_rate=7.0,
+    )
+assert app.state.user_billing.mark_dispatch_authorized(
+    "req_startup_dispatched", "startup-recovery-user",
+)
 app.state.user_billing.active_reservation_user_ids = lambda: ["startup-recovery-user"]
 app.state.wallet_charge_reconciler = lambda user_id: wallet_reconcile_calls.append(user_id)
 for path in ("/v1/images/generations", "/v1/audio/speech", "/v1/audio/conversations"):
@@ -88,6 +107,9 @@ for path in ("/v1/images/generations", "/v1/audio/speech", "/v1/audio/conversati
 
 with TestClient(app) as client:
     assert wallet_reconcile_calls == ["startup-recovery-user"], wallet_reconcile_calls
+    assert app.state.user_billing.reservations["req_startup_unstarted"]["state"] == "released"
+    assert app.state.user_billing.reservations["req_startup_dispatched"]["state"] == "reserved"
+    assert app.state.user_billing.reservations["req_startup_dispatched"]["dispatch_authorized_at"]
     assert client.get("/api/client/plugins").json() == {
         "data": [], "execution_enabled": False,
     }

@@ -83,6 +83,7 @@ from .playground_stream_contract_v293 import playground_stream_attribution
 from .playground_request_evidence_v207 import request_test_index, playground_link
 from .token_usage import usage_for
 from .quota_reservation_runtime_v1 import (
+    authorize_wallet_dispatch,
     is_request_id_conflict,
     reserve_image_generation_quota,
     reserve_request_quota,
@@ -129,6 +130,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         wallet_reconciler = getattr(app.state, "wallet_charge_reconciler", None)
         billing_store = getattr(app.state, "user_billing", None)
+        if billing_store is not None:
+            try:
+                released_unstarted = await asyncio.to_thread(
+                    billing_store.release_unstarted_admissions
+                )
+                if released_unstarted:
+                    logger.warning(
+                        "Wallet startup released %s pre-dispatch admission hold(s)",
+                        released_unstarted,
+                    )
+            except Exception as error:
+                # A failed ledger write is not permission to release funds.
+                # Keep the holds active for explicit reconciliation.
+                logger.warning(
+                    "Wallet pre-dispatch startup recovery deferred error_type=%s",
+                    type(error).__name__,
+                )
         if callable(wallet_reconciler) and billing_store is not None:
             for user_id in billing_store.active_reservation_user_ids():
                 try:
@@ -2385,6 +2403,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 attachments_count=len(attachments),
                 input_file_ids=[str(item["file_id"]) for item in attachments],
             )
+            await asyncio.to_thread(
+                authorize_wallet_dispatch, app, request_id, principal,
+            )
             await chat_request_service.dispatch(
                 client_id,
                 request_id=request_id,
@@ -2655,6 +2676,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "usage": {}, "timings": state.timings(), "diagnostics": image_diagnostics(), "error": None,
                 },
                 create_only=True,
+            )
+            await asyncio.to_thread(
+                authorize_wallet_dispatch, app, request_id, principal,
             )
             await registry.send(
                 client_id,
