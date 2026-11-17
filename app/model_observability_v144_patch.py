@@ -54,7 +54,16 @@ def _trace(authority: dict[str, Any] | None, evidence: dict[str, Any] | None) ->
     request_model = normalize_model_id(evidence.get("request_model"))
     # A page transport alias ("auto"/"default") is not evidence of a model
     # actually serving the request. Do not mark such a response verified.
-    served = normalize_concrete_model_id(evidence.get("served_model"))
+    response_ok = evidence.get("response_ok") is True
+    response_status_raw = evidence.get("response_status")
+    response_status = (
+        response_status_raw if type(response_status_raw) is int and 100 <= response_status_raw <= 599
+        else None
+    )
+    # A model-shaped field in an HTTP error response is not evidence of a
+    # model that served this request. Require the same-request 2xx response
+    # observation before accepting any concrete served-model identifier.
+    served = normalize_concrete_model_id(evidence.get("served_model")) if response_ok else None
     default_model = normalize_concrete_model_id(evidence.get("default_model"))
     # Profile/default metadata is diagnostic only. It must never prove which
     # concrete model actually served this request.
@@ -63,7 +72,7 @@ def _trace(authority: dict[str, Any] | None, evidence: dict[str, Any] | None) ->
     # A network-confirmed different model must be visible as a conflict
     # even when the lower-level observer did not flag an intra-stream clash.
     served_mismatch = bool(routed and served and routed != served)
-    conflict = bool(evidence.get("model_conflict")) or served_mismatch
+    conflict = (bool(evidence.get("model_conflict")) if response_ok else False) or served_mismatch
     page_default_route = authority.get("default_page_route") is True
     expected_wire = None if page_default_route else str(
         authority.get("transport_model") or model_transport_id(routed) or ""
@@ -106,6 +115,8 @@ def _trace(authority: dict[str, Any] | None, evidence: dict[str, Any] | None) ->
         "model_page_native_wire_respected": page_native_verified,
         "original_wire_model": original_wire or None,
         "served_model": served,
+        "model_response_ok": response_ok,
+        "model_response_status": response_status,
         "observed_model": observed,
         "default_model": default_model,
         "model_verified": verified,
