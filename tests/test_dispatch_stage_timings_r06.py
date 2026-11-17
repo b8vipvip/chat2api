@@ -153,7 +153,7 @@ def test_production_chat_ingress_only_marks_socket_send_not_worker_ack() -> None
     assert "dispatch_send_started_mono = time.perf_counter()" in registry
     assert "dispatch_send_completed_mono = time.perf_counter()" in registry
     assert "server_dispatch_socket_lock_wait_ms" in (ROOT / "app/broker.py").read_text(encoding="utf-8")
-    # Browser-start truth still comes only from authenticated Worker via Broker,
+    # Response-start truth still comes only from authenticated Worker via Broker,
     # not from a successful socket write or an invented acknowledgement.
     background = (ROOT / "chrome_extension/background.js").read_text(encoding="utf-8")
     ack = background.index("worker_content_dispatch_ack_v1: true")
@@ -166,7 +166,8 @@ def test_production_chat_ingress_only_marks_socket_send_not_worker_ack() -> None
     assert 'elif event_type in {"chat.started", "image.started"}:' in broker
     assert 'diagnostics.get("worker_content_dispatch_ack_v1") is True' in broker
     assert "state.worker_content_ack_mono = state.worker_content_ack_mono or now" in broker
-    assert "state.browser_started_mono = state.browser_started_mono or now" in broker
+    assert "state.response_started_mono = state.response_started_mono or now" in broker
+    assert "state.browser_started_mono = state.browser_started_mono or state.response_started_mono" in broker
 
 
 
