@@ -247,7 +247,8 @@ const clearBroadcast=authorityBroadcasts.slice(beforeTerminalBroadcasts)
   .find(message=>message.source==="chat2api-model-authority-v144"
     && message.authority===null);
 assert.ok(clearBroadcast,"request-v6 terminal must broadcast cleared model authority");
-assert.equal(clearBroadcast.request_id,"");
+assert.equal(clearBroadcast.request_id,"req_terminal_clear123");
+assert.equal(clearBroadcast.terminal,true);
 
 // If an older stream ends after a newer request has started, it must not
 // clear the newer request's model authority. Only a matching request-v6
@@ -309,7 +310,7 @@ async function verifyMainWorldAuthorityClear(clearMessage) {
     data:{source:"chat2api-model-authority-v144",...message},
   });
   deliver({
-    request_id:"req_authority_lifecycle123",
+    request_id:"req_terminal_clear123",
     authority:{requested_model:"gpt-5.6-sol",routed_model:"gpt-5.6-sol",
       transport_model:"gpt-5.6-sol-wm"},
   });
@@ -320,12 +321,19 @@ async function verifyMainWorldAuthorityClear(clearMessage) {
     await new Promise(resolve=>setImmediate(resolve));
   assert.equal(sentBodies[0].model,"gpt-5.6-sol-wm",
     "active request authority should rewrite its own conversation request");
+  // A stale terminal from a prior request must not clear the current model.
+  deliver({request_id:"req_older_request123",authority:null,terminal:true});
+  await mainContext.fetch("https://chatgpt.com/backend-api/conversation",{
+    method:"POST",body:JSON.stringify({model:"gpt-6"}),
+  });
+  assert.equal(sentBodies[1].model,"gpt-5.6-sol-wm",
+    "an older request's terminal must not clear the newer request's authority");
   deliver(clearMessage);
   await mainContext.fetch("https://chatgpt.com/backend-api/conversation",{
     method:"POST",body:JSON.stringify({model:"gpt-6"}),
   });
-  assert.equal(sentBodies[1].model,"gpt-6",
-    "after the matching response ends, later native ChatGPT requests must not inherit its model");
+  assert.equal(sentBodies[2].model,"gpt-6",
+    "after the matching request terminal, later native ChatGPT requests must not inherit its model");
 }
 await verifyMainWorldAuthorityClear(clearBroadcast);
 console.log("Worker isolated bridge: terminal request releases only its own model authority");
