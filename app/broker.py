@@ -581,7 +581,7 @@ class RequestBroker:
             state.browser_started_mono = state.browser_started_mono or now
             diagnostics = event.get("diagnostics")
             if isinstance(diagnostics, dict):
-                state.diagnostics.update(diagnostics)
+                _merge_request_v6_dispatch_diagnostics(state.diagnostics, diagnostics)
         elif event_type == "chat.delta":
             state.first_token_mono = state.first_token_mono or now
             delta = str(event.get("delta") or "")
