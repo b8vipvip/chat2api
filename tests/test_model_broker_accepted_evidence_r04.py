@@ -148,6 +148,7 @@ def test_model_authority_snapshot_is_released_with_server_owned_broker_lease(mon
         # Worker terminal event; this must still discard request-local state.
         await broker.release(request_id)
         assert request_id not in app.state.model_authorities_v144
+        await _flush_projection(app, request_id)
 
     asyncio.run(exercise())
 
