@@ -54,11 +54,17 @@ def _trace(authority: dict[str, Any] | None, evidence: dict[str, Any] | None) ->
     request_model = normalize_model_id(evidence.get("request_model"))
     # A page transport alias ("auto"/"default") is not evidence of a model
     # actually serving the request. Do not mark such a response verified.
-    response_ok = evidence.get("response_ok") is True
     response_status_raw = evidence.get("response_status")
     response_status = (
         response_status_raw if type(response_status_raw) is int and 100 <= response_status_raw <= 599
         else None
+    )
+    # The success flag and HTTP status are independent evidence fields. A
+    # served-model claim requires both to agree on a successful 2xx response.
+    response_ok = (
+        evidence.get("response_ok") is True
+        and response_status is not None
+        and 200 <= response_status < 300
     )
     # A model-shaped field in an HTTP error response is not evidence of a
     # model that served this request. Require the same-request 2xx response
