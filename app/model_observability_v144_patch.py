@@ -161,6 +161,7 @@ def install_model_observability_v144_patch(app: FastAPI) -> FastAPI:
     telemetry = app.state.telemetry
     base_send: Callable[[str, dict[str, Any]], Awaitable[None]] = registry.send
     base_publish = broker.publish
+    base_release = broker.release
     authorities: dict[str, dict[str, Any]] = {}
 
     async def send_with_model_authority(client_id: str, message: dict[str, Any]) -> None:
@@ -236,8 +237,20 @@ def install_model_observability_v144_patch(app: FastAPI) -> FastAPI:
             authorities.pop(str(request_id), None)
         return published
 
+    async def release_with_model_authority(request_id: str) -> None:
+        # Server-owned timeout, cancellation, admission failure and other
+        # non-Worker terminals can release Broker state without a Worker
+        # terminal event. Always discard the per-request authority snapshot
+        # when the request lease is released, not only on chat.completed.
+        try:
+            await base_release(request_id)
+        finally:
+            authorities.pop(str(request_id), None)
+
     registry.send = send_with_model_authority
     broker.publish = publish_with_model_evidence
+    broker.release = release_with_model_authority
+    app.state.model_authorities_v144 = authorities
     _patch_admin_html()
     app.state.model_observability_v144_installed = True
     app.state.model_observability_revision = PATCH_REVISION
