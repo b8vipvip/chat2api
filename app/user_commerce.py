@@ -1034,6 +1034,12 @@ class BillingStore:
                 if row.get("state") == "reserved" and row.get("user_id")
             })
 
+    def reservation_for_request(self, request_id: str) -> dict[str, Any] | None:
+        """Return a snapshot of one request's wallet admission under the ledger lock."""
+        with self.lock:
+            row = self.reservations.get(str(request_id or ""))
+            return dict(row) if row is not None else None
+
     def mark_dispatch_authorized(self, request_id: str, user_id: str) -> bool:
         """Durably mark that an admitted wallet request may now reach a Worker.
 
