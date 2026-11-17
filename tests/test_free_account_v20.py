@@ -106,13 +106,16 @@ with tempfile.TemporaryDirectory() as tmp:
 
     # Direct Registry tests must model the same Broker admission lease that
     # production ChatRequestService creates before any Worker dispatch.
-    asyncio.run(app.state.broker.create("req-free", "free-ext"))
     token = v13_patch._target_context.set(target)
     try:
         assert registry.resolve_client(None) == "free-ext"
-        asyncio.run(registry.send("free-ext", {
-            "type": "chat.request", "request_id": "req-free", "options": {"model": "gpt-5.5-mini"}
-        }))
+        async def send_free_request():
+            await app.state.broker.create("req-free", "free-ext")
+            await registry.send("free-ext", {
+                "type": "chat.request", "request_id": "req-free", "options": {"model": "gpt-5.5-mini"}
+            })
+            await app.state.broker.release("req-free")
+        asyncio.run(send_free_request())
     finally:
         v13_patch._target_context.reset(token)
     sent = free_socket.payloads[-1]
@@ -120,19 +123,20 @@ with tempfile.TemporaryDirectory() as tmp:
     assert sent["options"]["mini_route"] == "free-native"
     assert sent["options"]["fallback_model"] is None
 
-    asyncio.run(app.state.broker.release("req-free"))
     registry.busy_clients.add("free-ext")
-    asyncio.run(app.state.broker.create("req-paid", "paid-ext"))
     token = v13_patch._target_context.set(target)
     try:
         assert registry.resolve_client(None) == "paid-ext"
-        asyncio.run(registry.send("paid-ext", {
-            "type": "chat.request", "request_id": "req-paid", "options": {"model": "gpt-5.5-mini"}
-        }))
+        async def send_paid_fallback_request():
+            await app.state.broker.create("req-paid", "paid-ext")
+            await registry.send("paid-ext", {
+                "type": "chat.request", "request_id": "req-paid", "options": {"model": "gpt-5.5-mini"}
+            })
+            await app.state.broker.release("req-paid")
+        asyncio.run(send_paid_fallback_request())
     finally:
         v13_patch._target_context.reset(token)
     sent = paid_socket.payloads[-1]
-    asyncio.run(app.state.broker.release("req-paid"))
     assert sent["options"]["mini_route"] == "gpt-5.5-instant-fallback"
     assert sent["options"]["fallback_model"] == "gpt-5.5"
     assert sent["options"]["fallback_reasoning_effort"] == "low"
