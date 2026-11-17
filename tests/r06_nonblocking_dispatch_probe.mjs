@@ -19,10 +19,17 @@ const sandbox = {
     return new Promise(() => {}); // unresolved background diagnostic ACK
   },
 };
-const dispatchStage = vm.runInNewContext(
-  source.slice(start, end) + "\nrunDispatchStage;", sandbox,
+const dispatchHelpers = vm.runInNewContext(
+  source.slice(start, end) + "\n({ runDispatchStage, dispatchElapsedMs });", sandbox,
   { timeout: 2000 },
 );
+const dispatchStage = dispatchHelpers.runDispatchStage;
+const dispatchElapsedMs = dispatchHelpers.dispatchElapsedMs;
+// performance.now() is allowed to return exactly zero at document start.
+// Zero is a valid monotonic timestamp, not a missing-value sentinel.
+assert.equal(dispatchElapsedMs({ dispatchTimingStartedAt: 0 }, 0), 0);
+assert.equal(dispatchElapsedMs({ dispatchTimingStartedAt: 0 }, 12.5), 12.5);
+assert.equal(dispatchElapsedMs({ dispatchTimingStartedAt: null }, 12.5), null);
 const active = { dispatchTimingStartedAt: 90, dispatchStageEvidence: {} };
 
 async function withoutDiagnosticWait(operation) {
