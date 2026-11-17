@@ -364,6 +364,23 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
                 status_code=409,
                 detail={"code": "request_id_conflict", "message": "request_id already exists"},
             ) from error
+        except HTTPException as error:
+            # Preserve infrastructure/admission status codes instead of
+            # rewriting a wallet dispatch-marker failure as a browser 502.
+            state.completed_mono = state.completed_mono or time.perf_counter()
+            try:
+                await record_voice(
+                    request_id=request_id, response_id=response_id, client_id=selected_client,
+                    principal=principal, model=model, request_type=request_type, prompt=prompt,
+                    transcript="", state=state, status_value="error",
+                    error=str(error.detail), input_file_ids=input_file_ids,
+                )
+            except Exception as telemetry_error:
+                logger.warning(
+                    "Voice admission failure telemetry deferred request_id=%s error_type=%s",
+                    request_id, type(telemetry_error).__name__,
+                )
+            raise
         except asyncio.TimeoutError as error:
             state.diagnostics["voice_failure_code"] = "VOICE_SERVER_WAIT_TIMEOUT"
             state.diagnostics["voice_failure_stage"] = str(state.diagnostics.get("voice_stage") or "unknown")
