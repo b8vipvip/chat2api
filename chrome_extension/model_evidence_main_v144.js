@@ -362,7 +362,22 @@
     if (event.source !== globalThis) return;
     const detail = event.data;
     if (!detail || detail.source !== AUTHORITY_SOURCE) return;
-    state.authority = detail.authority && typeof detail.authority === "object" ? { ...detail.authority, request_id: detail.request_id || null } : null;
+    if (detail.authority && typeof detail.authority === "object") {
+      state.authority = { ...detail.authority, request_id: detail.request_id || null };
+      return;
+    }
+    if (detail.terminal === true) {
+      // A delayed terminal from an older request must not clear the authority
+      // installed by a newer request in the same ChatGPT page.
+      const activeRequestId = String(state.authority?.request_id || "");
+      if (activeRequestId && activeRequestId === String(detail.request_id || "")) {
+        state.authority = null;
+      }
+      return;
+    }
+    // A newly admitted request without a concrete model authority explicitly
+    // clears any previous rewrite rule.
+    state.authority = null;
   });
 
   globalThis.fetch = async function chat2apiModelEvidenceFetch(input, init) {
