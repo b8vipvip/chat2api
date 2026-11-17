@@ -4,14 +4,14 @@ import vm from "node:vm";
 
 const code=fs.readFileSync(new URL("../chrome_extension/model_evidence_main_v144.js",import.meta.url),"utf8");
 
-async function capture(objects, headers={}) {
+async function capture(objects, headers={}, status=200) {
   const emitted=[];
   const body=objects.map(value=>"data: "+JSON.stringify(value)+"\n\n").join("")+"data: [DONE]\n\n";
   const ctx={
     URL, Request, TextDecoder,
     Response, location:{href:"https://chatgpt.com/"},
     document:{documentElement:{setAttribute(){}}},
-    fetch:async()=>new Response(body,{status:200,headers}),
+    fetch:async()=>new Response(body,{status,headers}),
     postMessage(message){emitted.push(message);},
     addEventListener(){},
     globalThis:null,
@@ -68,6 +68,15 @@ const pageAlias=await capture([
 assert.equal(pageAlias.served_model,null,
   "page-routing aliases cannot prove that a concrete upstream model served");
 assert.equal(pageAlias.default_model,null);
+
+const failedResponse = await capture([
+  {served_model_slug:"gpt-6-astra-wm"},
+],{},403);
+assert.equal(failedResponse.served_model,null,
+  "model-looking fields in an HTTP error body cannot prove a served model");
+assert.equal(failedResponse.model_conflict,false);
+assert.equal(failedResponse.response_ok,false);
+assert.equal(failedResponse.response_status,403);
 
 // Thousands of SSE blocks must be accumulated in linear work and bounded
 // memory. The former adapter re-parsed every prior object on each new frame
@@ -136,6 +145,7 @@ const takeLast=async()=>{
 issueRequest("req_modelconflict123");
 dispatch("stream-1","request",{request_model:"gpt-6",request_wire_model:"gpt-6"});
 dispatch("stream-1","evidence",{
+  response_ok:true,response_status:200,
   served_model:"gpt-6",model_field:"resolved_model_slug",
   default_model:"gpt-5.6-sol",default_model_field:"default_model_slug",
   reasoning:"high",reasoning_field:"reasoning_level",
@@ -145,6 +155,8 @@ let bridged=await takeLast();
 assert.equal(bridged.served_model,"gpt-6");
 assert.equal(bridged.default_model,"gpt-5.6-sol");
 assert.equal(bridged.reasoning,"high");
+assert.equal(bridged.response_ok,true);
+assert.equal(bridged.response_status,200);
 dispatch("stream-1","evidence",{
   served_model:null,default_model:null,reasoning:null,
   model_conflict:true,default_model_conflict:true,reasoning_conflict:true,
@@ -184,6 +196,8 @@ bridged=await takeLast();
 assert.equal(bridged.served_model,"gpt-6-astra");
 assert.equal(bridged.model_field,"response-header");
 assert.equal(bridged.evidence_source,"network_response_header");
+assert.equal(bridged.response_ok,true);
+assert.equal(bridged.response_status,200);
 dispatch("stream-2","evidence",{
   served_model:null,model_conflict:true,model_field:null,
   evidence_source:"network_response_metadata",
@@ -209,8 +223,8 @@ dispatch("stream-race","request",{request_model:"gpt-6",
   request_wire_model:"gpt-6"});
 await takeLast();
 stallNextEvidenceWrite=true;
-dispatch("stream-race","evidence",{served_model:"gpt-6",
-  model_field:"served_model_slug",
+dispatch("stream-race","evidence",{response_ok:true,response_status:200,
+  served_model:"gpt-6",model_field:"served_model_slug",
   evidence_source:"network_response_metadata"});
 for(let i=0;i<10&&!releaseStalledEvidenceWrite;i++)
   await new Promise(resolve=>setImmediate(resolve));
@@ -224,9 +238,26 @@ bridged=await takeLast();
 assert.equal(bridged.served_model,null,
   "older async model proof cannot overwrite a later conflict");
 assert.equal(bridged.model_conflict,true);
+assert.equal(bridged.response_ok,true);
+assert.equal(bridged.response_status,200);
 
 assert.equal(storedEvidence.at(-1).served_model,null);
 assert.equal(storedEvidence.at(-1).model_conflict,true);
+
+// A concrete-looking field carried by an HTTP error response must never
+// survive the isolated bridge as a served-model claim.
+issueRequest("req_http_errorbody123");
+dispatch("stream-error-body","request",{request_model:"gpt-6"});
+dispatch("stream-error-body","evidence",{
+  response_ok:false,response_status:403,
+  served_model:"gpt-6",model_field:"resolved_model_slug",
+  evidence_source:"network_response_metadata",
+});
+bridged=await takeLast();
+assert.equal(bridged.served_model,null);
+assert.equal(bridged.model_field,null);
+assert.equal(bridged.response_ok,false);
+assert.equal(bridged.response_status,403);
 
 // A request's model authority must not leak into the next native ChatGPT
 // conversation. The exact stream's completion clears only its own active

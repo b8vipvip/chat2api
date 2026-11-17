@@ -65,7 +65,16 @@
     // model when the network adapter emitted {served_model:null,
     // model_conflict:true}. Conflicts are sticky for this same stream.
     const select=key=>owns(key)?detail[key]:previous[key];
-    const modelConflict=Boolean(detail.model_conflict || previous.model_conflict);
+    const responseStatus = owns("response_status") ? Number(detail.response_status)
+      : owns("status") ? Number(detail.status) : Number(previous.response_status || 0);
+    const responseSuccess = owns("response_ok") ? detail.response_ok === true
+      : owns("ok") ? detail.ok === true : previous.response_ok === true;
+    // Do not trust a success boolean when the same stream has an HTTP error
+    // status (or no verifiable status). This keeps the bridge fail-closed even
+    // if a malformed/older observer sends contradictory evidence.
+    const responseOk = responseSuccess && Number.isInteger(responseStatus)
+      && responseStatus >= 200 && responseStatus < 300;
+    const modelConflict=responseOk && Boolean(detail.model_conflict || previous.model_conflict);
     const defaultConflict=Boolean(detail.default_model_conflict || previous.default_model_conflict);
     const reasoningConflict=Boolean(detail.reasoning_conflict || previous.reasoning_conflict);
     const evidence = {
@@ -77,16 +86,19 @@
         const raw=String(select("request_wire_model") || "").toLowerCase();
         return /^[a-z0-9._:-]{1,128}$/.test(raw) ? raw : null;
       })(),
-      served_model: modelConflict?null:normalizeModel(select("served_model")),
+      served_model: !responseOk || modelConflict ? null : normalizeModel(select("served_model")),
       default_model: defaultConflict?null:normalizeModel(select("default_model")),
       reasoning: reasoningConflict?null:(select("reasoning") || null),
       model_conflict: modelConflict,
       default_model_conflict: defaultConflict,
       reasoning_conflict: reasoningConflict,
-      model_field: modelConflict?null:(select("model_field") || null),
+      model_field: !responseOk || modelConflict ? null : (select("model_field") || null),
       default_model_field: defaultConflict?null:(select("default_model_field") || null),
       reasoning_field: reasoningConflict?null:(select("reasoning_field") || null),
       evidence_source: detail.evidence_source || previous.evidence_source || "network_request_metadata",
+      response_ok: responseOk,
+      response_status: Number.isInteger(responseStatus) && responseStatus >= 100 && responseStatus <= 599
+        ? responseStatus : null,
       request_rewritten: Boolean(detail.request_rewritten || row.evidence.request_rewritten),
       // Only the immutable request-phase MAIN-world observer may supply
       // this fact; response-phase events must not manufacture new wire proof.
