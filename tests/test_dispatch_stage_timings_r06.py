@@ -205,6 +205,74 @@ def test_worker_content_ack_requires_the_fixed_request_v6_dispatch_source() -> N
     asyncio.run(exercise())
 
 
+def test_out_of_order_dispatch_stage_snapshots_cannot_regress_completed_evidence() -> None:
+    async def exercise() -> None:
+        broker = RequestBroker()
+        state = await broker.create("req_r06_out_of_order", "ext_r06")
+
+        newest = await broker.publish("req_r06_out_of_order", {
+            "type": "chat.diagnostics",
+            "request_id": "req_r06_out_of_order",
+            "diagnostics": {
+                "request_v6_dispatch_elapsed_ms": 160.0,
+                "request_v6_dispatch_stage_evidence_v1": {
+                    "resolve_blocking_interruption": {
+                        "status": "completed", "started_elapsed_ms": 1.0,
+                        "duration_ms": 2.0, "completed_elapsed_ms": 3.0,
+                    },
+                    "prepare_attachments": {
+                        "status": "completed", "started_elapsed_ms": 4.0,
+                        "duration_ms": 5.0, "completed_elapsed_ms": 9.0,
+                    },
+                    "write_prompt": {
+                        "status": "completed", "started_elapsed_ms": 10.0,
+                        "duration_ms": 20.0, "completed_elapsed_ms": 30.0,
+                    },
+                    "submit_and_confirm": {
+                        "status": "started", "started_elapsed_ms": 31.0,
+                    },
+                    "untrusted_extra_stage": {"status": "completed"},
+                },
+            },
+        })
+        assert newest is True
+
+        # An older snapshot can arrive later, including through chat.started.
+        # It must not replace completed stages with their earlier "started"
+        # state or move the dispatch elapsed clock backwards.
+        stale = await broker.publish("req_r06_out_of_order", {
+            "type": "chat.started",
+            "request_id": "req_r06_out_of_order",
+            "diagnostics": {
+                "request_v6_dispatch_elapsed_ms": 12.0,
+                "request_v6_dispatch_stage_evidence_v1": {
+                    "resolve_blocking_interruption": {
+                        "status": "started", "started_elapsed_ms": 1.0,
+                    },
+                    "prepare_attachments": {
+                        "status": "started", "started_elapsed_ms": 4.0,
+                    },
+                    "write_prompt": {
+                        "status": "started", "started_elapsed_ms": 10.0,
+                    },
+                },
+            },
+        })
+        assert stale is True
+        evidence = state.diagnostics["request_v6_dispatch_stage_evidence_v1"]
+        assert evidence["resolve_blocking_interruption"]["status"] == "completed"
+        assert evidence["prepare_attachments"]["status"] == "completed"
+        assert evidence["write_prompt"]["status"] == "completed"
+        assert evidence["write_prompt"]["completed_elapsed_ms"] == 30.0
+        assert evidence["submit_and_confirm"]["status"] == "started"
+        assert "untrusted_extra_stage" not in evidence
+        assert state.diagnostics["request_v6_dispatch_elapsed_ms"] == 160.0
+
+        await broker.release("req_r06_out_of_order")
+
+    asyncio.run(exercise())
+
+
 def test_registry_send_binds_the_exact_socket_for_every_broker_request_family(tmp_path) -> None:
     class FakeSocket:
         def __init__(self) -> None:
