@@ -50,7 +50,7 @@ let monotonicClock = 0;
 const context={
   globalThis:{__CHAT2API_CONVERSATION_ROUTING_V1__:{failRequest:async()=>{retires++;return true;}}},
   monotonicNow:()=>++monotonicClock,
-  elapsedMs:started=>Math.max(0,monotonicClock-started),
+  elapsedMs:started=>Math.max(0,++monotonicClock-started),
   resolveRoutedTab:async()=>({id:++allocated,windowId:100+allocated}),
   withCurrentTab:async(_,fn)=>fn(),
   baseHandleServerMessage:async()=>{delivered++;if(delivered===1){const e=new Error("No tab with id: 1");e.code="routed_tab_disappeared_before_ack";throw e;}return "ok";},
