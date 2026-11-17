@@ -33,7 +33,7 @@ const readinessContext={
   },
   String,Error,
 };
-vm.runInNewContext(routeHelpers+"\\nglobalThis.resolve=resolveRoutedTab;",readinessContext);
+vm.runInNewContext(routeHelpers+"\nglobalThis.resolve=resolveRoutedTab;",readinessContext);
 const readinessMessage={request_id:"readiness-reallocation"};
 const readinessTab=await readinessContext.globalThis.resolve(readinessMessage);
 assert.equal(readinessTab.id,2);
