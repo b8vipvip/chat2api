@@ -302,13 +302,15 @@ async function verifyMainWorldAuthorityClear(clearMessage) {
     },
     postMessage(message){emitted.push(message);},
     addEventListener(name,handler){if(name==="message")listeners.push(handler);},
-    globalThis:null,
   };
-  mainContext.globalThis=mainContext;
-  vm.runInNewContext(code,mainContext);
+  // Chromium's window identity is the VM's contextified global, not the
+  // original sandbox object passed to vm.createContext().
+  vm.createContext(mainContext);
+  vm.runInContext(code,mainContext);
+  const mainWorldWindow=vm.runInContext("globalThis",mainContext);
   assert.equal(listeners.length,1);
   const deliver=message=>listeners[0]({
-    source:mainContext,
+    source:mainWorldWindow,
     data:{source:"chat2api-model-authority-v144",...message},
   });
   deliver({
