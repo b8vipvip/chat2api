@@ -673,11 +673,11 @@ def test_wallet_enabled_rejects_unpriced_model_and_releases_token_hold(tmp_path:
     install_quota_reservation_runtime_v1(app)
 
     with pytest.raises(HTTPException) as error:
-        reserve_request_quota(
+        asyncio.run(reserve_request_quota(
             app, "req_wallet_unpriced_0001",
             SimpleNamespace(kind="api_key", key_id=public["key_id"]),
             "unpriced model request", 4096, model_id="gpt-5.6-sol",
-        )
+        ))
 
     assert error.value.status_code == 503
     assert "not configured" in str(error.value.detail)
@@ -733,11 +733,11 @@ def test_wallet_billing_rejects_positive_text_rates_for_unmetered_media_models(
     install_quota_reservation_runtime_v1(app)
 
     with pytest.raises(HTTPException) as error:
-        reserve_request_quota(
+        asyncio.run(reserve_request_quota(
             app, f"req_wallet_{model_id.replace('-', '_')}_0001",
             SimpleNamespace(kind="api_key", key_id=public["key_id"]),
             "media request", 4096, model_id=model_id,
-        )
+        ))
 
     assert error.value.status_code == 503
     assert "not metered" in str(error.value.detail)
@@ -1106,11 +1106,11 @@ def test_wallet_enabled_rejects_disabled_model_price_and_releases_token_hold(tmp
     install_quota_reservation_runtime_v1(app)
 
     with pytest.raises(HTTPException) as error:
-        reserve_request_quota(
+        asyncio.run(reserve_request_quota(
             app, "req_wallet_disabled_price_0001",
             SimpleNamespace(kind="api_key", key_id=public["key_id"]),
             "disabled model price request", 4096, model_id="gpt-5.6-sol",
-        )
+        ))
 
     assert error.value.status_code == 503
     assert "not configured or enabled" in str(error.value.detail)

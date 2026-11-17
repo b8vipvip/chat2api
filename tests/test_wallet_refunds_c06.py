@@ -918,6 +918,7 @@ def test_wallet_ledger_preserves_valid_negative_integer_debt_balance(tmp_path: P
 
 
 def test_reused_request_id_returns_conflict_without_releasing_original_holds(tmp_path: Path) -> None:
+    import asyncio
     from fastapi import HTTPException
     from app.quota_reservation_runtime_v1 import reserve_request_quota
     from app.quota_reservations import QuotaReservationStore
@@ -934,18 +935,18 @@ def test_reused_request_id_returns_conflict_without_releasing_original_holds(tmp
     app.state.quota_reservation_runtime_enabled = True
     principal = SimpleNamespace(kind="managed", key_id="key-managed")
 
-    first = reserve_request_quota(
+    first = asyncio.run(reserve_request_quota(
         app, "req_reused_quota_id", principal, "prompt", 4096, model_id="paid-model",
-    )
+    ))
     assert first is not None
     assert app.state.quota_reservations.get("req_reused_quota_id")["state"] == "reserved"
     assert billing.active_reservations_for_user("usr_admission_snapshot")
 
     with pytest.raises(HTTPException) as conflict:
-        reserve_request_quota(
+        asyncio.run(reserve_request_quota(
             app, "req_reused_quota_id", principal, "different prompt", 8192,
             model_id="paid-model",
-        )
+        ))
 
     assert conflict.value.status_code == 409
     assert conflict.value.detail["code"] == "request_id_conflict"
