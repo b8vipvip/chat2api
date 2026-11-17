@@ -29,6 +29,10 @@ class RequestState:
     # Server timestamp of the authenticated Worker's request-v6 content ACK.
     # This is dispatch evidence only; it does not own request finality.
     worker_content_ack_mono: float | None = None
+    # chat.started is emitted when the ChatGPT response/generation is first
+    # observed. It is NOT a browser/page startup event. Keep the old
+    # browser_started_mono field as a compatibility alias for stored callers.
+    response_started_mono: float | None = None
     browser_started_mono: float | None = None
     first_token_mono: float | None = None
     completed_mono: float | None = None
@@ -47,8 +51,16 @@ class RequestState:
 
     def timings(self) -> dict[str, float | None]:
         end = self.completed_mono or time.perf_counter()
+        response_started = self.response_started_mono
+        if response_started is None:
+            response_started = self.browser_started_mono
+        response_started_ms = (
+            round((response_started - self.created_mono) * 1000, 1)
+            if response_started is not None else None
+        )
         return {
-            "browser_started_ms": round((self.browser_started_mono - self.created_mono) * 1000, 1) if self.browser_started_mono else None,
+            "response_started_ms": response_started_ms,
+            "browser_started_ms": response_started_ms,
             # Stage durations are for diagnostics, never Broker finality.
             # Missing/overlapping clocks return unknown, not a made-up zero.
             "request_admission_wait_ms": self.diagnostics.get("request_admission_wait_ms"),
@@ -81,17 +93,31 @@ class RequestState:
                 and self.dispatch_send_completed_mono is not None
                 and self.worker_content_ack_mono >= self.dispatch_send_completed_mono else None
             ),
-            "worker_content_ack_to_browser_started_ms": (
-                round((self.browser_started_mono - self.worker_content_ack_mono) * 1000, 1)
-                if self.browser_started_mono is not None
+            "worker_content_ack_to_response_started_ms": (
+                round((response_started - self.worker_content_ack_mono) * 1000, 1)
+                if response_started is not None
                 and self.worker_content_ack_mono is not None
-                and self.browser_started_mono >= self.worker_content_ack_mono else None
+                and response_started >= self.worker_content_ack_mono else None
+            ),
+            # Deprecated compatibility alias: this is response start, not
+            # Chrome/browser process startup.
+            "worker_content_ack_to_browser_started_ms": (
+                round((response_started - self.worker_content_ack_mono) * 1000, 1)
+                if response_started is not None
+                and self.worker_content_ack_mono is not None
+                and response_started >= self.worker_content_ack_mono else None
+            ),
+            "server_send_to_response_started_ms": (
+                round((response_started - self.dispatch_send_completed_mono) * 1000, 1)
+                if response_started is not None
+                and self.dispatch_send_completed_mono is not None
+                and response_started >= self.dispatch_send_completed_mono else None
             ),
             "server_send_to_browser_started_ms": (
-                round((self.browser_started_mono - self.dispatch_send_completed_mono) * 1000, 1)
-                if self.browser_started_mono is not None
+                round((response_started - self.dispatch_send_completed_mono) * 1000, 1)
+                if response_started is not None
                 and self.dispatch_send_completed_mono is not None
-                and self.browser_started_mono >= self.dispatch_send_completed_mono else None
+                and response_started >= self.dispatch_send_completed_mono else None
             ),
             "first_token_ms": round((self.first_token_mono - self.created_mono) * 1000, 1) if self.first_token_mono else None,
             "generation_ms": round((end - self.first_token_mono) * 1000, 1) if self.first_token_mono else None,
@@ -582,7 +608,8 @@ class RequestBroker:
                     state.worker_content_ack_mono = state.worker_content_ack_mono or now
                     state.diagnostics["worker_content_dispatch_ack_received"] = True
         elif event_type in {"chat.started", "image.started"}:
-            state.browser_started_mono = state.browser_started_mono or now
+            state.response_started_mono = state.response_started_mono or now
+            state.browser_started_mono = state.browser_started_mono or state.response_started_mono
             diagnostics = event.get("diagnostics")
             if isinstance(diagnostics, dict):
                 _merge_request_v6_dispatch_diagnostics(state.diagnostics, diagnostics)
