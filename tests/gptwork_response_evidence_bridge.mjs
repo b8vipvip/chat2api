@@ -279,7 +279,7 @@ async function verifyMainWorldAuthorityClear(clearMessage) {
     document:{documentElement:{setAttribute(){}}},
     fetch:async(_input,init)=>{
       sentBodies.push(JSON.parse(String(init?.body||"{}")));
-      return new Response("data: [DONE]\\n\\n",{status:200});
+      return new Response("data: [DONE]\n\n",{status:200});
     },
     postMessage(message){emitted.push(message);},
     addEventListener(name,handler){if(name==="message")listeners.push(handler);},
