@@ -67,6 +67,31 @@ def test_nonconcrete_network_aliases_never_verify_served_model() -> None:
     assert trace["model_verification_level"] == "unverified"
 
 
+def test_served_model_requires_successful_same_request_response() -> None:
+    from app.model_observability_v144_patch import _trace
+
+    authority = {"requested_model": "gpt-6", "routed_model": "gpt-6"}
+    failed = _trace(authority, {
+        "served_model": "gpt-6",
+        "model_conflict": True,
+        "response_ok": False,
+        "response_status": 403,
+        "evidence_source": "network_response_metadata",
+    })
+    assert failed["served_model"] is None
+    assert failed["model_verified"] is False
+    assert failed["model_conflict"] is False
+    assert failed["model_response_ok"] is False
+    assert failed["model_response_status"] == 403
+
+    # Older/unversioned Worker evidence without a same-request success bit
+    # must remain unknown rather than becoming a concrete served-model claim.
+    missing = _trace(authority, {"served_model": "gpt-6"})
+    assert missing["served_model"] is None
+    assert missing["model_verified"] is False
+    assert missing["model_response_ok"] is False
+
+
 def test_response_equal_authority_conflict_fails_closed() -> None:
     body = "data: " + json.dumps({
         "served_model_slug": "gpt-6-astra-wm",
