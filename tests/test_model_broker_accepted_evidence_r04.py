@@ -198,6 +198,8 @@ def test_telemetry_projection_outage_does_not_reverse_accepted_broker_event(monk
             "type": "chat.diagnostics", "request_id": request_id,
             "diagnostics": {"model_evidence_v144": {
                 "served_model": "gpt-6",
+                "response_ok": True,
+                "response_status": 200,
                 "evidence_source": "network_response_metadata",
             }},
         })
