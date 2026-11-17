@@ -29,9 +29,9 @@ class RequestState:
     # Server timestamp of the authenticated Worker's request-v6 content ACK.
     # This is dispatch evidence only; it does not own request finality.
     worker_content_ack_mono: float | None = None
-    # chat.started is emitted when the ChatGPT response/generation is first
-    # observed. It is NOT a browser/page startup event. Keep the old
-    # browser_started_mono field as a compatibility alias for stored callers.
+    # chat.started/image.started mark when response generation is first
+    # observed. They are NOT browser/page startup events. Keep the old
+    # browser_started_mono field as a compatibility alias for existing callers.
     response_started_mono: float | None = None
     browser_started_mono: float | None = None
     first_token_mono: float | None = None
