@@ -1,6 +1,7 @@
 import base64
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
