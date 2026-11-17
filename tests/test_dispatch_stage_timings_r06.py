@@ -322,7 +322,8 @@ def test_request_v6_terminal_emit_snapshots_final_dispatch_stages() -> None:
     ]
     assert '["chat.completed", "chat.error", "chat.cancelled"].includes(event?.type)' in emit
     assert "request_v6_dispatch_timing_version: 1" in emit
-    assert "request_v6_dispatch_elapsed_ms: dispatchElapsedMs(active)" in emit
+    assert "const dispatchStartedAt = Number(active.dispatchTimingStartedAt || 0);" in emit
+    assert "request_v6_dispatch_elapsed_ms: dispatchElapsed" in emit
     assert "request_v6_dispatch_stage_evidence_v1: { ...(active.dispatchStageEvidence || {}) }" in emit
 
 
