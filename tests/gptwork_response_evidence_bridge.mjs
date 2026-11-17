@@ -236,14 +236,22 @@ await takeLast();
 const beforeTerminalBroadcasts=authorityBroadcasts.length;
 dispatch("stream-terminal","done");
 await takeLast();
+assert.equal(authorityBroadcasts.length,beforeTerminalBroadcasts,
+  "SSE EOF alone must not clear authority before request-v6 finishes tool turns");
+messageListeners[0]({
+  source:bridgeWindow,
+  data:{source:"chat2api-model-authority-v144",
+    request_id:"req_terminal_clear123",authority:null,terminal:true},
+});
 const clearBroadcast=authorityBroadcasts.slice(beforeTerminalBroadcasts)
   .find(message=>message.source==="chat2api-model-authority-v144"
     && message.authority===null);
-assert.ok(clearBroadcast,"completed response must broadcast cleared model authority");
+assert.ok(clearBroadcast,"request-v6 terminal must broadcast cleared model authority");
 assert.equal(clearBroadcast.request_id,"");
 
 // If an older stream ends after a newer request has started, it must not
-// clear the newer request's model authority.
+// clear the newer request's model authority. Only a matching request-v6
+// terminal can release the active authority.
 issueRequest("req_old_stream123");
 dispatch("stream-old","request",{request_model:"gpt-6"});
 await takeLast();
@@ -253,12 +261,20 @@ await takeLast();
 const beforeOldDone=authorityBroadcasts.length;
 dispatch("stream-old","done");
 await takeLast();
+messageListeners[0]({
+  source:bridgeWindow,
+  data:{source:"chat2api-model-authority-v144",
+    request_id:"req_old_stream123",authority:null,terminal:true},
+});
 assert.equal(authorityBroadcasts.length,beforeOldDone,
-  "late completion from an older stream must not clear newer authority");
-dispatch("stream-new","done");
-await takeLast();
+  "late terminal from an older request must not clear newer authority");
+messageListeners[0]({
+  source:bridgeWindow,
+  data:{source:"chat2api-model-authority-v144",
+    request_id:"req_new_stream123",authority:null,terminal:true},
+});
 assert.equal(authorityBroadcasts.length,beforeOldDone+1,
-  "the matching newer stream must clear its own authority");
+  "matching request-v6 terminal must clear its own authority");
 
 // A new request with no explicit model authority must explicitly clear the
 // prior main-world rule rather than inherit the previous request's model.
