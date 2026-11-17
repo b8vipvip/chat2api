@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.config import Settings
@@ -78,6 +79,22 @@ def test_wallet_reservation_replay_cannot_adopt_or_release_original_hold(tmp_pat
     assert reopened.reservations["req_wallet_identity"]["reserved_cny_cents"] == original["reserved_cny_cents"]
     assert reopened.active_reservations_for_user(user_id)
     assert reopened.balance_cents(user_id) == 2_000
+
+
+def test_wallet_dispatch_authorization_fails_closed_when_owner_lookup_fails(tmp_path: Path) -> None:
+    def fail_owner_lookup(_key_id: str) -> str:
+        raise OSError("account store unavailable")
+
+    app = SimpleNamespace(state=SimpleNamespace(
+        user_accounts=SimpleNamespace(owner_for_key=fail_owner_lookup),
+        user_billing=BillingStore(tmp_path),
+    ))
+    with pytest.raises(HTTPException) as error:
+        authorize_wallet_dispatch(
+            app, "req_owner_lookup_failure",
+            SimpleNamespace(kind="user", key_id="key-owner-failure"),
+        )
+    assert error.value.status_code == 503
 
 
 def test_wallet_pre_dispatch_hold_recovery_is_versioned_and_durable(tmp_path: Path, monkeypatch) -> None:
