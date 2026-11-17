@@ -34,7 +34,7 @@
     finally { state.currentTab = null; }
   }
 
-  async function resolveRoutedTab(message) {
+  async function resolveRoutedTab(message, { recordReallocation = true } = {}) {
     const resolver = globalThis.resolveTargetTabForRequest;
     const requestId = String(message?.request_id || "");
     // The single conversation router remains the sole allocation owner.
@@ -65,7 +65,7 @@
       }
       throw new Error("Routed ChatGPT tab was not available");
     } finally {
-      if (reallocationStarted !== null) recordRouteReallocation(message, reallocationStarted);
+      if (reallocationStarted !== null && recordReallocation) recordRouteReallocation(message, reallocationStarted);
     }
   }
 
@@ -148,7 +148,9 @@
       let replacement;
       try {
         await router.failRequest(requestId, "lost-tab-before-content-ack-v153");
-        replacement = await resolveRoutedTab(message);
+        // The outer timer covers this entire recovery, including any internal
+        // readiness retry. Suppress nested recording to avoid double counting.
+        replacement = await resolveRoutedTab(message, { recordReallocation: false });
       } finally {
         recordRouteReallocation(message, reallocationStarted);
         message.__chat2api_worker_route_resolve_ms = elapsedMs(routeStarted);
