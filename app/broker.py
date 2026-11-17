@@ -280,6 +280,34 @@ def _terminal_provenance(event: dict[str, Any]) -> dict[str, Any]:
                 safe_identity[key] = value
         if safe_identity:
             result["native_message_identity_facts"] = safe_identity
+
+    # Successful chat terminals need the same bounded request-v6 timing
+    # evidence as failure terminals. Otherwise the terminal allowlist silently
+    # drops the final stage snapshot after the Broker closes the request.
+    for key in (
+        "request_v6_dispatch_elapsed_ms",
+        "request_v6_dispatch_submit_click_elapsed_ms",
+        "request_v6_dispatch_to_response_started_ms",
+    ):
+        value = raw.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            try:
+                numeric = float(value)
+            except (OverflowError, ValueError):
+                continue
+            if math.isfinite(numeric) and 0 <= numeric <= 900000:
+                result[key] = round(numeric, 1)
+    if type(raw.get("request_v6_dispatch_timing_version")) is int and raw.get("request_v6_dispatch_timing_version") == 1:
+        result["request_v6_dispatch_timing_version"] = 1
+    evidence = raw.get("request_v6_dispatch_stage_evidence_v1")
+    if isinstance(evidence, dict):
+        safe_evidence: dict[str, dict[str, Any]] = {}
+        for stage_name in _REQUEST_V6_DISPATCH_STAGES:
+            safe_entry = _safe_request_v6_dispatch_stage_entry(evidence.get(stage_name))
+            if safe_entry is not None:
+                safe_evidence[stage_name] = safe_entry
+        if safe_evidence:
+            result["request_v6_dispatch_stage_evidence_v1"] = safe_evidence
     return result
 
 
