@@ -25,6 +25,12 @@ class _Telemetry:
         self.rows.append(dict(row))
 
 
+async def _flush_projection(app: FastAPI, request_id: str) -> None:
+    task = app.state.model_observability_v144_projection_tasks.get(request_id)
+    if task is not None:
+        await task
+
+
 def test_only_broker_accepted_events_can_change_model_evidence(monkeypatch) -> None:
     async def exercise() -> None:
         app = FastAPI()
@@ -71,6 +77,7 @@ def test_only_broker_accepted_events_can_change_model_evidence(monkeypatch) -> N
         assert await broker.publish(request_id, evidence_event("chat.diagnostics", "gpt-6"))
         assert state.diagnostics["model_verified"] is True
         assert state.diagnostics["served_model"] == "gpt-6"
+        await _flush_projection(app, request_id)
         assert await broker.publish(request_id, {
             "type": "chat.completed", "request_id": request_id, "text": "done",
         })
@@ -200,6 +207,7 @@ def test_telemetry_projection_outage_does_not_reverse_accepted_broker_event(monk
         })
         assert terminal is True
         assert state.terminal_event_type == "chat.completed"
+        await _flush_projection(app, request_id)
         await broker.release(request_id)
 
     asyncio.run(exercise())
@@ -239,6 +247,7 @@ def test_model_routing_telemetry_outage_does_not_block_worker_dispatch(monkeypat
         assert sent[0]["type"] == "chat.request"
         assert sent[0]["routing"]["requested_model"] == "gpt-6"
         assert sent[0]["routing"]["routed_model"] == "gpt-6"
+        await _flush_projection(app, request_id)
         # Broker remains the only terminal owner even when observability is down.
         assert await broker.publish(request_id, {
             "type": "chat.completed", "request_id": request_id, "text": "done",
@@ -276,3 +285,47 @@ def test_terminal_telemetry_and_native_persistence_are_best_effort() -> None:
     source = (Path(__file__).resolve().parents[1] / "app/main.py").read_text(encoding="utf-8")
     assert 'projection="worker-terminal-receipt"' in source
     assert "_native_snapshot_persist_best_effort(" in source
+
+def test_slow_model_telemetry_does_not_gate_worker_dispatch(monkeypatch) -> None:
+    async def exercise() -> None:
+        app = FastAPI()
+        broker = RequestBroker()
+        started = asyncio.Event()
+        release_projection = asyncio.Event()
+        sent: list[dict] = []
+
+        class SlowTelemetry:
+            async def upsert(self, row: dict) -> None:
+                started.set()
+                await release_projection.wait()
+
+        async def send(_client_id: str, message: dict) -> None:
+            sent.append(message)
+
+        app.state.registry = SimpleNamespace(send=send)
+        app.state.broker = broker
+        app.state.telemetry = SlowTelemetry()
+        monkeypatch.setattr(model_patch, "install_worker_model_library_v145_patch", lambda app: app)
+        monkeypatch.setattr(model_patch, "_patch_admin_html", lambda: None)
+        model_patch.install_model_observability_v144_patch(app)
+
+        request_id = "req_r04_slow_telemetry"
+        await broker.create(request_id, "ext_r04")
+        token = routing._MODEL_CONTEXT.set({
+            "requested_model": "gpt-6", "routed_model": "gpt-6",
+        })
+        try:
+            await asyncio.wait_for(app.state.registry.send("ext_r04", {
+                "type": "chat.request", "request_id": request_id,
+            }), timeout=0.1)
+        finally:
+            routing._MODEL_CONTEXT.reset(token)
+
+        assert sent and sent[0]["type"] == "chat.request"
+        await asyncio.wait_for(started.wait(), timeout=0.1)
+        release_projection.set()
+        await _flush_projection(app, request_id)
+        await broker.release(request_id)
+
+    asyncio.run(exercise())
+
