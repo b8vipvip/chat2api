@@ -711,6 +711,7 @@ def test_broker_preserves_bounded_worker_dispatch_failure_diagnostics() -> None:
             "diagnostics": {
                 "worker_dispatch_queue_wait_ms": 160000.26,
                 "worker_route_resolve_ms": 12.34,
+                "worker_route_reallocation_ms": 5.67,
                 "worker_target_tab_lookup_ms": 4,
                 "worker_ensure_content_ms": 900001,
                 "worker_tabs_send_message_ms": -1,
@@ -765,6 +766,7 @@ def test_broker_preserves_bounded_worker_dispatch_failure_diagnostics() -> None:
         assert state.terminal_event_type == "chat.error"
         assert state.diagnostics["worker_dispatch_queue_wait_ms"] == 160000.3
         assert state.diagnostics["worker_route_resolve_ms"] == 12.3
+        assert state.diagnostics["worker_route_reallocation_ms"] == 5.7
         assert "worker_ensure_content_ms" not in state.diagnostics
         assert "worker_tabs_send_message_ms" not in state.diagnostics
         assert state.diagnostics["worker_dispatch_failure_stage"] == "ensure-content"
