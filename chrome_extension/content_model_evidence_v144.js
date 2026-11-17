@@ -142,20 +142,6 @@
     if (event.source !== globalThis) return;
     const detail = event.data;
     if (!detail) return;
-    if (detail.source === AUTHORITY_SOURCE) {
-      // The main-world observer reports completion of the exact /conversation
-      // fetch it bound to the active API request. Clear only that request:
-      // an older stream finishing late must not revoke a newer request's
-      // model authority.
-      const completedRequestId = String(detail.request_id || "");
-      if (detail.authority == null && completedRequestId
-          && completedRequestId === activeRequestId) {
-        activeRequestId = "";
-        activeAuthority = null;
-        broadcastAuthority("", null);
-      }
-      return;
-    }
     if (detail.source !== SOURCE) return;
     const row = bind(detail.stream_id);
     if (!row) return;
