@@ -90,7 +90,8 @@ const isolatedEmits=[], messageListeners=[], bridgeRequests=[], authorityBroadca
 const storedEvidence=[];
 let stallNextEvidenceWrite=false,releaseStalledEvidenceWrite=null;
 const isolatedContext={
-  Date, setTimeout, clearTimeout, postMessage(message){authorityBroadcasts.push(message);},
+  Date, setTimeout(){return 0;}, clearTimeout(){},
+  postMessage(message){authorityBroadcasts.push(message);},
   chrome:{
     runtime:{
       onMessage:{addListener(fn){bridgeRequests.push(fn)}},
