@@ -197,6 +197,14 @@ def test_v144_formal_release_contract_is_v02297() -> None:
     assert payload["features"]["final_model_authority_v144"] is True
     assert payload["features"]["worker_redesigned_chatgpt_model_evidence_v144"] is True
 
+def test_request_v6_clears_page_model_authority_only_at_request_terminal() -> None:
+    source = (ROOT / "chrome_extension" / "content_request_v6.js").read_text(encoding="utf-8")
+    assert 'source: "chat2api-model-authority-v144"' in source
+    assert "request_id: active.requestId" in source
+    assert "authority: null" in source
+    assert "terminal: true" in source
+
+
 def test_gptwork_response_evidence_bridge_matches_server_truth() -> None:
     if shutil.which("node") is None:
         return
