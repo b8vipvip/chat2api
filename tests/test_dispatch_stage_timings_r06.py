@@ -273,6 +273,59 @@ def test_out_of_order_dispatch_stage_snapshots_cannot_regress_completed_evidence
     asyncio.run(exercise())
 
 
+def test_completed_terminal_retains_bounded_request_v6_dispatch_evidence() -> None:
+    async def exercise() -> None:
+        broker = RequestBroker()
+        state = await broker.create("req_r06_terminal_evidence", "ext_r06")
+        accepted = await broker.publish("req_r06_terminal_evidence", {
+            "type": "chat.completed",
+            "request_id": "req_r06_terminal_evidence",
+            "text": "done",
+            "diagnostics": {
+                "request_v6_dispatch_timing_version": 1,
+                "request_v6_dispatch_elapsed_ms": 164300.0,
+                "request_v6_dispatch_submit_click_elapsed_ms": 4200.0,
+                "request_v6_dispatch_to_response_started_ms": 5100.0,
+                "request_v6_dispatch_stage_evidence_v1": {
+                    "prepare_attachments": {
+                        "status": "completed", "started_elapsed_ms": 10.0,
+                        "duration_ms": 160000.0, "completed_elapsed_ms": 160010.0,
+                    },
+                    "submit_and_confirm": {
+                        "status": "completed", "started_elapsed_ms": 160020.0,
+                        "duration_ms": 4300.0, "completed_elapsed_ms": 164320.0,
+                    },
+                    "untrusted_extra_stage": {"status": "completed"},
+                },
+            },
+        })
+        assert accepted is True
+        assert state.terminal_event_type == "chat.completed"
+        assert state.diagnostics["request_v6_dispatch_timing_version"] == 1
+        assert state.diagnostics["request_v6_dispatch_elapsed_ms"] == 164300.0
+        assert state.diagnostics["request_v6_dispatch_submit_click_elapsed_ms"] == 4200.0
+        assert state.diagnostics["request_v6_dispatch_to_response_started_ms"] == 5100.0
+        evidence = state.diagnostics["request_v6_dispatch_stage_evidence_v1"]
+        assert evidence["prepare_attachments"]["duration_ms"] == 160000.0
+        assert evidence["submit_and_confirm"]["status"] == "completed"
+        assert "untrusted_extra_stage" not in evidence
+        await broker.release("req_r06_terminal_evidence")
+
+    asyncio.run(exercise())
+
+
+def test_request_v6_terminal_emit_snapshots_final_dispatch_stages() -> None:
+    source = (ROOT / "chrome_extension/content_request_v6.js").read_text(encoding="utf-8")
+    emit = source[
+        source.index("  async function emit(event)"):
+        source.index('    if (event?.type === "chat.completed" && active)')
+    ]
+    assert '["chat.completed", "chat.error", "chat.cancelled"].includes(event?.type)' in emit
+    assert "request_v6_dispatch_timing_version: 1" in emit
+    assert "request_v6_dispatch_elapsed_ms: dispatchElapsedMs(active)" in emit
+    assert "request_v6_dispatch_stage_evidence_v1: { ...(active.dispatchStageEvidence || {}) }" in emit
+
+
 def test_registry_send_binds_the_exact_socket_for_every_broker_request_family(tmp_path) -> None:
     class FakeSocket:
         def __init__(self) -> None:
