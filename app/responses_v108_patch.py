@@ -317,6 +317,8 @@ async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], princi
                 request_id, type(release_error).__name__,
             )
 
+    from .quota_reservation_runtime_v1 import authorize_wallet_dispatch
+
     quota_reservation = None
     if not internal_repair:
         raw_output_budget = body.get("max_output_tokens")
@@ -328,9 +330,7 @@ async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], princi
         except (TypeError, ValueError):
             requested_output_budget = 0
         try:
-            from .quota_reservation_runtime_v1 import (
-                authorize_wallet_dispatch, reserve_request_quota,
-            )
+            from .quota_reservation_runtime_v1 import reserve_request_quota
             quota_reservation = await reserve_request_quota(
                 app, request_id, principal, prompt,
                 max(4096, requested_output_budget),

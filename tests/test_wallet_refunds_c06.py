@@ -125,13 +125,20 @@ def test_wallet_pre_dispatch_hold_recovery_is_versioned_and_durable(tmp_path: Pa
 
     # A failed authorization-marker write rolls back the in-memory mutation.
     failing = BillingStore(tmp_path)
-    original = dict(failing.reservations["req_legacy"])
+    failing.reserve_for_request(
+        user_id, "req_marker_write_failure",
+        model_id="paid-model", estimated_cny_cents=100,
+        input_tokens=10, output_tokens=4096,
+        price_snapshot=price, price_catalog_snapshot={"paid-model": price},
+        usd_cny_rate=7.0,
+    )
+    original = dict(failing.reservations["req_marker_write_failure"])
     def fail_save():
         raise OSError("simulated wallet ledger write failure")
     monkeypatch.setattr(failing, "_save", fail_save)
     with pytest.raises(OSError, match="write failure"):
-        failing.mark_dispatch_authorized("req_legacy", user_id)
-    assert failing.reservations["req_legacy"] == original
+        failing.mark_dispatch_authorized("req_marker_write_failure", user_id)
+    assert failing.reservations["req_marker_write_failure"] == original
 
 
 def test_concurrent_wallet_reservations_cannot_overcommit_available_balance(tmp_path: Path) -> None:
