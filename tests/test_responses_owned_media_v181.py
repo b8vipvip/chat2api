@@ -69,6 +69,7 @@ def test_responses_stream_defers_image_source_and_completes_with_owned_link(tmp_
     app = FastAPI()
     app.state.media_archive = MediaArchive(tmp_path, "master")
     app.state.responses_v108_store = OrderedDict()
+    app.state.responses_v108_owners = {}
     released = []
     app.state.registry = SimpleNamespace(
         busy_clients=set(["ext_a"]),

@@ -11,8 +11,14 @@
     return bytes;
   }
 
-  async function fetchFile(spec) {
-    const response = await chrome.runtime.sendMessage({ type: "chat2api.attachment.fetch", fileId: spec.file_id });
+  async function fetchFile(spec, requestId) {
+    const scopedRequestId = String(requestId || spec.request_id || "");
+    if (!/^[A-Za-z0-9_-]{6,120}$/.test(scopedRequestId)) {
+      throw new Error("Attachment fetch requires its original request ID");
+    }
+    const response = await chrome.runtime.sendMessage({
+      type: "chat2api.attachment.fetch", fileId: spec.file_id, requestId: scopedRequestId,
+    });
     if (!response?.ok) throw new Error(response?.error || `Unable to download ${spec.file_id}`);
     const data = response.data || {};
     return new File([decode(data.base64 || "")], data.filename || spec.filename || spec.file_id, {
@@ -269,14 +275,18 @@
     throw new Error(`${file.name}: ChatGPT did not confirm that the attachment finished uploading; automatic duplicate retry was suppressed`);
   }
 
-  async function attach(specs = []) {
+  async function attach(specs = [], options = {}) {
     const started = performance.now();
     if (!Array.isArray(specs) || !specs.length) return { attachments_count: 0, attachment_prepare_ms: 0 };
     if (specs.length > 4) throw new Error("A maximum of 4 attachments is supported per request");
+    const requestId = String(options.request_id || specs[0]?.request_id || "");
+    if (!/^[A-Za-z0-9_-]{6,120}$/.test(requestId)) {
+      throw new Error("Attachment preparation requires its original request ID");
+    }
 
     await recoverDuplicateDialogs();
     const files = [];
-    for (const spec of specs) files.push(await fetchFile(spec));
+    for (const spec of specs) files.push(await fetchFile(spec, requestId));
     const uploaded = [];
     for (const file of files) {
       uploaded.push(await uploadOne(file));
@@ -302,7 +312,7 @@
   globalThis[KEY] = { attach, recoverDuplicateDialogs, removeAttachmentsByName, attachmentCount, state };
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.type === "chat2api.attach.prepare") {
-      attach(message.attachments || [])
+      attach(message.attachments || [], { request_id: message.request_id })
         .then(data => sendResponse({ ok: true, data }))
         .catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));
       return true;

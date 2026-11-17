@@ -47,6 +47,7 @@ jobs:
           echo "action=$(jq -r '.action' <<<"$action")" >> "$GITHUB_OUTPUT"
           echo "task-id=$(jq -r '.task_id' <<<"$action")" >> "$GITHUB_OUTPUT"
           echo "pr-number=$(jq -r '.pr_number // empty' <<<"$action")" >> "$GITHUB_OUTPUT"
+          echo "replacement-pr-number=$(jq -r '.replacement_pr_number // empty' <<<"$action")" >> "$GITHUB_OUTPUT"
           echo "head-sha=$(jq -r '.head_sha // empty' <<<"$action")" >> "$GITHUB_OUTPUT"
           echo "merge-sha=$(jq -r '.merge_sha // empty' <<<"$action")" >> "$GITHUB_OUTPUT"
           echo "run-id=$(jq -r '.run_id // empty' <<<"$action")" >> "$GITHUB_OUTPUT"
@@ -316,6 +317,34 @@ jobs:
             gh api --method POST "repos/$REPOSITORY/issues/$PR_NUMBER/comments" -f body="$body" >/dev/null
           fi
 
+
+      - name: Publish closed-unmerged task receipt
+        if: ${{ steps.state.outputs.action == 'closed_unmerged' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.state.outputs.pr-number }}
+          TASK_ID: ${{ steps.state.outputs.task-id }}
+          REPLACEMENT_PR_NUMBER: ${{ steps.state.outputs.replacement-pr-number }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$PR_NUMBER" ]] || { echo "::error::Closed-unmerged receipt requires a PR number"; exit 1; }
+          marker="<!-- gptauto-closed-unmerged:$TASK_ID -->"
+          replacement=""
+          if [[ -n "$REPLACEMENT_PR_NUMBER" ]]; then
+            replacement=" Continue under replacement PR #$REPLACEMENT_PR_NUMBER."
+          fi
+          body="$marker
+          GPTAuto: PR #$PR_NUMBER is closed without merge. This PR-level task is inactive, but the engineering goal is NOT marked DONE. No Ready-for-review request, merge attempt, or repair generation will be issued for this closed PR.$replacement"
+          comments="$(gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" 2>/dev/null || echo '[]')"
+          comment_id="$(jq -r --arg marker "$marker" '[.[] | select(.body | contains($marker))] | .[0].id // empty' <<<"$comments")"
+          if [[ -n "$comment_id" ]]; then
+            gh api --method PATCH "repos/$REPOSITORY/issues/comments/$comment_id" -f body="$body" >/dev/null
+          else
+            gh api --method POST "repos/$REPOSITORY/issues/$PR_NUMBER/comments" -f body="$body" >/dev/null
+          fi
+
       - name: Persist completion lease
         if: ${{ steps.state.outputs.lease-active == 'true' }}
         env:
@@ -371,4 +400,5 @@ jobs:
             echo "- Repair pushes never fall back to GITHUB_TOKEN."
             echo "- queued/in_progress checks get a bounded two-minute wait before WAITING_GITHUB handoff."
             echo "- action_required is USER_ACTION_REQUIRED and never a repair failure."
+            echo "- closed unmerged PRs are inactive PR tasks, not DONE and never Ready-for-review or merge candidates."
           } >> "$GITHUB_STEP_SUMMARY"

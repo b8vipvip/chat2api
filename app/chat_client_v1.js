@@ -14,11 +14,33 @@
     streaming: false,
     streamingMessageId: "",
     abortController: null,
+    recoveryController: null,
+    activeRequestRecord: null,
+    recoveryInFlight: new Set(),
+    pendingImages: [],
+    pendingImagesConversationId: "",
+    pendingFiles: [],
+    pendingFilesConversationId: "",
     toastTimer: null,
   };
   const MAX_CONVERSATIONS = 15;
   const MAX_MESSAGES = 30;
   const MAX_MESSAGE_CHARS = 8000;
+  const MAX_IMAGES_PER_MESSAGE = 4;
+  const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+  const MAX_TOTAL_IMAGE_BYTES = 20 * 1024 * 1024;
+  const MAX_FILES_PER_MESSAGE = 4;
+  const MAX_DOCUMENT_BYTES = 20 * 1024 * 1024;
+  const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+  const DOCUMENT_MIME_BY_EXTENSION = Object.freeze({
+    pdf: "application/pdf", txt: "text/plain", md: "text/markdown", csv: "text/csv",
+    json: "application/json", rtf: "application/rtf",
+    docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  });
+  const ALLOWED_DOCUMENT_MIME_TYPES = new Set(Object.values(DOCUMENT_MIME_BY_EXTENSION));
+  const FILE_ID_PATTERN = /^file_[A-Za-z0-9]{8,64}$/;
 
   function id() {
     if (window.crypto && typeof window.crypto.randomUUID === "function") return window.crypto.randomUUID();
@@ -64,6 +86,79 @@
     return "chat2api.webchat.v1." + String(userId || "unknown");
   }
 
+  function imageFileId(part) {
+    const value = typeof part?.image_url === "string" ? part.image_url : part?.image_url?.url;
+    return typeof value === "string" && FILE_ID_PATTERN.test(value) ? value : "";
+  }
+
+  function normalizedDocumentPart(part) {
+    const fileId = typeof part?.file_id === "string" ? part.file_id :
+      (typeof part?.file?.file_id === "string" ? part.file.file_id : "");
+    const mimeType = String(part?.mime_type || "").toLowerCase();
+    if (!FILE_ID_PATTERN.test(fileId) || !ALLOWED_DOCUMENT_MIME_TYPES.has(mimeType)) return null;
+    const filename = String(part?.filename || "document").replace(/[\\/\\0]/g, "_").slice(0, 180);
+    const size = Number.isFinite(Number(part?.size)) ? Math.max(0, Math.min(MAX_DOCUMENT_BYTES, Number(part.size))) : 0;
+    return {type:"file",file_id:fileId,filename,mime_type:mimeType,size};
+  }
+
+  function normalizeMessageContent(content, role) {
+    if (typeof content === "string") return content.slice(0, MAX_MESSAGE_CHARS);
+    if (role !== "user" || !Array.isArray(content)) return "";
+    const parts = [];
+    let imageCount = 0;
+    let fileCount = 0;
+    for (const part of content) {
+      if (part?.type === "text" && typeof part.text === "string") {
+        parts.push({type:"text",text:part.text.slice(0,MAX_MESSAGE_CHARS)});
+      } else if (part?.type === "image_url" && imageCount + fileCount < MAX_FILES_PER_MESSAGE) {
+        const fileId = imageFileId(part);
+        if (fileId) {
+          parts.push({type:"image_url",image_url:{url:fileId}});
+          imageCount += 1;
+        }
+      } else if (part?.type === "file" && imageCount + fileCount < MAX_FILES_PER_MESSAGE) {
+        const normalized = normalizedDocumentPart(part);
+        if (normalized) { parts.push(normalized); fileCount += 1; }
+      }
+    }
+    return parts.length ? parts : "";
+  }
+
+  function messageText(message) {
+    if (typeof message?.content === "string") return message.content;
+    if (!Array.isArray(message?.content)) return "";
+    return message.content
+      .filter((part) => part?.type === "text" && typeof part.text === "string")
+      .map((part) => part.text)
+      .join("\n");
+  }
+
+  function messageImageIds(message) {
+    if (!Array.isArray(message?.content)) return [];
+    return message.content.map(imageFileId).filter(Boolean).slice(0, MAX_IMAGES_PER_MESSAGE);
+  }
+
+  function messageFileAttachments(message) {
+    if (!Array.isArray(message?.content)) return [];
+    return message.content.filter((part) => part?.type === "file")
+      .map(normalizedDocumentPart).filter(Boolean).slice(0, MAX_FILES_PER_MESSAGE);
+  }
+
+  function messageFileIds(message) {
+    return messageFileAttachments(message).map((file) => file.file_id);
+  }
+
+  function messageAttachmentIds(message) {
+    return [...messageImageIds(message), ...messageFileIds(message)];
+  }
+
+  function formatFileSize(size) {
+    const bytes = Math.max(0, Number(size) || 0);
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KiB";
+    return (bytes / (1024 * 1024)).toFixed(1) + " MiB";
+  }
+
   function loadHistory() {
     try {
       const raw = localStorage.getItem(state.storageKey);
@@ -71,22 +166,32 @@
       if (!Array.isArray(rows)) return [];
       return rows.filter((row) => row && typeof row === "object" && typeof row.id === "string")
         .slice(0, MAX_CONVERSATIONS)
-        .map((row) => ({
-          id: row.id,
-          title: String(row.title || "新对话").slice(0, 80),
-          model: String(row.model || state.selectedModel).slice(0, 120),
-          createdAt: String(row.createdAt || new Date().toISOString()),
-          updatedAt: String(row.updatedAt || row.createdAt || new Date().toISOString()),
-          messages: Array.isArray(row.messages) ? row.messages.slice(-MAX_MESSAGES).filter((message) =>
-            message && (message.role === "user" || message.role === "assistant") &&
-            typeof message.content === "string" && (message.role === "user" || message.content.trim())
-          ).map((message) => ({
-            id: String(message.id || id()),
-            role: message.role,
-            content: message.content.slice(0, MAX_MESSAGE_CHARS),
-            createdAt: String(message.createdAt || ""),
-          })) : [],
-        }));
+        .map((row) => {
+          const messages = Array.isArray(row.messages) ? row.messages.slice(-MAX_MESSAGES).map((message) => {
+            if (!message || (message.role !== "user" && message.role !== "assistant")) return null;
+            const content = normalizeMessageContent(message.content, message.role);
+            if (!content || (message.role === "assistant" && !String(content).trim())) return null;
+            return {
+              id: String(message.id || id()),
+              role: message.role,
+              content,
+              createdAt: String(message.createdAt || ""),
+              requestId: typeof message.requestId === "string" ? message.requestId.slice(0, 140) : "",
+              pending: message.pending === true,
+              recoveryStatus: typeof message.recoveryStatus === "string" ? message.recoveryStatus.slice(0, 40) : "",
+            };
+          }).filter(Boolean) : [];
+          const hasSavedAttachments = messages.some((message) => messageAttachmentIds(message).length);
+          return {
+            id: row.id,
+            title: String(row.title || "新对话").slice(0, 80),
+            model: String(row.model || state.selectedModel).slice(0, 120),
+            apiKeyId: hasSavedAttachments && typeof row.apiKeyId === "string" ? row.apiKeyId.slice(0, 120) : "",
+            createdAt: String(row.createdAt || new Date().toISOString()),
+            updatedAt: String(row.updatedAt || row.createdAt || new Date().toISOString()),
+            messages,
+          };
+        });
     } catch {
       toast("本地聊天历史无法读取，已使用空白历史。");
       return [];
@@ -101,7 +206,7 @@
       ...conversation,
       messages: (conversation.messages || []).slice(-MAX_MESSAGES).map((message) => ({
         ...message,
-        content: String(message.content || "").slice(0, MAX_MESSAGE_CHARS),
+        content: normalizeMessageContent(message.content, message.role),
       })),
     }));
     try {
@@ -121,10 +226,15 @@
       return currentConversation();
     }
     const now = new Date().toISOString();
+    if (state.pendingImages.length || state.pendingFiles.length) {
+      toast("请先发送或移除待发送附件，再新建对话。");
+      return currentConversation();
+    }
     const conversation = {
       id: id(),
       title: "新对话",
       model: state.selectedModel,
+      apiKeyId: "",
       createdAt: now,
       updatedAt: now,
       messages: [],
@@ -143,6 +253,11 @@
       toast("当前回复仍在生成；请先停止生成再切换对话。");
       return;
     }
+    if ((state.pendingImages.length && state.pendingImagesConversationId !== conversationId) ||
+        (state.pendingFiles.length && state.pendingFilesConversationId !== conversationId)) {
+      toast("请先发送或移除待发送附件，再切换对话。");
+      return;
+    }
     state.activeConversationId = conversationId;
     const conversation = currentConversation();
     if (conversation) state.selectedModel = conversation.model || state.selectedModel;
@@ -158,13 +273,33 @@
       toast("当前对话正在生成；请先停止生成再删除。");
       return;
     }
-    if (!window.confirm("删除这段本地对话？此操作不可撤销。")) return;
+    if ((state.pendingImages.length && state.pendingImagesConversationId === conversationId) ||
+        (state.pendingFiles.length && state.pendingFilesConversationId === conversationId)) {
+      toast("请先移除待发送附件，再删除对话。");
+      return;
+    }
+    if (!window.confirm("删除这段本地对话？本地记录会删除，且仅清理未被其他本地对话引用的附件。")) return;
+    const remainingFileIds = new Set(
+      state.conversations
+        .filter((row) => row.id !== conversationId)
+        .flatMap((row) => row.messages.flatMap(messageAttachmentIds))
+    );
+    const orphanedFileIds = [...new Set(conversation.messages.flatMap(messageAttachmentIds))]
+      .filter((fileId) => !remainingFileIds.has(fileId));
     state.conversations = state.conversations.filter((row) => row.id !== conversationId);
     if (state.activeConversationId === conversationId) {
       state.activeConversationId = state.conversations[0]?.id || "";
     }
     saveHistory();
     renderAll();
+    if (orphanedFileIds.length) {
+      Promise.allSettled(orphanedFileIds.map((fileId) =>
+        apiJson("/api/user/files/" + encodeURIComponent(fileId), {method:"DELETE"})
+      )).then((results) => {
+        const failed = results.filter((result) => result.status === "rejected").length;
+        if (failed) toast("本地对话已删除；" + failed + " 个附件文件未能自动清理。");
+      });
+    }
   }
 
   function renameConversation(conversationId) {
@@ -187,7 +322,7 @@
     const rows = state.conversations.filter((conversation) => {
       if (!query) return true;
       return conversation.title.toLocaleLowerCase().includes(query) ||
-        conversation.messages.some((message) => message.content.toLocaleLowerCase().includes(query));
+        conversation.messages.some((message) => messageText(message).toLocaleLowerCase().includes(query));
     });
     if (!rows.length) {
       const empty = document.createElement("div");
@@ -423,12 +558,83 @@
       time.className = "message-time";
       time.textContent = message.createdAt ? new Date(message.createdAt).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}) : "";
       header.append(name, time);
+      if (message.role === "assistant" && message.recoveryStatus &&
+          (message.pending || message.recoveryStatus !== "completed")) {
+        const status = document.createElement("span");
+        status.className = "recovery-status";
+        status.textContent = recoveryStatusLabel(message.recoveryStatus);
+        header.appendChild(status);
+      }
       const body = document.createElement("div");
       body.className = "message-body";
       if (message.role === "user") {
-        body.textContent = message.content;
+        const text = messageText(message);
+        if (text) {
+          const textNode = document.createElement("div");
+          textNode.className = "message-user-text";
+          textNode.textContent = text;
+          body.appendChild(textNode);
+        }
+        const imageIds = messageImageIds(message);
+        const fileAttachments = messageFileAttachments(message);
+        if (fileAttachments.length) {
+          const grid = document.createElement("div");
+          grid.className = "message-file-grid";
+          fileAttachments.forEach((file) => {
+            const link = document.createElement("a");
+            link.className = "message-file-card";
+            link.href = "/api/user/chat/files/" + encodeURIComponent(file.file_id) + "/download";
+            link.rel = "noopener noreferrer";
+            const icon = document.createElement("span");
+            icon.className = "message-file-icon";
+            icon.textContent = "文件";
+            const details = document.createElement("span");
+            details.className = "message-file-details";
+            const filename = document.createElement("span");
+            filename.className = "message-file-name";
+            filename.textContent = file.filename;
+            const meta = document.createElement("span");
+            meta.className = "message-file-meta";
+            meta.textContent = formatFileSize(file.size) + " · " + file.mime_type;
+            details.append(filename, meta);
+            link.append(icon, details);
+            grid.appendChild(link);
+          });
+          body.appendChild(grid);
+        }
+        if (imageIds.length) {
+          const grid = document.createElement("div");
+          grid.className = "message-image-grid";
+          imageIds.forEach((fileId) => {
+            const path = "/api/user/files/" + encodeURIComponent(fileId) + "/content";
+            const link = document.createElement("a");
+            link.className = "message-image-link";
+            link.href = path;
+            link.target = "_blank";
+            link.rel = "noopener noreferrer";
+            const image = document.createElement("img");
+            image.className = "message-image";
+            image.src = path;
+            image.alt = "用户上传的图片";
+            image.loading = "lazy";
+            image.addEventListener("error", () => {
+              const fallback = document.createElement("span");
+              fallback.className = "message-image-missing";
+              fallback.textContent = "图片不可用或当前账户无权访问";
+              link.replaceWith(fallback);
+            }, {once:true});
+            link.appendChild(image);
+            grid.appendChild(link);
+          });
+          body.appendChild(grid);
+        }
       } else {
-        renderMarkdown(body, message.content);
+        const renderer = window.Chat2APISafeRenderer;
+        if (renderer && typeof renderer.renderMarkdown === "function") {
+          renderer.renderMarkdown(body, message.content);
+        } else {
+          body.textContent = message.content;
+        }
       }
       if (state.streaming && message.id === state.streamingMessageId) {
         const caret = document.createElement("span");
@@ -438,11 +644,23 @@
       }
       const actions = document.createElement("div");
       actions.className = "message-actions";
+      if (message.role === "assistant" && message.pending && message.requestId) {
+        const recover = document.createElement("button");
+        recover.type = "button";
+        recover.className = "recovery-action";
+        recover.textContent = "恢复回复";
+        recover.addEventListener("click", () => { void recoverPendingMessage(conversation, message); });
+        actions.appendChild(recover);
+      }
       const copy = document.createElement("button");
       copy.type = "button";
       copy.textContent = "复制";
       copy.addEventListener("click", async () => {
-        try { await navigator.clipboard.writeText(message.content); toast("消息已复制"); }
+        try {
+          const copied = [messageText(message), ...messageImageIds(message).map(() => "[图片附件]"), ...messageFileAttachments(message).map((file) => "[文件附件: " + file.filename + "]")].filter(Boolean).join("\n");
+          await navigator.clipboard.writeText(copied);
+          toast("消息已复制");
+        }
         catch { toast("无法访问剪贴板"); }
       });
       actions.appendChild(copy);
@@ -465,14 +683,289 @@
   function autoTitle(conversation) {
     if (!conversation || conversation.title !== "新对话") return;
     const first = conversation.messages.find((message) => message.role === "user");
-    if (first) conversation.title = first.content.replace(/\s+/g, " ").trim().slice(0, 32) || "新对话";
+    if (first) conversation.title = messageText(first).replace(/\s+/g, " ").trim().slice(0, 32) || (messageImageIds(first).length ? "图片附件" : (messageFileAttachments(first).length ? "文件附件" : "新对话"));
+  }
+
+  function selectedKeyId() {
+    return String($("apiKeySelect")?.value || "");
+  }
+
+  function selectedKeyHasScope(scope) {
+    const key = state.keys.find((row) => row.key_id === selectedKeyId());
+    return Boolean(key && (!Array.isArray(key.scopes) || key.scopes.includes(scope)));
   }
 
   function resizeComposer() {
     const input = $("messageInput");
     input.style.height = "auto";
     input.style.height = Math.min(input.scrollHeight, 220) + "px";
-    $("sendButton").disabled = state.streaming || !input.value.trim() || !state.apiToken;
+    const conversation = currentConversation();
+    const pendingForConversation = (state.pendingImages.length > 0 && state.pendingImagesConversationId === conversation?.id) ||
+      (state.pendingFiles.length > 0 && state.pendingFilesConversationId === conversation?.id);
+    const keyMatchesConversation = !conversation?.apiKeyId || conversation.apiKeyId === selectedKeyId();
+    const unresolvedRequest = Boolean(conversation?.messages?.some((message) => message.role === "assistant" && message.pending === true));
+    $("sendButton").disabled = state.streaming || unresolvedRequest || (!input.value.trim() && !pendingForConversation) ||
+      !state.apiToken || !keyMatchesConversation;
+    $("attachButton").disabled = state.streaming || !state.apiToken || !selectedKeyHasScope("files");
+    $("fileButton").disabled = state.streaming || !state.apiToken || !selectedKeyHasScope("files");
+  }
+
+  function renderPendingImages() {
+    const root = $("pendingImages");
+    root.replaceChildren();
+    state.pendingImages.forEach((image, index) => {
+      const chip = document.createElement("div");
+      chip.className = "attachment-chip";
+      const preview = document.createElement("img");
+      preview.src = image.previewUrl;
+      preview.alt = image.filename;
+      const name = document.createElement("span");
+      name.className = "attachment-name";
+      name.textContent = image.filename;
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "attachment-remove";
+      remove.textContent = "×";
+      remove.setAttribute("aria-label", "移除图片 " + image.filename);
+      remove.addEventListener("click", async () => {
+        const [removed] = state.pendingImages.splice(index, 1);
+        if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
+        if (removed?.fileId) {
+          try {
+            await apiJson("/api/user/files/" + encodeURIComponent(removed.fileId), {
+              method: "DELETE",
+            });
+          } catch {
+            toast("图片已移出待发送列表，但服务器临时文件未能自动清理。");
+          }
+        }
+        if (!state.pendingImages.length) {
+          state.pendingImagesConversationId = "";
+          const conversation = currentConversation();
+          if (conversation && !state.pendingFiles.length && !conversation.messages.some((message) => messageAttachmentIds(message).length)) {
+            conversation.apiKeyId = "";
+            saveHistory();
+          }
+        }
+        renderPendingImages();
+        resizeComposer();
+      });
+      chip.append(preview, name, remove);
+      root.appendChild(chip);
+    });
+    root.classList.toggle("hidden", state.pendingImages.length === 0);
+  }
+
+  function renderPendingFiles() {
+    const root = $("pendingFiles");
+    root.replaceChildren();
+    state.pendingFiles.forEach((file, index) => {
+      const chip = document.createElement("div");
+      chip.className = "attachment-file-chip";
+      const icon = document.createElement("span");
+      icon.className = "attachment-file-icon";
+      icon.textContent = "文件";
+      const details = document.createElement("span");
+      details.className = "attachment-file-details";
+      const name = document.createElement("span");
+      name.className = "attachment-file-name";
+      name.textContent = file.filename;
+      const meta = document.createElement("span");
+      meta.className = "attachment-file-meta";
+      meta.textContent = formatFileSize(file.size) + (file.fileId ? " · 已上传" : "");
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "attachment-remove";
+      remove.textContent = "×";
+      remove.setAttribute("aria-label", "移除文件 " + file.filename);
+      remove.addEventListener("click", async () => {
+        const [removed] = state.pendingFiles.splice(index, 1);
+        if (removed?.fileId) {
+          try {
+            await apiJson("/api/user/files/" + encodeURIComponent(removed.fileId), {method:"DELETE"});
+          } catch { toast("文件已移出待发送列表，但服务器临时文件未能自动清理。"); }
+        }
+        if (!state.pendingFiles.length) {
+          state.pendingFilesConversationId = "";
+          const conversation = currentConversation();
+          if (conversation && !state.pendingImages.length &&
+              !conversation.messages.some((message) => messageAttachmentIds(message).length)) {
+            conversation.apiKeyId = "";
+            saveHistory();
+          }
+        }
+        renderPendingFiles();
+        resizeComposer();
+      });
+      details.append(name, meta);
+      chip.append(icon, details, remove);
+      root.appendChild(chip);
+    });
+    root.classList.toggle("hidden", state.pendingFiles.length === 0);
+  }
+
+  async function uploadPendingFiles() {
+    for (const file of state.pendingFiles) {
+      if (file.fileId) continue;
+      const dataUrl = await readFileAsDataUrl(file.file);
+      const comma = dataUrl.indexOf(",");
+      if (comma < 0) throw new Error("文件编码失败");
+      const payload = await apiJson("/v1/files", {
+        method: "POST",
+        headers: {
+          "Authorization": "Bearer " + state.apiToken,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          filename: file.filename,
+          mime_type: file.mimeType,
+          data_base64: dataUrl.slice(comma + 1),
+          purpose: "assistants",
+        }),
+      });
+      const fileId = String(payload.id || "");
+      if (!FILE_ID_PATTERN.test(fileId)) throw new Error("服务器没有返回有效的文件 ID");
+      file.fileId = fileId;
+      file.file = null;
+    }
+  }
+
+  async function handleDocumentFiles(fileList) {
+    if (state.streaming) return;
+    if (!state.apiToken) { toast("请先登录并选择 API Key。"); return; }
+    if (!selectedKeyHasScope("files")) { toast("当前 API Key 没有 files 权限。"); return; }
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    const conversation = currentConversation() || createConversation();
+    if (!conversation) return;
+    if (conversation.apiKeyId && conversation.apiKeyId !== selectedKeyId()) {
+      toast("该对话已有附件，请切换回上传附件时使用的 API Key。");
+      return;
+    }
+    if ((state.pendingImages.length && state.pendingImagesConversationId !== conversation.id) ||
+        (state.pendingFiles.length && state.pendingFilesConversationId !== conversation.id)) {
+      toast("请先发送或移除其他对话的待发送附件。");
+      return;
+    }
+    let totalBytes = state.pendingImages.reduce((sum, image) => sum + image.size, 0) +
+      state.pendingFiles.reduce((sum, file) => sum + file.size, 0);
+    for (const file of files) {
+      if (state.pendingImages.length + state.pendingFiles.length >= MAX_FILES_PER_MESSAGE) {
+        toast("每条消息最多添加 " + MAX_FILES_PER_MESSAGE + " 个附件。");
+        break;
+      }
+      const extension = String(file.name || "").split(".").pop().toLowerCase();
+      const mimeType = DOCUMENT_MIME_BY_EXTENSION[extension];
+      if (!mimeType) {
+        toast("暂不支持该文件类型；支持 PDF、TXT、Markdown、CSV、JSON、RTF、DOCX、XLSX 和 PPTX。");
+        continue;
+      }
+      if (!file.size || file.size > MAX_DOCUMENT_BYTES || totalBytes + file.size > MAX_TOTAL_IMAGE_BYTES) {
+        toast("单个文件上限 20 MiB，单条消息附件总量上限 20 MiB。");
+        continue;
+      }
+      state.pendingFiles.push({
+        file, fileId:"", filename:String(file.name || "document").slice(0,180),
+        mimeType, size:file.size,
+      });
+      state.pendingFilesConversationId = conversation.id;
+      totalBytes += file.size;
+    }
+    renderPendingFiles();
+    resizeComposer();
+    $("messageInput").focus();
+  }
+
+
+  function readFileAsDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error("读取文件失败"));
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function uploadPendingImages() {
+    for (const image of state.pendingImages) {
+      if (image.fileId) continue;
+      const dataUrl = await readFileAsDataUrl(image.file);
+      const comma = dataUrl.indexOf(",");
+      if (comma < 0) throw new Error("图片编码失败");
+      const payload = await apiJson("/v1/files", {
+        method: "POST",
+        headers: {
+          "Authorization": "Bearer " + state.apiToken,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          filename: image.filename,
+          mime_type: image.mimeType,
+          data_base64: dataUrl.slice(comma + 1),
+          purpose: "vision",
+        }),
+      });
+      const fileId = String(payload.id || "");
+      if (!FILE_ID_PATTERN.test(fileId)) throw new Error("服务器没有返回有效的图片文件 ID");
+      image.fileId = fileId;
+      image.file = null;
+    }
+  }
+
+  async function handleImageFiles(fileList) {
+    if (state.streaming) return;
+    if (!state.apiToken) {
+      toast("请先登录并选择 API Key。");
+      return;
+    }
+    if (!selectedKeyHasScope("files")) {
+      toast("当前 API Key 没有 files 权限，请更换 Key 或在控制台调整权限。");
+      return;
+    }
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    const conversation = currentConversation() || createConversation();
+    if (!conversation) return;
+    if (conversation.apiKeyId && conversation.apiKeyId !== selectedKeyId()) {
+      toast("该对话已有图片附件，请切换回上传图片时使用的 API Key。");
+      return;
+    }
+    if (state.pendingFiles.length && state.pendingFilesConversationId !== conversation.id) {
+      toast("请先发送或移除其他对话的待发送附件。");
+      return;
+    }
+    if (state.pendingImages.length && state.pendingImagesConversationId !== conversation.id) {
+      toast("请先发送或移除其他对话的待发送图片。");
+      return;
+    }
+    let totalBytes = state.pendingImages.reduce((sum, image) => sum + image.size, 0) + state.pendingFiles.reduce((sum, file) => sum + file.size, 0);
+    for (const file of files) {
+      if (state.pendingImages.length + state.pendingFiles.length >= MAX_FILES_PER_MESSAGE) {
+        toast("每条消息最多添加 " + MAX_FILES_PER_MESSAGE + " 个附件。");
+        break;
+      }
+      if (!ALLOWED_IMAGE_TYPES.has(file.type)) {
+        toast("暂不支持 " + (file.type || "未知格式") + "；仅支持 PNG、JPEG、WebP 和 GIF。");
+        continue;
+      }
+      if (!file.size || file.size > MAX_IMAGE_BYTES || totalBytes + file.size > MAX_TOTAL_IMAGE_BYTES) {
+        toast("单张图片上限 10 MiB，单条消息图片总量上限 20 MiB。");
+        continue;
+      }
+      state.pendingImages.push({
+        file,
+        fileId: "",
+        filename: String(file.name || "image").slice(0, 180),
+        mimeType: file.type,
+        size: file.size,
+        previewUrl: URL.createObjectURL(file),
+      });
+      state.pendingImagesConversationId = conversation.id;
+      totalBytes += file.size;
+    }
+    renderPendingImages();
+    resizeComposer();
+    $("messageInput").focus();
   }
 
   function appendDelta(assistant, delta) {
@@ -488,6 +981,8 @@
     }
   }
 
+  class StreamResponseError extends Error {}
+
   function consumeSseFrame(frame, assistant) {
     const data = frame.split(/\r?\n/)
       .filter((line) => line.startsWith("data:"))
@@ -498,7 +993,7 @@
     let event;
     try { event = JSON.parse(data); } catch { return false; }
     if (event?.error) {
-      throw new Error(event.error.message || "服务端返回流式错误");
+      throw new StreamResponseError(event.error.message || "服务端返回流式错误");
     }
     const choice = Array.isArray(event?.choices) ? event.choices[0] : null;
     if (choice?.delta && Object.prototype.hasOwnProperty.call(choice.delta, "content")) {
@@ -507,39 +1002,141 @@
     return false;
   }
 
+  function recoveryStatusLabel(status) {
+    const labels = {
+      streaming: "生成中", recovering: "恢复中", recovery_pending: "等待服务端确认",
+      queued: "排队中", running: "生成中", reconnecting: "重新连接中",
+      completed: "已完成", completed_without_text: "已完成，但无可恢复文本",
+      cancellation_requested: "正在确认停止", cancelled: "已取消", error: "请求失败",
+      stalled: "请求停滞", auth_required: "需要重新登录", not_found: "请求记录不存在",
+      recovery_unavailable: "暂不可恢复", recovery_timeout: "恢复超时",
+      recovery_failed: "恢复失败", recovery_error: "恢复连接异常",
+      invalid_response: "恢复响应无效", request_mismatch: "请求身份不匹配",
+      invalid_request: "请求记录无效", polling_stopped: "恢复已停止",
+    };
+    return labels[String(status || "")] || "请求状态：" + String(status || "unknown");
+  }
+
+  function makeRecoveryController(conversation, assistant) {
+    const recoveryApi = window.Chat2APIStreamRecoveryV1;
+    if (!recoveryApi || typeof recoveryApi.create !== "function") return null;
+    return recoveryApi.create({
+      onUpdate(update) {
+        if (!update || update.request_id !== assistant.requestId || update.assistant_message_id !== assistant.id) return;
+        assistant.recoveryStatus = String(update.status || "recovering").slice(0, 40);
+        if (update.status === "completed" && update.terminal === true && typeof update.response_text === "string") {
+          assistant.content = update.response_text.slice(0, MAX_MESSAGE_CHARS);
+        }
+        saveHistory();
+        if (currentConversation()?.id === conversation.id) renderMessages();
+      },
+    });
+  }
+
+  async function recoverPendingMessage(conversation, assistant, existingController = null) {
+    if (!assistant || assistant.pending !== true || !assistant.requestId) return {status:"not_pending"};
+    const record = {request_id:String(assistant.requestId),assistant_message_id:String(assistant.id || "")};
+    const recoveryKey = record.request_id + ":" + record.assistant_message_id;
+    if (state.recoveryInFlight.has(recoveryKey)) return {status:"already_recovering"};
+    const controller = existingController || makeRecoveryController(conversation, assistant);
+    if (!controller) {
+      assistant.pending = false;
+      assistant.recoveryStatus = "recovery_unavailable";
+      saveHistory();
+      if (currentConversation()?.id === conversation.id) renderMessages();
+      return {status:"recovery_unavailable"};
+    }
+    state.recoveryInFlight.add(recoveryKey);
+    assistant.recoveryStatus = "recovering";
+    saveHistory();
+    if (currentConversation()?.id === conversation.id) renderMessages();
+    try {
+      const result = await controller.resume(record);
+      const status = String(result?.status || "recovery_failed");
+      if (result?.terminal === true) {
+        assistant.pending = false;
+        assistant.recoveryStatus = status;
+        if (status === "completed" && typeof result.response_text === "string") assistant.content = result.response_text.slice(0, MAX_MESSAGE_CHARS);
+      } else if (["recovery_timeout", "polling_stopped", "auth_required"].includes(status)) {
+        assistant.pending = true;
+        assistant.recoveryStatus = status;
+      } else {
+        assistant.pending = false;
+        assistant.recoveryStatus = status;
+        if (status === "not_found" && !assistant.content) assistant.content = "请求未被服务端接收，或请求记录已过期，无法恢复。";
+      }
+      return result;
+    } catch (error) {
+      assistant.pending = !(error && error.name === "TypeError");
+      assistant.recoveryStatus = assistant.pending ? "recovery_error" : "invalid_request";
+      return {status:assistant.recoveryStatus};
+    } finally {
+      state.recoveryInFlight.delete(recoveryKey);
+      conversation.updatedAt = new Date().toISOString();
+      saveHistory();
+      if (currentConversation()?.id === conversation.id) renderMessages();
+      resizeComposer();
+    }
+  }
+
+  function resumePendingMessages() {
+    const pending = [];
+    state.conversations.forEach((conversation) => {
+      (conversation.messages || []).forEach((message) => {
+        if (message.role === "assistant" && message.pending === true && message.requestId) pending.push({conversation,message});
+      });
+    });
+    pending.forEach(({conversation,message}) => { void recoverPendingMessage(conversation,message); });
+  }
   async function sendMessage(text) {
     const clean = String(text || "").trim();
-    if (!clean || state.streaming) return;
+    if (state.streaming) return;
+    const conversation = currentConversation() || createConversation();
+    if (conversation.messages.some((message) => message.role === "assistant" && message.pending === true)) {
+      toast("上一条回复仍在恢复；请先完成恢复后再发送。");
+      return;
+    }
+    const recoveryApi = window.Chat2APIStreamRecoveryV1;
+    if (!recoveryApi || typeof recoveryApi.createRequestId !== "function") {
+      toast("请求恢复模块尚未加载，请刷新页面后重试。");
+      return;
+    }
+    const requestId = recoveryApi.createRequestId();
+    const pending = state.pendingImagesConversationId === conversation?.id ? state.pendingImages : [];
+    const pendingFiles = state.pendingFilesConversationId === conversation?.id ? state.pendingFiles : [];
+    if (!clean && pendingFiles.length) { toast("添加文档时请同时输入要处理的问题或指令。"); return; }
+    if (!clean && !pending.length && !pendingFiles.length) return;
     if (!state.apiToken) {
       toast("请先选择一个可用的 API Key。");
       showOnly("keyRequired");
       return;
     }
-    const conversation = currentConversation() || createConversation();
+    const keyId = selectedKeyId();
+    if (conversation.apiKeyId && conversation.apiKeyId !== keyId) {
+      toast("该对话包含由其他 API Key 上传的附件，请切换回原 API Key。");
+      resizeComposer();
+      return;
+    }
+    if ((pending.length || pendingFiles.length) && !selectedKeyHasScope("files")) {
+      toast("当前 API Key 没有 files 权限，无法发送附件。");
+      return;
+    }
     conversation.model = state.selectedModel;
-    const userMessage = {id:id(),role:"user",content:clean,createdAt:new Date().toISOString()};
-    conversation.messages.push(userMessage);
-    autoTitle(conversation);
-    const assistant = {id:id(),role:"assistant",content:"",createdAt:new Date().toISOString()};
-    conversation.messages.push(assistant);
-    conversation.updatedAt = new Date().toISOString();
-    saveHistory();
     state.streaming = true;
-    state.streamingMessageId = assistant.id;
     state.abortController = new AbortController();
-    $("messageInput").value = "";
-    resizeComposer();
-    $("stopButton").classList.remove("hidden");
     $("sendButton").disabled = true;
+    $("attachButton").disabled = true;
+    $("fileButton").disabled = true;
     $("newChatButton").disabled = true;
     $("apiKeySelect").disabled = true;
     $("modelSelect").disabled = true;
-    renderAll();
+    $("messageInput").disabled = true;
+    setConnection((pending.length || pendingFiles.length) ? "正在上传附件…" : "正在连接…");
 
+    let userMessage = null;
+    let assistant = null;
+    let requestSubmitted = false;
     try {
-      const messages = conversation.messages
-        .filter((message) => message.id !== assistant.id)
-        .map((message) => ({role:message.role,content:message.content}));
       try {
         const session = await apiJson("/api/user/me");
         if (String(session.user?.user_id || "") !== String(state.user?.user_id || "")) {
@@ -552,6 +1149,51 @@
         setConnection("登录已失效", "error");
         throw new Error("用户登录状态已失效，请重新登录后再继续聊天");
       }
+
+      if (pending.length || pendingFiles.length) {
+        conversation.apiKeyId = keyId;
+        saveHistory();
+        await uploadPendingImages();
+        await uploadPendingFiles();
+      }
+      const imageParts = pending.map((image) => ({
+        type: "image_url",
+        image_url: {url:image.fileId},
+      }));
+      const fileParts = pendingFiles.map((file) => ({
+        type: "file", file_id:file.fileId, filename:file.filename, mime_type:file.mimeType, size:file.size,
+      }));
+      const userParts = [...(clean ? [{type:"text",text:clean}] : []), ...imageParts, ...fileParts];
+      const userContent = userParts.length ? userParts : clean;
+      userMessage = {id:id(),role:"user",content:userContent,createdAt:new Date().toISOString()};
+      conversation.messages.push(userMessage);
+      autoTitle(conversation);
+      assistant = {id:id(),role:"assistant",content:"",createdAt:new Date().toISOString(),requestId,pending:true,recoveryStatus:"streaming"};
+      conversation.messages.push(assistant);
+      state.recoveryController = makeRecoveryController(conversation, assistant);
+      state.activeRequestRecord = {request_id:requestId, assistant_message_id:assistant.id};
+      conversation.updatedAt = new Date().toISOString();
+      saveHistory();
+      state.pendingImages.forEach((image) => {
+        if (image.previewUrl) URL.revokeObjectURL(image.previewUrl);
+      });
+      state.pendingImages = [];
+      state.pendingImagesConversationId = "";
+      state.pendingFiles = [];
+      state.pendingFilesConversationId = "";
+      $("messageInput").value = "";
+      renderPendingImages();
+      renderPendingFiles();
+      state.streamingMessageId = assistant.id;
+      $("stopButton").classList.remove("hidden");
+      setConnection("已连接", "ready");
+      resizeComposer();
+      renderAll();
+
+      const messages = conversation.messages
+        .filter((message) => message.id !== assistant.id)
+        .map((message) => ({role:message.role,content:message.content}));
+      requestSubmitted = true;
       const response = await fetch("/v1/chat/completions", {
         method: "POST",
         credentials: "same-origin",
@@ -559,6 +1201,7 @@
           "Authorization": "Bearer " + state.apiToken,
           "Content-Type": "application/json",
           "Accept": "text/event-stream",
+          "X-Chat2API-Request-ID": requestId,
         },
         body: JSON.stringify({
           model: state.selectedModel,
@@ -613,26 +1256,57 @@
         if (!done) void reader.cancel().catch(() => {});
         reader.releaseLock();
       }
-      if (!assistant.content.trim()) {
-        conversation.messages = conversation.messages.filter((message) => message.id !== assistant.id);
-      }
-      if (!done) {
-        toast("连接已结束，但未收到流结束标记；请检查请求记录确认是否完整。");
-      } else if (!assistant.content.trim()) {
-        toast("模型没有返回文本内容。");
+      if (done) {
+        assistant.pending = false;
+        assistant.recoveryStatus = "completed";
+        if (!assistant.content.trim()) {
+          conversation.messages = conversation.messages.filter((message) => message.id !== assistant.id);
+          toast("模型没有返回文本内容。");
+        }
+      } else {
+        assistant.pending = true;
+        assistant.recoveryStatus = "recovery_pending";
+        saveHistory();
+        const recoveryController = state.recoveryController;
+        void recoverPendingMessage(conversation, assistant, recoveryController).then((result) => {
+          if (result?.status === "completed") toast("连接中断，已从服务端恢复最终回复。");
+          else toast("连接已结束但未收到流结束标记；请求状态：" + recoveryStatusLabel(result?.status));
+        });
       }
     } catch (error) {
-      if (error.name === "AbortError") {
-        toast(assistant.content ? "已停止生成，已保留当前回复。" : "已停止生成。");
-        if (!assistant.content) conversation.messages = conversation.messages.filter((message) => message.id !== assistant.id);
+      if (error instanceof StreamResponseError) {
+        assistant.pending = false;
+        assistant.recoveryStatus = "error";
+        // Do not leave an empty assistant placeholder when the server failed
+        // before delivering any content; preserve the message when partial
+        // content was already streamed.
+        if (!assistant.content) {
+          conversation.messages = conversation.messages.filter((message) => message.id !== assistant.id);
+        }
+        toast("请求失败：" + error.message);
+        return;
+      }
+      if (assistant && requestSubmitted && assistant.requestId) {
+        assistant.pending = true;
+        assistant.recoveryStatus = error.name === "AbortError" ? "cancellation_requested" : "recovery_pending";
+        saveHistory();
+        const recoveryController = state.recoveryController;
+        void recoverPendingMessage(conversation, assistant, recoveryController).then((result) => {
+          if (result?.status === "completed") toast("连接中断，已恢复服务端最终回复。");
+          else if (result?.status === "cancelled") toast("请求已取消。");
+          else if (result?.status === "completed_without_text") toast("请求已完成，但服务端没有可恢复的文本。");
+          else toast((error.name === "AbortError" ? "停止状态：" : "请求失败，恢复状态：") + recoveryStatusLabel(result?.status));
+        });
       } else {
-        if (!assistant.content) conversation.messages = conversation.messages.filter((message) => message.id !== assistant.id);
+        if (assistant && !assistant.content.trim()) conversation.messages = conversation.messages.filter((message) => message.id !== assistant.id);
         toast("请求失败：" + error.message);
       }
     } finally {
       state.streaming = false;
       state.streamingMessageId = "";
       state.abortController = null;
+      state.recoveryController = null;
+      state.activeRequestRecord = null;
       conversation.updatedAt = new Date().toISOString();
       saveHistory();
       if (state.apiToken) renderAll();
@@ -641,6 +1315,9 @@
       $("newChatButton").disabled = false;
       $("apiKeySelect").disabled = false;
       $("modelSelect").disabled = false;
+      $("messageInput").disabled = false;
+      renderPendingImages();
+      renderPendingFiles();
       resizeComposer();
       $("messageInput").focus();
     }
@@ -661,9 +1338,14 @@
       state.apiToken = String(payload.token || "");
       if (!state.apiToken) throw new Error("API Key 密钥为空");
       try { localStorage.setItem("chat2api.webchat.key." + state.user.user_id, keyId); } catch {}
-      setConnection("已连接", "ready");
-      resizeComposer();
       await loadModels();
+      const conversation = currentConversation();
+      if (conversation?.apiKeyId && conversation.apiKeyId !== keyId) {
+        setConnection("此对话需要原 API Key", "error");
+      } else {
+        setConnection("已连接", "ready");
+      }
+      resizeComposer();
       renderAll();
       return true;
     } catch (error) {
@@ -699,7 +1381,9 @@
     });
     let preferred = "";
     try { preferred = localStorage.getItem("chat2api.webchat.key." + state.user.user_id) || ""; } catch {}
-    const selected = usable.find((key) => key.key_id === preferred) || usable[0];
+    const conversationKeyId = currentConversation()?.apiKeyId || "";
+    const selected = usable.find((key) => key.key_id === conversationKeyId) ||
+      usable.find((key) => key.key_id === preferred) || usable[0];
     select.value = selected.key_id;
     return selectApiKey(selected.key_id);
   }
@@ -737,7 +1421,11 @@
     if (!conversation || !conversation.messages.length) return;
     const lines = ["# " + (conversation.title || "Chat2API 对话"), "", "模型：" + conversation.model, ""];
     conversation.messages.forEach((message) => {
-      lines.push(message.role === "user" ? "## 用户" : "## Chat2API", "", message.content, "");
+      lines.push(message.role === "user" ? "## 用户" : "## Chat2API", "");
+      const text = messageText(message);
+      if (text) lines.push(text, "");
+      messageImageIds(message).forEach((fileId) => lines.push("[图片附件: " + fileId + "]", ""));
+      messageFileAttachments(message).forEach((file) => lines.push("[文件附件: " + file.filename + "]", ""));
     });
     const blob = new Blob([lines.join("\n")], {type:"text/markdown;charset=utf-8"});
     const url = URL.createObjectURL(blob);
@@ -767,14 +1455,34 @@
     if (state.conversations.length) state.activeConversationId = state.conversations[0].id;
     renderAll();
     const ready = await loadKeys();
+    resumePendingMessages();
     if (!ready) return;
     if (currentConversation()) state.selectedModel = currentConversation().model || state.selectedModel;
     renderAll();
   }
 
+  if (window.Chat2APIImageDropV1) {
+    state.destroyImageDrop = window.Chat2APIImageDropV1.install(
+      $("composerArea"),
+      document,
+      {
+        onFiles: (files) => handleImageFiles(files),
+        onActive: (active) => $("composerArea").classList.toggle("drag-over", active),
+      },
+    );
+  }
+
   $("newChatButton").addEventListener("click", createConversation);
   $("conversationSearch").addEventListener("input", renderSidebar);
-  $("apiKeySelect").addEventListener("change", (event) => selectApiKey(event.target.value));
+  $("apiKeySelect").addEventListener("change", (event) => {
+    const conversation = currentConversation();
+    if ((state.pendingImages.length || state.pendingFiles.length) && conversation?.apiKeyId && conversation.apiKeyId !== event.target.value) {
+      event.target.value = conversation.apiKeyId;
+      toast("待发送附件已绑定当前 API Key；请先移除附件再切换 Key。");
+      return;
+    }
+    selectApiKey(event.target.value);
+  });
   $("modelSelect").addEventListener("change", (event) => {
     state.selectedModel = event.target.value;
     const conversation = currentConversation();
@@ -785,10 +1493,39 @@
     }
   });
   $("sendButton").addEventListener("click", () => sendMessage($("messageInput").value));
+  $("attachButton").addEventListener("click", () => $("imageInput").click());
+  $("fileButton").addEventListener("click", () => $("fileInput").click());
+  $("fileInput").addEventListener("change", async (event) => {
+    await handleDocumentFiles(event.target.files);
+    event.target.value = "";
+  });
+  $("imageInput").addEventListener("change", async (event) => {
+    await handleImageFiles(event.target.files);
+    event.target.value = "";
+  });
   $("stopButton").addEventListener("click", () => {
+    const controller = state.recoveryController;
+    const record = state.activeRequestRecord;
+    if (controller && record) {
+      void controller.cancel(record).then((result) => {
+        if (result?.cancel_requested) toast("已向 Worker 发送停止请求。");
+        else if (result?.terminal) toast("请求已进入终态。");
+        else toast("无法确认停止状态，将继续核对服务端请求。");
+      }).catch(() => toast("停止请求未确认；已保留请求恢复记录。"));
+    }
     if (state.abortController) state.abortController.abort();
   });
   $("messageInput").addEventListener("input", resizeComposer);
+  $("messageInput").addEventListener("paste", (event) => {
+    const images = Array.from(event.clipboardData?.items || [])
+      .filter((item) => item.kind === "file" && ALLOWED_IMAGE_TYPES.has(item.type))
+      .map((item) => item.getAsFile())
+      .filter(Boolean);
+    if (images.length) {
+      event.preventDefault();
+      handleImageFiles(images);
+    }
+  });
   $("messageInput").addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
@@ -819,6 +1556,14 @@
     const theme = localStorage.getItem("chat2api.webchat.theme");
     if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
   } catch {}
+  window.addEventListener("beforeunload", () => {
+    if (typeof state.destroyImageDrop === "function") state.destroyImageDrop();
+    state.pendingImages.forEach((image) => {
+      if (image.previewUrl) URL.revokeObjectURL(image.previewUrl);
+    });
+  });
+  renderPendingImages();
+  renderPendingFiles();
   resizeComposer();
   bootstrap().catch((error) => {
     setConnection("初始化失败", "error");

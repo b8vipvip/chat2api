@@ -127,8 +127,12 @@
     return "";
   }
 
-  async function fetchAudio(spec) {
-    const response = await chrome.runtime.sendMessage({ type: "chat2api.attachment.fetch", fileId: spec.file_id });
+  async function fetchAudio(spec, requestId) {
+    const response = await chrome.runtime.sendMessage({
+      type: "chat2api.attachment.fetch",
+      fileId: spec.file_id,
+      requestId: String(requestId || ""),
+    });
     if (!response?.ok) throw new Error(response?.error || "Unable to fetch voice input file");
     return response.data || {};
   }
@@ -244,7 +248,7 @@
     const started = performance.now();
     try {
       let inputData = null;
-      if (message.audio?.file_id) inputData = await fetchAudio(message.audio);
+      if (message.audio?.file_id) inputData = await fetchAudio(message.audio, active.requestId);
       postMain("voice.prepare", active, {
         mode: active.mode,
         input_base64: inputData?.base64 || "",

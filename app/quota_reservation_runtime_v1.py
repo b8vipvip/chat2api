@@ -1,0 +1,461 @@
+"""Bounded runtime adapter for the C-06 in-flight token reservation ledger."""
+from __future__ import annotations
+
+import asyncio
+import logging
+import math
+from typing import Any
+
+from fastapi import HTTPException
+
+from .quota_reservations import QuotaExceeded, QuotaReservationConflict, QuotaReservationError
+from .token_usage import usage_for
+from .user_commerce import (
+    InsufficientWalletBalance, WalletReservationConflict, WalletReservationError,
+    _pricing_model_key,
+)
+
+
+logger = logging.getLogger(__name__)
+
+
+def is_request_id_conflict(error: BaseException) -> bool:
+    """Distinguish a replayed request identity from ordinary quota rejection."""
+    if not isinstance(error, HTTPException) or error.status_code != 409:
+        return False
+    detail = error.detail
+    return isinstance(detail, dict) and detail.get("code") == "request_id_conflict"
+
+
+def _price_from_catalog_snapshot(config: dict[str, Any], model_id: str) -> dict[str, Any] | None:
+    """Resolve exact IDs before aliases from one immutable pricing snapshot."""
+    rows = config.get("models")
+    if not isinstance(rows, list):
+        return None
+    requested = str(model_id or "").strip()
+    if not requested:
+        return None
+    requested_key = requested.casefold()
+    for row in rows:
+        if (
+            isinstance(row, dict)
+            and str(row.get("model_id") or "").strip().casefold() == requested_key
+        ):
+            return dict(row)
+    canonical = _pricing_model_key(requested)
+    for row in rows:
+        if (
+            isinstance(row, dict)
+            and _pricing_model_key(row.get("model_id")) == canonical
+        ):
+            return dict(row)
+    return None
+
+
+def authorize_wallet_dispatch(app: Any, request_id: str, principal: Any) -> bool:
+    """Persist the wallet admission's dispatch boundary before any Worker send.
+
+    No-op for master keys, non-user keys, and intentionally unbilled requests.
+    A persistence/ownership error fails closed: the caller must not dispatch.
+    """
+    if str(getattr(principal, "kind", "")) == "master":
+        return False
+    accounts = getattr(app.state, "user_accounts", None)
+    billing = getattr(app.state, "user_billing", None)
+    key_id = str(getattr(principal, "key_id", "") or "")
+    try:
+        # Resolve account ownership before treating a missing reservation as a
+        # legacy/unbilled path. An account-owned key must always have a durable
+        # admission row (including an explicit zero-price/billing-disabled row)
+        # before it can reach a Worker.
+        owner = None
+        if accounts is not None and key_id:
+            owner_lookup = getattr(accounts, "owner_for_key", None)
+            if not callable(owner_lookup):
+                raise WalletReservationError("Wallet reservation owner lookup is unavailable")
+            owner = owner_lookup(key_id)
+
+        if billing is None:
+            if owner:
+                raise WalletReservationError("Wallet billing store is unavailable for an account-owned API key")
+            return False
+
+        lookup = getattr(billing, "reservation_for_request", None)
+        if not callable(lookup):
+            raise WalletReservationError("Wallet reservation lookup is unavailable")
+        reservation = lookup(str(request_id))
+        if reservation is None:
+            if owner:
+                raise WalletReservationError(
+                    "Account-owned API key is missing its durable wallet admission record"
+                )
+            # Legacy keys without an account owner have no wallet ledger entry.
+            return False
+        if (
+            str(reservation.get("state") or "") == "released"
+            and str(reservation.get("release_reason") or "") in {
+                "billing_disabled_at_admission", "zero_price_at_admission",
+            }
+        ):
+            # Intentional free/unbilled admissions have a durable marker and
+            # therefore remain valid even though no active hold exists.
+            return False
+        if (
+            str(reservation.get("state") or "") != "reserved"
+            or reservation.get("admission_protocol_version") != 1
+        ):
+            raise WalletReservationError("Wallet reservation is not dispatchable")
+        if accounts is None or not key_id or not owner:
+            raise WalletReservationError("Wallet reservation owner context is unavailable")
+        if str(reservation.get("user_id") or "") != str(owner):
+            raise WalletReservationError("Wallet reservation owner does not match the API key")
+        if not billing.mark_dispatch_authorized(str(request_id), str(owner)):
+            raise WalletReservationError("Wallet dispatch authorization marker was not persisted")
+        return True
+    except Exception as error:
+        logger.exception(
+            "Wallet dispatch authorization persistence failed request_id=%s error_type=%s",
+            request_id, type(error).__name__,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Wallet dispatch authorization could not be persisted",
+        ) from error
+
+
+def reserve_wallet_charge(
+    app: Any, request_id: str, principal: Any, model_id: str,
+    prompt_tokens: int, output_tokens: int,
+) -> dict[str, Any] | None:
+    """Reserve estimated wallet cents for a user-owned, priced model request.
+
+    This is an admission hold, not a second charge ledger. BillingStore remains
+    the sole owner of the final request_id charge and wallet debit.
+    """
+    if str(getattr(principal, "kind", "")) == "master":
+        return None
+    accounts = getattr(app.state, "user_accounts", None)
+    if accounts is None:
+        return None
+    key_id = str(getattr(principal, "key_id", "") or "")
+    owner = accounts.owner_for_key(key_id) if key_id else None
+    if not owner:
+        return None
+    billing = getattr(app.state, "user_billing", None)
+    pricing = getattr(app.state, "user_pricing", None)
+    if billing is None or pricing is None:
+        raise HTTPException(status_code=503, detail="Wallet reservation is unavailable")
+    try:
+        config = pricing.public()
+        fx = float(config.get("usd_cny_rate") or 0)
+        if not math.isfinite(fx) or fx <= 0:
+            raise ValueError("Invalid USD/CNY billing rate")
+        normalized_model_id = str(model_id or "").strip() or "unknown"
+        if not bool(config.get("billing_enabled")):
+            price = _price_from_catalog_snapshot(config, normalized_model_id) or {
+                "model_id": normalized_model_id,
+                "enabled": False,
+                "input_usd_per_million": 0.0,
+                "cached_input_usd_per_million": 0.0,
+                "output_usd_per_million": 0.0,
+            }
+            billing.record_unbilled_admission(
+                str(owner), str(request_id), model_id=normalized_model_id,
+                input_tokens=max(0, int(prompt_tokens)),
+                output_tokens=max(0, int(output_tokens)),
+                reason="billing_disabled_at_admission",
+                price_snapshot=price, usd_cny_rate=fx,
+            )
+            return None
+        price = _price_from_catalog_snapshot(config, normalized_model_id)
+        if not price or price.get("enabled", True) is not True:
+            # Disabled and unpriced rows are both closed to new paid requests.
+            # An intentional free model must have an explicit enabled zero-rate
+            # row; merely disabling its price must not bypass wallet admission.
+            raise HTTPException(
+                status_code=503,
+                detail="Wallet price is not configured or enabled for this model",
+            )
+        # Image and realtime Voice costs are not represented by text-token
+        # usage in the current Worker protocol. A positive per-token price
+        # would therefore undercharge these endpoints; only an explicit
+        # all-zero row may opt them into intentionally free use.
+        if str(model_id or "").strip().lower() in {"gpt-image", "gpt-live", "gpt-live-mini"}:
+            rate_fields = (
+                "input_usd_per_million",
+                "cached_input_usd_per_million",
+                "output_usd_per_million",
+            )
+            if any(float(price.get(field) or 0) > 0 for field in rate_fields):
+                raise HTTPException(
+                    status_code=503,
+                    detail="Provider usage for this model is not metered for wallet billing",
+                )
+        # Cached-token share is unknown at admission. Reserve against the
+        # higher of ordinary and cached input rates so an administrator's
+        # valid (but unusually high) cached-input price cannot make the hold
+        # systematically understate the eventual charge.
+        conservative_input_rate = max(
+            float(price.get("input_usd_per_million") or 0),
+            float(price.get("cached_input_usd_per_million") or 0),
+        )
+        usd = (
+            max(0, int(prompt_tokens)) * conservative_input_rate
+            + max(0, int(output_tokens)) * float(price.get("output_usd_per_million") or 0)
+        ) / 1_000_000
+        rate_fields = (
+            "input_usd_per_million",
+            "cached_input_usd_per_million",
+            "output_usd_per_million",
+        )
+        has_positive_rate = any(float(price.get(field) or 0) > 0 for field in rate_fields)
+        if not has_positive_rate:
+            billing.record_unbilled_admission(
+                str(owner), str(request_id), model_id=normalized_model_id,
+                input_tokens=max(0, int(prompt_tokens)),
+                output_tokens=max(0, int(output_tokens)),
+                reason="zero_price_at_admission",
+                price_snapshot=price, usd_cny_rate=fx,
+            )
+            return None
+        # A positive-rate request always gets a durable admission snapshot and
+        # at least a one-cent hold, even when nearest-cent rounding would be 0.
+        estimated_cny_cents = max(1, int(math.ceil(usd * fx * 100)))
+        catalog_snapshot: dict[str, dict[str, Any]] = {}
+        for row in config.get("models") or []:
+            if not isinstance(row, dict):
+                continue
+            # Preserve exact model IDs: gpt-5.6 and gpt-5.6-sol can
+            # intentionally carry different administrator-configured prices.
+            key = str(row.get("model_id") or "").strip().casefold()
+            if key:
+                catalog_snapshot.setdefault(key, dict(row))
+        return billing.reserve_for_request(
+            str(owner), str(request_id),
+            model_id=str(model_id or ""),
+            estimated_cny_cents=estimated_cny_cents,
+            input_tokens=max(0, int(prompt_tokens)),
+            output_tokens=max(0, int(output_tokens)),
+            price_snapshot=price,
+            price_catalog_snapshot=catalog_snapshot,
+            usd_cny_rate=fx,
+        )
+    except HTTPException:
+        raise
+    except InsufficientWalletBalance as error:
+        raise HTTPException(status_code=402, detail="账户余额不足，无法预留本次请求预计费用") from error
+    except WalletReservationConflict as error:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "request_id_conflict", "message": str(error)},
+        ) from error
+    except WalletReservationError as error:
+        raise HTTPException(status_code=503, detail="Wallet reservation failed: " + str(error)) from error
+    except OSError as error:
+        # Storage write failure is an admission failure, never a best-effort
+        # bypass to Worker dispatch.
+        raise HTTPException(status_code=503, detail="Wallet reservation storage is unavailable") from error
+    except (TypeError, ValueError, OverflowError) as error:
+        raise HTTPException(status_code=503, detail="Wallet reservation estimate is invalid") from error
+
+
+async def reserve_request_quota(
+    app: Any, request_id: str, principal: Any, prompt: str, output_limit: int,
+    model_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Reserve a conservative estimate before a usage-bearing Worker dispatch."""
+    if not bool(getattr(app.state, "quota_reservation_runtime_enabled", False)):
+        return None
+    # The server master key is deliberately not a ManagedApiKey row and has
+    # no per-key token quota. Keep it on the existing unmetered path instead
+    # of treating its synthetic key_id="master" as a missing managed key.
+    if str(getattr(principal, "kind", "")) == "master":
+        return None
+    store = getattr(app.state, "quota_reservations", None)
+    api_keys = getattr(app.state, "api_keys", None)
+    if store is None or api_keys is None:
+        raise HTTPException(status_code=503, detail="Token quota reservation is unavailable")
+    key_id = str(getattr(principal, "key_id", "") or "")
+    if not key_id:
+        raise HTTPException(status_code=403, detail="An API key is required for token quota reservation")
+    try:
+        prompt_tokens = max(0, int(usage_for(str(prompt or ""), "").prompt_tokens))
+        requested_output = int(output_limit)
+    except (TypeError, ValueError, AttributeError) as error:
+        raise HTTPException(status_code=400, detail="Invalid token quota estimate") from error
+    if requested_output < 1 or requested_output > 1_000_000:
+        raise HTTPException(status_code=400, detail="Requested output budget is outside the quota reservation limit")
+    estimated_tokens = prompt_tokens + requested_output
+    if estimated_tokens < 1 or estimated_tokens > 1_000_000:
+        raise HTTPException(status_code=413, detail="Estimated request usage is too large for quota reservation")
+    async def reserve_from_authoritative_key_snapshot() -> dict[str, Any]:
+        item = getattr(api_keys, "keys", {}).get(key_id)
+        if item is None:
+            raise QuotaReservationError("Unknown API key")
+        public = item.public() if callable(getattr(item, "public", None)) else {}
+        completed_tokens = max(0, int(getattr(item, "tokens_used", 0) or 0))
+        quota_limit = getattr(item, "token_quota", None)
+        if quota_limit is not None and completed_tokens >= int(quota_limit):
+            raise QuotaExceeded("API key token quota is exhausted")
+        if (
+            not bool(getattr(item, "enabled", False))
+            or bool(getattr(item, "revoked_at", None))
+            or bool(public.get("expired", False))
+        ):
+            raise QuotaReservationError("API key is disabled, expired or revoked")
+        # Keep ApiKeyStore's async lock while the SQLite transaction reserves
+        # against the same completed-usage snapshot. Otherwise a concurrent
+        # terminal charge can update tokens_used between the snapshot and the
+        # reservation commit, admitting more work than the key quota allows.
+        return await asyncio.to_thread(
+            store.reserve,
+            str(request_id),
+            key_id,
+            estimated_tokens,
+            quota_limit=quota_limit,
+            completed_tokens=completed_tokens,
+        )
+
+    token_reservation = None
+    try:
+        key_lock = getattr(api_keys, "lock", None)
+        if key_lock is not None and hasattr(key_lock, "__aenter__"):
+            async with key_lock:
+                token_reservation = await reserve_from_authoritative_key_snapshot()
+        else:
+            token_reservation = await reserve_from_authoritative_key_snapshot()
+        # BillingStore is a separate durable ledger. Reserve wallet capacity
+        # before dispatch; if it rejects, roll back the token hold first.
+        await asyncio.to_thread(
+            reserve_wallet_charge,
+            app, str(request_id), principal, str(model_id or ""),
+            prompt_tokens, requested_output,
+        )
+        return token_reservation
+    except HTTPException:
+        if token_reservation:
+            try:
+                await asyncio.to_thread(store.release, str(request_id), key_id)
+            except Exception:
+                logger.exception(
+                    "Token reservation cleanup failed after wallet admission rejection request_id=%s",
+                    request_id,
+                )
+        raise
+    except QuotaReservationConflict as error:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "request_id_conflict", "message": str(error)},
+        ) from error
+    except QuotaExceeded as error:
+        raise HTTPException(status_code=429, detail=str(error)) from error
+    except QuotaReservationError as error:
+        raise HTTPException(status_code=503, detail="Token quota reservation failed: " + str(error)) from error
+    except Exception as error:
+        # Unexpected wallet/journal persistence failure must not leave a
+        # token hold that blocks unrelated, valid requests.
+        if token_reservation:
+            try:
+                await asyncio.to_thread(store.release, str(request_id), key_id)
+            except Exception:
+                logger.exception(
+                    "Token hold cleanup failed after quota admission exception request_id=%s",
+                    request_id,
+                )
+        logger.warning(
+            "Token quota reservation backend unavailable error_type=%s",
+            type(error).__name__,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Token quota reservation service is temporarily unavailable",
+        ) from error
+
+
+# Images and Voice do not yet expose provider-verified usage in the Worker
+# protocol. These fixed amounts are admission holds only; terminal settlement
+# continues to use the existing estimated text usage emitted by each executor.
+IMAGE_GENERATION_RESERVATION_FLOOR_TOKENS = 4096
+AUDIO_REQUEST_RESERVATION_FLOOR_TOKENS = 4096
+
+
+async def reserve_image_generation_quota(
+    app: Any, request_id: str, principal: Any, prompt: str, image_count: int = 1,
+    model_id: str = "gpt-image",
+) -> dict[str, Any] | None:
+    if type(image_count) is not int or not 1 <= image_count <= 4:
+        raise HTTPException(status_code=400, detail="Image count is outside the quota reservation limit")
+    return await reserve_request_quota(
+        app, request_id, principal, prompt,
+        IMAGE_GENERATION_RESERVATION_FLOOR_TOKENS * image_count,
+        model_id=model_id,
+    )
+
+
+async def reserve_audio_request_quota(
+    app: Any, request_id: str, principal: Any, prompt: str, model_id: str = "gpt-live",
+) -> dict[str, Any] | None:
+    """Hold an admission allowance for speech or uploaded-audio requests.
+
+    Text input (speech prompt or optional conversation instruction) is
+    estimated before dispatch. Uploaded audio bytes are not converted into
+    fabricated tokens; the fixed floor is admission capacity only. The Voice
+    Worker does not report provider-verified usage, so terminal settlement
+    continues to use the existing estimated prompt/transcript row.
+    """
+    return await reserve_request_quota(
+        app, request_id, principal, prompt,
+        AUDIO_REQUEST_RESERVATION_FLOOR_TOKENS,
+        model_id=model_id,
+    )
+
+
+def install_quota_reservation_runtime_v1(app: Any) -> Any:
+    if getattr(app.state, "quota_reservation_runtime_v1_installed", False):
+        return app
+    store = getattr(app.state, "quota_reservations", None)
+    api_keys = getattr(app.state, "api_keys", None)
+    telemetry = getattr(app.state, "telemetry", None)
+    if store is None or api_keys is None or telemetry is None:
+        raise RuntimeError("C-06 runtime requires quota_reservations, api_keys and telemetry app state")
+
+    async def account_usage_with_reservations(record: dict[str, Any]) -> None:
+        # TelemetryStore invokes this for queued/running snapshots too. The
+        # reservation store treats those as pending and settles/releases only
+        # the Broker-owned terminal projection.
+        status = str(record.get("status") or "").lower()
+        try:
+            await store.commit_completed_usage(record, api_keys)
+        finally:
+            if status in {"error", "cancelled", "stalled", "failed", "timeout"}:
+                request_id = str(record.get("request_id") or "")
+                key_id = str(record.get("api_key_id") or "")
+                accounts = getattr(app.state, "user_accounts", None)
+                billing = getattr(app.state, "user_billing", None)
+                owner = accounts.owner_for_key(key_id) if accounts is not None and key_id else None
+                if owner and billing is not None and request_id:
+                    try:
+                        await asyncio.to_thread(
+                            billing.release_reservation,
+                            request_id,
+                            str(owner),
+                            reason="request_" + status,
+                        )
+                    except Exception as error:
+                        logger.warning(
+                            "Wallet reservation release deferred request_id=%s error_type=%s",
+                            request_id, type(error).__name__,
+                        )
+
+    telemetry.usage_accounting = account_usage_with_reservations
+    app.state.quota_reservation_runtime_enabled = True
+    app.state.quota_reservation_runtime_coverage = [
+        "/v1/chat/completions",
+        "/v1/responses",
+        "/v1/images/generations",
+        "/v1/responses#image_generation (delegated to Images executor)",
+        "/v1/audio/speech",
+        "/v1/audio/conversations",
+    ]
+    app.state.quota_reservation_runtime_v1_installed = True
+    return app

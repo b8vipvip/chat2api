@@ -12,15 +12,20 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncIterator
+from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import http_exception_handler, request_validation_exception_handler
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from pydantic import ValidationError
 
 from .admin import admin_response
 from .admin_auth import same_origin_admin_request
 from .api_keys import ApiKeyStore, ApiPrincipal, UNSET
 from .broker import RequestBroker, RequestState
+from .chat_request_service import ChatRequestService
 from .chat_media_deadline_v171 import chat_timeout_window, worker_chat_timeout, long_form_text_requested
 from .chat_progress_stream_v196 import status_from_diagnostics, progress_is_real
 from .chat_stream_delivery_v194 import StagedStreamText, final_text_chunks, sse_heartbeat_interval
@@ -30,7 +35,7 @@ from .terminal_archive_singleflight_v277 import archive_once
 from .mixed_media_archive_v280 import archive_mixed_reply
 from .archive_write_stop_v280 import ArchiveWriteStop
 from .config import Settings, get_settings
-from .file_store import FileStore
+from .file_store import FileIntegrityError, FileStore
 from .media_archive_v173 import MediaArchive
 from .mode_management import ModeManagementError, ModeManagementStore
 from .mode_resolver import ModeResolverMiddleware
@@ -47,7 +52,12 @@ from .native_capture_audit_v281 import capture_comparison
 from .native_snapshot_finality_v282 import native_snapshot_finality, native_terminal_view
 from .media_public_origin_v187 import media_base_for_request
 from .response_history_media_v188 import history_safe_response_text
-from .responses_multimodal_input_v183 import attachment_specs as canonical_attachment_specs
+from .responses_multimodal_input_v183 import (
+    attachment_specs as canonical_attachment_specs,
+    validate_document_file,
+    validate_image_file,
+    verify_raster_image,
+)
 from .media_handoff import StreamMediaMarkerGate
 from .models import (
     ApiKeyCreate,
@@ -62,7 +72,7 @@ from .models import (
 )
 from .prompting import build_prompt
 from .registry import ClientRegistry
-from .telemetry import TelemetryStore, parse_request_since
+from .telemetry import DuplicateRequestIdentity, TelemetryStore, parse_request_since
 from .runtime_contract import SERVER_RUNTIME_VERSION
 from .runtime_code_identity import runtime_code_sha
 from .worker_probe_store import WorkerProbeStore
@@ -72,6 +82,12 @@ from .playground_truth_v170 import (reconcile_playground_runs, reconcile_playgro
 from .playground_stream_contract_v293 import playground_stream_attribution
 from .playground_request_evidence_v207 import request_test_index, playground_link
 from .token_usage import usage_for
+from .quota_reservation_runtime_v1 import (
+    authorize_wallet_dispatch,
+    is_request_id_conflict,
+    reserve_image_generation_quota,
+    reserve_request_quota,
+)
 
 logger = logging.getLogger("chat2api")
 APP_VERSION = "0.5.0"
@@ -81,6 +97,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     config = settings or get_settings()
     registry = ClientRegistry(config.data_dir)
     broker = RequestBroker()
+    chat_request_service = ChatRequestService(registry, broker)
     # The request origin is the actual dispatch socket; disconnection of an
     # old socket must not terminate requests already sent on its replacement.
     registry.request_broker = broker
@@ -105,6 +122,145 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await registry.load()
         await telemetry.load()
         await api_keys.load()
+        recovered_queued = await telemetry.recover_queued_after_restart(set(broker.requests))
+        if recovered_queued:
+            logger.warning(
+                "Recovered %s queued request(s) from the previous process as stalled",
+                recovered_queued,
+            )
+        wallet_reconciler = getattr(app.state, "wallet_charge_reconciler", None)
+        billing_store = getattr(app.state, "user_billing", None)
+        if billing_store is not None:
+            try:
+                unstarted_wallet_holds = await asyncio.to_thread(
+                    billing_store.unstarted_admissions
+                )
+            except Exception as error:
+                unstarted_wallet_holds = []
+                logger.warning(
+                    "Wallet pre-dispatch startup scan deferred error_type=%s",
+                    type(error).__name__,
+                )
+            quota_store = getattr(app.state, "quota_reservations", None)
+            for hold in unstarted_wallet_holds:
+                request_id = str(hold.get("request_id") or "")
+                user_id = str(hold.get("user_id") or "")
+                token_row = None
+                if quota_store is not None and request_id:
+                    try:
+                        token_row = await asyncio.to_thread(quota_store.get, request_id)
+                    except Exception as error:
+                        logger.warning(
+                            "Pre-dispatch token reservation lookup deferred request_id=%s error_type=%s",
+                            request_id, type(error).__name__,
+                        )
+                key_id = str((token_row or {}).get("key_id") or "")
+                existing = telemetry.get(request_id) if request_id else None
+                if existing is None and request_id:
+                    persisted_lookup = getattr(telemetry, "get_many_persisted", None)
+                    if callable(persisted_lookup):
+                        try:
+                            existing = (await asyncio.to_thread(
+                                persisted_lookup, {request_id},
+                            )).get(request_id)
+                        except Exception as error:
+                            logger.warning(
+                                "Pre-dispatch telemetry lookup deferred request_id=%s error_type=%s",
+                                request_id, type(error).__name__,
+                            )
+                existing_key_id = str((existing or {}).get("api_key_id") or "")
+                if key_id and existing_key_id and key_id != existing_key_id:
+                    logger.error(
+                        "Pre-dispatch wallet/token identity conflict request_id=%s",
+                        request_id,
+                    )
+                    continue
+                if str((existing or {}).get("status") or "").lower() == "completed":
+                    logger.error(
+                        "Pre-dispatch wallet marker conflicts with completed telemetry request_id=%s",
+                        request_id,
+                    )
+                    continue
+                existing_diagnostics = (
+                    existing.get("diagnostics")
+                    if isinstance((existing or {}).get("diagnostics"), dict) else {}
+                )
+                row_payload = {
+                    **(existing or {}),
+                    "request_id": request_id,
+                    "status": "stalled",
+                    "error": "Server restarted before Worker dispatch",
+                    "diagnostics": {
+                        **existing_diagnostics,
+                        "request_admission_recovery": "server-restart-before-worker-dispatch",
+                        "request_admission_failure_kind": "server_restart",
+                    },
+                }
+                if key_id or existing_key_id:
+                    row_payload["api_key_id"] = key_id or existing_key_id
+                try:
+                    recovered_row = await telemetry.upsert(row_payload)
+                except Exception as error:
+                    recovered_row = telemetry.get(request_id) if request_id else None
+                    recovered_row = recovered_row or existing
+                    logger.warning(
+                        "Wallet pre-dispatch telemetry recovery failed request_id=%s error_type=%s",
+                        request_id, type(error).__name__,
+                    )
+                # The first persisted completed terminal always wins. Do not
+                # release a hold if contradictory completion evidence exists;
+                # leave it for normal charge reconciliation instead.
+                if str((recovered_row or {}).get("status") or "").lower() == "completed":
+                    logger.error(
+                        "Pre-dispatch wallet marker conflicts with completed telemetry request_id=%s",
+                        request_id,
+                    )
+                    continue
+                if quota_store is not None and key_id:
+                    try:
+                        await asyncio.to_thread(quota_store.release, request_id, key_id)
+                    except Exception as error:
+                        logger.warning(
+                            "Pre-dispatch token hold release deferred request_id=%s error_type=%s",
+                            request_id, type(error).__name__,
+                        )
+                if user_id and request_id:
+                    try:
+                        await asyncio.to_thread(
+                            billing_store.release_reservation,
+                            request_id, user_id,
+                            reason="server_restart_before_worker_dispatch",
+                        )
+                    except Exception as error:
+                        logger.warning(
+                            "Pre-dispatch wallet hold release deferred request_id=%s error_type=%s",
+                            request_id, type(error).__name__,
+                        )
+        if callable(wallet_reconciler) and billing_store is not None:
+            for user_id in billing_store.active_reservation_user_ids():
+                try:
+                    wallet_reconciler(user_id)
+                except Exception as error:
+                    # An unresolved hold remains reserved; startup must not
+                    # invent a release or prevent unrelated users from serving.
+                    logger.warning(
+                        "Wallet reservation startup recovery deferred error_type=%s",
+                        type(error).__name__,
+                    )
+        quota_store = getattr(app.state, "quota_reservations", None)
+        if quota_store is not None and getattr(app.state, "quota_reservation_runtime_enabled", False):
+            # Recover terminal telemetry before expiring old reservations.
+            # TelemetryStore persists a terminal row before its accounting
+            # callback; a crash in that gap leaves the reservation reserved,
+            # not committing, and must not lose a completed charge.
+            replayed_reservations = await quota_store.recover_committing(telemetry, api_keys)
+            reconciled_reservations = quota_store.reconcile(api_keys)
+            expired_reservations = quota_store.expire_reservations()
+            if expired_reservations or replayed_reservations or reconciled_reservations:
+                logger.info(
+                    "Quota reservation startup recovery expired=%s replayed=%s reconciled=%s",
+                    expired_reservations, replayed_reservations, reconciled_reservations,
+                )
         await file_store.load()
         await test_runs.load()
         recovered_runs = await test_runs.recover_interrupted()
@@ -125,6 +281,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = config
     app.state.registry = registry
     app.state.broker = broker
+    app.state.chat_request_service = chat_request_service
     app.state.telemetry = telemetry
     app.state.worker_probes = worker_probes
     app.state.native_dom_evidence = native_dom_evidence
@@ -139,6 +296,54 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.mode_management = mode_management
     # Keep detached-stream supervisors alive until their Broker terminal is persisted.
     app.state.detached_sse_tasks = set()
+
+    @app.exception_handler(HTTPException)
+    async def mode2_http_exception_handler(request: Request, error: HTTPException):
+        if not request.url.path.startswith("/v1/"):
+            return await http_exception_handler(request, error)
+        detail = error.detail
+        if isinstance(detail, dict) and isinstance(detail.get("error"), dict):
+            payload = {"error": detail["error"]}
+        else:
+            values = detail if isinstance(detail, dict) else {}
+            if isinstance(detail, dict):
+                message = str(values.get("message") or values.get("detail") or "Request failed")
+            else:
+                message = str(detail or "Request failed")
+            status_code = int(error.status_code)
+            default_type = (
+                "authentication_error" if status_code == 401 else
+                "permission_error" if status_code == 403 else
+                "not_found_error" if status_code == 404 else
+                "conflict_error" if status_code == 409 else
+                "rate_limit_error" if status_code == 429 else
+                "server_error" if status_code >= 500 else
+                "invalid_request_error"
+            )
+            payload = {"error": {
+                "message": message,
+                "type": str(values.get("type") or default_type),
+                "param": values.get("param"),
+                "code": values.get("code"),
+            }}
+        return JSONResponse(payload, status_code=error.status_code, headers=error.headers)
+
+    @app.exception_handler(RequestValidationError)
+    async def mode2_validation_exception_handler(request: Request, error: RequestValidationError):
+        if not request.url.path.startswith("/v1/"):
+            return await request_validation_exception_handler(request, error)
+        errors = error.errors()
+        first = errors[0] if errors else {}
+        location = first.get("loc") or ()
+        param = ".".join(str(part) for part in location if part not in {"body", "query", "path", "header", "cookie"})
+        return JSONResponse({
+            "error": {
+                "message": str(first.get("msg") or "Invalid request"),
+                "type": "invalid_request_error",
+                "param": param or None,
+                "code": str(first.get("type") or "invalid_request_error"),
+            }
+        }, status_code=422)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=config.origins,
@@ -966,14 +1171,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             current["response_generated_files_live_checked"] = True
         return current
 
+    def active_playground_run_ids() -> set[str]:
+        manager = getattr(app.state, "playground_run_manager", None)
+        tasks = getattr(manager, "tasks", None)
+        return set(tasks) if isinstance(tasks, dict) else set()
+
     @app.get("/api/admin/tests", dependencies=[Depends(require_admin_key)])
     async def admin_tests(limit: int = Query(default=50, ge=1, le=200)) -> dict[str, object]:
-        await reconcile_playground_runs(test_runs, telemetry, limit=min(200, limit))
+        await reconcile_playground_runs(
+            test_runs, telemetry, limit=min(200, limit),
+            active_run_ids=active_playground_run_ids(),
+        )
         return {"data": [present_playground_run(row) for row in test_runs.recent(limit)]}
 
     @app.get("/api/admin/tests/{run_id}", dependencies=[Depends(require_admin_key)])
     async def admin_test_detail(run_id: str) -> dict[str, object]:
-        await reconcile_playground_runs(test_runs, telemetry, limit=200)
+        await reconcile_playground_runs(
+            test_runs, telemetry, limit=200,
+            active_run_ids=active_playground_run_ids(),
+        )
         row = test_runs.get(run_id)
         if not row:
             raise HTTPException(status_code=404, detail="Test report not found")
@@ -1006,9 +1222,95 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def clients() -> list[dict[str, object]]:
         return registry.summaries()
 
-    @app.post("/v1/files")
-    async def upload_file(body: FileUploadRequest, principal: ApiPrincipal = Depends(require_api_key)) -> dict[str, object]:
+    def standard_file_object(item) -> dict[str, object]:
+        try:
+            created_at = int(datetime.fromisoformat(str(item.created_at).replace("Z", "+00:00")).timestamp())
+        except (TypeError, ValueError, OverflowError):
+            created_at = int(time.time())
+        return {
+            "id": item.file_id,
+            "object": "file",
+            "bytes": int(item.size),
+            "created_at": created_at,
+            "filename": item.filename,
+            "purpose": item.purpose,
+            "status": "processed",
+            "status_details": None,
+            "mime_type": item.mime_type,
+            "created_at_iso": item.created_at,
+        }
+
+    @app.post(
+        "/v1/files",
+        openapi_extra={"requestBody": {
+            "required": True,
+            "content": {
+                "multipart/form-data": {"schema": {
+                    "type": "object", "required": ["file", "purpose"],
+                    "properties": {
+                        "file": {"type": "string", "format": "binary"},
+                        "purpose": {"type": "string", "enum": ["assistants", "vision", "user_data"]},
+                    },
+                }},
+                "application/json": {"schema": {
+                    "type": "object", "required": ["filename", "data_base64"],
+                    "properties": {
+                        "filename": {"type": "string"},
+                        "data_base64": {"type": "string"},
+                        "mime_type": {"type": "string"},
+                        "purpose": {"type": "string"},
+                    },
+                }},
+            },
+        }},
+    )
+    async def upload_file(request: Request, principal: ApiPrincipal = Depends(require_api_key)) -> dict[str, object]:
         require_scope(principal, "files")
+        content_type = str(request.headers.get("content-type") or "").lower()
+        if content_type.startswith("multipart/form-data"):
+            try:
+                form = await request.form()
+            except Exception as error:
+                raise HTTPException(status_code=400, detail="Invalid multipart file upload") from error
+            upload = form.get("file")
+            if upload is None or not callable(getattr(upload, "read", None)):
+                raise HTTPException(status_code=422, detail="Multipart upload requires a file field")
+            purpose = str(form.get("purpose") or "").strip()
+            if purpose not in {"assistants", "vision", "user_data"}:
+                raise HTTPException(status_code=400, detail="Unsupported file purpose; use assistants, vision, or user_data")
+            filename = str(getattr(upload, "filename", "") or "upload.bin")
+            mime_type = str(getattr(upload, "content_type", "") or "application/octet-stream")
+            try:
+                payload = await upload.read(file_store.max_file_bytes + 1)
+            finally:
+                close = getattr(upload, "close", None)
+                if callable(close):
+                    await close()
+            if not payload:
+                raise HTTPException(status_code=400, detail="Uploaded file is empty")
+            if len(payload) > file_store.max_file_bytes:
+                raise HTTPException(status_code=413, detail="Uploaded file exceeds the configured size limit")
+            try:
+                body = FileUploadRequest(
+                    filename=filename,
+                    data_base64=base64.b64encode(payload).decode("ascii"),
+                    mime_type=mime_type,
+                    purpose=purpose,
+                )
+            except ValidationError as error:
+                # Multipart form metadata must fail like any other /v1 input,
+                # not bubble out as an unhandled Pydantic exception / HTTP 500.
+                # Do not include arbitrary uploaded filenames in error text.
+                raise HTTPException(status_code=422, detail="Invalid multipart file upload metadata") from error
+            standard_response = True
+        elif content_type.startswith("application/json"):
+            try:
+                body = FileUploadRequest.model_validate(await request.json())
+            except (ValueError, TypeError, ValidationError) as error:
+                raise HTTPException(status_code=422, detail="Invalid JSON file upload request") from error
+            standard_response = False
+        else:
+            raise HTTPException(status_code=415, detail="Use multipart/form-data or the Chat2API JSON upload format")
         try:
             item = await file_store.create(
                 filename=body.filename,
@@ -1019,7 +1321,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
-        return item.public()
+        return standard_file_object(item) if standard_response else item.public()
 
     @app.get("/v1/files/{file_id}")
     async def file_metadata(file_id: str, principal: ApiPrincipal = Depends(require_api_key)) -> dict[str, object]:
@@ -1029,10 +1331,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Unknown file_id")
         if principal.kind != "master" and item.owner_key_id != principal.key_id:
             raise HTTPException(status_code=403, detail="File belongs to another API key")
-        return item.public()
+        return standard_file_object(item)
+
+    @app.get(
+        "/v1/files/{file_id}/content",
+        responses={200: {"content": {"application/octet-stream": {}}}},
+    )
+    async def file_content(file_id: str, principal: ApiPrincipal = Depends(require_api_key)) -> Response:
+        require_scope(principal, "files")
+        item = file_store.get(file_id)
+        if not item:
+            raise HTTPException(status_code=404, detail="Unknown file_id")
+        if principal.kind != "master" and item.owner_key_id != principal.key_id:
+            raise HTTPException(status_code=403, detail="File belongs to another API key")
+        try:
+            _, payload = await asyncio.to_thread(file_store.read, file_id)
+        except FileNotFoundError as error:
+            raise HTTPException(status_code=410, detail="Stored file content is missing") from error
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Unknown file_id") from error
+        ascii_filename = re.sub(r"[^A-Za-z0-9._-]", "_", item.filename).strip("._") or "download"
+        encoded_filename = quote(item.filename, safe="")
+        return Response(payload, media_type="application/octet-stream", headers={
+            "Content-Disposition": f"attachment; filename=\"{ascii_filename}\"; filename*=UTF-8''{encoded_filename}",
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-store",
+        })
 
     @app.delete("/v1/files/{file_id}")
-    async def delete_file(file_id: str, principal: ApiPrincipal = Depends(require_api_key)) -> dict[str, bool]:
+    async def delete_file(file_id: str, principal: ApiPrincipal = Depends(require_api_key)) -> dict[str, object]:
         require_scope(principal, "files")
         try:
             await file_store.delete(file_id, None if principal.kind == "master" else principal.key_id)
@@ -1040,18 +1367,51 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except PermissionError as error:
             raise HTTPException(status_code=403, detail=str(error)) from error
-        return {"deleted": True}
+        return {"id": file_id, "object": "file", "deleted": True}
 
     @app.get("/api/extensions/files/{file_id}")
-    async def extension_file(file_id: str, client_id: str = Query(...), token: str = Query(...)) -> Response:
+    async def extension_file(
+        file_id: str, request_id: str = Query(..., min_length=6, max_length=120),
+        client_id: str = Query(...), token: str = Query(...),
+    ) -> Response:
         if not await registry.authenticate(client_id, token):
             raise HTTPException(status_code=401, detail="Invalid extension token")
+        row = telemetry.get(request_id)
+        item = file_store.get(file_id)
+        active = getattr(broker, "requests", {}).get(request_id)
+        allowed_ids = row.get("input_file_ids") if isinstance(row, dict) else None
+        dispatch_socket = getattr(active, "dispatch_socket", None)
+        sockets = getattr(registry, "sockets", None)
+        current_socket = sockets.get(client_id) if isinstance(sockets, dict) else None
+        if (
+            not isinstance(row, dict)
+            or active is None
+            or dispatch_socket is None
+            or current_socket is not dispatch_socket
+            or str(getattr(active, "client_id", "") or "") != client_id
+            or getattr(active, "terminal_event_type", None) is not None
+            or getattr(active, "completed_mono", None) is not None
+            or str(row.get("status") or "") != "running"
+            or str(row.get("client_id") or "") != client_id
+            or not item
+            or (
+                str(row.get("api_key_id") or "") != "master"
+                and str(row.get("api_key_id") or "") != str(item.owner_key_id or "")
+            )
+            or not isinstance(allowed_ids, list)
+            or file_id not in {str(value) for value in allowed_ids}
+        ):
+            raise HTTPException(status_code=404, detail="Unknown attachment")
         try:
             item, payload = file_store.read(file_id)
+        except FileIntegrityError as error:
+            raise HTTPException(status_code=503, detail="Stored file content failed integrity verification") from error
         except KeyError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except FileNotFoundError as error:
             raise HTTPException(status_code=410, detail=str(error)) from error
+        except OSError as error:
+            raise HTTPException(status_code=503, detail="Stored file content is temporarily unavailable") from error
         return Response(
             payload,
             media_type=item.mime_type,
@@ -1119,10 +1479,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             {"estimated": usage.estimated, "estimator": usage.estimator},
         )
 
-    def attachment_specs(file_ids: list[str], principal: ApiPrincipal) -> list[dict[str, object]]:
-        return canonical_attachment_specs(file_store, file_ids, principal)
+    def attachment_specs(
+        file_ids: list[str], principal: ApiPrincipal, *, request_id: str | None = None,
+    ) -> list[dict[str, object]]:
+        rows = canonical_attachment_specs(file_store, file_ids, principal)
+        if not request_id:
+            return rows
+        # The worker download grant is bound to the exact request, API-key owner
+        # and assigned Worker. It is not a reusable file-id capability.
+        return [{**row, "request_id": request_id} for row in rows]
 
     async def inline_image_files(body: ChatCompletionRequest, principal: ApiPrincipal) -> list[str]:
+        # Apply one request-wide attachment budget across existing image IDs,
+        # document IDs and inline data URLs before allocating any new objects.
+        existing_file_ids = body.all_file_ids()
+        inline_data_count = sum(
+            1
+            for message in body.messages
+            if isinstance(message.content, list)
+            for part in message.content
+            if isinstance(part, dict) and part.get("type") in {"image_url", "input_image"}
+            for raw_image_value in [part.get("image_url")]
+            for image_value in [raw_image_value.get("url") if isinstance(raw_image_value, dict) else raw_image_value]
+            if isinstance(image_value, str) and image_value.startswith("data:")
+        )
+        if len(existing_file_ids) + inline_data_count > 4:
+            raise HTTPException(status_code=400, detail="At most four image/file inputs are supported per request")
+        existing_specs = attachment_specs(existing_file_ids, principal) if existing_file_ids else []
+        total_bytes = sum(int(item.get("size") or 0) for item in existing_specs)
+        if total_bytes > 20 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="Combined image/file inputs may not exceed 20 MiB")
+        seen_file_ids = set(existing_file_ids)
         result: list[str] = []
         sequence = 0
         for message in body.messages:
@@ -1137,6 +1524,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if not isinstance(value, str) or not value:
                     continue
                 if value.startswith("file_"):
+                    try:
+                        validate_image_file(file_store, value, principal)
+                    except ValueError as error:
+                        raise HTTPException(status_code=400, detail=str(error)) from error
                     result.append(value)
                     continue
                 if not value.startswith("data:"):
@@ -1144,18 +1535,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         status_code=400,
                         detail="Remote image URLs are not fetched for security. Use a base64 data URL or upload via POST /v1/files.",
                     )
+                if len(seen_file_ids) >= 4:
+                    raise HTTPException(status_code=400, detail="At most four image/file inputs are supported per request")
                 sequence += 1
                 try:
+                    image_bytes, image_mime = file_store._decode(value, None)
+                    verify_raster_image(image_bytes, image_mime)
+                    if len(image_bytes) > 10 * 1024 * 1024:
+                        raise ValueError("input_image exceeds the 10 MiB per-image limit")
+                    if total_bytes + len(image_bytes) > 20 * 1024 * 1024:
+                        raise ValueError("Combined image/file inputs may not exceed 20 MiB")
                     item = await file_store.create(
-                        filename=f"inline-image-{sequence}.png",
-                        data_base64=value,
-                        mime_type=None,
+                        filename=f"inline-image-{sequence}.{image_mime.split('/', 1)[-1]}",
+                        data_base64=base64.b64encode(image_bytes).decode("ascii"),
+                        mime_type=image_mime,
                         owner_key_id=principal.key_id,
                         purpose="vision",
                     )
                 except ValueError as error:
                     raise HTTPException(status_code=400, detail=str(error)) from error
                 result.append(item.file_id)
+                seen_file_ids.add(item.file_id)
+                total_bytes += len(image_bytes)
         return result
 
     def chat2api_meta(state: RequestState, token_meta: dict[str, object], principal: ApiPrincipal) -> dict[str, object]:
@@ -1328,6 +1729,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             await reconcile_playground_request_terminal(
                 test_runs, telemetry, state.request_id,
+                active_run_ids=active_playground_run_ids(),
             )
         except Exception:
             logger.exception(
@@ -1343,7 +1745,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def record_request_queued(
         *, request_id: str, response_id: str, requested_model: str, prompt: str,
         principal: ApiPrincipal, stream: bool, prompt_mode: str,
-        request_type: str, attachments_count: int,
+        request_type: str, attachments_count: int, input_file_ids: list[str],
     ) -> None:
         """Persist request visibility before Worker selection/capacity admission.
 
@@ -1362,6 +1764,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "requested_model": requested_model,
             "request_type": request_type,
             "attachments_count": attachments_count,
+            "input_file_ids": list(dict.fromkeys(str(value) for value in input_file_ids if value)),
             "stream": stream,
             "prompt_mode": prompt_mode,
             "prompt_chars": len(prompt),
@@ -1371,7 +1774,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "timings": {},
             "diagnostics": {"request_admission_stage": "selecting-worker"},
             "error": None,
-        })
+        }, create_only=True)
         logger.info(
             "API request queued before Worker selection request_id=%s model=%s key=%s",
             request_id, requested_model, principal.key_id,
@@ -1389,6 +1792,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response_id: str,
         request_type: str,
         attachments_count: int,
+        input_file_ids: list[str],
     ) -> None:
         usage, token_meta = standard_usage(prompt, "")
         await telemetry.upsert(
@@ -1402,6 +1806,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "requested_model": requested_model,
                 "request_type": request_type,
                 "attachments_count": attachments_count,
+                "input_file_ids": list(dict.fromkeys(str(value) for value in input_file_ids if value)),
                 "stream": stream,
                 "prompt_mode": prompt_mode,
                 "prompt_chars": len(prompt),
@@ -1467,7 +1872,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "timings": {"total_ms": round((time.perf_counter() - started_mono) * 1000, 1)},
                 "diagnostics": diagnostics,
                 "error": error,
-            }
+            },
+            create_only=not bool(existing),
         )
         # Early admission failures (e.g. no connected Chrome Worker) have
         # no RequestState or later Worker finalizer. Reconcile that exact
@@ -1476,6 +1882,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             await reconcile_playground_request_terminal(
                 test_runs, telemetry, request_id,
+                active_run_ids=active_playground_run_ids(),
             )
         except Exception:
             logger.exception(
@@ -1850,22 +2257,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         require_scope(principal, "chat")
         prompt = build_prompt(body.messages, body.prompt_mode)
         inline_ids = await inline_image_files(body, principal)
+        for message in body.messages:
+            for file_id in message.referenced_document_file_ids():
+                try:
+                    validate_document_file(file_store, file_id, principal)
+                except ValueError as error:
+                    raise HTTPException(status_code=400, detail=str(error)) from error
         file_ids = list(dict.fromkeys(body.all_file_ids() + inline_ids))
-        attachments = attachment_specs(file_ids, principal)
         request_id = accepted_request_id(x_chat2api_request_id, "req_")
+        attachments = attachment_specs(file_ids, principal, request_id=request_id)
+        if len(attachments) > 4:
+            raise HTTPException(status_code=400, detail="At most four image/file inputs are supported per request")
+        if sum(int(item.get("size") or 0) for item in attachments) > 20 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="Combined image/file inputs may not exceed 20 MiB")
+        if any(
+            str(item.get("mime_type") or "").startswith("image/")
+            and int(item.get("size") or 0) > 10 * 1024 * 1024
+            for item in attachments
+        ):
+            raise HTTPException(status_code=400, detail="input_image exceeds the 10 MiB per-image limit")
         response_id = completion_id()
         request_started = time.perf_counter()
         requested_client = body.client_id or x_chat2api_client
         request_type = "multimodal" if attachments else "text"
 
-        # v220: the request exists from admission ingress, not only after a
-        # capacity slot opens. The queued row remains visible in Request History.
-        await record_request_queued(
-            request_id=request_id, response_id=response_id, requested_model=body.model,
-            prompt=prompt, principal=principal, stream=body.stream,
-            prompt_mode=body.prompt_mode, request_type=request_type,
-            attachments_count=len(attachments),
-        )
         # Read-only version identity for browser-origin Playground calls.
         # ABCD may legitimately use real SSE even if its final report never
         # arrives. Never reject a request solely for missing that report.
@@ -1873,6 +2288,89 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             request_id=request_id, stream=body.stream,
             headers=request.headers, test_runs=test_runs,
         )
+        requested_output_limits = [
+            getattr(body, "max_tokens", None),
+            getattr(body, "max_completion_tokens", None),
+        ]
+        output_budget = max([
+            4096,
+            *(value for value in requested_output_limits if isinstance(value, int) and not isinstance(value, bool) and value > 0),
+        ])
+        try:
+            quota_reservation = await reserve_request_quota(
+                app, request_id, principal, prompt, output_budget,
+                model_id=body.model,
+            )
+        except HTTPException as quota_error:
+            if not is_request_id_conflict(quota_error):
+                await record_early_error(
+                    request_id=request_id, response_id=response_id, requested_model=body.model,
+                    prompt=prompt, principal=principal, stream=body.stream, prompt_mode=body.prompt_mode,
+                    started_mono=request_started, error=str(quota_error.detail), request_type=request_type,
+                    attachments_count=len(attachments),
+                )
+            raise
+        # Persist request visibility only after durable quota/wallet admission.
+        # Otherwise an old request ID outside TelemetryStore's 500-row cache
+        # could overwrite its history before the persistent reservation journal
+        # rejects the duplicate.
+        def release_admission_holds() -> None:
+            if not quota_reservation:
+                return
+            quota_store = getattr(app.state, "quota_reservations", None)
+            if quota_store is not None:
+                try:
+                    quota_store.release(request_id, principal.key_id)
+                except Exception as release_error:
+                    logger.warning(
+                        "Duplicate request token hold cleanup failed request_id=%s error_type=%s",
+                        request_id, type(release_error).__name__,
+                    )
+            accounts = getattr(app.state, "user_accounts", None)
+            billing = getattr(app.state, "user_billing", None)
+            try:
+                owner = accounts.owner_for_key(principal.key_id) if accounts is not None else None
+                if owner and billing is not None:
+                    billing.release_reservation(
+                        request_id, str(owner), reason="request_admission_projection_conflict",
+                    )
+            except Exception as release_error:
+                logger.warning(
+                    "Duplicate request wallet hold cleanup failed request_id=%s error_type=%s",
+                    request_id, type(release_error).__name__,
+                )
+
+        try:
+            await record_request_queued(
+                request_id=request_id, response_id=response_id, requested_model=body.model,
+                prompt=prompt, principal=principal, stream=body.stream,
+                prompt_mode=body.prompt_mode, request_type=request_type,
+                attachments_count=len(attachments),
+                input_file_ids=[str(item["file_id"]) for item in attachments],
+            )
+        except DuplicateRequestIdentity as error:
+            release_admission_holds()
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "request_id_conflict", "message": str(error)},
+            ) from error
+        except Exception:
+            release_admission_holds()
+            raise
+        if quota_reservation:
+            try:
+                await telemetry.merge_diagnostics(request_id, {
+                    "quota_reservation_v1": {
+                        "state": "reserved",
+                        "reserved_tokens": int(quota_reservation.get("reserved_tokens") or 0),
+                        "estimate_policy": "prompt_tokens_plus_conservative_4096_output_floor_v1",
+                    },
+                })
+            except Exception as quota_diagnostic_error:
+                logger.warning(
+                    "Quota reservation diagnostic persistence failed request_id=%s error_type=%s",
+                    request_id, type(quota_diagnostic_error).__name__,
+                )
         if origin_evidence:
             try:
                 await telemetry.merge_diagnostics(
@@ -1910,7 +2408,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 extra={"request_id": request_id, "client_id": client_id,
                        "admission_stage": "waiting-capacity"},
             )
-            state = await broker.create(request_id, client_id)
+            state = await chat_request_service.reserve(request_id, client_id)
         except HTTPException as error:
             await record_early_error(request_id=request_id, response_id=response_id, requested_model=body.model,
                                      prompt=prompt, principal=principal, stream=body.stream, prompt_mode=body.prompt_mode,
@@ -1992,17 +2490,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 response_id=response_id,
                 request_type=request_type,
                 attachments_count=len(attachments),
+                input_file_ids=[str(item["file_id"]) for item in attachments],
             )
-            await registry.send(
+            await asyncio.to_thread(
+                authorize_wallet_dispatch, app, request_id, principal,
+            )
+            await chat_request_service.dispatch(
                 client_id,
-                {
-                    "type": "chat.request",
-                    "request_id": request_id,
-                    "prompt": prompt,
-                    "attachments": attachments,
-                    "options": {"auto_switch_text": True, "timeout_seconds": browser_timeout_seconds, "model": body.model,
-                                "probe_policy": state.probe_policy},
-                },
+                request_id=request_id,
+                prompt=prompt,
+                attachments=attachments,
+                options={"auto_switch_text": True, "timeout_seconds": browser_timeout_seconds, "model": body.model,
+                         "probe_policy": state.probe_policy},
             )
         except Exception as error:
             state.completed_mono = time.perf_counter()
@@ -2175,15 +2674,81 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         principal: ApiPrincipal = Depends(require_api_key),
     ) -> dict[str, object]:
         require_scope(principal, "images")
-        attachments = attachment_specs([item.file_id for item in body.attachments], principal)
         request_id = accepted_request_id(x_chat2api_request_id, "imgreq_")
+        if telemetry.get(request_id):
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "request_id_conflict", "message": "Duplicate request_id"},
+            )
+        attachments = attachment_specs(
+            [item.file_id for item in body.attachments], principal, request_id=request_id,
+        )
         response_id = "img_" + uuid.uuid4().hex
         started = time.perf_counter()
         client_id = resolve_client_now(body.client_id or x_chat2api_client)
+        if telemetry.get(request_id):
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "request_id_conflict", "message": "request_id already exists"},
+            )
         try:
             state = await broker.create(request_id, client_id)
         except RuntimeError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+
+        quota_reservation = None
+        try:
+            quota_reservation = await reserve_image_generation_quota(
+                app, request_id, principal, body.prompt, body.n,
+                model_id="gpt-image",
+            )
+        except HTTPException as quota_error:
+            state.completed_mono = time.perf_counter()
+            if not is_request_id_conflict(quota_error):
+                try:
+                    await telemetry.upsert({
+                        "request_id": request_id, "response_id": response_id, "client_id": client_id,
+                        "api_key_id": principal.key_id, "api_key_name": principal.name, "auth_kind": principal.kind,
+                        "requested_model": "gpt-image", "request_type": "image_generation",
+                        "attachments_count": len(attachments), "stream": False, "prompt_mode": "image",
+                        "prompt_chars": len(body.prompt), "completion_chars": 0, "status": "error",
+                        "usage": {}, "timings": state.timings(),
+                        "diagnostics": {"quota_reservation_v1": {
+                            "state": "rejected", "http_status": quota_error.status_code,
+                            "estimate_policy": "prompt_tokens_plus_4096_per_image_admission_floor_v1",
+                        }},
+                        "error": str(quota_error.detail),
+                    }, create_only=True)
+                except DuplicateRequestIdentity:
+                    # A concurrent request won this identity. Never replace
+                    # its history with the losing admission's quota error.
+                    pass
+                except Exception as telemetry_error:
+                    logger.warning(
+                        "Image quota rejection could not be persisted request_id=%s error_type=%s",
+                        request_id, type(telemetry_error).__name__,
+                    )
+            try:
+                await broker.release(request_id)
+            except Exception as release_error:
+                logger.warning(
+                    "Image quota rejection broker release failed request_id=%s error_type=%s",
+                    request_id, type(release_error).__name__,
+                )
+            raise
+
+        quota_diagnostics = {}
+        if quota_reservation:
+            quota_diagnostics = {"quota_reservation_v1": {
+                "state": "reserved",
+                "reserved_tokens": int(quota_reservation.get("reserved_tokens") or 0),
+                "estimate_policy": "prompt_tokens_plus_4096_per_image_admission_floor_v1",
+                "provider_usage_verified": False,
+            }}
+
+        def image_diagnostics() -> dict[str, Any]:
+            return {**dict(state.diagnostics), **quota_diagnostics}
+
         registry.busy_clients.add(client_id)
         state.probe_policy = probe_policy(client_id)
         timeout_seconds = body.timeout or max(config.request_timeout_seconds, 300)
@@ -2193,10 +2758,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "request_id": request_id, "response_id": response_id, "client_id": client_id,
                     "api_key_id": principal.key_id, "api_key_name": principal.name, "auth_kind": principal.kind,
                     "requested_model": "gpt-image", "request_type": "image_generation",
-                    "attachments_count": len(attachments), "stream": False, "prompt_mode": "image",
+                    "attachments_count": len(attachments),
+                    "input_file_ids": [str(item["file_id"]) for item in attachments],
+                    "stream": False, "prompt_mode": "image",
                     "prompt_chars": len(body.prompt), "completion_chars": 0, "status": "running",
-                    "usage": {}, "timings": state.timings(), "diagnostics": dict(state.diagnostics), "error": None,
-                }
+                    "usage": {}, "timings": state.timings(), "diagnostics": image_diagnostics(), "error": None,
+                },
+                create_only=True,
+            )
+            await asyncio.to_thread(
+                authorize_wallet_dispatch, app, request_id, principal,
             )
             await registry.send(
                 client_id,
@@ -2304,8 +2875,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "attachments_count": len(attachments), "stream": False, "prompt_mode": "image",
                     "prompt_chars": len(body.prompt), "completion_chars": 0, "status": "completed",
                     "usage": {**usage, **token_meta}, "timings": state.timings(),
-                    "diagnostics": dict(state.diagnostics), "error": None,
-                }
+                    "diagnostics": image_diagnostics(), "error": None,
+                },
             )
             # The standalone Images API already archived verified bytes.
             # Reuse those exact records; do not capture or upload images twice.
@@ -2332,7 +2903,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "request_id": request_id,
                     "client_id": client_id,
                     "timings": state.timings(),
-                    "diagnostics": state.diagnostics,
+                    "diagnostics": image_diagnostics(),
                     "token_usage": token_meta,
                     "media_files": archived_media,
                     "owned_media": owned_media,
@@ -2343,6 +2914,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     }} if owned_media else {}),
                 },
             }
+        except DuplicateRequestIdentity as error:
+            state.completed_mono = time.perf_counter()
+            if quota_reservation:
+                try:
+                    app.state.quota_reservations.release(request_id, principal.key_id)
+                except Exception as release_error:
+                    logger.warning(
+                        "Image quota release after duplicate request ID failed request_id=%s error_type=%s",
+                        request_id, type(release_error).__name__,
+                    )
+            accounts = getattr(app.state, "user_accounts", None)
+            billing = getattr(app.state, "user_billing", None)
+            try:
+                owner = accounts.owner_for_key(principal.key_id) if accounts is not None else None
+                if owner and billing is not None:
+                    billing.release_reservation(
+                        request_id, str(owner), reason="request_admission_projection_conflict",
+                    )
+            except Exception as release_error:
+                logger.warning(
+                    "Image wallet hold cleanup after duplicate request ID failed request_id=%s error_type=%s",
+                    request_id, type(release_error).__name__,
+                )
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "request_id_conflict", "message": "request_id already exists"},
+            ) from error
         except asyncio.TimeoutError as error:
             state.completed_mono = time.perf_counter()
             await telemetry.upsert(
@@ -2351,7 +2949,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                  "requested_model": "gpt-image", "request_type": "image_generation",
                  "attachments_count": len(attachments), "stream": False, "prompt_mode": "image",
                  "prompt_chars": len(body.prompt), "completion_chars": 0, "status": "error",
-                 "usage": {}, "timings": state.timings(), "diagnostics": state.diagnostics,
+                 "usage": {}, "timings": state.timings(), "diagnostics": image_diagnostics(),
                  "error": "Timed out waiting for ChatGPT Images"}
             )
             raise HTTPException(status_code=504, detail="Timed out waiting for ChatGPT Images") from error
@@ -2364,11 +2962,55 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                  "attachments_count": len(attachments), "stream": False, "prompt_mode": "image",
                  "prompt_chars": len(body.prompt), "completion_chars": 0,
                  "status": failure_status(state, message=str(error)),
-                 "usage": {}, "timings": state.timings(), "diagnostics": state.diagnostics, "error": str(error)}
+                 "usage": {}, "timings": state.timings(), "diagnostics": image_diagnostics(), "error": str(error)}
             )
             raise HTTPException(status_code=502, detail=str(error)) from error
+        except Exception as error:
+            current = telemetry.get(request_id)
+            current_status = str((current or {}).get("status") or "")
+            if current_status not in {"completed", "error", "cancelled", "stalled", "failed", "timeout"}:
+                state.completed_mono = state.completed_mono or time.perf_counter()
+                try:
+                    await telemetry.upsert({
+                        "request_id": request_id, "response_id": response_id, "client_id": client_id,
+                        "api_key_id": principal.key_id, "api_key_name": principal.name, "auth_kind": principal.kind,
+                        "requested_model": "gpt-image", "request_type": "image_generation",
+                        "attachments_count": len(attachments), "stream": False, "prompt_mode": "image",
+                        "prompt_chars": len(body.prompt), "completion_chars": 0, "status": "error",
+                        "usage": {}, "timings": state.timings(), "diagnostics": image_diagnostics(),
+                        "error": type(error).__name__,
+                    })
+                except Exception as telemetry_error:
+                    logger.warning(
+                        "Image request failure telemetry could not be persisted request_id=%s error_type=%s",
+                        request_id, type(telemetry_error).__name__,
+                    )
+            raise
         finally:
             registry.busy_clients.discard(client_id)
+            if quota_reservation:
+                current = telemetry.get(request_id)
+                if str((current or {}).get("status") or "") != "completed":
+                    try:
+                        app.state.quota_reservations.release(request_id, principal.key_id)
+                    except Exception as release_error:
+                        logger.warning(
+                            "Image quota reservation cleanup deferred request_id=%s error_type=%s",
+                            request_id, type(release_error).__name__,
+                        )
+                    accounts = getattr(app.state, "user_accounts", None)
+                    billing = getattr(app.state, "user_billing", None)
+                    try:
+                        owner = accounts.owner_for_key(principal.key_id) if accounts is not None else None
+                        if owner and billing is not None:
+                            billing.release_reservation(
+                                request_id, str(owner), reason="image_request_not_completed",
+                            )
+                    except Exception as release_error:
+                        logger.warning(
+                            "Image wallet reservation cleanup deferred request_id=%s error_type=%s",
+                            request_id, type(release_error).__name__,
+                        )
             await broker.release(request_id)
 
     # Both Images and Responses image_generation use this exact Worker/Broker
@@ -2384,14 +3026,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             isinstance(item, dict) and item.get("file_id") == file_id for item in media
         ):
             raise HTTPException(status_code=404, detail="No archived image for this request")
-        try:
-            item, payload = file_store.read(file_id)
-        except (KeyError, FileNotFoundError) as error:
-            raise HTTPException(status_code=404, detail="Archived image is no longer available") from error
+        item = file_store.get(file_id)
+        if not item or str(item.owner_key_id) != str(row.get("api_key_id") or ""):
+            raise HTTPException(status_code=404, detail="Archived image is no longer available")
         if item.purpose != "generated-output" or item.mime_type not in {
             "image/png", "image/jpeg", "image/webp", "image/gif"
         }:
             raise HTTPException(status_code=404, detail="Invalid request media")
+        try:
+            item, payload = file_store.read(file_id)
+        except FileIntegrityError as error:
+            raise HTTPException(status_code=503, detail="Archived image integrity check failed") from error
+        except (KeyError, FileNotFoundError) as error:
+            raise HTTPException(status_code=404, detail="Archived image is no longer available") from error
+        except OSError as error:
+            raise HTTPException(status_code=503, detail="Archived image storage is temporarily unavailable") from error
         return Response(
             content=payload, media_type=item.mime_type,
             headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
@@ -2417,7 +3066,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else None
                 if message_type == "extension.hello" and metadata:
                     socket_runtime_epoch = str(metadata.get("transport_runtime_epoch") or "")
-                await registry.touch(client_id, metadata)
+                if not await registry.touch(client_id, metadata, websocket=websocket):
+                    # This connection was replaced while it was still draining.
+                    # Ignore every message from the stale socket.
+                    break
                 if message_type in {"heartbeat", "extension.hello", "extension.status"}:
                     if message_type in {"extension.hello", "extension.status"} and not window_target_synced:
                         window_runtime = getattr(app.state, "worker_window_limits", {})
@@ -2446,9 +3098,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     # after the bounded stage write/validation completes.
                     accepted, reason = False, "request-or-socket-not-active"
                     state = broker.requests.get(request_id)
-                    if (state and state.client_id == client_id
-                        and registry.sockets.get(client_id) is websocket
-                        and state.terminal_event_type is None):
+                    if (
+                        state
+                        and state.owns_dispatch_socket(
+                            client_id, websocket, registry.sockets.get(client_id)
+                        )
+                        and state.terminal_event_type is None
+                        and state.completed_mono is None
+                    ):
                         try:
                             await asyncio.to_thread(
                                 generated_staging.ingest,
@@ -2484,9 +3141,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     active_state=broker.requests.get(request_id)
                     row=telemetry.get(request_id) or {}
                     owner=str(row.get("api_key_id") or "")
-                    if (active_state and active_state.client_id == client_id and owner
-                            and registry.sockets.get(client_id) is websocket
-                            and message.get("phase")=="before_terminal"):
+                    if (
+                        active_state
+                        and active_state.owns_dispatch_socket(
+                            client_id, websocket, registry.sockets.get(client_id)
+                        )
+                        and active_state.terminal_event_type is None
+                        and active_state.completed_mono is None
+                        and owner
+                        and message.get("phase") == "before_terminal"
+                    ):
                         try:
                             native_dom_evidence.save(request_id,owner,message.get("report"))
                         except (ValueError, TypeError, OSError):
@@ -2503,8 +3167,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     reason = "request-or-socket-not-active"
                     authorized = (
                         active_state is not None
-                        and active_state.client_id == client_id
-                        and registry.sockets.get(client_id) is websocket
+                        and active_state.owns_dispatch_socket(
+                            client_id, websocket, registry.sockets.get(client_id)
+                        )
+                        and active_state.terminal_event_type is None
+                        and active_state.completed_mono is None
                         and bool(owner)
                     )
                     if authorized:
@@ -2549,7 +3216,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     # request-to-Worker authority; probe events never reach the
                     # request terminal queue.
                     state = broker.requests.get(request_id)
-                    if state and state.client_id == client_id and registry.sockets.get(client_id) is websocket:
+                    if (
+                        state
+                        and state.owns_dispatch_socket(
+                            client_id, websocket, registry.sockets.get(client_id)
+                        )
+                        and state.terminal_event_type is None
+                        and state.completed_mono is None
+                    ):
                         try:
                             result = await worker_probes.ingest(
                                 request_id=request_id, worker_id=probe_worker_id(client_id),
@@ -2577,11 +3251,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "image.completed", "image.error", "image.cancelled",
                     }
                     active_state = broker.requests.get(request_id)
-                    if terminal_message and active_state and active_state.client_id == client_id:
+                    if not active_state or not active_state.owns_dispatch_socket(
+                        client_id, websocket, registry.sockets.get(client_id)
+                    ):
+                        # A valid extension token is not authority over every
+                        # Broker request. Reject cross-Worker, stale and same-ID
+                        # reconnect sockets before mutating request diagnostics.
+                        logger.warning(
+                            "Rejected Worker event without original dispatch socket request=%s client=%s type=%s",
+                            request_id, client_id, message_type,
+                        )
+                        continue
+                    record_terminal_receipt = bool(
+                        terminal_message
+                        and active_state.terminal_event_type is None
+                        and active_state.completed_mono is None
+                    )
+                    if record_terminal_receipt:
                         active_state.diagnostics["terminal_transport_server_seen"] = True
                         active_state.diagnostics["terminal_transport_server_received_at"] = time.time()
                         active_state.diagnostics["terminal_transport_payload_chars"] = len(str(message.get("text") or ""))
-                    accepted = await broker.publish(request_id, message)
+                    # The Broker repeats the socket/assignment check at its
+                    # publication boundary and rejects any server-finalized state.
+                    accepted = await broker.publish_worker_event(
+                        request_id,
+                        message,
+                        client_id=client_id,
+                        websocket=websocket,
+                        current_socket=registry.sockets.get(client_id),
+                    )
                     if accepted and message_type == "chat.completed" and active_state:
                         row = telemetry.get(request_id) or {}
                         owner = str(row.get("api_key_id") or "")
@@ -2591,26 +3289,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         active_state.diagnostics["native_snapshot_persisted"] = bool(
                             owner and native_content.persist(request_id, owner)
                         )
-                    if terminal_message:
-                        if active_state and active_state.client_id == client_id:
-                            active_state.diagnostics["terminal_transport_broker_accepted"] = bool(accepted)
-                            # Persist acknowledgement as an observation, never as
-                            # a competing completed/error terminal. If the API
-                            # handler is stuck in archival, the exported log
-                            # now reveals the precise boundary it reached.
-                            active_state.diagnostics["server_terminal_receipt_stage"] = (
-                                "broker-accepted" if accepted else "broker-rejected"
-                            )
-                            active_state.diagnostics["server_terminal_receipt_type"] = str(message_type)
-                            await telemetry.upsert({
-                                "request_id": request_id,
-                                "diagnostics": dict(active_state.diagnostics),
-                            })
-                        if not accepted:
-                            logger.warning(
-                                "Worker terminal not accepted request=%s type=%s active=%s",
-                                request_id, message_type, bool(active_state),
-                            )
+                    if record_terminal_receipt:
+                        active_state.diagnostics["terminal_transport_broker_accepted"] = bool(accepted)
+                        # Persist acknowledgement as an observation, never as
+                        # a competing completed/error terminal. If the API
+                        # handler is stuck in archival, the exported log
+                        # now reveals the precise boundary it reached.
+                        active_state.diagnostics["server_terminal_receipt_stage"] = (
+                            "broker-accepted" if accepted else "broker-rejected"
+                        )
+                        active_state.diagnostics["server_terminal_receipt_type"] = str(message_type)
+                        await telemetry.upsert({
+                            "request_id": request_id,
+                            "diagnostics": dict(active_state.diagnostics),
+                        })
+                    if terminal_message and not accepted:
+                        logger.warning(
+                            "Worker terminal not accepted request=%s type=%s active=%s",
+                            request_id, message_type, bool(active_state),
+                        )
         except WebSocketDisconnect:
             pass
         except Exception:
