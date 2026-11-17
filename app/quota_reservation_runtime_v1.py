@@ -52,6 +52,35 @@ def _price_from_catalog_snapshot(config: dict[str, Any], model_id: str) -> dict[
     return None
 
 
+def authorize_wallet_dispatch(app: Any, request_id: str, principal: Any) -> bool:
+    """Persist the wallet admission's dispatch boundary before any Worker send.
+
+    No-op for master keys, non-user keys, and intentionally unbilled requests.
+    A persistence/ownership error fails closed: the caller must not dispatch.
+    """
+    if str(getattr(principal, "kind", "")) == "master":
+        return False
+    accounts = getattr(app.state, "user_accounts", None)
+    billing = getattr(app.state, "user_billing", None)
+    key_id = str(getattr(principal, "key_id", "") or "")
+    if accounts is None or billing is None or not key_id:
+        return False
+    try:
+        owner = accounts.owner_for_key(key_id)
+        if not owner:
+            return False
+        return bool(billing.mark_dispatch_authorized(str(request_id), str(owner)))
+    except Exception as error:
+        logger.exception(
+            "Wallet dispatch authorization persistence failed request_id=%s error_type=%s",
+            request_id, type(error).__name__,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Wallet dispatch authorization could not be persisted",
+        ) from error
+
+
 def reserve_wallet_charge(
     app: Any, request_id: str, principal: Any, model_id: str,
     prompt_tokens: int, output_tokens: int,

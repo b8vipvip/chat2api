@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.config import Settings
@@ -15,6 +16,7 @@ from app.user_commerce import (
     BillingStore, InsufficientWalletBalance, PricingStore,
     WalletReservationConflict, WalletReservationError,
 )
+from app.quota_reservation_runtime_v1 import authorize_wallet_dispatch
 from app.user_console_v104_patch import install_user_console_v104_patch
 from app.v17_patch import install_v17_patch
 
@@ -77,6 +79,84 @@ def test_wallet_reservation_replay_cannot_adopt_or_release_original_hold(tmp_pat
     assert reopened.reservations["req_wallet_identity"]["reserved_cny_cents"] == original["reserved_cny_cents"]
     assert reopened.active_reservations_for_user(user_id)
     assert reopened.balance_cents(user_id) == 2_000
+
+
+def test_wallet_dispatch_authorization_fails_closed_when_owner_lookup_fails(tmp_path: Path) -> None:
+    def fail_owner_lookup(_key_id: str) -> str:
+        raise OSError("account store unavailable")
+
+    app = SimpleNamespace(state=SimpleNamespace(
+        user_accounts=SimpleNamespace(owner_for_key=fail_owner_lookup),
+        user_billing=BillingStore(tmp_path),
+    ))
+    with pytest.raises(HTTPException) as error:
+        authorize_wallet_dispatch(
+            app, "req_owner_lookup_failure",
+            SimpleNamespace(kind="user", key_id="key-owner-failure"),
+        )
+    assert error.value.status_code == 503
+
+
+def test_wallet_pre_dispatch_hold_recovery_is_versioned_and_durable(tmp_path: Path, monkeypatch) -> None:
+    user_id = "usr_pre_dispatch_recovery"
+    price = _price_row("paid-model", 10_000.0)
+    billing = BillingStore(tmp_path)
+    billing.credit(user_id, 2_000)
+
+    for request_id in ("req_unstarted", "req_dispatched", "req_legacy"):
+        billing.reserve_for_request(
+            user_id, request_id,
+            model_id="paid-model", estimated_cny_cents=100,
+            input_tokens=10, output_tokens=4096,
+            price_snapshot=price, price_catalog_snapshot={"paid-model": price},
+            usd_cny_rate=7.0,
+        )
+
+    fake_app = SimpleNamespace(state=SimpleNamespace(
+        user_accounts=SimpleNamespace(owner_for_key=lambda _key_id: user_id),
+        user_billing=billing,
+    ))
+    assert authorize_wallet_dispatch(
+        fake_app, "req_dispatched", SimpleNamespace(kind="user", key_id="key-pre-dispatch"),
+    ) is True
+    assert billing.reservations["req_dispatched"]["dispatch_authorized_at"]
+
+    # Simulate a reservation written by a pre-protocol release where dispatch
+    # ownership cannot be inferred. Startup must preserve it.
+    legacy = billing.reservations["req_legacy"]
+    legacy.pop("admission_protocol_version")
+    legacy.pop("dispatch_authorized_at")
+    billing._save()
+
+    reopened = BillingStore(tmp_path)
+    unstarted = reopened.unstarted_admissions()
+    assert [row["request_id"] for row in unstarted] == ["req_unstarted"]
+    assert reopened.reservations["req_unstarted"]["state"] == "reserved"
+    assert reopened.reservations["req_dispatched"]["state"] == "reserved"
+    assert reopened.reservations["req_dispatched"]["dispatch_authorized_at"]
+    assert reopened.reservations["req_legacy"]["state"] == "reserved"
+    assert reopened.active_reservations_for_user(user_id) == [
+        reopened.reservations["req_unstarted"],
+        reopened.reservations["req_dispatched"],
+        reopened.reservations["req_legacy"],
+    ]
+
+    # A failed authorization-marker write rolls back the in-memory mutation.
+    failing = BillingStore(tmp_path)
+    failing.reserve_for_request(
+        user_id, "req_marker_write_failure",
+        model_id="paid-model", estimated_cny_cents=100,
+        input_tokens=10, output_tokens=4096,
+        price_snapshot=price, price_catalog_snapshot={"paid-model": price},
+        usd_cny_rate=7.0,
+    )
+    original = dict(failing.reservations["req_marker_write_failure"])
+    def fail_save():
+        raise OSError("simulated wallet ledger write failure")
+    monkeypatch.setattr(failing, "_save", fail_save)
+    with pytest.raises(OSError, match="write failure"):
+        failing.mark_dispatch_authorized("req_marker_write_failure", user_id)
+    assert failing.reservations["req_marker_write_failure"] == original
 
 
 def test_concurrent_wallet_reservations_cannot_overcommit_available_balance(tmp_path: Path) -> None:

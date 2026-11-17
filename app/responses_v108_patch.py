@@ -317,6 +317,8 @@ async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], princi
                 request_id, type(release_error).__name__,
             )
 
+    from .quota_reservation_runtime_v1 import authorize_wallet_dispatch
+
     quota_reservation = None
     if not internal_repair:
         raw_output_budget = body.get("max_output_tokens")
@@ -434,6 +436,9 @@ async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], princi
             raise
     registry.busy_clients.add(client_id)
     try:
+        await asyncio.to_thread(
+            authorize_wallet_dispatch, app, request_id, principal,
+        )
         await app.state.chat_request_service.dispatch(
             client_id,
             request_id=request_id,

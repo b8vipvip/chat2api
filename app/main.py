@@ -83,6 +83,7 @@ from .playground_stream_contract_v293 import playground_stream_attribution
 from .playground_request_evidence_v207 import request_test_index, playground_link
 from .token_usage import usage_for
 from .quota_reservation_runtime_v1 import (
+    authorize_wallet_dispatch,
     is_request_id_conflict,
     reserve_image_generation_quota,
     reserve_request_quota,
@@ -160,19 +161,112 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         wallet_reconciler = getattr(app.state, "wallet_charge_reconciler", None)
         billing_store = getattr(app.state, "user_billing", None)
-        if callable(wallet_reconciler) and billing_store is not None:
-            for user_id in billing_store.active_reservation_user_ids():
-                try:
-                    wallet_reconciler(user_id)
-                except Exception as error:
-                    # An unresolved hold remains reserved; startup must not
-                    # invent a release or prevent unrelated users from serving.
-                    logger.warning(
-                        "Wallet reservation startup recovery deferred error_type=%s",
-                        type(error).__name__,
+        if billing_store is not None:
+            try:
+                unstarted_wallet_holds = await asyncio.to_thread(
+                    billing_store.unstarted_admissions
+                )
+            except Exception as error:
+                unstarted_wallet_holds = []
+                logger.warning(
+                    "Wallet pre-dispatch startup scan deferred error_type=%s",
+                    type(error).__name__,
+                )
+            quota_store = getattr(app.state, "quota_reservations", None)
+            for hold in unstarted_wallet_holds:
+                request_id = str(hold.get("request_id") or "")
+                user_id = str(hold.get("user_id") or "")
+                token_row = None
+                if quota_store is not None and request_id:
+                    try:
+                        token_row = await asyncio.to_thread(quota_store.get, request_id)
+                    except Exception as error:
+                        logger.warning(
+                            "Pre-dispatch token reservation lookup deferred request_id=%s error_type=%s",
+                            request_id, type(error).__name__,
+                        )
+                key_id = str((token_row or {}).get("key_id") or "")
+                existing = telemetry.get(request_id) if request_id else None
+                if existing is None and request_id:
+                    persisted_lookup = getattr(telemetry, "get_many_persisted", None)
+                    if callable(persisted_lookup):
+                        try:
+                            existing = (await asyncio.to_thread(
+                                persisted_lookup, {request_id},
+                            )).get(request_id)
+                        except Exception as error:
+                            logger.warning(
+                                "Pre-dispatch telemetry lookup deferred request_id=%s error_type=%s",
+                                request_id, type(error).__name__,
+                            )
+                existing_key_id = str((existing or {}).get("api_key_id") or "")
+                if key_id and existing_key_id and key_id != existing_key_id:
+                    logger.error(
+                        "Pre-dispatch wallet/token identity conflict request_id=%s",
+                        request_id,
                     )
-        wallet_reconciler = getattr(app.state, "wallet_charge_reconciler", None)
-        billing_store = getattr(app.state, "user_billing", None)
+                    continue
+                if str((existing or {}).get("status") or "").lower() == "completed":
+                    logger.error(
+                        "Pre-dispatch wallet marker conflicts with completed telemetry request_id=%s",
+                        request_id,
+                    )
+                    continue
+                existing_diagnostics = (
+                    existing.get("diagnostics")
+                    if isinstance((existing or {}).get("diagnostics"), dict) else {}
+                )
+                row_payload = {
+                    **(existing or {}),
+                    "request_id": request_id,
+                    "status": "stalled",
+                    "error": "Server restarted before Worker dispatch",
+                    "diagnostics": {
+                        **existing_diagnostics,
+                        "request_admission_recovery": "server-restart-before-worker-dispatch",
+                        "request_admission_failure_kind": "server_restart",
+                    },
+                }
+                if key_id or existing_key_id:
+                    row_payload["api_key_id"] = key_id or existing_key_id
+                try:
+                    recovered_row = await telemetry.upsert(row_payload)
+                except Exception as error:
+                    recovered_row = telemetry.get(request_id) if request_id else None
+                    recovered_row = recovered_row or existing
+                    logger.warning(
+                        "Wallet pre-dispatch telemetry recovery failed request_id=%s error_type=%s",
+                        request_id, type(error).__name__,
+                    )
+                # The first persisted completed terminal always wins. Do not
+                # release a hold if contradictory completion evidence exists;
+                # leave it for normal charge reconciliation instead.
+                if str((recovered_row or {}).get("status") or "").lower() == "completed":
+                    logger.error(
+                        "Pre-dispatch wallet marker conflicts with completed telemetry request_id=%s",
+                        request_id,
+                    )
+                    continue
+                if quota_store is not None and key_id:
+                    try:
+                        await asyncio.to_thread(quota_store.release, request_id, key_id)
+                    except Exception as error:
+                        logger.warning(
+                            "Pre-dispatch token hold release deferred request_id=%s error_type=%s",
+                            request_id, type(error).__name__,
+                        )
+                if user_id and request_id:
+                    try:
+                        await asyncio.to_thread(
+                            billing_store.release_reservation,
+                            request_id, user_id,
+                            reason="server_restart_before_worker_dispatch",
+                        )
+                    except Exception as error:
+                        logger.warning(
+                            "Pre-dispatch wallet hold release deferred request_id=%s error_type=%s",
+                            request_id, type(error).__name__,
+                        )
         if callable(wallet_reconciler) and billing_store is not None:
             for user_id in billing_store.active_reservation_user_ids():
                 try:
@@ -2429,6 +2523,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 attachments_count=len(attachments),
                 input_file_ids=[str(item["file_id"]) for item in attachments],
             )
+            await asyncio.to_thread(
+                authorize_wallet_dispatch, app, request_id, principal,
+            )
             await chat_request_service.dispatch(
                 client_id,
                 request_id=request_id,
@@ -2699,6 +2796,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "usage": {}, "timings": state.timings(), "diagnostics": image_diagnostics(), "error": None,
                 },
                 create_only=True,
+            )
+            await asyncio.to_thread(
+                authorize_wallet_dispatch, app, request_id, principal,
             )
             await registry.send(
                 client_id,
@@ -3214,9 +3314,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     if accepted and message_type == "chat.completed" and active_state:
                         row = telemetry.get(request_id) or {}
                         owner = str(row.get("api_key_id") or "")
-                        # Disk persistence is a separate delivery projection.
-                        # Its failure must remain visible without reversing an
-                        # already accepted Broker terminal or dropping the socket.
+                        # This is the actual disk-persistence proof; the
+                        # earlier per-chunk ACK establishes only validated,
+                        # in-memory publication. Neither result owns terminal.
                         active_state.diagnostics["native_snapshot_persisted"] = (
                             _native_snapshot_persist_best_effort(
                                 native_content, request_id, owner, active_state.diagnostics,
