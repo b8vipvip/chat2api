@@ -401,11 +401,19 @@ def test_broker_preserves_bounded_worker_dispatch_failure_diagnostics() -> None:
                 "request_v6_dispatch_timing_version": 1,
                 "request_v6_dispatch_elapsed_ms": 160123.46,
                 "request_v6_dispatch_stage_evidence_v1": {
+                    "prepare_attachments": {
+                        "status": "failed",
+                        "started_elapsed_ms": 8,
+                        "duration_ms": 160000,
+                        "completed_elapsed_ms": 160008,
+                        "error_type": "TimeoutError",
+                        "raw_attachment_name": "must not be persisted",
+                    },
                     "write_prompt": {
                         "status": "completed",
-                        "started_elapsed_ms": 10,
+                        "started_elapsed_ms": 160010,
                         "duration_ms": 25.5,
-                        "completed_elapsed_ms": 35.5,
+                        "completed_elapsed_ms": 160035.5,
                     },
                     "submit_and_confirm": {
                         "status": "failed",
@@ -444,6 +452,11 @@ def test_broker_preserves_bounded_worker_dispatch_failure_diagnostics() -> None:
         assert state.diagnostics["retry_after_ms"] == 2500.0
         assert state.diagnostics["request_v6_dispatch_elapsed_ms"] == 160123.5
         evidence = state.diagnostics["request_v6_dispatch_stage_evidence_v1"]
+        assert evidence["prepare_attachments"]["status"] == "failed"
+        assert evidence["prepare_attachments"]["duration_ms"] == 160000.0
+        assert evidence["prepare_attachments"]["error_type"] == "TimeoutError"
+        assert "raw_attachment_name" not in evidence["prepare_attachments"]
+        assert evidence["write_prompt"]["status"] == "completed"
         assert evidence["submit_and_confirm"]["status"] == "failed"
         assert evidence["submit_and_confirm"]["error_type"] == "TimeoutError"
         assert "raw_page_text" not in evidence["submit_and_confirm"]

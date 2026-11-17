@@ -303,7 +303,7 @@ _WORKER_DISPATCH_FAILURE_STAGES = frozenset({
     "target-tab-lookup", "ensure-content", "content-script-message",
 })
 _REQUEST_V6_DISPATCH_STAGES = (
-    "resolve_blocking_interruption", "write_prompt", "submit_and_confirm",
+    "resolve_blocking_interruption", "prepare_attachments", "write_prompt", "submit_and_confirm",
 )
 
 
@@ -342,7 +342,7 @@ def _worker_dispatch_failure_provenance(event: dict[str, Any]) -> dict[str, Any]
     evidence = raw.get("request_v6_dispatch_stage_evidence_v1")
     if isinstance(evidence, dict):
         safe_evidence: dict[str, dict[str, Any]] = {}
-        # Iterate only the three known stages. Do not scan an untrusted
+        # Iterate only the four known stages. Do not scan an untrusted
         # Worker-supplied mapping with an arbitrary number of keys.
         for stage_name in _REQUEST_V6_DISPATCH_STAGES:
             entry = evidence.get(stage_name)
