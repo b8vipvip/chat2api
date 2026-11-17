@@ -104,6 +104,9 @@ with tempfile.TemporaryDirectory() as tmp:
     assert target["model"] == "gpt-5.5-mini"
     assert target["reasoning_effort"] is None
 
+    # Direct Registry tests must model the same Broker admission lease that
+    # production ChatRequestService creates before any Worker dispatch.
+    asyncio.run(app.state.broker.create("req-free", "free-ext"))
     token = v13_patch._target_context.set(target)
     try:
         assert registry.resolve_client(None) == "free-ext"
@@ -117,7 +120,9 @@ with tempfile.TemporaryDirectory() as tmp:
     assert sent["options"]["mini_route"] == "free-native"
     assert sent["options"]["fallback_model"] is None
 
+    asyncio.run(app.state.broker.release("req-free"))
     registry.busy_clients.add("free-ext")
+    asyncio.run(app.state.broker.create("req-paid", "paid-ext"))
     token = v13_patch._target_context.set(target)
     try:
         assert registry.resolve_client(None) == "paid-ext"
@@ -127,6 +132,7 @@ with tempfile.TemporaryDirectory() as tmp:
     finally:
         v13_patch._target_context.reset(token)
     sent = paid_socket.payloads[-1]
+    asyncio.run(app.state.broker.release("req-paid"))
     assert sent["options"]["mini_route"] == "gpt-5.5-instant-fallback"
     assert sent["options"]["fallback_model"] == "gpt-5.5"
     assert sent["options"]["fallback_reasoning_effort"] == "low"
