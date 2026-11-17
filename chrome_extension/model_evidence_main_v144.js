@@ -238,14 +238,26 @@
 
   function observeResponse(response, streamId, requestInfo) {
     let clone;
-    try { clone = response.clone(); } catch (_) { return; }
+    try { clone = response.clone(); }
+    catch (_) {
+      // The page's native fetch still owns this response. Tell the isolated
+      // bridge that this stream cannot be observed so it can release the
+      // request-scoped model authority rather than leave it active forever.
+      post({ phase: "unavailable", stream_id: streamId });
+      return;
+    }
     const headerModel = ["x-openai-model", "openai-model", "x-gpt-model", "x-model"]
       .map(name => normalizeModel(clone.headers?.get?.(name))).find(Boolean) || null;
     post({ phase: "response", stream_id: streamId, status: Number(clone.status || 0), ok: Boolean(clone.ok),
       request_model: requestInfo.requestModel, request_wire_model: requestInfo.requestWireModel,
       request_rewritten: requestInfo.rewritten, authority_violation: requestInfo.authorityViolation, header_model: headerModel });
     const reader = clone.body?.getReader?.();
-    if (!reader) return;
+    if (!reader) {
+      // Header-only / non-streaming responses have no clone reader to emit
+      // native EOF. Complete the evidence lifecycle explicitly.
+      post({ phase: "done", stream_id: streamId, bytes: 0, observation_limit_hit: false });
+      return;
+    }
     const decoder = new TextDecoder("utf-8");
     let buffer = "", bytes = 0, lastFingerprint = "";
     // SSE replies can contain thousands of events. Rewalking the full
