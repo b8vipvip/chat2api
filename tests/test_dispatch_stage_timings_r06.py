@@ -105,6 +105,40 @@ def test_dispatch_timing_missing_or_overlapping_events_are_unknown() -> None:
     assert invalid.timings()["server_send_start_after_broker_ms"] is None
 
 
+def test_chat_started_records_response_start_and_preserves_legacy_browser_alias() -> None:
+    async def exercise() -> None:
+        broker = RequestBroker()
+        state = await broker.create("req_r06_response_start_semantics", "ext_r06")
+        ack = await broker.publish("req_r06_response_start_semantics", {
+            "type": "chat.diagnostics",
+            "request_id": "req_r06_response_start_semantics",
+            "diagnostics": {
+                "worker_content_dispatch_ack_v1": True,
+                "worker_content_dispatch_ack_source": "background-tabs-sendMessage-request-v6",
+            },
+        })
+        assert ack is True
+        started = await broker.publish("req_r06_response_start_semantics", {
+            "type": "chat.started",
+            "request_id": "req_r06_response_start_semantics",
+            "diagnostics": {"response_start_source": "network-evidence-v57"},
+        })
+        assert started is True
+        assert state.response_started_mono is not None
+        assert state.browser_started_mono == state.response_started_mono
+        durations = state.timings()
+        assert durations["response_started_ms"] is not None
+        assert durations["worker_content_ack_to_response_started_ms"] is not None
+        assert durations["browser_started_ms"] == durations["response_started_ms"]
+        assert (
+            durations["worker_content_ack_to_browser_started_ms"]
+            == durations["worker_content_ack_to_response_started_ms"]
+        )
+        await broker.release("req_r06_response_start_semantics")
+
+    asyncio.run(exercise())
+
+
 def test_production_chat_ingress_only_marks_socket_send_not_worker_ack() -> None:
     source = (ROOT / "app/main.py").read_text(encoding="utf-8")
     chat = source[
