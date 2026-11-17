@@ -328,6 +328,8 @@ class ClientRegistry:
 
         request_id = str(payload.get("request_id") or "") if isinstance(payload, dict) else ""
         broker = getattr(self, "request_broker", None)
+        if request_type in initial_request_types and broker is not None and not request_id.strip():
+            raise RuntimeError("Request ID is required for Worker dispatch")
         dispatch_state = (
             getattr(broker, "requests", {}).get(request_id)
             if broker and request_id and request_type in initial_request_types

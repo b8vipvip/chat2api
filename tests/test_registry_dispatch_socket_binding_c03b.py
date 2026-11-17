@@ -52,6 +52,15 @@ def test_registry_binds_every_broker_request_family_including_legacy_dictation(t
         assert all(state.dispatch_socket is socket for state in states.values())
         assert [item["type"] for item in socket.sent] == list(request_types)
 
+        # An initial dispatch without a request ID must not bypass the
+        # Broker lease requirement, even when the Worker socket is healthy.
+        for payload in (
+            {"type": "chat.request"},
+            {"type": "chat.request", "request_id": ""},
+        ):
+            with pytest.raises(RuntimeError, match="Request ID is required for Worker dispatch"):
+                await registry.send("worker-a", payload)
+
         # An initial dispatch with an unknown/released Broker lease must not
         # reach the Worker even when the client socket itself is healthy.
         with pytest.raises(RuntimeError, match="Request lease is no longer active"):
