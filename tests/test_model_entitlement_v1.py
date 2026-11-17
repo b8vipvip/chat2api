@@ -716,6 +716,7 @@ def test_responses_hosted_image_tool_enforces_key_and_server_owned_image_model(t
     app, _ = build_app(tmp_path, image_executor=image_executor)
     holder["app"] = app
     app.state.responses_v108_store = {}
+    app.state.responses_v108_owners = {}
     principal = ApiPrincipal(
         key_id="key_1",
         name="image-key",
