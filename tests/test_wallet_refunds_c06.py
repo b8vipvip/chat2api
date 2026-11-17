@@ -112,9 +112,9 @@ def test_wallet_pre_dispatch_hold_recovery_is_versioned_and_durable(tmp_path: Pa
     billing._save()
 
     reopened = BillingStore(tmp_path)
-    assert reopened.release_unstarted_admissions() == 1
-    assert reopened.reservations["req_unstarted"]["state"] == "released"
-    assert reopened.reservations["req_unstarted"]["release_reason"] == "server_restart_before_worker_dispatch"
+    unstarted = reopened.unstarted_admissions()
+    assert [row["request_id"] for row in unstarted] == ["req_unstarted"]
+    assert reopened.reservations["req_unstarted"]["state"] == "reserved"
     assert reopened.reservations["req_dispatched"]["state"] == "reserved"
     assert reopened.reservations["req_dispatched"]["dispatch_authorized_at"]
     assert reopened.reservations["req_legacy"]["state"] == "reserved"

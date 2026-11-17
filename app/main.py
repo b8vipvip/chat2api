@@ -132,21 +132,75 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         billing_store = getattr(app.state, "user_billing", None)
         if billing_store is not None:
             try:
-                released_unstarted = await asyncio.to_thread(
-                    billing_store.release_unstarted_admissions
+                unstarted_wallet_holds = await asyncio.to_thread(
+                    billing_store.unstarted_admissions
                 )
-                if released_unstarted:
-                    logger.warning(
-                        "Wallet startup released %s pre-dispatch admission hold(s)",
-                        released_unstarted,
-                    )
             except Exception as error:
-                # A failed ledger write is not permission to release funds.
-                # Keep the holds active for explicit reconciliation.
+                unstarted_wallet_holds = []
                 logger.warning(
-                    "Wallet pre-dispatch startup recovery deferred error_type=%s",
+                    "Wallet pre-dispatch startup scan deferred error_type=%s",
                     type(error).__name__,
                 )
+            quota_store = getattr(app.state, "quota_reservations", None)
+            for hold in unstarted_wallet_holds:
+                request_id = str(hold.get("request_id") or "")
+                user_id = str(hold.get("user_id") or "")
+                token_row = (
+                    await asyncio.to_thread(quota_store.get, request_id)
+                    if quota_store is not None and request_id else None
+                )
+                key_id = str((token_row or {}).get("key_id") or "")
+                existing = telemetry.get(request_id) if request_id else None
+                row_payload = {
+                    "request_id": request_id,
+                    "status": "stalled",
+                    "error": "Server restarted before Worker dispatch",
+                    "diagnostics": {
+                        "request_admission_recovery": "server-restart-before-worker-dispatch",
+                        "request_admission_failure_kind": "server_restart",
+                    },
+                }
+                if key_id:
+                    row_payload["api_key_id"] = key_id
+                elif isinstance(existing, dict) and existing.get("api_key_id"):
+                    row_payload["api_key_id"] = str(existing["api_key_id"])
+                try:
+                    recovered_row = await telemetry.upsert(row_payload)
+                except Exception as error:
+                    recovered_row = telemetry.get(request_id) if request_id else None
+                    logger.warning(
+                        "Wallet pre-dispatch telemetry recovery failed request_id=%s error_type=%s",
+                        request_id, type(error).__name__,
+                    )
+                # The first persisted completed terminal always wins. Do not
+                # release a hold if contradictory completion evidence exists;
+                # leave it for normal charge reconciliation instead.
+                if str((recovered_row or {}).get("status") or "").lower() == "completed":
+                    logger.error(
+                        "Pre-dispatch wallet marker conflicts with completed telemetry request_id=%s",
+                        request_id,
+                    )
+                    continue
+                if quota_store is not None and key_id:
+                    try:
+                        await asyncio.to_thread(quota_store.release, request_id, key_id)
+                    except Exception as error:
+                        logger.warning(
+                            "Pre-dispatch token hold release deferred request_id=%s error_type=%s",
+                            request_id, type(error).__name__,
+                        )
+                if user_id and request_id:
+                    try:
+                        await asyncio.to_thread(
+                            billing_store.release_reservation,
+                            request_id, user_id,
+                            reason="server_restart_before_worker_dispatch",
+                        )
+                    except Exception as error:
+                        logger.warning(
+                            "Pre-dispatch wallet hold release deferred request_id=%s error_type=%s",
+                            request_id, type(error).__name__,
+                        )
         if callable(wallet_reconciler) and billing_store is not None:
             for user_id in billing_store.active_reservation_user_ids():
                 try:

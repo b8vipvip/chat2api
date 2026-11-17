@@ -1067,40 +1067,22 @@ class BillingStore:
                 raise
             return True
 
-    def release_unstarted_admissions(self) -> int:
-        """Release only new-protocol wallet holds proven not to have been dispatched.
+    def unstarted_admissions(self) -> list[dict[str, Any]]:
+        """Return protocol-v1 wallet holds that never authorized Worker dispatch.
 
-        This runs before the server accepts traffic. Protocol-v1 reservations
-        start without a dispatch marker; every production API writes its
-        request-history row and then durably marks dispatch authorization
-        before sending to a Worker. An absent marker therefore proves that the
-        previous process never authorized Worker dispatch. Legacy reservations
-        are deliberately preserved because they lack this proof.
+        The production lifespan turns these into stalled request-history rows
+        (releasing token reservations through the existing accounting hook)
+        and then releases the wallet hold. Legacy and dispatch-authorized rows
+        are excluded because their Worker execution status cannot be inferred.
         """
         with self.lock:
-            candidates = {
-                request_id: dict(row)
-                for request_id, row in self.reservations.items()
+            rows = [
+                dict(row) for row in self.reservations.values()
                 if row.get("state") == "reserved"
                 and row.get("admission_protocol_version") == 1
                 and row.get("dispatch_authorized_at") is None
-            }
-            if not candidates:
-                return 0
-            now = _now()
-            for request_id in candidates:
-                self.reservations[request_id].update({
-                    "state": "released",
-                    "release_reason": "server_restart_before_worker_dispatch",
-                    "updated_at": now,
-                })
-            try:
-                self._save()
-            except Exception:
-                for request_id, previous in candidates.items():
-                    self.reservations[request_id] = previous
-                raise
-            return len(candidates)
+            ]
+        return sorted(rows, key=lambda row: str(row.get("created_at") or ""))
 
     def available_balance_cents(self, user_id: str) -> int:
         with self.lock:
