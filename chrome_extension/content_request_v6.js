@@ -3809,7 +3809,20 @@
         },
       });
     } finally {
-      if (state.active === active) state.active = null;
+      if (state.active === active) {
+        // Release the page-world model rewrite only when this request-v6
+        // lifecycle is terminal. A native /conversation SSE EOF may be an
+        // intermediate tool turn and must not revoke a still-active request.
+        try {
+          globalThis.postMessage({
+            source: "chat2api-model-authority-v144",
+            request_id: active.requestId,
+            authority: null,
+            terminal: true,
+          }, "*");
+        } catch (_) {}
+        state.active = null;
+      }
       if (v5?.active === active) v5.active = null;
     }
   }
