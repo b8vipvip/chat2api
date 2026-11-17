@@ -994,4 +994,48 @@ def test_wallet_admission_uses_one_immutable_pricing_snapshot(tmp_path: Path, mo
     billing_file = BillingStore(tmp_path)
     assert billing_file.reservations["req_atomic_price_snapshot_123"]["price_snapshot"]["input_usd_per_million"] == 10.0
 
+def test_wallet_dispatch_fails_closed_when_owned_key_has_no_admission(tmp_path: Path) -> None:
+    from app.quota_reservation_runtime_v1 import authorize_wallet_dispatch
 
+    billing = BillingStore(tmp_path)
+    app = SimpleNamespace(state=SimpleNamespace(
+        user_accounts=SimpleNamespace(owner_for_key=lambda _key_id: "user-owned"),
+        user_billing=billing,
+    ))
+    principal = SimpleNamespace(kind="managed", key_id="key-owned")
+
+    with pytest.raises(HTTPException) as error:
+        authorize_wallet_dispatch(app, "req_missing_wallet_admission", principal)
+
+    assert error.value.status_code == 503
+    assert "could not be persisted" in str(error.value.detail)
+    billing.close()
+
+
+def test_wallet_dispatch_fails_closed_when_billing_store_is_missing_for_owned_key() -> None:
+    from app.quota_reservation_runtime_v1 import authorize_wallet_dispatch
+
+    app = SimpleNamespace(state=SimpleNamespace(
+        user_accounts=SimpleNamespace(owner_for_key=lambda _key_id: "user-owned"),
+        user_billing=None,
+    ))
+    principal = SimpleNamespace(kind="managed", key_id="key-owned")
+
+    with pytest.raises(HTTPException) as error:
+        authorize_wallet_dispatch(app, "req_missing_billing_store", principal)
+
+    assert error.value.status_code == 503
+
+
+def test_wallet_dispatch_keeps_legacy_unowned_key_without_reservation_compatible(tmp_path: Path) -> None:
+    from app.quota_reservation_runtime_v1 import authorize_wallet_dispatch
+
+    billing = BillingStore(tmp_path)
+    app = SimpleNamespace(state=SimpleNamespace(
+        user_accounts=SimpleNamespace(owner_for_key=lambda _key_id: None),
+        user_billing=billing,
+    ))
+    principal = SimpleNamespace(kind="managed", key_id="legacy-key")
+
+    assert authorize_wallet_dispatch(app, "req_legacy_unowned", principal) is False
+    billing.close()
