@@ -63,10 +63,12 @@ def authorize_wallet_dispatch(app: Any, request_id: str, principal: Any) -> bool
     accounts = getattr(app.state, "user_accounts", None)
     billing = getattr(app.state, "user_billing", None)
     key_id = str(getattr(principal, "key_id", "") or "")
-    owner = accounts.owner_for_key(key_id) if accounts is not None and key_id else None
-    if not owner or billing is None:
+    if accounts is None or billing is None or not key_id:
         return False
     try:
+        owner = accounts.owner_for_key(key_id)
+        if not owner:
+            return False
         return bool(billing.mark_dispatch_authorized(str(request_id), str(owner)))
     except Exception as error:
         logger.exception(
