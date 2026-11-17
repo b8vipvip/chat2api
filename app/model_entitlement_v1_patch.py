@@ -319,6 +319,7 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
             return {"allowed": True, "reason": "master_key", "model": model_id, "matched_rules": []}
         owner_id = _identity(key_id)
         tenant_id, tenant_role = _tenant_context_for_key(key_id, owner_id)
+        user_role, subscription_plan = _user_policy_context(owner_id)
         return store.evaluate(
             str(model_id or ""),
             key_id=str(key_id),
