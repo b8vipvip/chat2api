@@ -1,3 +1,4 @@
+import asyncio
 import base64
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -177,6 +178,7 @@ def test_voice_dispatch_marker_storage_failure_preserves_503_and_never_sends(tmp
         raise OSError("simulated wallet marker storage failure")
 
     app.state.user_billing = SimpleNamespace(mark_dispatch_authorized=fail_dispatch_marker)
+    public, managed_token = asyncio.run(app.state.api_keys.create("Managed Voice"))
     sent: list[dict] = []
 
     async def fake_send(client_id: str, payload: dict) -> None:
@@ -188,7 +190,8 @@ def test_voice_dispatch_marker_storage_failure_preserves_503_and_never_sends(tmp
         with client.websocket_connect(f"/ws/extensions/{client_id}?token={extension_token}") as websocket:
             websocket.receive_json()
             response = client.post(
-                "/v1/audio/speech", headers=headers(),
+                "/v1/audio/speech",
+                headers={"Authorization": f"Bearer {managed_token}"},
                 json={"model": "gpt-live", "input": "marker failure must fail closed", "timeout": 30},
             )
 
