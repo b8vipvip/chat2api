@@ -1,4 +1,4 @@
-"""R-06: separate server admission/send time from Worker browser startup."""
+"""R-06: separate server admission/send time from Worker response start."""
 from __future__ import annotations
 
 import asyncio
