@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Awaitable, Callable
 
@@ -121,6 +122,46 @@ def _trace(authority: dict[str, Any] | None, evidence: dict[str, Any] | None) ->
     }
 
 
+def _schedule_telemetry_projection(
+    pending: dict[str, asyncio.Task[None]], telemetry: Any, row: dict[str, Any],
+    *, request_id: str, projection: str,
+) -> None:
+    """Persist optional model telemetry off the request/Worker event path.
+
+    Per-request tasks are chained so the initial requested/routed projection
+    cannot finish after and overwrite a later accepted served-model projection.
+    A bounded timeout prevents a wedged store from retaining tasks forever.
+    """
+    previous = pending.get(request_id)
+
+    async def persist() -> None:
+        if previous is not None:
+            await previous
+        try:
+            await asyncio.wait_for(telemetry.upsert(row), timeout=2.0)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Timed out persisting model telemetry request_id=%s projection=%s",
+                request_id, projection,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to persist model telemetry request_id=%s projection=%s",
+                request_id, projection,
+            )
+
+    task = asyncio.create_task(
+        persist(), name=f"model-telemetry-{projection}-{request_id[:12]}",
+    )
+    pending[request_id] = task
+
+    def clear(completed: asyncio.Task[None]) -> None:
+        if pending.get(request_id) is completed:
+            pending.pop(request_id, None)
+
+    task.add_done_callback(clear)
+
+
 def _patch_admin_html() -> None:
     html = admin_module.ADMIN_HTML
     if 'data-model-evidence-v144="1"' in html:
@@ -163,6 +204,7 @@ def install_model_observability_v144_patch(app: FastAPI) -> FastAPI:
     base_publish = broker.publish
     base_release = broker.release
     authorities: dict[str, dict[str, Any]] = {}
+    projection_tasks: dict[str, asyncio.Task[None]] = {}
 
     async def send_with_model_authority(client_id: str, message: dict[str, Any]) -> None:
         if isinstance(message, dict) and str(message.get("type") or "") == "chat.request":
@@ -190,20 +232,16 @@ def install_model_observability_v144_patch(app: FastAPI) -> FastAPI:
                 message["routing"] = routing
                 if request_id:
                     authorities[request_id] = authority
-                    try:
-                        await telemetry.upsert({
+                    _schedule_telemetry_projection(
+                        projection_tasks, telemetry,
+                        {
                             "request_id": request_id,
                             **_trace(authority, None),
                             "client_id": client_id,
-                        })
-                    except Exception:
-                        # Model routing metadata is carried by the request and
-                        # in-memory authority map; telemetry must not block the
-                        # actual Worker dispatch when its store is unavailable.
-                        logger.exception(
-                            "Failed to persist model routing projection request_id=%s",
-                            request_id,
-                        )
+                        },
+                        request_id=request_id,
+                        projection="model-routing",
+                    )
         await base_send(client_id, message)
 
     async def publish_with_model_evidence(request_id: str, event: dict[str, Any]) -> bool:
@@ -223,11 +261,16 @@ def install_model_observability_v144_patch(app: FastAPI) -> FastAPI:
                     if state is not None:
                         state.diagnostics.update(trace)
                         state.diagnostics["model_evidence_v144"] = evidence
-                    # Telemetry is a best-effort projection. Once Broker has
-                    # accepted an event, an observability-store outage must not
-                    # turn that accepted event into an apparent Worker failure
-                    # or cause a duplicate terminal retry.
-                    await telemetry.upsert({"request_id": str(request_id), **trace})
+                    # Broker state is updated synchronously above. Persist the
+                    # optional history projection off the Worker socket path;
+                    # a slow telemetry store must not delay later deltas or
+                    # terminal delivery. Per-request chaining preserves order.
+                    _schedule_telemetry_projection(
+                        projection_tasks, telemetry,
+                        {"request_id": str(request_id), **trace},
+                        request_id=str(request_id),
+                        projection="served-model-evidence",
+                    )
             except Exception:
                 logger.exception(
                     "Accepted Broker event but failed to project model evidence request_id=%s",
@@ -251,6 +294,7 @@ def install_model_observability_v144_patch(app: FastAPI) -> FastAPI:
     broker.publish = publish_with_model_evidence
     broker.release = release_with_model_authority
     app.state.model_authorities_v144 = authorities
+    app.state.model_observability_v144_projection_tasks = projection_tasks
     _patch_admin_html()
     app.state.model_observability_v144_installed = True
     app.state.model_observability_revision = PATCH_REVISION
