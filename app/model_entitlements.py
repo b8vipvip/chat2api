@@ -18,10 +18,13 @@ from typing import Any
 from .model_catalog import normalize_concrete_model_id
 
 
-SUBJECT_TYPES = frozenset({"global", "key", "user", "tenant", "tenant_role"})
+SUBJECT_TYPES = frozenset({
+    "global", "key", "user", "tenant", "tenant_role", "user_role", "subscription_plan",
+})
 EFFECTS = frozenset({"allow", "deny"})
 MAX_MODELS = 200
 SUBJECT_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,160}$")
+ROLE_OR_PLAN_ID = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 
 
 class ModelEntitlementError(ValueError):
@@ -59,9 +62,15 @@ class ModelEntitlementStore:
         self.db = sqlite3.connect(str(self.path), timeout=10, check_same_thread=False, isolation_level=None)
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.execute("PRAGMA busy_timeout=10000")
+        self._ensure_subject_schema()
+        os.chmod(self.path, 0o600)
+
+    def _create_rules_table(self) -> None:
         self.db.execute("""
-            CREATE TABLE IF NOT EXISTS model_entitlement_rules(
-              subject_type TEXT NOT NULL CHECK(subject_type IN ('global','tenant','tenant_role','key','user')),
+            CREATE TABLE model_entitlement_rules(
+              subject_type TEXT NOT NULL CHECK(subject_type IN (
+                'global','tenant','tenant_role','key','user','user_role','subscription_plan'
+              )),
               subject_id TEXT NOT NULL,
               effect TEXT NOT NULL CHECK(effect IN ('allow','deny')),
               models_json TEXT NOT NULL,
@@ -70,7 +79,37 @@ class ModelEntitlementStore:
               PRIMARY KEY(subject_type,subject_id)
             )
         """)
-        os.chmod(self.path, 0o600)
+
+    def _ensure_subject_schema(self) -> None:
+        existing = self.db.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='model_entitlement_rules'"
+        ).fetchone()
+        if existing is None:
+            self._create_rules_table()
+            return
+        schema_sql = str(existing[0] or "")
+        if "'user_role'" in schema_sql and "'subscription_plan'" in schema_sql:
+            return
+        # Expand the CHECK constraint transactionally. Existing global/key/user/
+        # tenant/tenant_role policy rows are copied verbatim before the old table
+        # is dropped; a failed migration rolls back to the original schema.
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            self.db.execute(
+                "ALTER TABLE model_entitlement_rules RENAME TO model_entitlement_rules_legacy"
+            )
+            self._create_rules_table()
+            self.db.execute("""
+                INSERT INTO model_entitlement_rules
+                  (subject_type,subject_id,effect,models_json,enabled,updated_at)
+                SELECT subject_type,subject_id,effect,models_json,enabled,updated_at
+                FROM model_entitlement_rules_legacy
+            """)
+            self.db.execute("DROP TABLE model_entitlement_rules_legacy")
+            self.db.execute("COMMIT")
+        except Exception:
+            self.db.execute("ROLLBACK")
+            raise
 
     @staticmethod
     def _subject(subject_type: str, subject_id: str) -> tuple[str, str]:
@@ -80,8 +119,15 @@ class ModelEntitlementStore:
             if subject_id != "default":
                 raise ModelEntitlementError("Global policy subject_id must be 'default'")
             return subject_type, subject_id
+        if subject_type in {"user_role", "subscription_plan"}:
+            # These identities are canonical lowercase slugs in their owning
+            # stores. Normalize policy writes/deletes the same way so mixed-case
+            # admin input cannot create a rule that never matches a live subject.
+            subject_id = str(subject_id or "").strip().lower()
         if not isinstance(subject_id, str) or not SUBJECT_ID.fullmatch(subject_id):
             raise ModelEntitlementError("Invalid subject_id")
+        if subject_type in {"user_role", "subscription_plan"} and not ROLE_OR_PLAN_ID.fullmatch(subject_id):
+            raise ModelEntitlementError("Invalid role or subscription plan subject_id")
         return subject_type, subject_id
 
     def upsert(
@@ -143,13 +189,18 @@ class ModelEntitlementStore:
 
     def rules_for(
         self, *, key_id: str | None, user_id: str | None, tenant_id: str | None = None,
-        tenant_role: str | None = None,
+        tenant_role: str | None = None, user_role: str | None = None,
+        subscription_plan: str | None = None,
     ) -> list[dict[str, Any]]:
         pairs = [("global", "default")]
         if tenant_id:
             pairs.append(("tenant", str(tenant_id)))
         if tenant_role:
             pairs.append(("tenant_role", str(tenant_role)))
+        if user_role:
+            pairs.append(("user_role", str(user_role)))
+        if subscription_plan:
+            pairs.append(("subscription_plan", str(subscription_plan)))
         if user_id:
             pairs.append(("user", str(user_id)))
         if key_id and key_id != "master":
@@ -175,9 +226,13 @@ class ModelEntitlementStore:
         user_id: str | None,
         tenant_id: str | None = None,
         tenant_role: str | None = None,
+        user_role: str | None = None,
+        subscription_plan: str | None = None,
     ) -> dict[str, Any]:
         rules = self.rules_for(
-            key_id=key_id, user_id=user_id, tenant_id=tenant_id, tenant_role=tenant_role
+            key_id=key_id, user_id=user_id, tenant_id=tenant_id,
+            tenant_role=tenant_role, user_role=user_role,
+            subscription_plan=subscription_plan,
         )
         if not rules:
             return {"allowed": True, "reason": "no_policy", "model": model_id, "matched_rules": []}

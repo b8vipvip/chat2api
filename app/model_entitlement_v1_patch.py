@@ -5,8 +5,10 @@ model request context. It never selects a Worker or asserts served-model truth.
 """
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
+import secrets
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -16,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from .admin_audit import AdminAuditError, AdminAuditStore
 from .admin_auth import SESSION_COOKIE
 from .user_commerce import USER_SESSION_COOKIE
+from .user_subscriptions import UserSubscriptionError, UserSubscriptionStore
 from .model_entitlements import (
     ModelEntitlementError,
     ModelEntitlementStore,
@@ -24,6 +27,10 @@ from .model_entitlements import (
 from . import model_capability_routing_patch as model_routing
 from . import v13_patch
 
+
+_API_KEY_CONTEXT_CAPTURE = contextvars.ContextVar(
+    "chat2api_model_entitlement_api_key_context_capture", default=False
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,12 +42,31 @@ class ModelEntitlementUpdate(BaseModel):
     enabled: bool = True
 
 
+class UserSystemRoleUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    system_role: str = Field(min_length=1, max_length=64)
+
+
+class SubscriptionPlanUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=100)
+    enabled: bool = True
+
+
+class UserSubscriptionAssign(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    plan_id: str = Field(min_length=1, max_length=64)
+    expires_at: str | None = Field(default=None, max_length=64)
+
+
 def install_model_entitlements(app: FastAPI) -> FastAPI:
     if getattr(app.state, "model_entitlements_installed", False):
         return app
     registry = app.state.registry
     store = ModelEntitlementStore(app.state.settings.data_dir)
     accounts = getattr(app.state, "user_accounts", None)
+    subscriptions = UserSubscriptionStore(app.state.settings.data_dir)
+    app.state.user_subscriptions = subscriptions
     tenant_memberships = getattr(app.state, "tenant_memberships", None)
     api_keys = getattr(app.state, "api_keys", None)
     if api_keys is None:
@@ -50,6 +76,84 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
     if tenant_memberships is None:
         raise RuntimeError("Model entitlements require the authoritative TenantMembershipStore")
     app.state.model_entitlements = store
+
+    # Bind the principal authenticated by the existing API-key store without
+    # changing main.py's dependency contract. The marker is request-scoped and
+    # the middleware resets its routing context on every /v1 response.
+    base_authenticate = api_keys.authenticate
+    if not getattr(base_authenticate, "_model_entitlement_context_wrapper", False):
+        async def authenticate_with_routing_context(token: str):
+            principal = await base_authenticate(token)
+            if principal is not None and _API_KEY_CONTEXT_CAPTURE.get():
+                key_id = str(getattr(principal, "key_id", "") or "")
+                if key_id:
+                    registry.routing_key_context.set(key_id)
+            return principal
+
+        authenticate_with_routing_context._model_entitlement_context_wrapper = True
+        api_keys.authenticate = authenticate_with_routing_context
+
+    @app.middleware("http")
+    async def api_key_routing_context_middleware(request: Request, call_next):
+        if not request.url.path.startswith("/v1/"):
+            return await call_next(request)
+        routing_token = registry.routing_key_context.set(None)
+        capture_token = _API_KEY_CONTEXT_CAPTURE.set(True)
+        supplied = str(request.headers.get("x-api-key") or "").strip()
+        authorization = request.headers.get("authorization")
+        if authorization and authorization.lower().startswith("bearer "):
+            supplied = authorization[7:].strip()
+        master_key = str(getattr(app.state.settings, "api_key", "") or "")
+        if master_key and supplied and secrets.compare_digest(supplied, master_key):
+            registry.routing_key_context.set("master")
+        try:
+            return await call_next(request)
+        finally:
+            _API_KEY_CONTEXT_CAPTURE.reset(capture_token)
+            registry.routing_key_context.reset(routing_token)
+
+    # Responses image_generation calls the canonical Images executor directly
+    # from its adapter. Keep the C-03B adapter/resource-ownership module free of
+    # entitlement concerns by wrapping the shared executor at this composition
+    # boundary. This also guarantees the server-owned gpt-image target is used
+    # for both streaming and non-streaming Responses tool calls.
+    base_image_executor = getattr(app.state, "image_generation_executor", None)
+    if callable(base_image_executor):
+        async def image_executor_with_entitlements(**kwargs):
+            request = kwargs.get("request")
+            request_path = str(getattr(getattr(request, "url", None), "path", "") or "")
+            if request_path != "/v1/responses":
+                return await base_image_executor(**kwargs)
+            principal = kwargs.get("principal")
+            key_id = str(getattr(principal, "key_id", "") or "")
+            if not key_id:
+                raise HTTPException(
+                    status_code=503,
+                    detail={"code": "model_entitlement_image_identity_unavailable"},
+                )
+            routing_context = getattr(registry, "routing_key_context", None)
+            if not callable(getattr(routing_context, "set", None)) or not callable(
+                getattr(routing_context, "reset", None)
+            ):
+                raise HTTPException(
+                    status_code=503,
+                    detail={"code": "model_entitlement_image_context_unavailable"},
+                )
+            routing_token = routing_context.set(key_id)
+            image_body = kwargs.get("body")
+            try:
+                with model_routing.model_target_context(
+                    "gpt-image",
+                    needs_multimodal=bool(getattr(image_body, "attachments", None)),
+                ):
+                    return await base_image_executor(**kwargs)
+            finally:
+                routing_context.reset(routing_token)
+
+        app.state.image_generation_executor = image_executor_with_entitlements
+        app.state.model_entitlement_image_executor_wrapped = True
+    else:
+        app.state.model_entitlement_image_executor_wrapped = False
 
     audit = getattr(app.state, "admin_audit", None) or AdminAuditStore(app.state.settings.data_dir)
     app.state.admin_audit = audit
@@ -68,17 +172,20 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
 
     def audit_event(
         actor: str, action: str, subject_type: str, subject_id: str, details: dict[str, Any],
-        *, request_id: str = "", required: bool = True,
+        *, target_type: str = "model_entitlement", request_id: str = "", required: bool = True,
     ) -> bool:
         try:
             audit.append(
-                actor=actor, action=action, target_type="model_entitlement",
+                actor=actor, action=action, target_type=target_type,
                 target_id=f"{subject_type}:{subject_id}", request_id=request_id,
                 details=details,
             )
         except AdminAuditError as exc:
             if required:
-                raise HTTPException(status_code=503, detail="Administrator audit unavailable; policy change denied") from exc
+                raise HTTPException(
+                    status_code=503,
+                    detail="Administrator audit unavailable; policy change denied",
+                ) from exc
             app.state.admin_audit_completion_pending = True
             logger.error(
                 "Admin audit completion append failed after model entitlement mutation: subject_type=%s subject_id=%s action=%s",
@@ -112,6 +219,20 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
         if subject_type == "tenant_role":
             if subject_id not in {"owner", "admin", "member", "viewer"}:
                 raise ModelEntitlementError("Unknown tenant membership role")
+            return
+        if subject_type == "user_role":
+            try:
+                accounts.validate_system_role(subject_id)
+            except (AttributeError, ValueError) as exc:
+                raise ModelEntitlementError("Unknown end-user system role") from exc
+            return
+        if subject_type == "subscription_plan":
+            try:
+                exists = subscriptions.plan_exists(subject_id)
+            except UserSubscriptionError as exc:
+                raise ModelEntitlementError("Invalid subscription plan ID") from exc
+            if not exists:
+                raise KeyError("Unknown subscription plan")
             return
 
     def _identity(key_id: str | None) -> str | None:
@@ -167,6 +288,32 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
                 detail={"code": "model_entitlement_tenant_context_unavailable"},
             ) from exc
 
+    def _user_policy_context(user_id: str | None) -> tuple[str | None, str | None]:
+        if not user_id:
+            return None, None
+        try:
+            # A disabled account must not keep generating through an API key
+            # created while it was enabled. Account/tenant data owners remain
+            # authoritative; this authorization adapter only consumes them.
+            if not accounts.is_enabled(str(user_id)):
+                raise HTTPException(
+                    status_code=403,
+                    detail={"code": "model_entitlement_user_disabled"},
+                )
+            system_role = accounts.system_role_for(str(user_id))
+            subscription = subscriptions.current_plan_for_user(str(user_id))
+            plan_id = str(subscription.get("plan_id") or "")
+            if not plan_id:
+                raise RuntimeError("User subscription has no effective plan")
+            return system_role, plan_id
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "model_entitlement_user_policy_context_unavailable"},
+            ) from exc
+
     def _decision(key_id: str | None, model_id: str | None) -> dict[str, Any]:
         if not key_id or key_id == "master":
             return {"allowed": True, "reason": "master_key", "model": model_id, "matched_rules": []}
@@ -178,6 +325,8 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
             user_id=owner_id,
             tenant_id=tenant_id,
             tenant_role=tenant_role,
+            user_role=user_role,
+            subscription_plan=subscription_plan,
         )
 
     base_catalog = registry.model_catalog
@@ -234,23 +383,89 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
             return response
         user = accounts.authenticate(request.cookies.get(USER_SESSION_COOKIE))
         if not user:
-            return response
+            return JSONResponse(
+                {"detail": "User session is unavailable"},
+                status_code=401,
+                headers={"Cache-Control": "private, no-store"},
+            )
         try:
             payload = json.loads((await _response_bytes(response)).decode("utf-8"))
         except (UnicodeDecodeError, ValueError, TypeError):
-            return response
+            return JSONResponse(
+                {"detail": {"code": "model_entitlement_catalog_unavailable"}},
+                status_code=503,
+                headers={"Cache-Control": "private, no-store"},
+            )
         if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
-            return response
+            return JSONResponse(
+                {"detail": {"code": "model_entitlement_catalog_unavailable"}},
+                status_code=503,
+                headers={"Cache-Control": "private, no-store"},
+            )
+
         user_id = str(user.get("user_id") or "")
-        payload["data"] = [
-            row for row in payload["data"]
-            if isinstance(row, dict)
-            and store.evaluate(
-                str(row.get("id") or row.get("model") or ""),
-                key_id=None, user_id=user_id,
-            ).get("allowed") is True
-        ]
-        return JSONResponse(payload, status_code=response.status_code, headers={"Cache-Control": "private, no-store"})
+        try:
+            user_role, subscription_plan = _user_policy_context(user_id)
+        except HTTPException as exc:
+            return JSONResponse(
+                {"detail": exc.detail},
+                status_code=exc.status_code,
+                headers={"Cache-Control": "private, no-store"},
+            )
+        selected_key_id = str(request.query_params.get("key_id") or "").strip()
+        if selected_key_id:
+            try:
+                owns_selected_key = accounts.owns_key(user_id, selected_key_id)
+            except Exception:
+                owns_selected_key = False
+            if not owns_selected_key:
+                return JSONResponse(
+                    {"detail": "API key not found"},
+                    status_code=404,
+                    headers={"Cache-Control": "private, no-store"},
+                )
+
+        filtered: list[dict[str, Any]] = []
+        try:
+            for row in payload["data"]:
+                if not isinstance(row, dict):
+                    continue
+                # The production pricing catalog uses model_id. Keep id/model
+                # aliases for compatible test and older catalog providers.
+                model_id = str(
+                    row.get("model_id") or row.get("id") or row.get("model") or ""
+                ).strip()
+                if not model_id:
+                    continue
+                decision = (
+                    _decision(selected_key_id, model_id)
+                    if selected_key_id
+                    else store.evaluate(
+                        model_id, key_id=None, user_id=user_id,
+                        user_role=user_role, subscription_plan=subscription_plan,
+                    )
+                )
+                if decision.get("allowed") is True:
+                    filtered.append(row)
+        except HTTPException as exc:
+            return JSONResponse(
+                {"detail": exc.detail},
+                status_code=exc.status_code,
+                headers={"Cache-Control": "private, no-store"},
+            )
+        except Exception:
+            return JSONResponse(
+                {"detail": {"code": "model_entitlement_policy_unavailable"}},
+                status_code=503,
+                headers={"Cache-Control": "private, no-store"},
+            )
+
+        payload["data"] = filtered
+        return JSONResponse(
+            payload,
+            status_code=response.status_code,
+            headers={"Cache-Control": "private, no-store"},
+        )
 
     @app.get("/api/admin/model-entitlements")
     async def list_model_entitlements(request: Request) -> dict[str, Any]:
@@ -280,6 +495,146 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
         }, request_id=request_id, required=False)
         response.headers["X-Admin-Audit-Status"] = "complete" if audit_ok else "completion-pending"
         return {"rule": rule}
+
+    @app.get("/api/admin/subscription-plans")
+    async def list_subscription_plans(request: Request) -> dict[str, Any]:
+        admin_actor(request)
+        return {"data": subscriptions.list_plans()}
+
+    @app.put("/api/admin/subscription-plans/{plan_id}")
+    async def put_subscription_plan(
+        plan_id: str, body: SubscriptionPlanUpdate, request: Request, response: Response,
+    ) -> dict[str, Any]:
+        actor = admin_actor(request)
+        request_id = str(request.headers.get("x-request-id") or "")
+        audit_event(
+            actor, "subscription.plan_update_requested", "subscription_plan", plan_id,
+            {"name": body.name, "enabled": body.enabled},
+            target_type="subscription_plan", request_id=request_id,
+        )
+        try:
+            plan = subscriptions.upsert_plan(plan_id, body.name, enabled=body.enabled)
+        except UserSubscriptionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        audit_ok = audit_event(
+            actor, "subscription.plan_update_completed", "subscription_plan", plan_id,
+            {"name": plan["name"], "enabled": plan["enabled"]},
+            target_type="subscription_plan", request_id=request_id, required=False,
+        )
+        response.headers["X-Admin-Audit-Status"] = "complete" if audit_ok else "completion-pending"
+        return {"plan": plan}
+
+    @app.put("/api/admin/users/{user_id}/role")
+    async def put_user_system_role(
+        user_id: str, body: UserSystemRoleUpdate, request: Request, response: Response,
+    ) -> dict[str, Any]:
+        actor = admin_actor(request)
+        request_id = str(request.headers.get("x-request-id") or "")
+        if accounts.admin_get(user_id) is None:
+            raise HTTPException(status_code=404, detail="User not found")
+        try:
+            role = accounts.validate_system_role(body.system_role)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        try:
+            previous_role = accounts.system_role_for(user_id)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="User role authority unavailable") from exc
+        audit_event(
+            actor, "user.system_role_update_requested", "user", user_id,
+            {"previous_system_role": previous_role, "system_role": role},
+            target_type="user", request_id=request_id,
+        )
+        try:
+            user = accounts.set_system_role(user_id, role)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="User not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        audit_ok = audit_event(
+            actor, "user.system_role_update_completed", "user", user_id,
+            {"previous_system_role": previous_role, "system_role": role},
+            target_type="user", request_id=request_id, required=False,
+        )
+        response.headers["X-Admin-Audit-Status"] = "complete" if audit_ok else "completion-pending"
+        return {"user": user}
+
+    @app.get("/api/admin/users/{user_id}/subscription")
+    async def get_user_subscription(user_id: str, request: Request) -> dict[str, Any]:
+        admin_actor(request)
+        if accounts.admin_get(user_id) is None:
+            raise HTTPException(status_code=404, detail="User not found")
+        return {
+            "current": subscriptions.current_plan_for_user(user_id),
+            "history": subscriptions.history_for_user(user_id),
+        }
+
+    @app.put("/api/admin/users/{user_id}/subscription")
+    async def put_user_subscription(
+        user_id: str, body: UserSubscriptionAssign, request: Request, response: Response,
+    ) -> dict[str, Any]:
+        actor = admin_actor(request)
+        request_id = str(request.headers.get("x-request-id") or "")
+        if accounts.admin_get(user_id) is None:
+            raise HTTPException(status_code=404, detail="User not found")
+        try:
+            previous_plan = subscriptions.current_plan_for_user(user_id)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Subscription authority unavailable") from exc
+        details = {
+            "previous_plan_id": previous_plan.get("plan_id"),
+            "plan_id": body.plan_id,
+            "expires_at": body.expires_at,
+        }
+        audit_event(
+            actor, "subscription.assignment_requested", "user_subscription", user_id,
+            details, target_type="user_subscription", request_id=request_id,
+        )
+        try:
+            subscription = subscriptions.assign(
+                user_id, body.plan_id, expires_at=body.expires_at, assigned_by=actor,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except UserSubscriptionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        audit_ok = audit_event(
+            actor, "subscription.assignment_completed", "user_subscription", user_id,
+            {
+                "subscription_id": subscription["subscription_id"],
+                "previous_plan_id": previous_plan.get("plan_id"),
+                "plan_id": subscription["plan_id"],
+            },
+            target_type="user_subscription", request_id=request_id, required=False,
+        )
+        response.headers["X-Admin-Audit-Status"] = "complete" if audit_ok else "completion-pending"
+        return {"subscription": subscription}
+
+    @app.delete("/api/admin/users/{user_id}/subscription")
+    async def delete_user_subscription(
+        user_id: str, request: Request, response: Response,
+    ) -> dict[str, Any]:
+        actor = admin_actor(request)
+        request_id = str(request.headers.get("x-request-id") or "")
+        if accounts.admin_get(user_id) is None:
+            raise HTTPException(status_code=404, detail="User not found")
+        try:
+            previous_plan = subscriptions.current_plan_for_user(user_id)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Subscription authority unavailable") from exc
+        audit_event(
+            actor, "subscription.cancellation_requested", "user_subscription", user_id,
+            {"previous_plan_id": previous_plan.get("plan_id")},
+            target_type="user_subscription", request_id=request_id,
+        )
+        cancelled = subscriptions.cancel_active(user_id)
+        audit_ok = audit_event(
+            actor, "subscription.cancellation_completed", "user_subscription", user_id,
+            {"cancelled": cancelled, "previous_plan_id": previous_plan.get("plan_id")},
+            target_type="user_subscription", request_id=request_id, required=False,
+        )
+        response.headers["X-Admin-Audit-Status"] = "complete" if audit_ok else "completion-pending"
+        return {"cancelled": bool(cancelled)}
 
     @app.delete("/api/admin/model-entitlements/{subject_type}/{subject_id}")
     async def delete_model_entitlement(

@@ -56,9 +56,6 @@ def permission_for_admin_route(path: str, method: str) -> str | None:
     if path == "/api/admin/control/admins" or re.fullmatch(r"/api/admin/control/admins/[^/]+", path):
         return "admins:write" if write else "admins:read"
     if re.fullmatch(r"/api/admin/control/admins/[^/]+/password", path):
-        # This compatibility route also supports self-service. The handler
-        # requires the authenticated actor to match the target username and
-        # verify the current password; only root may target another admin.
         return "users:write"
     if path == "/api/admin/control/self/password":
         return "admin:self_password"
@@ -71,7 +68,7 @@ def permission_for_admin_route(path: str, method: str) -> str | None:
     if path == "/api/admin/control/roles":
         return "admins:read"
     if path == "/api/admin/model-entitlements" or re.fullmatch(
-        r"/api/admin/model-entitlements/(global|key|user|tenant|tenant_role)/[^/]+", path
+        r"/api/admin/model-entitlements/(global|key|user|tenant|tenant_role|user_role|subscription_plan)/[^/]+", path
     ):
         return "models:" + suffix
     if path == "/api/admin/audit":
@@ -80,21 +77,25 @@ def permission_for_admin_route(path: str, method: str) -> str | None:
         return "quota:read"
     if path == "/api/admin/quota-reservations/reconcile":
         return "quota:write"
-    if re.fullmatch(r"/api/admin/billing/charges/[^/]+/refund", path):
-        return "billing:write" if method.upper() == "POST" else None
     if path == "/api/admin/tenants" or re.fullmatch(
         r"/api/admin/tenants/[^/]+/(?:members(?:/[^/]+)?|keys(?:/[^/]+)?)", path
     ):
         return "tenants:" + suffix
-    if path == "/api/admin/users" or re.fullmatch(
-        r"/api/admin/users/[^/]+(?:/sessions/revoke)?", path
-    ):
+    if re.fullmatch(r"/api/admin/users/[^/]+/role", path):
         return "users:" + suffix
+    if path == "/api/admin/subscription-plans" or re.fullmatch(
+        r"/api/admin/subscription-plans/[^/]+", path
+    ) or re.fullmatch(r"/api/admin/users/[^/]+/subscription", path):
+        return "billing:" + suffix
     # User-owned API keys are distinct from platform-managed API keys.
     # Only support (read-only) and super_admin (wildcard) may inspect them;
     # api_key_admin must not gain cross-user access through keys:read.
     if re.fullmatch(r"/api/admin/users/[^/]+/keys(?:/[^/]+)?", path):
         return "user_keys:" + suffix
+    if path == "/api/admin/users" or re.fullmatch(
+        r"/api/admin/users/[^/]+(?:/sessions/revoke)?", path
+    ):
+        return "users:" + suffix
     if re.fullmatch(r"/api/admin/keys/[^/]+/secret", path):
         return "secrets:read"
     if re.fullmatch(r"/api/admin/keys/[^/]+/settings", path):
@@ -103,6 +104,10 @@ def permission_for_admin_route(path: str, method: str) -> str | None:
         return "keys:" + suffix
     if path == "/api/admin/user-pricing":
         return "billing:" + suffix
+    if re.fullmatch(r"/api/admin/billing/charges/[^/]+/refund", path):
+        # Wallet refunds move user funds; grant only the explicit billing-write
+        # capability and do not expose a read permission for this write-only route.
+        return "billing:write" if write else None
     if path == "/api/admin/user-payments":
         # Payment provider private keys remain root-only until G0 DataKeyring
         # migration and its rotation/rollback evidence are accepted.

@@ -13,6 +13,8 @@ from app.admin_auth import AdminLoginRateLimiter, AdminSessionStore
 from app.config import Settings
 from app.control_plane import ControlPlaneError, ControlPlaneStore, ROLES, permission_for_admin_route
 from app.control_plane_v1_patch import install_control_plane_v1
+from app.tenant_membership_v1_patch import install_tenant_memberships
+from app.model_entitlement_v1_patch import install_model_entitlements
 from app.main import create_app
 from app.user_console_v104_patch import install_user_console_v104_patch
 from app.v17_patch import install_v17_patch
@@ -105,6 +107,7 @@ def test_role_route_map_is_explicit_and_secret_read_denied_to_key_admin():
     assert permission_for_admin_route("/api/admin/users/u1/keys", "GET") == "user_keys:read"
     assert permission_for_admin_route("/api/admin/users/u1/keys/key1", "PATCH") == "user_keys:write"
     assert "user_keys:read" not in ROLES["api_key_admin"]
+    assert "user_keys:read" in ROLES["support"]
     assert "user_keys:write" not in ROLES["support"]
     assert permission_for_admin_route("/api/admin/keys/id1", "PATCH") == "keys:write"
     assert permission_for_admin_route("/api/admin/keys/id1/secret", "GET") == "secrets:read"
@@ -312,3 +315,16 @@ def test_control_plane_atomic_save_never_rolls_memory_back_after_disk_commit(
     assert updated["announcement"] == "committed"
     assert store.public_client()["announcement"] == "committed"
     assert persisted["client"]["announcement"] == "committed"
+
+
+def test_user_role_and_subscription_admin_routes_have_distinct_rbac_permissions():
+    from app.control_plane import permission_for_admin_route
+
+    assert permission_for_admin_route("/api/admin/users/usr_12345/role", "PUT") == "users:write"
+    assert permission_for_admin_route("/api/admin/users/usr_12345/subscription", "GET") == "billing:read"
+    assert permission_for_admin_route("/api/admin/users/usr_12345/subscription", "PUT") == "billing:write"
+    assert permission_for_admin_route("/api/admin/users/usr_12345/subscription", "DELETE") == "billing:write"
+    assert permission_for_admin_route("/api/admin/subscription-plans", "GET") == "billing:read"
+    assert permission_for_admin_route("/api/admin/subscription-plans/pro", "PUT") == "billing:write"
+    assert permission_for_admin_route("/api/admin/model-entitlements/user_role/trusted", "PUT") == "models:write"
+    assert permission_for_admin_route("/api/admin/model-entitlements/subscription_plan/pro", "PUT") == "models:write"

@@ -185,7 +185,10 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 raise LookupError("All online Chrome extensions are at GPT-Live capacity")
             previous = registry.route_for_key(principal.key_id)
             if previous in idle:
-                return previous
+                # A sticky Worker is a routing hint, never an authorization
+                # shortcut. Re-enter the canonical resolver under the requested
+                # model context so key/user/tenant entitlement rules run again.
+                return registry.resolve_client(previous)
             selected = secrets.choice(idle)
             # Resolve explicitly so the existing registry persists the API-key sticky route.
             return registry.resolve_client(selected)
