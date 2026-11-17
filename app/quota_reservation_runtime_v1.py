@@ -63,13 +63,40 @@ def authorize_wallet_dispatch(app: Any, request_id: str, principal: Any) -> bool
     accounts = getattr(app.state, "user_accounts", None)
     billing = getattr(app.state, "user_billing", None)
     key_id = str(getattr(principal, "key_id", "") or "")
-    if accounts is None or billing is None or not key_id:
+    if billing is None:
         return False
     try:
+        lookup = getattr(billing, "reservation_for_request", None)
+        if not callable(lookup):
+            raise WalletReservationError("Wallet reservation lookup is unavailable")
+        reservation = lookup(str(request_id))
+        if reservation is None:
+            # No wallet admission was created for this request (for example,
+            # a legacy key with no account owner); there is no hold to mark.
+            return False
+        if (
+            str(reservation.get("state") or "") == "released"
+            and str(reservation.get("release_reason") or "") in {
+                "billing_disabled_at_admission", "zero_price_at_admission",
+            }
+        ):
+            # Intentional free/unbilled admissions have no active hold.
+            return False
+        if (
+            str(reservation.get("state") or "") != "reserved"
+            or reservation.get("admission_protocol_version") != 1
+        ):
+            raise WalletReservationError("Wallet reservation is not dispatchable")
+        if accounts is None or not key_id:
+            raise WalletReservationError("Wallet reservation owner context is unavailable")
         owner = accounts.owner_for_key(key_id)
         if not owner:
-            return False
-        return bool(billing.mark_dispatch_authorized(str(request_id), str(owner)))
+            raise WalletReservationError("Wallet reservation owner no longer exists")
+        if str(reservation.get("user_id") or "") != str(owner):
+            raise WalletReservationError("Wallet reservation owner does not match the API key")
+        if not billing.mark_dispatch_authorized(str(request_id), str(owner)):
+            raise WalletReservationError("Wallet dispatch authorization marker was not persisted")
+        return True
     except Exception as error:
         logger.exception(
             "Wallet dispatch authorization persistence failed request_id=%s error_type=%s",

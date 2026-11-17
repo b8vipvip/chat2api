@@ -82,12 +82,24 @@ def test_wallet_reservation_replay_cannot_adopt_or_release_original_hold(tmp_pat
 
 
 def test_wallet_dispatch_authorization_fails_closed_when_owner_lookup_fails(tmp_path: Path) -> None:
+    user_id = "usr_owner_lookup_failure"
+    billing = BillingStore(tmp_path)
+    billing.credit(user_id, 2_000)
+    price = _price_row("paid-model", 10_000.0)
+    billing.reserve_for_request(
+        user_id, "req_owner_lookup_failure",
+        model_id="paid-model", estimated_cny_cents=100,
+        input_tokens=10, output_tokens=4096,
+        price_snapshot=price, price_catalog_snapshot={"paid-model": price},
+        usd_cny_rate=7.0,
+    )
+
     def fail_owner_lookup(_key_id: str) -> str:
         raise OSError("account store unavailable")
 
     app = SimpleNamespace(state=SimpleNamespace(
         user_accounts=SimpleNamespace(owner_for_key=fail_owner_lookup),
-        user_billing=BillingStore(tmp_path),
+        user_billing=billing,
     ))
     with pytest.raises(HTTPException) as error:
         authorize_wallet_dispatch(
@@ -95,6 +107,94 @@ def test_wallet_dispatch_authorization_fails_closed_when_owner_lookup_fails(tmp_
             SimpleNamespace(kind="user", key_id="key-owner-failure"),
         )
     assert error.value.status_code == 503
+    assert billing.reservations["req_owner_lookup_failure"]["dispatch_authorized_at"] is None
+
+
+def test_wallet_dispatch_authorization_fails_closed_if_owner_disappears_after_admission(tmp_path: Path) -> None:
+    user_id = "usr_wallet_owner_disappears"
+    price = _price_row("paid-model", 10_000.0)
+    billing = BillingStore(tmp_path)
+    billing.credit(user_id, 2_000)
+    billing.reserve_for_request(
+        user_id, "req_wallet_owner_disappears",
+        model_id="paid-model", estimated_cny_cents=100,
+        input_tokens=10, output_tokens=4096,
+        price_snapshot=price, price_catalog_snapshot={"paid-model": price},
+        usd_cny_rate=7.0,
+    )
+    app = SimpleNamespace(state=SimpleNamespace(
+        user_accounts=SimpleNamespace(owner_for_key=lambda _key_id: None),
+        user_billing=billing,
+    ))
+
+    with pytest.raises(HTTPException) as error:
+        authorize_wallet_dispatch(
+            app, "req_wallet_owner_disappears",
+            SimpleNamespace(kind="user", key_id="key-owner-disappears"),
+        )
+
+    assert error.value.status_code == 503
+    assert billing.reservations["req_wallet_owner_disappears"]["dispatch_authorized_at"] is None
+    assert [row["request_id"] for row in billing.unstarted_admissions()] == [
+        "req_wallet_owner_disappears",
+    ]
+
+
+def test_wallet_dispatch_authorization_fails_closed_if_marker_returns_false(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    user_id = "usr_wallet_marker_false"
+    price = _price_row("paid-model", 10_000.0)
+    billing = BillingStore(tmp_path)
+    billing.credit(user_id, 2_000)
+    billing.reserve_for_request(
+        user_id, "req_wallet_marker_false",
+        model_id="paid-model", estimated_cny_cents=100,
+        input_tokens=10, output_tokens=4096,
+        price_snapshot=price, price_catalog_snapshot={"paid-model": price},
+        usd_cny_rate=7.0,
+    )
+    monkeypatch.setattr(billing, "mark_dispatch_authorized", lambda *_args, **_kwargs: False)
+    app = SimpleNamespace(state=SimpleNamespace(
+        user_accounts=SimpleNamespace(owner_for_key=lambda _key_id: user_id),
+        user_billing=billing,
+    ))
+
+    with pytest.raises(HTTPException) as error:
+        authorize_wallet_dispatch(
+            app, "req_wallet_marker_false",
+            SimpleNamespace(kind="user", key_id="key-wallet-marker-false"),
+        )
+
+    assert error.value.status_code == 503
+    assert billing.reservations["req_wallet_marker_false"]["dispatch_authorized_at"] is None
+
+
+def test_wallet_dispatch_authorization_allows_explicit_unbilled_admission(tmp_path: Path) -> None:
+    user_id = "usr_wallet_unbilled"
+    billing = BillingStore(tmp_path)
+    price = {
+        "model_id": "free-model", "enabled": True,
+        "input_usd_per_million": 0.0,
+        "cached_input_usd_per_million": 0.0,
+        "output_usd_per_million": 0.0,
+    }
+    billing.record_unbilled_admission(
+        user_id, "req_wallet_unbilled", model_id="free-model",
+        input_tokens=10, output_tokens=4096, reason="zero_price_at_admission",
+        price_snapshot=price, usd_cny_rate=7.0,
+    )
+    app = SimpleNamespace(state=SimpleNamespace(
+        user_accounts=SimpleNamespace(owner_for_key=lambda _key_id: user_id),
+        user_billing=billing,
+    ))
+
+    assert authorize_wallet_dispatch(
+        app, "req_wallet_unbilled",
+        SimpleNamespace(kind="user", key_id="key-wallet-unbilled"),
+    ) is False
+    assert billing.reservations["req_wallet_unbilled"]["state"] == "released"
+    assert billing.unstarted_admissions() == []
 
 
 def test_wallet_pre_dispatch_hold_recovery_is_versioned_and_durable(tmp_path: Path, monkeypatch) -> None:
