@@ -281,6 +281,7 @@ async function handleServerMessage(message) {
     const workerTimings = {
       worker_dispatch_queue_wait_ms: timing(message.__chat2api_worker_dispatch_queue_wait_ms),
       worker_route_resolve_ms: timing(message.__chat2api_worker_route_resolve_ms),
+      worker_route_reallocation_ms: timing(message.__chat2api_worker_route_reallocation_ms),
       worker_target_tab_lookup_ms: null,
       worker_ensure_content_ms: null,
       worker_tabs_send_message_ms: null,
