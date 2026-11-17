@@ -288,7 +288,14 @@ jobs:
 
       - name: R06 map full-suite collection around prior timeout positions
         run: |
-          pytest --collect-only -q > /tmp/chat2api-pytest-collection.txt
+          set +e
+          pytest --collect-only -q > /tmp/chat2api-pytest-collection.txt 2>&1
+          collection_status=$?
+          set -e
+          if [ "$collection_status" -ne 0 ]; then
+            cat /tmp/chat2api-pytest-collection.txt
+            exit "$collection_status"
+          fi
           python - <<'PY'
           from pathlib import Path
           items = [
