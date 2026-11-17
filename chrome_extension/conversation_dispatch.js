@@ -97,6 +97,7 @@
         route_failure_stage: String(error?.stage || "dispatch"),
         worker_dispatch_queue_wait_ms: timingValue(message.__chat2api_worker_dispatch_queue_wait_ms),
         worker_route_resolve_ms: timingValue(message.__chat2api_worker_route_resolve_ms),
+        worker_route_reallocation_ms: timingValue(message.__chat2api_worker_route_reallocation_ms),
         route_retired_by_authority_v30: routeRetired,
         rate_limit_terminal: rateLimited,
         retry_after_ms: retryAfterMs,
@@ -130,8 +131,18 @@
       if (!requestId || typeof router?.failRequest !== "function") throw error;
       // An explicit Chrome "No tab" means no content-script ACK and no
       // generation started. Reallocate once through the SAME router only.
-      await router.failRequest(requestId, "lost-tab-before-content-ack-v153");
-      const replacement = await resolveRoutedTab(message);
+      // Include the pre-ACK retry in the route timing instead of reporting
+      // only the first allocation attempt. Keep the retry separately visible
+      // so a real slow trace can distinguish initial routing from tab recovery.
+      const reallocationStarted = monotonicNow();
+      let replacement;
+      try {
+        await router.failRequest(requestId, "lost-tab-before-content-ack-v153");
+        replacement = await resolveRoutedTab(message);
+      } finally {
+        message.__chat2api_worker_route_reallocation_ms = elapsedMs(reallocationStarted);
+        message.__chat2api_worker_route_resolve_ms = elapsedMs(routeStarted);
+      }
       await trySendSocket({
         type: "chat.diagnostics",
         request_id: requestId,
