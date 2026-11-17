@@ -495,6 +495,26 @@ def test_initial_dispatch_is_rejected_if_broker_lease_releases_while_waiting_for
             raise AssertionError("released request was dispatched to the Worker")
         assert socket.sent == []
 
+        # A retained Broker row that already reached a terminal is equally
+        # non-dispatchable, even if its lease has not yet been released.
+        terminal_request_id = "req_r06_terminal_while_queued"
+        terminal_state = await broker.create(terminal_request_id, "ext_r06")
+        await lock.acquire()
+        terminal_send = asyncio.create_task(registry.send("ext_r06", {
+            "type": "chat.request", "request_id": terminal_request_id,
+        }))
+        await asyncio.sleep(0)
+        terminal_state.terminal_event_type = "chat.cancelled"
+        lock.release()
+        try:
+            await terminal_send
+        except RuntimeError as error:
+            assert str(error) == "Request is already terminal"
+        else:
+            raise AssertionError("terminal request was dispatched to the Worker")
+        assert socket.sent == []
+        await broker.release(terminal_request_id)
+
     asyncio.run(exercise())
 
 
