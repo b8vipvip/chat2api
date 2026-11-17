@@ -33,7 +33,7 @@ const readinessContext={
   },
   String,Error,
 };
-vm.runInNewContext(routeHelpers+"\nglobalThis.resolve=resolveRoutedTab;",readinessContext);
+vm.runInNewContext(routeHelpers+"\nglobalThis.resolve=resolveRoutedTab;globalThis.record=recordRouteReallocation;",readinessContext);
 const readinessMessage={request_id:"readiness-reallocation"};
 const readinessTab=await readinessContext.globalThis.resolve(readinessMessage);
 assert.equal(readinessTab.id,2);
@@ -41,6 +41,22 @@ assert.equal(readinessAllocations,2);
 assert.equal(readinessRetires,1);
 assert.equal(readinessMessage.__chat2api_worker_route_reallocation_ms,1,
   "pre-dispatch tab-readiness retry must expose its own duration");
+
+// A post-ACK recovery may itself encounter a tab already closed during the
+// second readiness probe. Suppress the nested timer and let the outer recovery
+// timer include the whole operation exactly once.
+const outerRecoveryStarted=readinessContext.monotonicNow();
+await readinessContext.globalThis.__CHAT2API_CONVERSATION_ROUTING_V1__.failRequest(
+  "readiness-reallocation","lost-tab-before-content-ack-v153");
+const recoveredAgain=await readinessContext.globalThis.resolve(
+  readinessMessage,{recordReallocation:false});
+assert.equal(recoveredAgain.id,4);
+assert.equal(readinessMessage.__chat2api_worker_route_reallocation_ms,1,
+  "nested readiness retry must not record separately when the outer recovery owns timing");
+readinessContext.globalThis.record(readinessMessage,outerRecoveryStarted);
+assert.equal(readinessMessage.__chat2api_worker_route_reallocation_ms,3,
+  "outer recovery timing must include the nested readiness retry exactly once");
+
 
 async function runRetirement({supersedeDuringAlarm=false,takeDuringPersist=false}={}) {
  const route={window_id:32,tab_id:12,inflight_request_id:"old"};
