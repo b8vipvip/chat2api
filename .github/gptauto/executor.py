@@ -15,6 +15,7 @@ def _host_control(task: Task, action: str) -> dict:
     authority = canonicalize_task(task)
     terminal = authority["terminal_done"]
     blocked = authority["phase"] == "USER_ACTION_REQUIRED"
+    closed_unmerged = authority["phase"] == "CLOSED_UNMERGED"
     allow_exit = authority["allow_foreground_exit"]
     return {
         "schema": "gptauto.host-control/v2",
@@ -24,10 +25,10 @@ def _host_control(task: Task, action: str) -> dict:
         "generation": authority["generation"],
         "repair_owner": authority["repair_owner"],
         "terminal_done": terminal,
-        "task_alive": not terminal,
+        "task_alive": not (terminal or closed_unmerged),
         "allow_foreground_exit": allow_exit,
-        "foreground_disposition": "TASK_DONE" if terminal else "USER_ACTION_REQUIRED" if blocked else "CONTINUE_REQUIRED",
-        "requires_foreground_poll": not (terminal or blocked),
+        "foreground_disposition": "TASK_DONE" if terminal else "USER_ACTION_REQUIRED" if blocked else "PR_CLOSED_UNMERGED" if closed_unmerged else "CONTINUE_REQUIRED",
+        "requires_foreground_poll": not (terminal or blocked or closed_unmerged),
         "continuation_required": authority["continuation_required"],
         "continuation_key": authority["continuation_key"],
         "blocked_reason": authority.get("blocked_reason", ""),
@@ -36,6 +37,8 @@ def _host_control(task: Task, action: str) -> dict:
             if terminal
             else "REQUEST_USER_ACTION"
             if blocked
+            else "STOP_THIS_PR_TASK"
+            if closed_unmerged
             else "RESUME_CHATGPT_SAME_TASK"
             if authority["continuation_required"]
             else "WAIT_FOR_TASK_STATE_CHANGE"
@@ -48,13 +51,14 @@ def _lease(task: Task, action: str) -> dict:
     host_control = _host_control(task, action)
     terminal = host_control["terminal_done"]
     blocked = host_control["phase"] == "USER_ACTION_REQUIRED"
+    closed_unmerged = host_control["phase"] == "CLOSED_UNMERGED"
     return {
-        "active": not terminal,
+        "active": not (terminal or closed_unmerged),
         "completion_gate": str(meta.get("completion_gate") or ""),
         "release_required": bool(meta.get("release_required")),
         "may_finish_foreground": host_control["allow_foreground_exit"],
         "task_alive": host_control["task_alive"],
-        "foreground_completion_status": "terminal" if terminal else "blocked" if blocked else "continue_required",
+        "foreground_completion_status": "terminal" if terminal else "blocked" if blocked else "closed_unmerged" if closed_unmerged else "continue_required",
         "foreground_disposition": host_control["foreground_disposition"],
         "allow_foreground_exit": host_control["allow_foreground_exit"],
         "requires_foreground_poll": host_control["requires_foreground_poll"],
@@ -65,6 +69,8 @@ def _lease(task: Task, action: str) -> dict:
             if terminal
             else "Report the explicit user action required, then resume the same GPTAuto task after that action."
             if blocked
+            else "This PR is closed without merge. Do not request Ready for review or attempt a merge; this PR-level task is inactive, not DONE. Continue only through an explicitly linked replacement task."
+            if closed_unmerged
             else "The engineering task is still active. Do not finish the foreground task; poll/recover GitHub gates until canonical DONE or explicit USER_ACTION_REQUIRED."
         ),
     }
@@ -108,6 +114,18 @@ def next_action(task: Task) -> dict:
                     "main_ci_run_id": str(meta.get("main_ci_run_id") or ""),
                     "release_run_id": str(meta.get("release_run_id") or ""),
                 },
+            },
+        )
+
+    if authority["phase"] == "CLOSED_UNMERGED":
+        return _with_lease(
+            task,
+            {
+                "action": "closed_unmerged",
+                "reason": "PR is closed without merge; retire this PR task without marking the engineering goal DONE",
+                "task_id": task.task_id,
+                "pr_number": str(meta.get("pr_number") or ""),
+                "replacement_pr_number": str(meta.get("replacement_pr_number") or ""),
             },
         )
 

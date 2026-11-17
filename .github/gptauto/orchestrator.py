@@ -22,6 +22,10 @@ def canonical_phase(task: Task) -> str:
     event_head = str(task.metadata.get("event_head_sha") or "")
     current_head = str(task.metadata.get("current_pr_head_sha") or task.metadata.get("head_sha") or "")
     current_event = not (event_head and current_head and event_head != current_head)
+    pr_state = str(task.metadata.get("pr_state") or "").strip().lower()
+    pr_merged = str(task.metadata.get("pr_merged") or "").strip().lower() in {"true", "1", "yes"}
+    if bool(task.metadata.get("pr_number")) and pr_state == "closed" and not pr_merged:
+        return "CLOSED_UNMERGED"
 
     # GitHub uses action_required for an approval/actor intervention gate. It is
     # not product-code failure evidence and must never spend a repair generation.
@@ -74,7 +78,7 @@ def canonicalize_task(task: Task) -> dict:
         task.state = State.DONE
     elif phase == "REPAIR_REQUIRED":
         task.state = State.EXECUTE
-    elif phase in {"POST_MERGE_CI", "RELEASE", "RELEASE_VERIFY", "WAITING_GITHUB"}:
+    elif phase in {"POST_MERGE_CI", "RELEASE", "RELEASE_VERIFY", "WAITING_GITHUB", "CLOSED_UNMERGED"}:
         task.state = State.VERIFY
     elif phase == "USER_ACTION_REQUIRED":
         task.state = State.BLOCKED
@@ -89,9 +93,10 @@ def canonicalize_task(task: Task) -> dict:
     task.metadata["repair_owner"] = "repair_pipeline" if phase == "REPAIR_REQUIRED" else ""
     terminal = phase == "DONE"
     blocked = phase == "USER_ACTION_REQUIRED"
+    closed_unmerged = phase == "CLOSED_UNMERGED"
     task.metadata["terminal_done"] = terminal
-    task.metadata["allow_foreground_exit"] = terminal or blocked
-    task.metadata["completion_lease"] = "DONE" if terminal else "BLOCKED" if blocked else "ACTIVE"
+    task.metadata["allow_foreground_exit"] = terminal or blocked or closed_unmerged
+    task.metadata["completion_lease"] = "DONE" if terminal else "BLOCKED" if blocked else "CLOSED_UNMERGED" if closed_unmerged else "ACTIVE"
     task.metadata["protocol"] = "gptauto.task-state/v2"
     task.metadata["continuation_required"] = phase == "REPAIR_REQUIRED"
     if blocked:
@@ -109,8 +114,8 @@ def canonicalize_task(task: Task) -> dict:
         "generation": generation,
         "repair_owner": str(task.metadata.get("repair_owner") or ""),
         "terminal_done": terminal,
-        "allow_foreground_exit": terminal or blocked,
-        "completion_lease": "DONE" if terminal else "BLOCKED" if blocked else "ACTIVE",
+        "allow_foreground_exit": terminal or blocked or closed_unmerged,
+        "completion_lease": "DONE" if terminal else "BLOCKED" if blocked else "CLOSED_UNMERGED" if closed_unmerged else "ACTIVE",
         "protocol": "gptauto.task-state/v2",
         "continuation_required": phase == "REPAIR_REQUIRED",
         "continuation_key": str(task.metadata.get("continuation_key") or ""),
