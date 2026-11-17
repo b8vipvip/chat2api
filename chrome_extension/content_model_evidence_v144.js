@@ -41,8 +41,11 @@
     const value = message?.options?.model_authority;
     return value && typeof value === "object" ? { ...value } : null;
   }
-  function broadcastAuthority(requestId, authority) {
-    try { globalThis.postMessage({ source: AUTHORITY_SOURCE, request_id: requestId, authority }, "*"); } catch (_) {}
+  function broadcastAuthority(requestId, authority, terminal = false) {
+    try { globalThis.postMessage({
+      source: AUTHORITY_SOURCE, request_id: requestId, authority,
+      terminal: terminal === true,
+    }, "*"); } catch (_) {}
   }
   function bind(streamId) {
     const key = String(streamId || "");
@@ -150,7 +153,7 @@
           && terminalRequestId && terminalRequestId === activeRequestId) {
         activeRequestId = "";
         activeAuthority = null;
-        broadcastAuthority("", null);
+        broadcastAuthority(terminalRequestId, null, true);
       }
       return;
     }
@@ -209,9 +212,10 @@
       // concrete model must not inherit the previous request's routing rule.
       broadcastAuthority(activeRequestId, activeAuthority);
     } else if (message?.type === "chat2api.cancel" && String(message.requestId || "") === activeRequestId) {
+      const cancelledRequestId = String(message.requestId || "");
       activeRequestId = "";
       activeAuthority = null;
-      broadcastAuthority("", null);
+      broadcastAuthority(cancelledRequestId, null, true);
     }
     return false;
   });
