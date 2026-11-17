@@ -246,12 +246,8 @@
       post({ phase: "unavailable", stream_id: streamId });
       return;
     }
-    const responseOk = clone.ok === true
-      && Number(clone.status) >= 200 && Number(clone.status) < 300;
-    const headerModel = responseOk
-      ? ["x-openai-model", "openai-model", "x-gpt-model", "x-model"]
-          .map(name => normalizeModel(clone.headers?.get?.(name))).find(Boolean) || null
-      : null;
+    const headerModel = ["x-openai-model", "openai-model", "x-gpt-model", "x-model"]
+      .map(name => normalizeModel(clone.headers?.get?.(name))).find(Boolean) || null;
     post({ phase: "response", stream_id: streamId, status: Number(clone.status || 0), ok: Boolean(clone.ok),
       request_model: requestInfo.requestModel, request_wire_model: requestInfo.requestWireModel,
       request_rewritten: requestInfo.rewritten, authority_violation: requestInfo.authorityViolation, header_model: headerModel });
@@ -290,14 +286,6 @@
     }
     const emitEvidence = terminal => {
       const evidence = {...evidenceState};
-      // A resolved-model-looking field in an HTTP error body is not proof
-      // that the upstream served that model. Keep the request/response status
-      // explicit and suppress all served-model claims for non-2xx responses.
-      if (!responseOk) {
-        evidence.served_model = null;
-        evidence.model_field = null;
-        evidence.model_conflict = false;
-      }
       if (headerModel) {
         if (evidence.served_model && evidence.served_model !== headerModel) {
           evidence.served_model = null; evidence.model_conflict = true; evidence.model_field = null;
@@ -310,7 +298,6 @@
       lastFingerprint = fingerprint;
       state.evidence += 1;
       post({ phase: "evidence", stream_id: streamId, terminal: Boolean(terminal),
-        response_ok: responseOk, response_status: Number(clone.status || 0),
         request_model: requestInfo.requestModel, request_wire_model: requestInfo.requestWireModel,
         request_rewritten: requestInfo.rewritten, authority_violation: requestInfo.authorityViolation, ...evidence });
     };
