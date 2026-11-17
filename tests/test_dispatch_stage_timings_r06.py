@@ -539,6 +539,27 @@ def test_initial_dispatch_is_rejected_if_broker_lease_releases_while_waiting_for
             raise AssertionError("released request was dispatched to the Worker")
         assert socket.sent == []
 
+        # Reusing the same request ID after the original lease was
+        # released must not let an old queued send bind to the replacement.
+        replacement_request_id = "req_r06_replaced_while_queued"
+        await broker.create(replacement_request_id, "ext_r06")
+        await lock.acquire()
+        replacement_send = asyncio.create_task(registry.send("ext_r06", {
+            "type": "chat.request", "request_id": replacement_request_id,
+        }))
+        await asyncio.sleep(0)
+        await broker.release(replacement_request_id)
+        await broker.create(replacement_request_id, "ext_r06")
+        lock.release()
+        try:
+            await replacement_send
+        except RuntimeError as error:
+            assert str(error) == "Request lease is no longer active"
+        else:
+            raise AssertionError("queued send attached to a replacement Broker lease")
+        assert socket.sent == []
+        await broker.release(replacement_request_id)
+
         # A retained Broker row that already reached a terminal is equally
         # non-dispatchable, even if its lease has not yet been released.
         terminal_request_id = "req_r06_terminal_while_queued"
