@@ -927,8 +927,8 @@ def test_reused_request_id_returns_conflict_without_releasing_original_holds(tmp
         tmp_path, billing_enabled=True, models=[_price_row("paid-model", 10_000.0)],
     )
     item = SimpleNamespace(
-        token_quota=100_000, tokens_used=0,
-        public=lambda: {"enabled": True},
+        token_quota=100_000, tokens_used=0, enabled=True, revoked_at=None,
+        public=lambda: {"enabled": True, "expired": False},
     )
     app.state.api_keys = SimpleNamespace(keys={"key-managed": item})
     app.state.quota_reservations = QuotaReservationStore(tmp_path)
