@@ -196,3 +196,29 @@ or multi-process ledger transactions. ApiKeyStore and BillingStore remain the
 only actual token and wallet charge authorities. C-06 is not complete until
 those explicit gaps and the remaining production acceptance gates are
 resolved.
+
+
+## 2026-11-17 — wallet pre-dispatch crash recovery handshake
+
+New positive-value wallet reservations use `admission_protocol_version=1`
+and start with `dispatch_authorized_at=null`. Chat Completions, Responses,
+Images and Voice now follow one ordering rule:
+
+1. Persist the request-history admission/running projection.
+2. Durably set `dispatch_authorized_at` in BillingStore.
+3. Only then send the first Worker request.
+
+If the marker write fails, the API fails closed and does not dispatch. On
+startup, only protocol-v1 holds without a dispatch marker are considered
+provably pre-dispatch. Recovery creates or terminalizes the same request's
+history row as `stalled`, releases the token reservation through the existing
+TelemetryStore accounting hook, and idempotently releases the wallet hold.
+If telemetry persistence or its accounting callback is unavailable, recovery
+attempts the token and wallet releases directly. A contradictory completed
+terminal is preserved for normal charge reconciliation.
+
+Legacy reservations without the protocol marker and new reservations with a
+dispatch authorization timestamp are intentionally preserved: the server
+cannot infer whether those requests reached the Worker. This handshake does
+not claim provider-verified usage, multi-host transactions, or payment-provider
+refund support. It closes only the pre-dispatch admission crash window.

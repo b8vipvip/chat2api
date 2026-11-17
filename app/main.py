@@ -181,13 +181,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         request_id,
                     )
                     continue
+                existing_diagnostics = (
+                    existing.get("diagnostics")
+                    if isinstance((existing or {}).get("diagnostics"), dict) else {}
+                )
                 row_payload = {
                     **(existing or {}),
                     "request_id": request_id,
                     "status": "stalled",
                     "error": "Server restarted before Worker dispatch",
                     "diagnostics": {
-                        **((existing or {}).get("diagnostics") or {}),
+                        **existing_diagnostics,
                         "request_admission_recovery": "server-restart-before-worker-dispatch",
                         "request_admission_failure_kind": "server_restart",
                     },
@@ -206,6 +210,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 # The first persisted completed terminal always wins. Do not
                 # release a hold if contradictory completion evidence exists;
                 # leave it for normal charge reconciliation instead.
+                if str((recovered_row or {}).get("status") or "").lower() == "completed":
+                    logger.error(
+                        "Pre-dispatch wallet marker conflicts with completed telemetry request_id=%s",
+                        request_id,
+                    )
+                    continue
                 if quota_store is not None and key_id:
                     try:
                         await asyncio.to_thread(quota_store.release, request_id, key_id)
