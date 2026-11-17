@@ -436,9 +436,14 @@ async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], princi
             raise
     registry.busy_clients.add(client_id)
     try:
-        await asyncio.to_thread(
-            authorize_wallet_dispatch, app, request_id, principal,
-        )
+        # The trusted internal tool-protocol repair is part of the parent
+        # Responses request, not a second billable admission. It deliberately
+        # has no wallet reservation row, so it must not enter the wallet
+        # dispatch-marker gate used by caller-owned requests.
+        if not internal_repair:
+            await asyncio.to_thread(
+                authorize_wallet_dispatch, app, request_id, principal,
+            )
         await app.state.chat_request_service.dispatch(
             client_id,
             request_id=request_id,
