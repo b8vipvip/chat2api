@@ -235,7 +235,14 @@ def test_outer_middleware_owns_stream_terminal(
     assert row["diagnostics"]["response_stream_event_count"] == len(events)
 
 
-def test_dispatch_correlates_worker_and_protocol_repair_attempts() -> None:
+def test_dispatch_correlates_worker_and_protocol_repair_attempts(monkeypatch) -> None:
+    from app import quota_reservation_runtime_v1 as quota_runtime
+
+    wallet_dispatches: list[str] = []
+    monkeypatch.setattr(
+        quota_runtime, "authorize_wallet_dispatch",
+        lambda _app, request_id, _principal: wallet_dispatches.append(request_id),
+    )
     trace = {"worker_attempt_ids": []}
     request = SimpleNamespace(
         headers={"x-chat2api-request-id": "resp_req_original"},
@@ -283,3 +290,4 @@ def test_dispatch_correlates_worker_and_protocol_repair_attempts() -> None:
     assert trace["worker_request_id"] == "resp_req_original"
     assert trace["worker_attempt_ids"] == ["resp_req_original", "resp_repair_2"]
     assert trace["worker_client_id"] == "ext_worker"
+    assert wallet_dispatches == ["resp_req_original"], "trusted repair must not require a second wallet admission"

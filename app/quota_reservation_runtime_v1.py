@@ -63,16 +63,33 @@ def authorize_wallet_dispatch(app: Any, request_id: str, principal: Any) -> bool
     accounts = getattr(app.state, "user_accounts", None)
     billing = getattr(app.state, "user_billing", None)
     key_id = str(getattr(principal, "key_id", "") or "")
-    if billing is None:
-        return False
     try:
+        # Resolve account ownership before treating a missing reservation as a
+        # legacy/unbilled path. An account-owned key must always have a durable
+        # admission row (including an explicit zero-price/billing-disabled row)
+        # before it can reach a Worker.
+        owner = None
+        if accounts is not None and key_id:
+            owner_lookup = getattr(accounts, "owner_for_key", None)
+            if not callable(owner_lookup):
+                raise WalletReservationError("Wallet reservation owner lookup is unavailable")
+            owner = owner_lookup(key_id)
+
+        if billing is None:
+            if owner:
+                raise WalletReservationError("Wallet billing store is unavailable for an account-owned API key")
+            return False
+
         lookup = getattr(billing, "reservation_for_request", None)
         if not callable(lookup):
             raise WalletReservationError("Wallet reservation lookup is unavailable")
         reservation = lookup(str(request_id))
         if reservation is None:
-            # No wallet admission was created for this request (for example,
-            # a legacy key with no account owner); there is no hold to mark.
+            if owner:
+                raise WalletReservationError(
+                    "Account-owned API key is missing its durable wallet admission record"
+                )
+            # Legacy keys without an account owner have no wallet ledger entry.
             return False
         if (
             str(reservation.get("state") or "") == "released"
@@ -80,18 +97,16 @@ def authorize_wallet_dispatch(app: Any, request_id: str, principal: Any) -> bool
                 "billing_disabled_at_admission", "zero_price_at_admission",
             }
         ):
-            # Intentional free/unbilled admissions have no active hold.
+            # Intentional free/unbilled admissions have a durable marker and
+            # therefore remain valid even though no active hold exists.
             return False
         if (
             str(reservation.get("state") or "") != "reserved"
             or reservation.get("admission_protocol_version") != 1
         ):
             raise WalletReservationError("Wallet reservation is not dispatchable")
-        if accounts is None or not key_id:
+        if accounts is None or not key_id or not owner:
             raise WalletReservationError("Wallet reservation owner context is unavailable")
-        owner = accounts.owner_for_key(key_id)
-        if not owner:
-            raise WalletReservationError("Wallet reservation owner no longer exists")
         if str(reservation.get("user_id") or "") != str(owner):
             raise WalletReservationError("Wallet reservation owner does not match the API key")
         if not billing.mark_dispatch_authorized(str(request_id), str(owner)):
