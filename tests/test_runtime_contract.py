@@ -205,6 +205,10 @@ def test_request_terminal_migration_owns_one_loaded_controller():
     request = (ROOT / "chrome_extension/content_request_v6.js").read_text(encoding="utf-8")
     assert "resolveBlockingInterruption({force:true,phase:\"before-request\"})" in request
     assert 'type: "chat.completed"' in request
+    assert 'source: "chat2api-model-authority-v144"' in request
+    assert "request_id: active.requestId" in request
+    assert "authority: null" in request
+    assert "terminal: true" in request
     assert "reconcileStrictTerminal" not in request
 
 
