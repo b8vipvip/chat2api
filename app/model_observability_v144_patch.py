@@ -15,6 +15,13 @@ logger = logging.getLogger(__name__)
 
 PATCH_ID = "final-model-authority-v144"
 PATCH_REVISION = 144
+_SERVED_MODEL_FIELDS = frozenset({
+    "used_model", "used_model_slug", "resolved_model", "resolved_model_slug",
+    "served_model", "served_model_slug",
+})
+_NETWORK_RESPONSE_SOURCES = frozenset({
+    "network_response_metadata", "network_response_header",
+})
 
 
 def _authority(target: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -43,7 +50,35 @@ def _evidence_from_event(event: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(diagnostics, dict):
         return None
     raw = diagnostics.get("model_evidence_v144")
-    return dict(raw) if isinstance(raw, dict) else None
+    if not isinstance(raw, dict):
+        return None
+    # Only the current, explicitly versioned MAIN-world fetch observer may
+    # supply served-model evidence. Unversioned/legacy Worker diagnostics
+    # remain useful as raw telemetry but cannot verify a model.
+    revision = diagnostics.get("model_evidence_revision")
+    transport = diagnostics.get("model_evidence_transport")
+    if type(revision) is not int or revision != PATCH_REVISION:
+        return None
+    if transport != "main-world-fetch":
+        return None
+    return dict(raw)
+
+
+def _network_response_source(evidence: dict[str, Any]) -> str | None:
+    source = str(evidence.get("evidence_source") or "").strip().lower()
+    return source if source in _NETWORK_RESPONSE_SOURCES else None
+
+
+def _served_model_field_valid(evidence: dict[str, Any], source: str | None) -> bool:
+    field = str(evidence.get("model_field") or "").strip()
+    if source == "network_response_header":
+        return field == "response-header"
+    if source != "network_response_metadata" or not field:
+        return False
+    # The observer emits the original JSON path. Validate its terminal key,
+    # not the optional nesting path, against the explicit served-model schema.
+    field_name = field.rsplit(".", 1)[-1].strip().lower().replace("-", "_")
+    return field_name in _SERVED_MODEL_FIELDS
 
 
 def _trace(authority: dict[str, Any] | None, evidence: dict[str, Any] | None) -> dict[str, Any]:
@@ -69,7 +104,10 @@ def _trace(authority: dict[str, Any] | None, evidence: dict[str, Any] | None) ->
     # A model-shaped field in an HTTP error response is not evidence of a
     # model that served this request. Require the same-request 2xx response
     # observation before accepting any concrete served-model identifier.
-    served = normalize_concrete_model_id(evidence.get("served_model")) if response_ok else None
+    evidence_source = _network_response_source(evidence)
+    served_field_valid = _served_model_field_valid(evidence, evidence_source)
+    served_evidence_valid = bool(response_ok and evidence_source and served_field_valid)
+    served = normalize_concrete_model_id(evidence.get("served_model")) if served_evidence_valid else None
     default_model = normalize_concrete_model_id(evidence.get("default_model"))
     # Profile/default metadata is diagnostic only. It must never prove which
     # concrete model actually served this request.
@@ -78,7 +116,10 @@ def _trace(authority: dict[str, Any] | None, evidence: dict[str, Any] | None) ->
     # A network-confirmed different model must be visible as a conflict
     # even when the lower-level observer did not flag an intra-stream clash.
     served_mismatch = bool(routed and served and routed != served)
-    conflict = (bool(evidence.get("model_conflict")) if response_ok else False) or served_mismatch
+    # A response-body conflict can be retained without a single model field,
+    # but only when it came from the recognized network-response observer.
+    conflict = (bool(evidence.get("model_conflict"))
+                if response_ok and evidence_source else False) or served_mismatch
     page_default_route = authority.get("default_page_route") is True
     expected_wire = None if page_default_route else str(
         authority.get("transport_model") or model_transport_id(routed) or ""
@@ -123,6 +164,8 @@ def _trace(authority: dict[str, Any] | None, evidence: dict[str, Any] | None) ->
         "served_model": served,
         "model_response_ok": response_ok,
         "model_response_status": response_status,
+        "model_evidence_source_valid": bool(evidence_source),
+        "model_response_evidence_valid": served_evidence_valid,
         "observed_model": observed,
         "default_model": default_model,
         "model_verified": verified,

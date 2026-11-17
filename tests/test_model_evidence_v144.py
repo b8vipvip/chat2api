@@ -112,6 +112,48 @@ def test_served_model_requires_successful_same_request_response() -> None:
     assert missing["model_response_ok"] is False
 
 
+def test_served_model_requires_network_response_source_and_field() -> None:
+    from app.model_observability_v144_patch import _trace
+
+    authority = {"requested_model": "gpt-6", "routed_model": "gpt-6"}
+    valid_metadata = {
+        "served_model": "gpt-6", "response_ok": True, "response_status": 200,
+        "model_field": "message.resolved_model_slug",
+        "evidence_source": "network_response_metadata",
+    }
+    assert _trace(authority, valid_metadata)["model_verified"] is True
+
+    valid_header = {
+        "served_model": "gpt-6", "response_ok": True, "response_status": 200,
+        "model_field": "response-header",
+        "evidence_source": "network_response_header",
+    }
+    assert _trace(authority, valid_header)["model_verified"] is True
+
+    forged_sources = (
+        {**valid_metadata, "evidence_source": "profile_default"},
+        {**valid_metadata, "evidence_source": "network_request_metadata"},
+        {**valid_metadata, "model_field": "profile.default_model_slug"},
+        {**valid_metadata, "evidence_source": "network_response_header"},
+        {**valid_header, "model_field": "resolved_model_slug"},
+    )
+    for evidence in forged_sources:
+        trace = _trace(authority, evidence)
+        assert trace["served_model"] is None
+        assert trace["model_verified"] is False
+        assert trace["model_response_evidence_valid"] is False
+
+    # Multiple conflicting response model fields can have no single field
+    # name; preserve that conflict only for a recognized network response.
+    conflict = _trace(authority, {
+        "response_ok": True, "response_status": 200,
+        "model_conflict": True, "evidence_source": "network_response_metadata",
+    })
+    assert conflict["served_model"] is None
+    assert conflict["model_conflict"] is True
+    assert conflict["model_verified"] is False
+
+
 def test_response_equal_authority_conflict_fails_closed() -> None:
     body = "data: " + json.dumps({
         "served_model_slug": "gpt-6-astra-wm",
@@ -164,6 +206,7 @@ def test_gptwork_default_profile_mismatch_is_not_a_fake_fallback() -> None:
         "response_status": 200,
         "default_model": "gpt-5.6-sol",
         "default_model_conflict": False,
+        "model_field": "resolved_model_slug",
         "evidence_source": "network_response_metadata",
     }
     trace = _trace(authority, evidence)
@@ -192,7 +235,10 @@ def test_free_default_network_request_is_not_misrepresented_as_concrete_model():
     assert trace["model_verified"] is False
     assert trace["transport_model"] is None
     assert trace["model_verification_level"] == "page-default-unverified"
-    served = _trace(authority, {"served_model": "gpt-5.6-sol", "response_ok": True, "response_status": 200})
+    served = _trace(authority, {
+        "served_model": "gpt-5.6-sol", "response_ok": True, "response_status": 200,
+        "model_field": "resolved_model_slug", "evidence_source": "network_response_metadata",
+    })
     assert served["model_verified"] is True
 
     source = (ROOT / "chrome_extension" / "model_evidence_main_v144.js").read_text(encoding="utf-8")
@@ -268,7 +314,8 @@ def test_served_mismatch_is_explicit_model_conflict_not_silent_fallback() -> Non
     from app.model_observability_v144_patch import _trace
     authority = {"requested_model": "gpt-5.6-sol", "routed_model": "gpt-5.6-sol"}
     evidence = {"request_model": "gpt-5.6-sol", "served_model": "gpt-6",
-                "response_ok": True, "response_status": 200, "model_conflict": False, "evidence_source": "network_response_metadata"}
+                "response_ok": True, "response_status": 200, "model_conflict": False,
+                "model_field": "resolved_model_slug", "evidence_source": "network_response_metadata"}
     trace = _trace(authority, evidence)
     assert trace["model_conflict"] is True
     assert trace["model_verified"] is False
@@ -289,7 +336,9 @@ def test_same_request_wire_slug_distinguishes_bad_rewrite_from_upstream_fallback
     # transport, but upstream metadata resolves a *different* model.
     upstream = _trace(authority, {"request_model": "gpt-5.6-sol",
                                   "request_wire_model": "gpt-5.6-sol-wm",
-                                  "served_model": "gpt-6", "response_ok": True, "response_status": 200})
+                                  "served_model": "gpt-6", "response_ok": True, "response_status": 200,
+                                  "model_field": "resolved_model_slug",
+                                  "evidence_source": "network_response_metadata"})
     assert upstream["model_wire_transport_matches"] is True
     assert upstream["model_authority_violation"] is False
     assert upstream["model_conflict"] is True
@@ -303,6 +352,8 @@ def test_same_request_wire_slug_distinguishes_bad_rewrite_from_upstream_fallback
         "served_model": "gpt-6",
         "response_ok": True,
         "response_status": 200,
+        "model_field": "resolved_model_slug",
+        "evidence_source": "network_response_metadata",
     })
     assert failed_rewrite["model_wire_transport_matches"] is False
     assert failed_rewrite["model_authority_violation"] is True
@@ -330,7 +381,9 @@ def test_v303_page_native_model_wire_is_not_overwritten_by_legacy_wm_alias():
             "page_native_wire_respected":True,
             "served_model":"gpt-5.6-sol",
             "response_ok":True,
-            "response_status":200}
+            "response_status":200,
+            "model_field":"resolved_model_slug",
+            "evidence_source":"network_response_metadata"}
     traced=_trace(authority,native)
     assert traced["model_wire_transport_matches"] is True
     assert traced["model_page_native_wire_respected"] is True

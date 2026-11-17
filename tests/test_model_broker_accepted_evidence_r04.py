@@ -68,12 +68,17 @@ def test_only_broker_accepted_events_can_change_model_evidence(monkeypatch) -> N
             return {
                 "type": event_type,
                 "request_id": request_id,
-                "diagnostics": {"model_evidence_v144": {
-                    "served_model": served_model,
-                    "response_ok": True,
-                    "response_status": 200,
-                    "evidence_source": "network_response_metadata",
-                }},
+                "diagnostics": {
+                    "model_evidence_revision": 144,
+                    "model_evidence_transport": "main-world-fetch",
+                    "model_evidence_v144": {
+                        "served_model": served_model,
+                        "response_ok": True,
+                        "response_status": 200,
+                        "model_field": "resolved_model_slug",
+                        "evidence_source": "network_response_metadata",
+                    },
+                },
             }
 
         assert await broker.publish(request_id, evidence_event("chat.diagnostics", "gpt-6"))
@@ -117,7 +122,41 @@ def test_only_broker_accepted_events_can_change_model_evidence(monkeypatch) -> N
     asyncio.run(exercise())
 
 
-def test_model_authority_snapshot_is_released_with_server_owned_broker_lease(monkeypatch) -> None:
+def test_model_evidence_requires_current_main_world_transport_envelope() -> None:
+    evidence = {
+        "served_model": "gpt-6",
+        "response_ok": True,
+        "response_status": 200,
+        "model_field": "resolved_model_slug",
+        "evidence_source": "network_response_metadata",
+    }
+    valid = {
+        "diagnostics": {
+            "model_evidence_revision": 144,
+            "model_evidence_transport": "main-world-fetch",
+            "model_evidence_v144": evidence,
+        },
+    }
+    assert model_patch._evidence_from_event(valid) == evidence
+
+    invalid_events = (
+        {"diagnostics": {"model_evidence_v144": evidence}},
+        {"diagnostics": {
+            "model_evidence_revision": 143,
+            "model_evidence_transport": "main-world-fetch",
+            "model_evidence_v144": evidence,
+        }},
+        {"diagnostics": {
+            "model_evidence_revision": 144,
+            "model_evidence_transport": "legacy-worker-cache",
+            "model_evidence_v144": evidence,
+        }},
+    )
+    for event in invalid_events:
+        assert model_patch._evidence_from_event(event) is None
+
+
+def test_model_authority_snapshot_is_released_with_server_owned_broker_lease(monkeypatch) -> None
     async def exercise() -> None:
         app = FastAPI()
         broker = RequestBroker()
@@ -196,12 +235,17 @@ def test_telemetry_projection_outage_does_not_reverse_accepted_broker_event(monk
         telemetry.fail = True
         accepted = await broker.publish(request_id, {
             "type": "chat.diagnostics", "request_id": request_id,
-            "diagnostics": {"model_evidence_v144": {
-                "served_model": "gpt-6",
-                "response_ok": True,
-                "response_status": 200,
-                "evidence_source": "network_response_metadata",
-            }},
+            "diagnostics": {
+                "model_evidence_revision": 144,
+                "model_evidence_transport": "main-world-fetch",
+                "model_evidence_v144": {
+                    "served_model": "gpt-6",
+                    "response_ok": True,
+                    "response_status": 200,
+                    "model_field": "resolved_model_slug",
+                    "evidence_source": "network_response_metadata",
+                },
+            },
         })
         assert accepted is True
         assert state.diagnostics["served_model"] == "gpt-6"
