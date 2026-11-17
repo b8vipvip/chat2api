@@ -28,7 +28,7 @@ const readinessContext={
   elapsedMs:started=>Math.max(0,++readinessClock-started),
   timingValue:value=>typeof value==="number"&&Number.isFinite(value)&&value>=0?Math.round(value*10)/10:null,
   chrome:{
-    tabs:{get:async id=>id===1?null:{id,windowId:77}},
+    tabs:{get:async id=>(id===1||id===3)?null:{id,windowId:77}},
     storage:{local:{set:async()=>{}}},
   },
   String,Error,
