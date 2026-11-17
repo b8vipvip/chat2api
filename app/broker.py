@@ -384,7 +384,11 @@ def _merge_request_v6_dispatch_diagnostics(
             next_status = next_entry["status"]
             terminal_statuses = {"completed", "failed", "skipped"}
             if previous_status in terminal_statuses:
-                if next_status == "started":
+                # Each request-v6 stage runs once. Once it reaches a terminal
+                # state, a later snapshot may refine timing for that SAME
+                # terminal state, but must never flip completed/failed/skipped
+                # merely because its timestamp is larger or equal.
+                if next_status != previous_status:
                     continue
                 previous_elapsed = previous.get("completed_elapsed_ms")
                 next_elapsed = next_entry.get("completed_elapsed_ms")
@@ -392,7 +396,7 @@ def _merge_request_v6_dispatch_diagnostics(
                     continue
                 if (isinstance(previous_elapsed, (int, float))
                         and isinstance(next_elapsed, (int, float))
-                        and next_elapsed < previous_elapsed):
+                        and next_elapsed <= previous_elapsed):
                     continue
                 if previous_elapsed is None and next_elapsed is None:
                     continue
