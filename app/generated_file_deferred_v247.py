@@ -234,7 +234,14 @@ class DeferredGeneratedFiles:
                     )
             try:
                 with self._db() as conn:
-                    conn.execute("UPDATE deferred_generated_files SET state='failed',updated_at=? WHERE id=?",
+                    # A stale archive worker (e.g. during a restart with
+                    # another process finalizing the same pending file) must
+                    # never demote an already committed, downloadable 'ready'
+                    # manifest back to 'failed'. File availability has one
+                    # monotonic durable owner: this SQLite manifest.
+                    conn.execute("""UPDATE deferred_generated_files
+                                 SET state='failed',updated_at=?
+                                 WHERE id=? AND state='processing'""",
                                  (datetime.now(timezone.utc).isoformat(), pending_id))
             except Exception:
                 logging.getLogger(__name__).exception(

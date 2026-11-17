@@ -152,3 +152,58 @@ def test_reaper_release_passes_through_latest_capacity_owner(monkeypatch):
         assert broker.capacity_snapshot(state.client_id)["used_units"] == 0
 
     asyncio.run(scenario())
+
+def test_startup_recovery_stalls_only_undispatched_queued_requests(tmp_path):
+    from app.telemetry import TelemetryStore
+
+    async def scenario():
+        store = TelemetryStore(tmp_path)
+        accounted = []
+
+        async def account(record):
+            accounted.append((record["request_id"], record["status"]))
+
+        store.usage_accounting = account
+        await store.upsert({
+            "request_id": "req_queued_restart_123",
+            "response_id": "resp_queued_restart_123",
+            "status": "queued",
+            "api_key_id": "key_owner",
+            "diagnostics": {"request_admission_stage": "waiting-capacity"},
+        })
+        await store.upsert({
+            "request_id": "req_running_restart_123",
+            "response_id": "resp_running_restart_123",
+            "status": "running",
+            "api_key_id": "key_owner",
+        })
+        await store.upsert({
+            "request_id": "req_active_queued_123",
+            "response_id": "resp_active_queued_123",
+            "status": "queued",
+            "api_key_id": "key_owner",
+        })
+
+        recovered = await store.recover_queued_after_restart({"req_active_queued_123"})
+        assert recovered == 1
+        queued = store.get("req_queued_restart_123")
+        assert queued["status"] == "stalled"
+        assert queued["error"] == "Server restarted before Worker dispatch"
+        assert queued["finished_at"]
+        assert queued["diagnostics"]["request_admission_recovery"] == "server-restart-before-worker-dispatch"
+        assert store.get("req_running_restart_123")["status"] == "running"
+        assert store.get("req_active_queued_123")["status"] == "queued"
+        assert ("req_queued_restart_123", "stalled") in accounted
+
+        reopened = TelemetryStore(tmp_path)
+        await reopened.load()
+        assert reopened.get("req_queued_restart_123")["status"] == "stalled"
+
+    asyncio.run(scenario())
+
+
+def test_production_lifespan_invokes_queued_restart_recovery():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "app" / "main.py").read_text(encoding="utf-8")
+    assert "await telemetry.recover_queued_after_restart(set(broker.requests))" in source

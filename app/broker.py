@@ -13,6 +13,9 @@ from typing import Any
 class RequestState:
     request_id: str
     client_id: str
+    # Exact WebSocket that received the initial dispatch. A reconnect for the
+    # same client_id does not inherit an already-running request.
+    dispatch_socket: Any | None = field(default=None, repr=False, compare=False)
     queue: asyncio.Queue[dict[str, Any]] = field(default_factory=asyncio.Queue)
     final_future: asyncio.Future[str] | None = None
     text: str = ""
@@ -36,7 +39,7 @@ class RequestState:
     diagnostics: dict[str, Any] = field(default_factory=dict)
 
     def owns_dispatch_socket(self, client_id: str, websocket: Any, current_socket: Any) -> bool:
-        """Require the exact request, Worker identity and dispatch socket."""
+        """Require the assigned Worker and exact original/current socket."""
         return bool(
             client_id
             and websocket is not None
@@ -375,6 +378,11 @@ class RequestBroker:
 
     async def create(self, request_id: str, client_id: str) -> RequestState:
         async with self.lock:
+            # Request identity is global across Workers. Never replace an
+            # existing lease when a caller replays the same ID on another
+            # client; that would orphan the original Worker/client mapping.
+            if request_id in self.requests:
+                raise RuntimeError("The request ID is already active")
             if client_id in self.client_requests:
                 raise RuntimeError("The selected extension is busy with another request")
             loop = asyncio.get_running_loop()
@@ -413,15 +421,40 @@ class RequestBroker:
                 else:
                     self.client_requests.pop(state.client_id, None)
 
+
+    async def publish_worker_event(
+        self,
+        request_id: str,
+        event: dict[str, Any],
+        *,
+        client_id: str,
+        websocket: Any,
+        current_socket: Any,
+    ) -> bool:
+        """Publish a Worker event only from the current socket assigned the request.
+
+        Request IDs are correlation identifiers, not Worker credentials. The
+        authenticated socket identity and the Broker's request assignment must
+        both match before any progress or terminal event can enter the queue.
+        """
+        if websocket is None or current_socket is not websocket:
+            return False
+        state = self.requests.get(request_id)
+        if state is None or not state.owns_dispatch_socket(
+            client_id, websocket, current_socket
+        ):
+            return False
+        return await self.publish(request_id, event)
+
     async def publish(self, request_id: str, event: dict[str, Any]) -> bool:
         state = self.requests.get(request_id)
         if not state:
             return False
         event_type = event.get("type")
-        if state.terminal_event_type is not None:
-            # Ignore EVERY event after the first terminal. In particular a late
-            # error must not overturn completion, and a second completion must
-            # not enter the stream queue after the first final frame.
+        if state.terminal_event_type is not None or state.completed_mono is not None:
+            # Ignore EVERY event after a Worker terminal or a server-owned
+            # terminal cutoff (for example, an API timeout). A late Worker
+            # completion must not overturn an already finalized API response.
             return False
         now = time.perf_counter()
         if event_type in {"chat.diagnostics", "image.diagnostics"}:
