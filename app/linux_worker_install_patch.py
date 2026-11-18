@@ -52,7 +52,6 @@ def install_linux_worker_install_patch(app: FastAPI) -> FastAPI:
 
     def combined_rows(request: Request) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
-        linked_workers: set[str] = set()
         for raw in installs.list_admin():
             item = sync_link(raw)
             worker_id = str(item.get("worker_id") or "")
@@ -70,8 +69,6 @@ def install_linux_worker_install_patch(app: FastAPI) -> FastAPI:
                 "last_seen_at": None,
                 "metadata": {},
             }
-            if worker_id:
-                linked_workers.add(worker_id)
             row = {
                 **base,
                 "record_type": "installation",
