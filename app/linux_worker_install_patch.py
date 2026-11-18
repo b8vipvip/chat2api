@@ -64,6 +64,7 @@ def install_linux_worker_install_patch(app: FastAPI) -> FastAPI:
             # A socket accepted without a recent Agent heartbeat is not ready
             # for command dispatch and must not be reported as installed.
             heartbeat_recent = False
+            heartbeat_age_seconds: float | None = None
             last_seen = str(worker.get("last_seen_at") or "")
             if last_seen:
                 try:
@@ -71,11 +72,16 @@ def install_linux_worker_install_patch(app: FastAPI) -> FastAPI:
                     if seen_at.tzinfo is None:
                         seen_at = seen_at.replace(tzinfo=timezone.utc)
                     age_seconds = (datetime.now(timezone.utc) - seen_at).total_seconds()
+                    heartbeat_age_seconds = round(age_seconds, 1)
                     heartbeat_recent = -5 <= age_seconds <= 45
                 except (TypeError, ValueError):
                     heartbeat_recent = False
             connected = bool(sockets.get(worker_id)) and heartbeat_recent
-        return {"valid": True, "connected": connected}
+        return {
+            "valid": True,
+            "connected": connected,
+            "heartbeat_age_seconds": heartbeat_age_seconds,
+        }
 
     @app.post("/api/workers/install-resume")
     async def worker_install_resume(request: Request) -> dict[str, bool]:
