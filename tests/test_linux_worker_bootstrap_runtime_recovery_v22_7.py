@@ -61,6 +61,9 @@ def test_fresh_install_validates_identity_against_the_current_enrollment():
     assert '@app.post("/api/workers/install-resume")' in api
     assert 'enrollment.get("worker_id") or "") != worker_id' in api
     assert "worker_store.authenticate(worker_id, worker_token)" in api
+    assert "/api/workers/identity/validate" in bootstrap
+    assert "Worker Agent 未能在 90 秒内连接当前服务端" in bootstrap
+    assert bootstrap.index("worker-connection") < bootstrap.index('INSTALL_SUCCESS=1')
 
 
 def test_runtime_marks_bootstrap_recovery_release():
