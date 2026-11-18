@@ -572,3 +572,29 @@ def test_legacy_owner_invitation_is_revoked_before_membership_acceptance(tmp_pat
     assert row["revoked_at"]
     assert store.role_for(tenant["tenant_id"], "usr_legacy_invitee123") is None
     store.close()
+
+
+
+def test_workspace_owner_transitions_are_enforced_inside_the_write_transaction(tmp_path: Path):
+    store = TenantMembershipStore(tmp_path)
+    tenant = store.create("owner-transaction-guard", "Owner Transaction Guard")
+    tenant_id = tenant["tenant_id"]
+    owner_id = "usr_owner_txn12345"
+    member_id = "usr_member_txn12345"
+    store.upsert_member(tenant_id, owner_id, "owner")
+    store.upsert_member(tenant_id, member_id, "member")
+
+    with pytest.raises(TenantMembershipError, match="owner transitions require super_admin"):
+        store.upsert_member(
+            tenant_id, member_id, "owner", allow_owner_change=False,
+        )
+    with pytest.raises(TenantMembershipError, match="owner transitions require super_admin"):
+        store.upsert_member(
+            tenant_id, owner_id, "member", allow_owner_change=False,
+        )
+    with pytest.raises(TenantMembershipError, match="owner transitions require super_admin"):
+        store.remove_member(tenant_id, owner_id, allow_owner_change=False)
+
+    assert store.role_for(tenant_id, owner_id) == "owner"
+    assert store.role_for(tenant_id, member_id) == "member"
+    store.close()
