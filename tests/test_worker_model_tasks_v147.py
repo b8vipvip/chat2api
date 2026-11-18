@@ -1,50 +1,75 @@
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_production_worker_touch_chain_accepts_current_websocket_and_rejects_stale_socket():
+    script = r"""
 import asyncio
-from types import SimpleNamespace
+import json
+import tempfile
+from pathlib import Path
 
-from fastapi import FastAPI
+from app.entry import app
 
-from app import model_capability_routing_patch as routing
-from app.registry import ClientRegistry
-from app.worker_model_tasks_v147_patch import install_manual_worker_text_model_tasks_v147_patch
-
-
-def test_v147_touch_preserves_websocket_identity_and_boolean_contract(monkeypatch, tmp_path):
-    async def scenario():
-        app = FastAPI()
-
-        @app.get("/api/admin/overview")
-        async def admin_overview():
-            return {}
-
-        registry = ClientRegistry(tmp_path)
-        app.state.registry = registry
-        app.state.settings = SimpleNamespace(data_dir=tmp_path)
-        app.state.worker_text_model_management_v146_snapshot = lambda: {"disabled": []}
-
-        monkeypatch.setattr(routing, "_compatible", routing._compatible)
-        install_manual_worker_text_model_tasks_v147_patch(app)
-
-        client_id, _token = await registry.register(
-            "Worker", "Chrome", "0.22.291", {}
-        )
+async def main():
+    registry = app.state.registry
+    with tempfile.TemporaryDirectory() as directory:
+        registry.data_dir = Path(directory)
+        registry.path = Path(directory) / "clients.json"
+        client_id, _token = await registry.register("Regression Worker", "Chrome", "0.22.291", {})
         current_socket = object()
-        stale_socket = object()
         await registry.attach(client_id, current_socket)
-
-        assert await registry.touch(
-            client_id, None, websocket=current_socket
-        ) is True
-        assert await registry.touch(
+        accepted = await registry.touch(
             client_id, {"extension_version": "0.22.292"}, websocket=current_socket
-        ) is True
-        assert registry.clients[client_id].version == "0.22.292"
+        )
+        stale = await registry.touch(
+            client_id, {"extension_version": "0.0.0"}, websocket=object()
+        )
+        print(json.dumps({
+            "accepted": accepted,
+            "stale_rejected": stale is False,
+            "version": registry.clients[client_id].version,
+        }))
 
-        # A stale/replaced socket must remain rejected by the wrapper too.
-        assert await registry.touch(
-            client_id, {"extension_version": "0.0.0"}, websocket=stale_socket
-        ) is False
-        assert registry.clients[client_id].version == "0.22.292"
+asyncio.run(main())
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=45,
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    assert payload == {
+        "accepted": True,
+        "stale_rejected": True,
+        "version": "0.22.292",
+    }
 
-    asyncio.run(scenario())
+
+def test_all_worker_touch_decorators_forward_the_websocket_keyword_and_result():
+    cases = (
+        ("app/worker_auto_login_v153_patch.py", "touch_with_relogin", "previous_touch"),
+        ("app/worker_text_model_management_v146_patch.py", "touch_with_history", "base_touch"),
+        ("app/worker_model_tasks_v147_patch.py", "touch_tasks", "base_touch"),
+    )
+    for relative, function, predecessor in cases:
+        source = (ROOT / relative).read_text(encoding="utf-8")
+        start = source.index(f"async def {function}")
+        end = source.index(f"\n    registry.touch =", start)
+        block = source[start:end]
+        assert "websocket: Any | None = None" in block
+        assert f"await {predecessor}(client_id, metadata, websocket=websocket)" in block
+        assert "if not accepted:" in block
+        assert "return False" in block
+        assert "return True" in block
