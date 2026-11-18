@@ -405,6 +405,7 @@ class TenantMembershipStore:
             raise TenantMembershipError("Invalid invitation code")
         token_hash = hashlib.sha256(raw_code.encode("utf-8")).hexdigest()
         expired = False
+        invalid_role = False
         result: dict[str, Any] | None = None
         with self.lock:
             with self.db:
@@ -426,6 +427,17 @@ class TenantMembershipStore:
                         (invitation_id,),
                     )
                     expired = True
+                elif role not in INVITABLE_ROLES:
+                    # Revoke invitations created by older versions that could
+                    # grant owner. Rejecting the request alone would leave the
+                    # legacy token reusable after a future rollback/redeploy.
+                    self.db.execute(
+                        """UPDATE tenant_invitations
+                           SET status='revoked',revoked_at=?
+                           WHERE invitation_id=? AND status='issued'""",
+                        (_now(), invitation_id),
+                    )
+                    invalid_role = True
                 elif str(invited_email) != normalized_email:
                     raise TenantMembershipError("Invitation email does not match the signed-in account")
                 else:
@@ -450,6 +462,8 @@ class TenantMembershipStore:
                     result = {"tenant_id": tenant_id, "user_id": user_id, "role": role}
         if expired:
             raise TenantMembershipError("Invitation has expired")
+        if invalid_role:
+            raise TenantMembershipError("Invitation role is no longer permitted")
         if result is None:
             raise TenantMembershipError("Invitation could not be accepted")
         return result
