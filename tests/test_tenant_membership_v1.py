@@ -156,6 +156,9 @@ def test_workspace_invitation_is_email_bound_single_use_and_revocable(tmp_path: 
     tenant = store.create("invite-team", "Invitation Team")
     store.upsert_member(tenant["tenant_id"], "usr_owner12345", "owner")
 
+    with pytest.raises(TenantMembershipError, match="owner assignment requires an explicit admin action"):
+        store.create_invitation(tenant["tenant_id"], "owner-target@example.com", "owner", "root")
+
     invitation, code = store.create_invitation(
         tenant["tenant_id"], "Member@Example.com", "member", "root",
         expires_in_seconds=600,
