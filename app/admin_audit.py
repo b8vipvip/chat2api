@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import secrets
 import threading
 from datetime import datetime, timezone
@@ -12,6 +13,63 @@ from typing import Any
 
 class AdminAuditError(RuntimeError):
     """Raised when the append-only administrator audit log is unsafe or invalid."""
+
+
+_REDACTED = "[REDACTED]"
+_SENSITIVE_AUDIT_FIELDS = frozenset({
+    "password", "passwd", "passphrase", "password_hash", "secret", "secret_key",
+    "private_key", "api_key", "apikey", "api_key_value", "client_secret",
+    "access_token", "refresh_token", "id_token", "token", "token_hash",
+    "token_value", "authorization", "proxy_authorization", "cookie", "set_cookie",
+    "session_cookie", "session_token", "csrf_token", "invitation_code", "invite_code",
+    "one_time_code", "otp", "bearer", "key", "key_value", "master_key",
+    "signing_key", "webhook_secret",
+})
+_SAFE_AUDIT_IDENTIFIERS = frozenset({
+    "key_id", "api_key_id", "session_id", "token_id",
+    "token_count", "tokens_used", "token_quota", "reserved_tokens",
+})
+_SENSITIVE_AUDIT_SUFFIXES = (
+    "_password", "_passwd", "_passphrase", "_secret", "_private_key",
+    "_api_key", "_token", "_cookie", "_credential", "_authorization",
+    "_invite_code", "_invitation_code", "_one_time_code", "_csrf_token", "_otp",
+)
+_SENSITIVE_AUDIT_PREFIXES = (
+    "password_", "passwd_", "passphrase_", "secret_", "private_key_",
+    "api_key_", "apikey_", "client_secret_", "access_token_", "refresh_token_",
+    "id_token_", "session_token_", "authorization_", "cookie_",
+    "invite_code_", "invitation_code_", "one_time_code_", "token_",
+)
+
+
+def _sensitive_audit_field(name: Any) -> bool:
+    normalized = re.sub(r"[^a-z0-9]+", "_", str(name or "").casefold()).strip("_")
+    if normalized in _SAFE_AUDIT_IDENTIFIERS:
+        return False
+    if normalized in _SENSITIVE_AUDIT_FIELDS:
+        return True
+    if normalized.endswith(_SENSITIVE_AUDIT_SUFFIXES):
+        return True
+    if normalized.startswith(_SENSITIVE_AUDIT_PREFIXES):
+        return True
+    compact = normalized.replace("_", "")
+    return any(part in compact for part in (
+        "password", "passwd", "passphrase", "secret", "authorization",
+        "cookie", "credential", "privatekey", "apikey", "invitationcode",
+        "invitecode", "onetimecode",
+    ))
+
+
+def _redact_audit_value(value: Any) -> Any:
+    """Recursively redact secret-bearing audit fields before persistence/export."""
+    if isinstance(value, dict):
+        return {
+            str(key): _REDACTED if _sensitive_audit_field(key) else _redact_audit_value(child)
+            for key, child in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_redact_audit_value(child) for child in value]
+    return value
 
 
 class AdminAuditStore:
@@ -103,7 +161,7 @@ class AdminAuditStore:
                 "request_id": str(request_id or "")[:128],
                 "result": "completed" if str(action or "").endswith("_completed") else "requested",
                 "policy_version": 1,
-                "details": dict(details or {}),
+                "details": _redact_audit_value(dict(details or {})),
                 "previous_hash": events[-1]["event_hash"] if events else self.ZERO_HASH,
             }
             event_hash = hashlib.sha256(self._canonical(payload)).hexdigest()
@@ -145,4 +203,18 @@ class AdminAuditStore:
         if type(limit) is not int or limit < 1 or limit > 200:
             raise ValueError("Audit limit must be between 1 and 200")
         with self._lock:
-            return list(reversed(self._read_events_locked()[-limit:]))
+            rows = list(reversed(self._read_events_locked()[-limit:]))
+            projected: list[dict[str, Any]] = []
+            for row in rows:
+                visible = dict(row)
+                original_details = visible.get("details", {})
+                safe_details = _redact_audit_value(original_details)
+                if safe_details != original_details:
+                    # Historical hash-chained rows are never rewritten in place:
+                    # their stored event_hash still authenticates the original
+                    # bytes. Mark the read projection so consumers know details
+                    # were redacted for display/export.
+                    visible["details"] = safe_details
+                    visible["details_redacted"] = True
+                projected.append(visible)
+            return projected
