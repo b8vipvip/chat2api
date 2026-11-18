@@ -268,10 +268,22 @@ class InvitationStore:
             conn = self._connect()
             try:
                 conn.execute("BEGIN IMMEDIATE")
+                # Sample time only after SQLite grants the write transaction.
+                # Otherwise lock contention can turn an expired invitation into
+                # a revocation using a stale pre-lock timestamp.
+                now = int(time.time())
+                # Expiry is authoritative even if no list/reserve request has
+                # materialized the state transition yet. Do not relabel an
+                # already-expired invitation as an administrator revocation.
+                conn.execute(
+                    """UPDATE invitations SET status='expired',reservation_id=NULL
+                       WHERE invitation_id=? AND status='issued' AND expires_at<=?""",
+                    (str(invitation_id), now),
+                )
                 cursor = conn.execute(
                     """UPDATE invitations SET status='revoked',revoked_at=?,reservation_id=NULL
-                       WHERE invitation_id=? AND status='issued'""",
-                    (int(time.time()), str(invitation_id)),
+                       WHERE invitation_id=? AND status='issued' AND expires_at>?""",
+                    (now, str(invitation_id), now),
                 )
                 conn.commit()
                 return cursor.rowcount == 1
