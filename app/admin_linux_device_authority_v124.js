@@ -160,6 +160,8 @@
     if(known.live)return `<span data-linux-standby-source="live" title="实时物理核验的未分配可接待窗口" style="color:#22c55e;font-weight:700">${count}</span>`;
     return `<span data-linux-standby-source="cached" title="本次物理核验未成功；显示45秒内的上次核验值，不能视为实时容量" style="color:#f59e0b;font-weight:700">${count}</span><small class="v124-muted" style="color:#f59e0b;white-space:nowrap"> 上次核验</small>`;
   }
+  let createDeviceBusy=false;
+
   function renderDevices(){
     const body=document.getElementById("linuxDeviceRowsV124");
     if(!body)return;
@@ -180,8 +182,8 @@
   // UI identity only: the internal wrk_ key remains unchanged for commands,
   // data attributes and Linux Controller ownership.
   const visibleWorkerId = worker => {
-    const id=String(worker?.extension_client_id||"").trim();
-    return /^ext_[A-Za-z0-9_-]{5,120}$/.test(id)?id:"ext_ 待绑定";
+    const id=String(worker?.worker_id||"").trim();
+    return /^wrk_[A-Za-z0-9]{8,120}$/.test(id)?id:"wrk_ 待分配";
   };
 
   function renderWorkers(){
@@ -253,7 +255,25 @@
     document.addEventListener("click",async event=>{const t=event.target?.closest?.("button");if(!t)return;try{
       if(t.dataset.closeDialog){if(t.dataset.closeDialog==="linuxWorkerLoginDialog"){await closeLogin();return;}document.getElementById(t.dataset.closeDialog)?.close();return;}
       if(t.id==="createLinuxDeviceV124"){await openCreate();return;} if(t.id==="proxyManagerV124"){await openProxyManager();return;} if(t.dataset.manageDevice){state.selectedDevice=String(t.dataset.manageDevice||"");renderManager();document.getElementById("linuxWorkerManagerV124").showModal();return;} if(t.id==="refreshLinuxDevicesV124"||t.id==="refreshManagerV124"){await refreshAll(true);return;}
-      if(t.id==="generateDeviceV124"){const r=await api("/api/admin/linux-devices",{method:"POST",body:{pairing_id:document.getElementById("devicePairingV124").value,proxy_id:document.getElementById("deviceProxyV124").value}});document.getElementById("deviceCommandV124").textContent=r.install_command||"";document.getElementById("deviceCommandBoxV124").style.display="block";document.getElementById("deviceCreateResultV124").textContent=`设备「${r.device_name}」已预留。`;await refreshAll(true);return;}
+      if(t.id==="generateDeviceV124"){
+        if(createDeviceBusy)return;
+        createDeviceBusy=true;
+        const original=t.textContent;
+        t.disabled=true;
+        t.textContent="生成中…";
+        try{
+          const r=await api("/api/admin/linux-devices",{method:"POST",body:{pairing_id:document.getElementById("devicePairingV124").value,proxy_id:document.getElementById("deviceProxyV124").value}});
+          document.getElementById("deviceCommandV124").textContent=r.install_command||"";
+          document.getElementById("deviceCommandBoxV124").style.display="block";
+          document.getElementById("deviceCreateResultV124").textContent=r.existing?"设备已存在，已复用原安装命令。":`设备「${r.device_name}」已预留。`;
+          await refreshAll(true);
+        }finally{
+          createDeviceBusy=false;
+          t.disabled=false;
+          t.textContent=original;
+        }
+        return;
+      }
       if(t.id==="copyDeviceCommandV124"){await navigator.clipboard.writeText(document.getElementById("deviceCommandV124").textContent||"");return;} if(t.dataset.copyDevice!==undefined){const d=state.devices[Number(t.dataset.copyDevice)];if(d?.install_command)await navigator.clipboard.writeText(d.install_command);return;} if(t.dataset.copyText){await navigator.clipboard.writeText(t.dataset.copyText);return;}
       if(t.id==="addProxyV124"){await api("/api/admin/linux-worker-proxies",{method:"POST",body:{name:document.getElementById("proxyNameV124").value,share_link:document.getElementById("proxyLinkV124").value}});document.getElementById("proxyNameV124").value="";document.getElementById("proxyLinkV124").value="";await loadOptions();renderProxyManager();return;} if(t.dataset.deleteProxy){if(confirm("确定删除这个代理？")){await api(`/api/admin/linux-worker-proxies/${encodeURIComponent(t.dataset.deleteProxy)}`,{method:"DELETE"});await loadOptions();renderProxyManager();}return;}
       if(t.dataset.proxyWorker){await openProxy(t.dataset.proxyWorker);return;} if(t.id==="applyQuickProxyV124"){const p=state.proxies.find(x=>x.proxy_id===document.getElementById("quickProxyV124").value);if(!p)return;const out=document.getElementById("quickProxyResultV124");out.textContent="正在应用代理…";await api(`/api/admin/linux-workers/${encodeURIComponent(state.selectedProxyWorker)}/proxy`,{method:"POST",body:{share_link:p.share_link}});await api(`/api/admin/linux-workers/${encodeURIComponent(state.selectedProxyWorker)}/proxy-label`,{method:"POST",body:{name:p.name}}).catch(()=>null);out.textContent="代理已应用";state.health.delete(state.selectedProxyWorker);await refreshAll(true);return;} if(t.id==="testQuickProxyV124"){const out=document.getElementById("quickProxyResultV124");out.textContent="测试中…";const h=await testWorker(state.selectedProxyWorker);state.health.set(state.selectedProxyWorker,h);out.textContent=h.networkReady?"当前代理可达":"当前代理不可达";renderDevices();renderWorkers();return;}
