@@ -30,6 +30,13 @@ def _charged_wallet(tmp_path: Path) -> tuple[BillingStore, PricingStore]:
     pricing.update(billing_enabled=True, usd_cny_rate=7.0, models=config["models"])
     billing = BillingStore(tmp_path)
     billing.credit("usr_refund", 1000)
+    billing.reserve_for_request(
+        "usr_refund", "req_refundable",
+        model_id="gpt-5.6-sol", estimated_cny_cents=100,
+        input_tokens=1000, output_tokens=500,
+        price_snapshot=pricing.model("gpt-5.6-sol") or {},
+        usd_cny_rate=7.0,
+    )
     charge = billing.record_charge("usr_refund", {
         "request_id": "req_refundable",
         "status": "completed",
@@ -750,6 +757,13 @@ def test_wallet_refund_route_is_csrf_gated_session_scoped_and_audited(tmp_path: 
     pricing.update(billing_enabled=True, usd_cny_rate=7.0, models=config["models"])
     billing = app.state.user_billing
     billing.credit("usr_refund", 1000)
+    billing.reserve_for_request(
+        "usr_refund", "req_refundable",
+        model_id="gpt-5.6-sol", estimated_cny_cents=100,
+        input_tokens=1000, output_tokens=500,
+        price_snapshot=pricing.model("gpt-5.6-sol") or {},
+        usd_cny_rate=7.0,
+    )
     charge = billing.record_charge("usr_refund", {
         "request_id": "req_refundable",
         "status": "completed", "requested_model": "gpt-5.6-sol",
@@ -803,8 +817,16 @@ def test_wallet_refund_history_is_visible_only_to_own_account(tmp_path: Path) ->
     config = pricing.public()
     pricing.update(billing_enabled=True, usd_cny_rate=7.0, models=config["models"])
     billing = app.state.user_billing
+    price = pricing.model("gpt-5.6-sol") or {}
     for name, user_id in (("alice", alice_id), ("bob", bob_id)):
         billing.credit(user_id, 1000)
+        request_id = "req_refund_" + name
+        billing.reserve_for_request(
+            user_id, request_id,
+            model_id="gpt-5.6-sol", estimated_cny_cents=100,
+            input_tokens=1000, output_tokens=500,
+            price_snapshot=price, usd_cny_rate=7.0,
+        )
         row = billing.record_charge(user_id, {
             "request_id": "req_refund_" + name,
             "status": "completed",
@@ -863,13 +885,20 @@ def test_wallet_credit_fsync_failure_never_leaves_spendable_phantom_balance(
     assert BillingStore(tmp_path).balance_cents("usr_credit_existing") == 150
 
 
-def test_wallet_accounting_caps_inconsistent_cached_input_to_total_input(tmp_path: Path) -> None:
+def test_wallet_accounting_rejects_inconsistent_cached_input_for_reserved_requests(tmp_path: Path) -> None:
     pricing = PricingStore(tmp_path)
     config = pricing.public()
     pricing.update(billing_enabled=True, usd_cny_rate=7.0, models=config["models"])
+    price = pricing.model("gpt-5.6-sol") or {}
     billing = BillingStore(tmp_path)
     billing.credit("usr_cache_guard", 10_000)
 
+    billing.reserve_for_request(
+        "usr_cache_guard", "req_cache_exceeds_input",
+        model_id="gpt-5.6-sol", estimated_cny_cents=5_000,
+        input_tokens=1_000_000, output_tokens=0,
+        price_snapshot=price, usd_cny_rate=7.0,
+    )
     row = billing.record_charge("usr_cache_guard", {
         "request_id": "req_cache_exceeds_input",
         "status": "completed",
@@ -878,16 +907,21 @@ def test_wallet_accounting_caps_inconsistent_cached_input_to_total_input(tmp_pat
             "prompt_tokens": 1_000_000,
             "cached_input_tokens": 2_000_000,
             "completion_tokens": 0,
+            "total_tokens": 1_000_000,
             "estimated": True,
         },
     }, pricing)
-    assert row is not None
-    assert row["input_tokens"] == 1_000_000
-    assert row["cached_input_tokens"] == 1_000_000
-    assert row["cost_cny_cents"] == 280  # 0.40 USD per 1M * 7 CNY/USD
-    assert billing.balance_cents("usr_cache_guard") == 9_720
+    assert row is None
+    assert billing.charge_for_request("req_cache_exceeds_input") is None
+    assert billing.reservations["req_cache_exceeds_input"]["state"] == "reserved"
 
     # Negative cache telemetry must not offset ordinary input accounting.
+    billing.reserve_for_request(
+        "usr_cache_guard", "req_negative_cached_input",
+        model_id="gpt-5.6-sol", estimated_cny_cents=5_000,
+        input_tokens=1_000_000, output_tokens=0,
+        price_snapshot=price, usd_cny_rate=7.0,
+    )
     other = billing.record_charge("usr_cache_guard", {
         "request_id": "req_negative_cached_input",
         "status": "completed",
@@ -896,12 +930,15 @@ def test_wallet_accounting_caps_inconsistent_cached_input_to_total_input(tmp_pat
             "prompt_tokens": 1_000_000,
             "cached_input_tokens": -100,
             "completion_tokens": 0,
+            "total_tokens": 1_000_000,
+            "estimated": True,
         },
     }, pricing)
-    assert other is not None
-    assert other["cached_input_tokens"] == 0
-    assert other["cost_cny_cents"] == 2_800  # 4.00 USD per 1M * 7 CNY/USD
-    assert billing.balance_cents("usr_cache_guard") == 6_920
+    assert other is None
+    assert billing.charge_for_request("req_negative_cached_input") is None
+    assert billing.reservations["req_negative_cached_input"]["state"] == "reserved"
+    assert billing.reserved_cents("usr_cache_guard") == 10_000
+    assert billing.balance_cents("usr_cache_guard") == 10_000
 
 
 @pytest.mark.parametrize("invalid_amount", [True, 1.5, "10", 0, -1, None])
