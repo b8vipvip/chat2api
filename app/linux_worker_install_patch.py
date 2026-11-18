@@ -88,6 +88,19 @@ def install_linux_worker_install_patch(app: FastAPI) -> FastAPI:
                 return {"valid": False}
             if not worker_store.authenticate(worker_id, worker_token):
                 return {"valid": False}
+            install_id = str(enrollment.get("install_id") or "")
+            if install_id:
+                install = installs.get(install_id)
+                if not install:
+                    return {"valid": False}
+                linked_worker_id = str(install.get("worker_id") or "")
+                if linked_worker_id and linked_worker_id != worker_id:
+                    return {"valid": False}
+                if not linked_worker_id:
+                    try:
+                        installs.link_worker(code, worker_id)
+                    except ValueError:
+                        return {"valid": False}
         return {"valid": True}
 
     def legacy_item(code: str) -> dict[str, Any] | None:
