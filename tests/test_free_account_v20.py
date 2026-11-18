@@ -104,12 +104,18 @@ with tempfile.TemporaryDirectory() as tmp:
     assert target["model"] == "gpt-5.5-mini"
     assert target["reasoning_effort"] is None
 
+    # Direct Registry tests must model the same Broker admission lease that
+    # production ChatRequestService creates before any Worker dispatch.
     token = v13_patch._target_context.set(target)
     try:
         assert registry.resolve_client(None) == "free-ext"
-        asyncio.run(registry.send("free-ext", {
-            "type": "chat.request", "request_id": "req-free", "options": {"model": "gpt-5.5-mini"}
-        }))
+        async def send_free_request():
+            await app.state.broker.create("req-free", "free-ext")
+            await registry.send("free-ext", {
+                "type": "chat.request", "request_id": "req-free", "options": {"model": "gpt-5.5-mini"}
+            })
+            await app.state.broker.release("req-free")
+        asyncio.run(send_free_request())
     finally:
         v13_patch._target_context.reset(token)
     sent = free_socket.payloads[-1]
@@ -121,9 +127,13 @@ with tempfile.TemporaryDirectory() as tmp:
     token = v13_patch._target_context.set(target)
     try:
         assert registry.resolve_client(None) == "paid-ext"
-        asyncio.run(registry.send("paid-ext", {
-            "type": "chat.request", "request_id": "req-paid", "options": {"model": "gpt-5.5-mini"}
-        }))
+        async def send_paid_fallback_request():
+            await app.state.broker.create("req-paid", "paid-ext")
+            await registry.send("paid-ext", {
+                "type": "chat.request", "request_id": "req-paid", "options": {"model": "gpt-5.5-mini"}
+            })
+            await app.state.broker.release("req-paid")
+        asyncio.run(send_paid_fallback_request())
     finally:
         v13_patch._target_context.reset(token)
     sent = paid_socket.payloads[-1]

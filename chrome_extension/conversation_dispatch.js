@@ -6,6 +6,14 @@
   const baseResolveTargetTab = resolveTargetTab;
   const state = { currentTab: null, chain: Promise.resolve(), requestTabs: new Map() };
   globalThis[KEY] = state;
+  const monotonicNow = () => globalThis.performance?.now?.() ?? Date.now();
+  const elapsedMs = started => Math.max(0, Math.round((monotonicNow() - started) * 10) / 10);
+  const timingValue = value => typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.round(value * 10) / 10 : null;
+  function recordRouteReallocation(message, started) {
+    const previous = timingValue(message.__chat2api_worker_route_reallocation_ms) ?? 0;
+    message.__chat2api_worker_route_reallocation_ms = Math.round((previous + elapsedMs(started)) * 10) / 10;
+  }
 
   resolveTargetTab = async function resolveCurrentConversationTarget() {
     if (state.currentTab?.id) {
@@ -26,33 +34,39 @@
     finally { state.currentTab = null; }
   }
 
-  async function resolveRoutedTab(message) {
+  async function resolveRoutedTab(message, { recordReallocation = true } = {}) {
     const resolver = globalThis.resolveTargetTabForRequest;
     const requestId = String(message?.request_id || "");
     // The single conversation router remains the sole allocation owner.
     // Repair a tab that disappears BEFORE content dispatch exactly once;
     // never replay a request that could already have reached the composer.
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const tab = typeof resolver === "function"
-        ? await resolver(message) : await baseResolveTargetTab();
-      if (!tab?.id) throw new Error("Per-key conversation router returned no usable ChatGPT tab");
-      const live = await chrome.tabs.get(tab.id).catch(() => null);
-      if (live?.id && live.windowId === tab.windowId) {
-        if (requestId) state.requestTabs.set(requestId, { tabId: live.id, windowId: live.windowId });
-        await chrome.storage.local.set({ boundTabId: live.id, autoBind: false, modelsUpdatedAt: 0 });
-        return live;
+    let reallocationStarted = null;
+    try {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const tab = typeof resolver === "function"
+          ? await resolver(message) : await baseResolveTargetTab();
+        if (!tab?.id) throw new Error("Per-key conversation router returned no usable ChatGPT tab");
+        const live = await chrome.tabs.get(tab.id).catch(() => null);
+        if (live?.id && live.windowId === tab.windowId) {
+          if (requestId) state.requestTabs.set(requestId, { tabId: live.id, windowId: live.windowId });
+          await chrome.storage.local.set({ boundTabId: live.id, autoBind: false, modelsUpdatedAt: 0 });
+          return live;
+        }
+        if (attempt === 0 && requestId) {
+          reallocationStarted = monotonicNow();
+          const router = globalThis.__CHAT2API_CONVERSATION_ROUTING_V1__;
+          await router?.failRequest?.(requestId, "tab-closed-before-dispatch-v153");
+          continue;
+        }
+        const error = new Error("Routed ChatGPT tab disappeared before request dispatch");
+        error.code = "routed_tab_closed_before_dispatch";
+        error.stage = "route-readiness";
+        throw error;
       }
-      if (attempt === 0 && requestId) {
-        const router = globalThis.__CHAT2API_CONVERSATION_ROUTING_V1__;
-        await router?.failRequest?.(requestId, "tab-closed-before-dispatch-v153");
-        continue;
-      }
-      const error = new Error("Routed ChatGPT tab disappeared before request dispatch");
-      error.code = "routed_tab_closed_before_dispatch";
-      error.stage = "route-readiness";
-      throw error;
+      throw new Error("Routed ChatGPT tab was not available");
+    } finally {
+      if (reallocationStarted !== null && recordReallocation) recordRouteReallocation(message, reallocationStarted);
     }
-    throw new Error("Routed ChatGPT tab was not available");
   }
 
   function enqueueDispatch(taskFactory) {
@@ -91,6 +105,9 @@
         routed_dispatch_terminal_v58: true,
         route_failure_code: String(error?.code || "route_dispatch_failed"),
         route_failure_stage: String(error?.stage || "dispatch"),
+        worker_dispatch_queue_wait_ms: timingValue(message.__chat2api_worker_dispatch_queue_wait_ms),
+        worker_route_resolve_ms: timingValue(message.__chat2api_worker_route_resolve_ms),
+        worker_route_reallocation_ms: timingValue(message.__chat2api_worker_route_reallocation_ms),
         route_retired_by_authority_v30: routeRetired,
         rate_limit_terminal: rateLimited,
         retry_after_ms: retryAfterMs,
@@ -108,7 +125,13 @@
   };
 
   async function routedDispatch(message) {
-    const tab = await resolveRoutedTab(message);
+    const routeStarted = monotonicNow();
+    let tab;
+    try {
+      tab = await resolveRoutedTab(message);
+    } finally {
+      message.__chat2api_worker_route_resolve_ms = elapsedMs(routeStarted);
+    }
     try {
       return await withCurrentTab(tab, () => baseHandleServerMessage(message));
     } catch (error) {
@@ -118,8 +141,20 @@
       if (!requestId || typeof router?.failRequest !== "function") throw error;
       // An explicit Chrome "No tab" means no content-script ACK and no
       // generation started. Reallocate once through the SAME router only.
-      await router.failRequest(requestId, "lost-tab-before-content-ack-v153");
-      const replacement = await resolveRoutedTab(message);
+      // Include the pre-ACK retry in the route timing instead of reporting
+      // only the first allocation attempt. Keep the retry separately visible
+      // so a real slow trace can distinguish initial routing from tab recovery.
+      const reallocationStarted = monotonicNow();
+      let replacement;
+      try {
+        await router.failRequest(requestId, "lost-tab-before-content-ack-v153");
+        // The outer timer covers this entire recovery, including any internal
+        // readiness retry. Suppress nested recording to avoid double counting.
+        replacement = await resolveRoutedTab(message, { recordReallocation: false });
+      } finally {
+        recordRouteReallocation(message, reallocationStarted);
+        message.__chat2api_worker_route_resolve_ms = elapsedMs(routeStarted);
+      }
       await trySendSocket({
         type: "chat.diagnostics",
         request_id: requestId,
@@ -173,7 +208,11 @@
 
     // This chain serializes only brief route allocation/page hand-off operations.
     // Same-logical-API request admission is exclusively server scheduler v58.
+    const dispatchEnqueuedAt = isRoutedRequest ? monotonicNow() : null;
     return enqueueDispatch(async () => {
+      if (dispatchEnqueuedAt !== null) {
+        message.__chat2api_worker_dispatch_queue_wait_ms = elapsedMs(dispatchEnqueuedAt);
+      }
       try {
         return isRoutedRequest ? await routedDispatch(message) : await dispatchKnownRequest(message);
       } catch (error) {

@@ -200,7 +200,10 @@ def test_worker_request_prepares_request_scoped_attachments_before_prompt_submis
 
     # The owner-scoped file download and ChatGPT composer upload must finish
     # before the request prompt is written or submitted.
+    prepare_stage = run_request.index('await runDispatchStage(active, "prepare_attachments"')
     prepare = run_request.index("await multimodal.attach(attachmentSpecs")
+    write_stage = run_request.index('await runDispatchStage(active, "write_prompt"')
     write_prompt = run_request.index("await writePrompt(active, prompt)")
-    submit = run_request.index("await submitAndConfirm(active)")
-    assert prepare < write_prompt < submit
+    submit_stage = run_request.index('await runDispatchStage(active, "submit_and_confirm"')
+    submit = run_request.index("() => submitAndConfirm(active)")
+    assert prepare_stage < prepare < write_stage < write_prompt < submit_stage < submit

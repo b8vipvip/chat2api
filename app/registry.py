@@ -308,14 +308,6 @@ class ClientRegistry:
         if not self.worker_admin_enabled(client_id):
             raise RuntimeError("Chrome extension connection is disabled")
         request_type = str(payload.get("type") or "") if isinstance(payload, dict) else ""
-        if request_type in {
-            "chat.request", "image.request", "voice.request", "voice.live.start",
-            "voice.live.request", "dictation.request",
-        } and not self.chatgpt_routing_ready(client_id):
-            raise RuntimeError(
-                "Chrome extension is online but ChatGPT is not logged in or the composer is not ready"
-            )
-        lock = self.socket_locks.setdefault(client_id, asyncio.Lock())
         initial_request_types = {
             "chat.request", "image.request", "voice.request",
             "voice.live.start", "voice.live.request", "dictation.request",
@@ -325,33 +317,67 @@ class ClientRegistry:
             "voice.live.audio", "voice.live.text", "voice.live.multimodal",
             "voice.live.cancel_response", "voice.live.stop",
         }
-        # A server timeout may set completed_mono before sending the Worker
-        # cancellation. Cancellation is the one follow-up allowed after that
-        # server-owned cutoff, but never after a Worker terminal.
         cancellation_types = {
             "chat.cancel", "voice.cancel", "dictation.cancel",
             "voice.live.cancel_response", "voice.live.stop",
         }
+        if request_type in initial_request_types and not self.chatgpt_routing_ready(client_id):
+            raise RuntimeError(
+                "Chrome extension is online but ChatGPT is not logged in or the composer is not ready"
+            )
+
+        request_id = str(payload.get("request_id") or "") if isinstance(payload, dict) else ""
+        broker = getattr(self, "request_broker", None)
+        if request_type in initial_request_types and broker is not None and not request_id.strip():
+            raise RuntimeError("Request ID is required for Worker dispatch")
+        dispatch_state = (
+            getattr(broker, "requests", {}).get(request_id)
+            if broker and request_id and request_type in initial_request_types
+            else None
+        )
+        # Bind the send operation to the exact Broker lease observed before
+        # waiting for the socket lock. A missing lease must not become valid
+        # later merely because another request reuses the same correlation ID.
+        if request_id and broker is not None and request_type in initial_request_types and dispatch_state is None:
+            raise RuntimeError("Request lease is no longer active")
+        # Start the queue clock before waiting for the per-Worker send lock.
+        if dispatch_state is not None and getattr(
+            dispatch_state, "dispatch_socket_lock_wait_started_mono", None,
+        ) is None:
+            dispatch_state.dispatch_socket_lock_wait_started_mono = time.perf_counter()
+
+        lock = self.socket_locks.setdefault(client_id, asyncio.Lock())
         async with lock:
+            if dispatch_state is not None and getattr(
+                dispatch_state, "dispatch_socket_lock_acquired_mono", None,
+            ) is None:
+                dispatch_state.dispatch_socket_lock_acquired_mono = time.perf_counter()
+
             # Re-read the socket while holding its send lock. A reconnect
             # between lookup and send must never redirect an active request's
             # follow-up/cancel message to a different Worker connection.
             websocket = self.sockets.get(client_id)
             if not websocket:
                 raise RuntimeError("Chrome extension is offline")
-            request_id = str(payload.get("request_id") or "")
-            broker = getattr(self, "request_broker", None)
+
             state = getattr(broker, "requests", {}).get(request_id) if broker and request_id else None
             if request_type in initial_request_types:
+                # A request can be cancelled, timed out or released while it
+                # waits behind another send on this Worker socket. Never send
+                # an orphaned initial dispatch after its Broker lease vanished.
+                if request_id and broker is not None and state is not dispatch_state:
+                    raise RuntimeError("Request lease is no longer active")
                 if state is not None:
                     if str(getattr(state, "client_id", "") or "") != client_id:
                         raise RuntimeError("Request is not assigned to this Worker")
+                    if (
+                        getattr(state, "terminal_event_type", None) is not None
+                        or getattr(state, "completed_mono", None) is not None
+                    ):
+                        raise RuntimeError("Request is already terminal")
                     # Bind once to the socket that received the initial
-                    # dispatch. A reused request ID cannot migrate to a new
-                    # connection after reconnect.
-                    # Test doubles and older in-memory Broker states may not
-                    # carry the optional socket field; treat absence as unbound,
-                    # then bind exactly once to this dispatch connection.
+                    # dispatch. R-06 timing must never rebind a request after
+                    # reconnect or weaken the exact-socket ownership gate.
                     dispatch_socket = getattr(state, "dispatch_socket", None)
                     if dispatch_socket is None:
                         state.dispatch_socket = websocket
@@ -360,11 +386,6 @@ class ClientRegistry:
             elif request_type in request_followup_types:
                 expected_socket = getattr(state, "dispatch_socket", None) if state is not None else None
                 terminal_event_type = getattr(state, "terminal_event_type", None) if state is not None else None
-                # A terminal browser error/cancel must still allow the server to
-                # stop the same live voice session. This is a cleanup command,
-                # not a second generation or a new terminal decision. Keep it
-                # bound to the exact original/current socket like every other
-                # request-scoped follow-up.
                 allow_voice_live_terminal_cleanup = (
                     request_type == "voice.live.stop"
                     and terminal_event_type in {"image.error", "image.cancelled"}
@@ -382,7 +403,24 @@ class ClientRegistry:
                 ):
                     raise RuntimeError("Request Worker connection changed or is unavailable")
                 websocket = expected_socket
-            await websocket.send_json(payload)
+
+            if dispatch_state is not None and getattr(
+                dispatch_state, "dispatch_send_started_mono", None,
+            ) is None:
+                dispatch_state.dispatch_send_started_mono = time.perf_counter()
+            try:
+                await websocket.send_json(payload)
+            except Exception:
+                if dispatch_state is not None and getattr(
+                    dispatch_state, "dispatch_send_completed_mono", None,
+                ) is None:
+                    dispatch_state.dispatch_send_completed_mono = time.perf_counter()
+                raise
+            else:
+                if dispatch_state is not None and getattr(
+                    dispatch_state, "dispatch_send_completed_mono", None,
+                ) is None:
+                    dispatch_state.dispatch_send_completed_mono = time.perf_counter()
 
     def online_client_ids(self) -> list[str]:
         return sorted(

@@ -12,6 +12,52 @@ function section(source,start,end) {
  return source.slice(a,b);
 }
 const retirement=section(routerSource,"  async function retireRoute(key, route, requestId, reason) {","  async function failRequest");
+
+// A tab found closed during the pre-dispatch readiness probe is also a
+// reallocation. Measure the router retirement plus the second resolution,
+// not just the later tabs.sendMessage recovery path.
+const routeHelpers=section(dispatchSource,"  function recordRouteReallocation(message, started) {","  function enqueueDispatch(taskFactory) {");
+let readinessClock=0,readinessAllocations=0,readinessRetires=0;
+const readinessContext={
+  globalThis:{
+    resolveTargetTabForRequest:async()=>({id:++readinessAllocations,windowId:77}),
+    __CHAT2API_CONVERSATION_ROUTING_V1__:{failRequest:async()=>{readinessRetires++;return true;}},
+  },
+  state:{requestTabs:new Map()},
+  monotonicNow:()=>++readinessClock,
+  elapsedMs:started=>Math.max(0,++readinessClock-started),
+  timingValue:value=>typeof value==="number"&&Number.isFinite(value)&&value>=0?Math.round(value*10)/10:null,
+  chrome:{
+    tabs:{get:async id=>(id===1||id===3)?null:{id,windowId:77}},
+    storage:{local:{set:async()=>{}}},
+  },
+  String,Error,
+};
+vm.runInNewContext(routeHelpers+"\nglobalThis.resolve=resolveRoutedTab;globalThis.record=recordRouteReallocation;",readinessContext);
+const readinessMessage={request_id:"readiness-reallocation"};
+const readinessTab=await readinessContext.globalThis.resolve(readinessMessage);
+assert.equal(readinessTab.id,2);
+assert.equal(readinessAllocations,2);
+assert.equal(readinessRetires,1);
+assert.equal(readinessMessage.__chat2api_worker_route_reallocation_ms,1,
+  "pre-dispatch tab-readiness retry must expose its own duration");
+
+// A post-ACK recovery may itself encounter a tab already closed during the
+// second readiness probe. Suppress the nested timer and let the outer recovery
+// timer include the whole operation exactly once.
+const outerRecoveryStarted=readinessContext.monotonicNow();
+await readinessContext.globalThis.__CHAT2API_CONVERSATION_ROUTING_V1__.failRequest(
+  "readiness-reallocation","lost-tab-before-content-ack-v153");
+const recoveredAgain=await readinessContext.globalThis.resolve(
+  readinessMessage,{recordReallocation:false});
+assert.equal(recoveredAgain.id,4);
+assert.equal(readinessMessage.__chat2api_worker_route_reallocation_ms,1,
+  "nested readiness retry must not record separately when the outer recovery owns timing");
+readinessContext.globalThis.record(readinessMessage,outerRecoveryStarted);
+assert.equal(readinessMessage.__chat2api_worker_route_reallocation_ms,3,
+  "outer recovery timing must include the nested readiness retry exactly once");
+
+
 async function runRetirement({supersedeDuringAlarm=false,takeDuringPersist=false}={}) {
  const route={window_id:32,tab_id:12,inflight_request_id:"old"};
  const calls=[];
@@ -46,8 +92,13 @@ assert.match(poolSource,/busyWindowIds\(router\)\.has\(Number\(windowId\)\)/);
 // no content ACK could have reached the tab. It must not become a new owner.
 const dispatch=section(dispatchSource,"  async function routedDispatch(message) {","  async function dispatchKnownRequest");
 let allocated=0,retires=0,delivered=0;
+let monotonicClock = 0;
 const context={
   globalThis:{__CHAT2API_CONVERSATION_ROUTING_V1__:{failRequest:async()=>{retires++;return true;}}},
+  monotonicNow:()=>++monotonicClock,
+  elapsedMs:started=>Math.max(0,++monotonicClock-started),
+  timingValue:value=>typeof value==="number"&&Number.isFinite(value)&&value>=0?Math.round(value*10)/10:null,
+  recordRouteReallocation:(message,started)=>{const prior=typeof message.__chat2api_worker_route_reallocation_ms==="number"?message.__chat2api_worker_route_reallocation_ms:0;message.__chat2api_worker_route_reallocation_ms=Math.round((prior+Math.max(0,++monotonicClock-started))*10)/10;},
   resolveRoutedTab:async()=>({id:++allocated,windowId:100+allocated}),
   withCurrentTab:async(_,fn)=>fn(),
   baseHandleServerMessage:async()=>{delivered++;if(delivered===1){const e=new Error("No tab with id: 1");e.code="routed_tab_disappeared_before_ack";throw e;}return "ok";},
@@ -55,10 +106,17 @@ const context={
   String,
 };
 vm.runInNewContext(dispatch+"\nglobalThis.dispatch=routedDispatch;",context);
-assert.equal(await context.globalThis.dispatch({request_id:"request1"}),"ok");
+const dispatchMessage={request_id:"request1"};
+assert.equal(await context.globalThis.dispatch(dispatchMessage),"ok");
 assert.equal(allocated,2);
 assert.equal(retires,1);
 assert.equal(delivered,2);
+assert.equal(dispatchMessage.__chat2api_worker_route_reallocation_ms,1,
+  "pre-ACK recovery must expose the reallocation duration separately");
+assert.equal(dispatchMessage.__chat2api_worker_route_resolve_ms,4,
+  "total route time must include the initial allocation and the recovery attempt");
+assert.match(bridgeSource,/worker_route_reallocation_ms:\s*timing\(message\.__chat2api_worker_route_reallocation_ms\)/,
+  "background diagnostics must preserve the reallocation duration");
 assert.match(dispatchSource,/throw new Error\(\`No tab with id: \$\{routedId\}\`\)/,
   "routed missing tab must not fall back to a different tab");
 assert.match(bridgeSource,/error\.code = "routed_tab_disappeared_before_ack"/);
