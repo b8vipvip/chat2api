@@ -84,6 +84,13 @@ def test_install_resume_only_accepts_the_identity_consumed_by_the_same_enrollmen
             json={"worker_id": credentials["worker_id"], "worker_token": credentials["worker_token"]},
         )
         assert identity_check.json() == {"valid": True, "connected": True}
+        store.data["workers"][credentials["worker_id"]]["last_seen_at"] = "2020-01-01T00:00:00Z"
+        store._save()
+        identity_check = client.post(
+            "/api/workers/identity/validate",
+            json={"worker_id": credentials["worker_id"], "worker_token": credentials["worker_token"]},
+        )
+        assert identity_check.json() == {"valid": True, "connected": False}
 
         windows_enrollment = store.create_enrollment("Windows Worker")
         windows_credentials = store.enroll(windows_enrollment["code"], {"platform": "windows"})
