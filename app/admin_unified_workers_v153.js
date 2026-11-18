@@ -403,12 +403,16 @@
     const disabled=codes.length>0&&codes.every(c=>c.enabled===false);
     const name=codes[0]?.name||group.linux?.device_name||clients[0]?.device_name||
       clients[0]?.name||group.id||"待命名设备";
+    const os=systemOf(group);
+    const orphanLinuxBridge=!group.linux&&os==="Linux";
+    const bridgeBindingConflict=clients.some(c=>c.metadata?.linux_bridge_binding_conflict===true);
+    const bridgeBindingLabel=bridgeBindingConflict?"Bridge 绑定冲突":
+      clients.some(c=>text(c.metadata?.linux_worker_id))?"Worker 关联缺失":"未绑定 Linux Worker";
     const status=live?"在线":disabled?"停用":
       group.linux?({"pending":"待安装","installing":"安装中","enrolling":"注册中","failed":"安装失败"}[group.linux.install_state]||"离线"):
-      clients.length||paired?"离线":"待配对";
+      orphanLinuxBridge?"Bridge未关联":clients.length||paired?"离线":"待配对";
     const tone=live?"good":disabled?"bad":status==="离线"?"bad":"warn";
     const count=group.linux?workers.filter(w=>!w.revoked_at).length:clients.length;
-    const os=systemOf(group);
     const primary=clients.find(c=>c.online===true&&c.connection_enabled!==false)||clients[0];
     const bridge=workers.find(w=>!w.revoked_at)?.metadata?.bridge||{};
     const net=primary?.metadata?.network_country_code||primary?.metadata?.network_probe_status||
@@ -455,7 +459,8 @@
     actions+='<button type="button" class="action danger" data-unified-delete-device="'+esc(group.key)+'">删除设备</button>';
     const physicalId=group.linux?.device_id||group.id||"";
     return '<tr data-v160-device-key="'+esc(group.key)+'"><td><b>'+esc(name)+'</b>'+
-      (physicalId?'<div class="v153-muted">'+esc(physicalId)+'</div>':"")+'</td>'+
+      (physicalId?'<div class="v153-muted">'+esc(physicalId)+'</div>':"")+
+      (orphanLinuxBridge?'<div class="v153-muted" style="color:#f59e0b">'+esc(bridgeBindingLabel)+'</div>':"")+'</td>'+
       '<td><span class="v124-pill '+tone+'">'+esc(status)+'</span></td>'+
       '<td>'+esc(os)+'</td><td>'+count+'</td>'+
 
@@ -580,6 +585,7 @@
       '<tr><td colspan="7" class="v153-muted">暂无设备。点击新增设备生成配对码。</td></tr>';
     const total=el("unifiedDeviceSummaryV160");
     if(total)total.textContent="设备："+groups.length+" · Linux："+groups.filter(g=>g.linux).length+
+      " · 未关联 Linux Worker 的 Bridge："+groups.filter(g=>!g.linux&&systemOf(g)==="Linux").length+
       " · 未配对："+groups.filter(g=>!g.clients.length&&!g.linux).length;
     renderWorkers();
   }
