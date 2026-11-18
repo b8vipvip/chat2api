@@ -25,6 +25,10 @@ KEY_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,160}$")
 EMAIL = re.compile(r"^[^@\s]{1,64}@[^@\s.]+(?:\.[^@\s.]+)+$")
 INVITATION_ID = re.compile(r"^tinv_[0-9a-f]{24}$")
 ROLES = frozenset({"owner", "admin", "member", "viewer"})
+# Workspace ownership is a transfer-sensitive privilege. Invitations may grant
+# delegated roles, but an owner must be assigned through the explicit admin
+# membership operation so a routine invitation cannot silently create owners.
+INVITABLE_ROLES = frozenset({"admin", "member", "viewer"})
 
 
 class TenantMembershipError(ValueError):
@@ -289,8 +293,8 @@ class TenantMembershipStore:
         *, expires_in_seconds: int = 7 * 24 * 3600,
     ) -> tuple[dict[str, Any], str]:
         normalized_email = self._normalize_invitation_email(email)
-        if role not in ROLES:
-            raise TenantMembershipError("Unknown workspace role")
+        if role not in INVITABLE_ROLES:
+            raise TenantMembershipError("Invitation role must be admin, member or viewer; owner assignment requires an explicit admin action")
         actor = str(created_by or "").strip()
         if not actor or len(actor) > 128:
             raise TenantMembershipError("Invalid invitation actor")
