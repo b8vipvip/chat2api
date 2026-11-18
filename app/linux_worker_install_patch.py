@@ -92,10 +92,10 @@ def install_linux_worker_install_patch(app: FastAPI) -> FastAPI:
                 "hostname": base.get("hostname") or item.get("hostname") or "",
             }
             rows.append(row)
-        for worker in worker_store.list_public():
-            if str(worker.get("worker_id") or "") in linked_workers:
-                continue
-            rows.append({**worker, "record_type": "worker", "install_state": "legacy", "install_enabled": False})
+        # Legacy/orphan Worker identities are intentionally not mixed into the
+        # active device feed. They remain available through the dedicated
+        # /api/admin/linux-legacy-records authority so a reinstall cannot look
+        # like a second physical device in the normal Worker console.
         rows.sort(key=lambda row: str(row.get("install_created_at") or row.get("created_at") or ""), reverse=True)
         return rows
 
