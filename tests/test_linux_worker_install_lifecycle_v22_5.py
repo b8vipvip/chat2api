@@ -55,6 +55,17 @@ def test_install_resume_only_accepts_the_identity_consumed_by_the_same_enrollmen
         wrong_code = {**credentials, "enroll_code": "AAAA-BBBB-CCCC"}
         assert client.post("/api/workers/install-resume", json=wrong_code).json() == {"valid": False}
         assert client.post("/api/workers/install-resume", json=credentials).json() == {"valid": True}
+        identity_check = client.post(
+            "/api/workers/identity/validate",
+            json={"worker_id": credentials["worker_id"], "worker_token": credentials["worker_token"]},
+        )
+        assert identity_check.json() == {"valid": True, "connected": False}
+        app.state.worker_sockets[credentials["worker_id"]] = object()
+        identity_check = client.post(
+            "/api/workers/identity/validate",
+            json={"worker_id": credentials["worker_id"], "worker_token": credentials["worker_token"]},
+        )
+        assert identity_check.json() == {"valid": True, "connected": True}
 
 
 def test_install_record_has_no_time_expiry_and_tracks_terminal_disable(tmp_path):
