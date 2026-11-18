@@ -81,3 +81,8 @@ def test_server_packages_bundle_and_admin_uses_worker_lifecycle_list():
     assert "有效期至" not in admin
     assert _runtime_version(runtime) >= (0, 22, 5)
     assert 'CHROME_BRIDGE_VERSION = "0.22.292"' in runtime
+
+def test_active_install_feed_does_not_surface_orphan_legacy_workers_as_second_devices():
+    source = (ROOT / "app" / "linux_worker_install_patch.py").read_text(encoding="utf-8")
+    assert "Legacy/orphan Worker identities are intentionally not mixed into the" in source
+    assert '"record_type": "worker"' not in source
