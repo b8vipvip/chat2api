@@ -82,7 +82,6 @@
   };
 
   let latestRows = [];
-  let createInstallBusy = false;
   const load = async () => {
     try {
       const payload = await request("/api/admin/linux-worker-installations");
@@ -139,6 +138,7 @@
   const remotePoint = event => { const image = document.getElementById("linuxLoginFrame"); const rect = image.getBoundingClientRect(); if (!rect.width || !rect.height) return null; return {x:Math.round((event.clientX-rect.left)/rect.width*loginSourceWidth),y:Math.round((event.clientY-rect.top)/rect.height*loginSourceHeight)}; };
 
   button.addEventListener("click", () => { document.querySelectorAll(".view").forEach(node => node.classList.remove("active")); document.querySelectorAll(".nav button").forEach(node => node.classList.toggle("active", node === button)); section.classList.add("active"); document.getElementById("pageTitle").textContent = "Linux Worker"; location.hash = "linux-workers"; load(); });
+  let createInstallBusy = false;
   document.getElementById("createLinuxWorker").addEventListener("click", async event => {
     if (createInstallBusy) return;
     createInstallBusy = true;
