@@ -13,6 +13,7 @@ import json
 import os
 import re
 import secrets
+import stat
 import threading
 import uuid
 from pathlib import Path
@@ -22,12 +23,12 @@ from typing import Any
 POLICY_VERSION = 1
 ROLES: dict[str, frozenset[str]] = {
     "super_admin": frozenset({"*"}),
-    "system_admin": frozenset({"system:read", "system:write", "clients:read", "clients:write", "models:read", "models:write", "users:read", "diagnostics:read", "tenants:read", "tenants:write", "quota:read", "quota:write"}),
-    "user_admin": frozenset({"users:read", "users:write"}),
-    "api_key_admin": frozenset({"keys:read", "keys:write", "quota:read", "quota:write"}),
-    "billing_admin": frozenset({"billing:read", "billing:write", "quota:read"}),
-    "plugin_admin": frozenset({"plugins:read", "plugins:write"}),
-    "support": frozenset({"users:read", "keys:read", "models:read", "clients:read", "diagnostics:read"}),
+    "system_admin": frozenset({"system:read", "system:write", "clients:read", "clients:write", "models:read", "models:write", "users:read", "diagnostics:read", "tenants:read", "tenants:write", "quota:read", "quota:write", "admin:self_password"}),
+    "user_admin": frozenset({"users:read", "users:write", "admin:self_password"}),
+    "api_key_admin": frozenset({"keys:read", "keys:write", "quota:read", "quota:write", "admin:self_password"}),
+    "billing_admin": frozenset({"billing:read", "billing:write", "quota:read", "admin:self_password"}),
+    "plugin_admin": frozenset({"plugins:read", "plugins:write", "admin:self_password"}),
+    "support": frozenset({"users:read", "keys:read", "user_keys:read", "models:read", "clients:read", "diagnostics:read", "admin:self_password"}),
 }
 ADMIN_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{2,63}$")
 ITERATIONS = 310_000
@@ -54,12 +55,20 @@ def permission_for_admin_route(path: str, method: str) -> str | None:
         return "system:" + suffix
     if path == "/api/admin/control/admins" or re.fullmatch(r"/api/admin/control/admins/[^/]+", path):
         return "admins:write" if write else "admins:read"
+    if re.fullmatch(r"/api/admin/control/admins/[^/]+/password", path):
+        return "users:write"
+    if path == "/api/admin/control/self/password":
+        return "admin:self_password"
     if path == "/api/admin/control/client":
         return "clients:" + suffix
+    if path == "/api/admin/control/invitations" or re.fullmatch(
+        r"/api/admin/control/invitations/[^/]+/revoke", path
+    ):
+        return "users:" + suffix
     if path == "/api/admin/control/roles":
         return "admins:read"
     if path == "/api/admin/model-entitlements" or re.fullmatch(
-        r"/api/admin/model-entitlements/(global|key|user|tenant|tenant_role)/[^/]+", path
+        r"/api/admin/model-entitlements/(global|key|user|tenant|tenant_role|user_role|subscription_plan)/[^/]+", path
     ):
         return "models:" + suffix
     if path == "/api/admin/audit":
@@ -72,8 +81,19 @@ def permission_for_admin_route(path: str, method: str) -> str | None:
         r"/api/admin/tenants/[^/]+/(?:members(?:/[^/]+)?|keys(?:/[^/]+)?)", path
     ):
         return "tenants:" + suffix
+    if re.fullmatch(r"/api/admin/users/[^/]+/role", path):
+        return "users:" + suffix
+    if path == "/api/admin/subscription-plans" or re.fullmatch(
+        r"/api/admin/subscription-plans/[^/]+", path
+    ) or re.fullmatch(r"/api/admin/users/[^/]+/subscription", path):
+        return "billing:" + suffix
+    # User-owned API keys are distinct from platform-managed API keys.
+    # Only support (read-only) and super_admin (wildcard) may inspect them;
+    # api_key_admin must not gain cross-user access through keys:read.
+    if re.fullmatch(r"/api/admin/users/[^/]+/keys(?:/[^/]+)?", path):
+        return "user_keys:" + suffix
     if path == "/api/admin/users" or re.fullmatch(
-        r"/api/admin/users/[^/]+(?:/sessions/revoke|/keys(?:/[^/]+)?)?", path
+        r"/api/admin/users/[^/]+(?:/sessions/revoke)?", path
     ):
         return "users:" + suffix
     if re.fullmatch(r"/api/admin/keys/[^/]+/secret", path):
@@ -84,6 +104,10 @@ def permission_for_admin_route(path: str, method: str) -> str | None:
         return "keys:" + suffix
     if path == "/api/admin/user-pricing":
         return "billing:" + suffix
+    if re.fullmatch(r"/api/admin/billing/charges/[^/]+/refund", path):
+        # Wallet refunds move user funds; grant only the explicit billing-write
+        # capability and do not expose a read permission for this write-only route.
+        return "billing:write" if write else None
     if path == "/api/admin/user-payments":
         # Payment provider private keys remain root-only until G0 DataKeyring
         # migration and its rotation/rollback evidence are accepted.
@@ -143,8 +167,20 @@ class ControlPlaneStore:
             raise ControlPlaneError("Control-plane storage cannot be a symbolic link")
         if not self.path.exists():
             return
+        fd = -1
         try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(self.path, flags)
+            metadata = os.fstat(fd)
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                raise ValueError("control-plane storage must be a single-link regular file")
+            if os.name != "nt" and hasattr(os, "fchmod"):
+                # Repair legacy permissions through the opened descriptor so
+                # a path swap cannot redirect chmod to another file.
+                os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "r", encoding="utf-8") as handle:
+                fd = -1
+                payload = json.load(handle)
             if not isinstance(payload, dict) or payload.get("version") != POLICY_VERSION:
                 raise ValueError("unsupported control-plane schema")
             client = payload["client"]
@@ -174,6 +210,9 @@ class ControlPlaneStore:
             self.client = dict(client)
         except (OSError, ValueError, KeyError, TypeError) as exc:
             raise ControlPlaneError("Control-plane storage is corrupt or unreadable; refusing to reset") from exc
+        finally:
+            if fd >= 0:
+                os.close(fd)
 
     def _save(self) -> None:
         payload = {"version": POLICY_VERSION, "client": self.client, "admins": list(self.admins.values())}
@@ -188,15 +227,18 @@ class ControlPlaneStore:
                 file.write("\n")
                 file.flush()
                 os.fsync(file.fileno())
+            # The temporary file is created with mode 0600. Rename
+            # preserves that mode; do not perform a fallible chmod after the
+            # atomic commit point or callers could roll memory back while disk
+            # already contains the new policy snapshot.
             os.replace(tmp, self.path)
-            os.chmod(self.path, 0o600)
         finally:
             tmp.unlink(missing_ok=True)
 
     @staticmethod
     def _validate_client(payload: dict[str, Any]) -> None:
-        if payload.get("registration_mode") not in {"open", "closed"}:
-            raise ControlPlaneError("registration_mode must be open or closed")
+        if payload.get("registration_mode") not in {"open", "closed", "invite_only"}:
+            raise ControlPlaneError("registration_mode must be open, closed or invite_only")
         if type(payload.get("web_chat_enabled")) is not bool:
             raise ControlPlaneError("web_chat_enabled must be a boolean")
         announcement = payload.get("announcement")
@@ -285,6 +327,29 @@ class ControlPlaneStore:
                 del self.admins[key]
                 raise
             return self._public_admin(self.admins[key])
+
+    def set_admin_password(self, username: str, password: str) -> dict[str, Any]:
+        if not isinstance(password, str) or len(password) < 12 or len(password) > 256:
+            raise ControlPlaneError("Password must contain 12-256 characters")
+        key = str(username or "").casefold()
+        if not key or key == self.root_username:
+            raise ControlPlaneError("The environment-managed root password cannot be changed here")
+        with self.lock:
+            row = self.admins.get(key)
+            if not row:
+                raise KeyError(username)
+            previous = dict(row)
+            salt = secrets.token_bytes(16)
+            row["salt"] = salt.hex()
+            row["password_hash"] = hashlib.pbkdf2_hmac(
+                "sha256", password.encode("utf-8"), salt, ITERATIONS
+            ).hex()
+            try:
+                self._save()
+            except Exception:
+                self.admins[key] = previous
+                raise
+            return self._public_admin(row)
 
     def update_admin(self, username: str, *, role: str | None = None, enabled: bool | None = None) -> dict[str, Any]:
         if role is None and enabled is None:

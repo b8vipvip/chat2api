@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from app.broker import RequestBroker, _terminal_provenance
 
 
@@ -146,3 +148,20 @@ def test_native_message_identity_rejection_facts_are_bounded_and_private():
         "native_message_identity_facts": {"arbitrary_field": "<main>secret</main>"}
     }})
     assert "native_message_identity_facts" not in rejected
+
+
+def test_broker_rejects_duplicate_active_request_id_without_replacing_original_lease():
+    async def scenario():
+        broker = RequestBroker()
+        original = await broker.create("req_duplicate_global_123", "ext_original")
+
+        with pytest.raises(RuntimeError, match="request ID is already active"):
+            await broker.create("req_duplicate_global_123", "ext_replay")
+
+        assert broker.requests["req_duplicate_global_123"] is original
+        assert broker.client_requests == {"ext_original": "req_duplicate_global_123"}
+        assert "ext_replay" not in broker.client_requests
+
+        await broker.release("req_duplicate_global_123")
+
+    asyncio.run(scenario())

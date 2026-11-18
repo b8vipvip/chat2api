@@ -27,6 +27,7 @@ def test_archived_generated_picture_is_admin_only_and_request_scoped(tmp_path: P
             )
             await app.state.telemetry.upsert({
                 "request_id": "imgreq_testmedia0123456789",
+                "api_key_id": "master",
                 "status": "completed",
                 "request_type": "image_generation",
                 "response_media": [{"file_id": item.file_id, "mime_type": "image/png", "bytes": item.size}],

@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+import json
 import time
 from collections import OrderedDict
 from pathlib import Path
@@ -14,10 +15,11 @@ from fastapi import HTTPException, Request
 from PIL import Image
 
 from app.api_keys import ApiPrincipal
+from app.chat_request_service import ChatRequestService
 from app.file_store import FileStore
 from app.media_archive_v173 import MediaArchive
 from app.responses_multimodal_input_v183 import (
-    attachment_specs, needs_multimodal, resolve_responses_attachments,
+    attachment_specs, needs_multimodal, resolve_responses_attachments, validate_image_file,
 )
 from app.responses_v108_patch import _dispatch
 from app.responses_image_tool_v182 import handle_image_tool
@@ -66,7 +68,7 @@ def test_file_id_and_file_data_use_same_owner_boundary(tmp_path: Path):
     files, archive = _stores(tmp_path)
     existing = asyncio.run(files.create(
         filename="photo.png", data_base64=base64.b64encode(_png()).decode(),
-        mime_type="image/png", owner_key_id="key-a",
+        mime_type="image/png", owner_key_id="key-a", purpose="vision",
     ))
     data = base64.b64encode(b"%PDF-1.4\nhello").decode()
     body = {"input": [{"role": "user", "content": [
@@ -123,7 +125,7 @@ def test_responses_dispatch_transfers_canonical_attachments_to_one_worker(tmp_pa
     files, archive = _stores(tmp_path)
     stored = asyncio.run(files.create(filename="image.png",
         data_base64=base64.b64encode(_png()).decode(), mime_type="image/png",
-        owner_key_id="key-a"))
+        owner_key_id="key-a", purpose="vision"))
     specs = attachment_specs(files, [stored.file_id], _key())
     events = []
     registry = SimpleNamespace(
@@ -133,17 +135,49 @@ def test_responses_dispatch_transfers_canonical_attachments_to_one_worker(tmp_pa
     async def send(client_id, message):
         events.append((client_id, message))
     registry.send = send
+    requests = {}
     async def create(request_id, client_id):
-        return SimpleNamespace(request_id=request_id, client_id=client_id)
-    app = SimpleNamespace(state=SimpleNamespace(registry=registry,
-        broker=SimpleNamespace(create=create),
-        settings=SimpleNamespace(request_timeout_seconds=600)))
+        state = SimpleNamespace(
+            request_id=request_id,
+            client_id=client_id,
+            final_future=asyncio.get_running_loop().create_future(),
+            timings=lambda: {},
+        )
+        requests[request_id] = state
+        return state
+    async def release(request_id):
+        requests.pop(request_id, None)
+    class FakeTelemetry:
+        def __init__(self):
+            self.rows = {}
+        def get(self, request_id):
+            return self.rows.get(request_id)
+        async def upsert(self, row, *, merge_diagnostics=False, create_only=False):
+            from app.telemetry import DuplicateRequestIdentity
+            request_id = row["request_id"]
+            previous = self.rows.get(request_id)
+            if create_only and previous is not None:
+                raise DuplicateRequestIdentity("request_id already exists")
+            value = {**(previous or {}), **row}
+            self.rows[request_id] = value
+            return dict(value)
+    telemetry = FakeTelemetry()
+    broker = SimpleNamespace(create=create, release=release, requests=requests)
+    app = SimpleNamespace(state=SimpleNamespace(
+        registry=registry,
+        broker=broker,
+        chat_request_service=ChatRequestService(registry, broker),
+        telemetry=telemetry,
+        settings=SimpleNamespace(request_timeout_seconds=600),
+    ))
     state, request_id, client, timeout = asyncio.run(_dispatch(
         app, _request(), {"model":"gpt-6"}, _key(), "描述图片", [],
         attachments=specs,
     ))
     assert len(events) == 1
-    assert events[0][1]["attachments"] == specs
+    expected_specs = [{**item, "request_id": request_id} for item in specs]
+    assert events[0][1]["attachments"] == expected_specs
+    assert all(item["request_id"] == request_id for item in events[0][1]["attachments"])
     assert events[0][1]["options"]["model"] == "gpt-6"
     assert request_id.startswith("resp_req_")
     assert client == "ext_ready"
@@ -161,6 +195,7 @@ def test_image_generation_tool_passes_image_reference_into_same_existing_executo
     app = SimpleNamespace(state=SimpleNamespace(
         file_store=files, media_archive=archive, image_generation_executor=generate,
         responses_v108_store=OrderedDict(),
+        responses_v108_owners={},
     ))
     body = {"model": "gpt-6", "input": [{"role":"user","content":[
         {"type":"input_text","text":"以此图片为参考生成插画"},
@@ -170,6 +205,116 @@ def test_image_generation_tool_passes_image_reference_into_same_existing_executo
     result = asyncio.run(handle_image_tool(app, _request(), body, _key(), "以此图片为参考生成插画"))
     assert result.status_code == 200
     assert len(records) == 1
+    result_body = json.loads(result.body)
+    assert app.state.responses_v108_owners[result_body["id"]] == "key-a"
     references = records[0]["body"].attachments
     assert len(references) == 1
     assert files.read(references[0].file_id)[1] == _png()
+
+
+def test_image_file_id_requires_vision_purpose_and_valid_raster_bytes(tmp_path: Path):
+    files, archive = _stores(tmp_path)
+    invalid = asyncio.run(files.create(
+        filename="invalid.png", data_base64=base64.b64encode(b"not a raster").decode(),
+        mime_type="image/png", owner_key_id="key-a", purpose="vision",
+    ))
+    non_vision = asyncio.run(files.create(
+        filename="not-vision.png", data_base64=base64.b64encode(_png()).decode(),
+        mime_type="image/png", owner_key_id="key-a", purpose="chat2api",
+    ))
+    for file_id in (invalid.file_id, non_vision.file_id):
+        body = {"input":[{"role":"user","content":[{"type":"input_image","file_id":file_id}]}]}
+        with pytest.raises(ValueError):
+            asyncio.run(resolve_responses_attachments(body, _request(), files, archive, _key()))
+
+def test_responses_dispatch_failure_terminalizes_request_scoped_attachment_grant(tmp_path: Path) -> None:
+    files, _archive = _stores(tmp_path)
+    stored = asyncio.run(files.create(
+        filename="send-failure.png",
+        data_base64=base64.b64encode(_png()).decode(),
+        mime_type="image/png",
+        owner_key_id="key-a",
+    ))
+    specs = attachment_specs(files, [stored.file_id], _key())
+    class FakeBroker:
+        def __init__(self):
+            self.requests = {}
+        async def create(self, request_id, client_id):
+            state = SimpleNamespace(
+                request_id=request_id, client_id=client_id, timings=lambda: {},
+                completed_mono=None, terminal_event_type=None,
+                final_future=asyncio.get_running_loop().create_future(),
+            )
+            self.requests[request_id] = state
+            return state
+        async def release(self, request_id):
+            self.requests.pop(request_id, None)
+
+    class FakeTelemetry:
+        def __init__(self):
+            self.rows = {}
+        def get(self, request_id):
+            return self.rows.get(request_id)
+        async def upsert(self, row, *, merge_diagnostics=False, create_only=False):
+            from app.telemetry import DuplicateRequestIdentity
+            request_id = row["request_id"]
+            previous = self.rows.get(request_id)
+            if create_only and previous is not None:
+                raise DuplicateRequestIdentity("request_id already exists")
+            self.rows[request_id] = {**(previous or {}), **row}
+            return dict(self.rows[request_id])
+
+    async def fail_send(_client_id, _message):
+        raise ConnectionError("simulated Worker socket send failure")
+
+    registry = SimpleNamespace(
+        set_routing_key=lambda _key: None,
+        resolve_client=lambda _requested: "ext_ready",
+        busy_clients=set(),
+        send=fail_send,
+    )
+    broker = FakeBroker()
+    telemetry = FakeTelemetry()
+    app = SimpleNamespace(state=SimpleNamespace(
+        registry=registry,
+        broker=broker,
+        chat_request_service=ChatRequestService(registry, broker),
+        telemetry=telemetry,
+        settings=SimpleNamespace(request_timeout_seconds=600),
+    ))
+
+    with pytest.raises(ConnectionError, match="socket send failure"):
+        asyncio.run(_dispatch(
+            app, _request(), {"model": "gpt-6"}, _key(),
+            "describe the attached image", [], attachments=specs,
+        ))
+
+    assert len(telemetry.rows) == 1
+    request_id, row = next(iter(telemetry.rows.items()))
+    assert row["status"] == "error"
+    assert row["api_key_id"] == "key-a"
+    assert row["client_id"] == "ext_ready"
+    assert row["input_file_ids"] == [stored.file_id]
+    assert row["diagnostics"]["responses_v108_dispatch_error_type"] == "ConnectionError"
+    assert request_id not in broker.requests
+    assert registry.busy_clients == set()
+
+
+def test_responses_file_integrity_failure_is_service_unavailable(tmp_path: Path) -> None:
+    files, _archive = _stores(tmp_path)
+    stored = asyncio.run(files.create(
+        filename="corrupt-input.png",
+        data_base64=base64.b64encode(_png()).decode(),
+        mime_type="image/png",
+        owner_key_id="key-a",
+        purpose="vision",
+    ))
+    path = files.root / stored.path
+    tampered = b"x" * stored.size
+    path.write_bytes(tampered)
+
+    with pytest.raises(HTTPException) as error:
+        validate_image_file(files, stored.file_id, _key())
+
+    assert error.value.status_code == 503
+    assert error.value.detail == {"code": "stored_file_integrity_unavailable"}

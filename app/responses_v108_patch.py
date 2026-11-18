@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import secrets
 import time
 import uuid
@@ -16,6 +17,7 @@ from .api_keys import ApiPrincipal
 from .responses_multimodal_input_v183 import needs_multimodal, resolve_responses_attachments
 from .media_handoff import StreamMediaMarkerGate
 from .token_usage import usage_for
+from .telemetry import DuplicateRequestIdentity
 
 
 PATCH_REVISION = 108
@@ -212,6 +214,17 @@ def _message_item(message_id: str, text: str, status: str = "completed") -> dict
     return {"id": message_id, "type": "message", "status": status, "role": "assistant", "content": [{"type": "output_text", "text": text, "annotations": [], "logprobs": []}]}
 
 
+def _store_response(app: FastAPI, response_id: str, response: dict[str, Any], owner_key_id: str) -> None:
+    """Store a Responses object and its owner as one bounded in-process record."""
+    store: OrderedDict[str, dict[str, Any]] = app.state.responses_v108_store
+    owners: dict[str, str] = app.state.responses_v108_owners
+    store[response_id] = response
+    owners[response_id] = str(owner_key_id or "")
+    while len(store) > 256:
+        evicted_id, _ = store.popitem(last=False)
+        owners.pop(evicted_id, None)
+
+
 def _response(response_id: str, body: dict[str, Any], prompt: str, text: str, output: list[dict[str, Any]], created_at: int, status: str = "completed") -> dict[str, Any]:
     return {
         "id": response_id,
@@ -275,11 +288,57 @@ async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], princi
     except (KeyError, ConnectionError) as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     raw_id = str(request_id_override or request.headers.get("x-chat2api-request-id") or "").strip()
-    request_id = raw_id if raw_id and len(raw_id) <= 128 else "resp_req_" + uuid.uuid4().hex
+    request_id = raw_id if re.fullmatch(r"[A-Za-z0-9_-]{6,120}", raw_id) else "resp_req_" + uuid.uuid4().hex
+    internal_repair = bool(request_id_override and request_id.startswith("resp_repair_"))
+    if not internal_repair and app.state.telemetry.get(request_id):
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "request_id_conflict", "message": "request_id already exists"},
+        )
     try:
-        state = await broker.create(request_id, client_id)
+        state = await app.state.chat_request_service.reserve(request_id, client_id)
     except RuntimeError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
+    # Responses is metered by the outer Responses middleware, which writes the
+    # authoritative terminal usage row under this same request_id. Reserve
+    # before Worker dispatch so the shared TelemetryStore hook can commit or
+    # release it from that terminal. Only the trusted internal tool-repair
+    # override is non-billable; a caller-supplied request-id prefix is not.
+    def release_wallet_admission_hold(reason: str) -> None:
+        accounts = getattr(app.state, "user_accounts", None)
+        billing = getattr(app.state, "user_billing", None)
+        try:
+            owner = accounts.owner_for_key(principal.key_id) if accounts is not None else None
+            if owner and billing is not None:
+                billing.release_reservation(request_id, str(owner), reason=reason)
+        except Exception as release_error:
+            logging.getLogger(__name__).warning(
+                "Responses wallet hold cleanup failed request_id=%s error_type=%s",
+                request_id, type(release_error).__name__,
+            )
+
+    from .quota_reservation_runtime_v1 import authorize_wallet_dispatch
+
+    quota_reservation = None
+    if not internal_repair:
+        raw_output_budget = body.get("max_output_tokens")
+        try:
+            requested_output_budget = (
+                0 if isinstance(raw_output_budget, bool)
+                else max(0, int(raw_output_budget or 0))
+            )
+        except (TypeError, ValueError):
+            requested_output_budget = 0
+        try:
+            from .quota_reservation_runtime_v1 import reserve_request_quota
+            quota_reservation = await reserve_request_quota(
+                app, request_id, principal, prompt,
+                max(4096, requested_output_budget),
+                model_id=str(body.get("model") or ""),
+            )
+        except Exception:
+            await broker.release(request_id)
+            raise
     trace_scope = getattr(request, "scope", None)
     trace = trace_scope.get("chat2api.responses_trace") if isinstance(trace_scope, dict) else None
     if isinstance(trace, dict):
@@ -315,23 +374,110 @@ async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], princi
             "diagnostics": {"internal_protocol_attempt": True,
                             "parent_request_id": str(body.get("_chat2api_parent_request_id") or "")},
         })
+    scoped_attachments = [
+        {**item, "request_id": request_id}
+        for item in (attachments or [])
+    ]
+    if not (request_id_override and request_id.startswith("resp_repair_")):
+        # Responses owns its Worker request ID too. Persist the exact owner,
+        # assigned Worker and attachment set before dispatch so the extension
+        # download endpoint can enforce the same request-scoped file grant as
+        # Chat Completions and Images.
+        try:
+            await app.state.telemetry.upsert({
+                "request_id": request_id,
+                "client_id": client_id,
+                "api_key_id": principal.key_id,
+                "api_key_name": principal.name,
+                "auth_kind": principal.kind,
+                "requested_model": str(body.get("model") or "gpt-5.6-sol"),
+                "request_type": "responses",
+                "attachments_count": len(scoped_attachments),
+                "input_file_ids": list(dict.fromkeys(
+                    str(item.get("file_id") or "") for item in scoped_attachments
+                    if item.get("file_id")
+                )),
+                "stream": bool(body.get("stream", False)),
+                "prompt_mode": "responses",
+                "prompt_chars": len(prompt),
+                "completion_chars": 0,
+                "status": "running",
+                "usage": {},
+                "timings": state.timings(),
+                "diagnostics": {"responses_v108_dispatch": True},
+                "error": None,
+            }, create_only=True)
+        except DuplicateRequestIdentity as error:
+            if quota_reservation:
+                try:
+                    app.state.quota_reservations.release(request_id, principal.key_id)
+                except Exception:
+                    logging.getLogger(__name__).warning(
+                        "Responses quota release after duplicate request ID failed request_id=%s",
+                        request_id,
+                    )
+            release_wallet_admission_hold("request_admission_projection_conflict")
+            await broker.release(request_id)
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "request_id_conflict", "message": "request_id already exists"},
+            ) from error
+        except Exception:
+            if quota_reservation:
+                try:
+                    app.state.quota_reservations.release(request_id, principal.key_id)
+                except Exception:
+                    logging.getLogger(__name__).warning(
+                        "Responses quota release after telemetry failure failed request_id=%s",
+                        request_id,
+                    )
+            release_wallet_admission_hold("request_admission_telemetry_persistence_failed")
+            await broker.release(request_id)
+            raise
     registry.busy_clients.add(client_id)
     try:
-        await registry.send(client_id, {
-            "type": "chat.request",
-            "request_id": request_id,
-            "prompt": prompt,
-            "attachments": attachments or [],
-            "options": {
+        # The trusted internal tool-protocol repair is part of the parent
+        # Responses request, not a second billable admission. It deliberately
+        # has no wallet reservation row, so it must not enter the wallet
+        # dispatch-marker gate used by caller-owned requests.
+        if not internal_repair:
+            await asyncio.to_thread(
+                authorize_wallet_dispatch, app, request_id, principal,
+            )
+        await app.state.chat_request_service.dispatch(
+            client_id,
+            request_id=request_id,
+            prompt=prompt,
+            attachments=scoped_attachments,
+            options={
                 "auto_switch_text": True,
                 "timeout_seconds": timeout,
                 "model": str(body.get("model") or "gpt-5.6-sol"),
                 "response_protocol": "responses-v108",
                 "native_tools": native_tools,
             },
-        })
-    except Exception:
+        )
+    except Exception as error:
         registry.busy_clients.discard(client_id)
+        # A failed socket send is terminal for this dispatch attempt. Mark the
+        # in-memory lease terminal before persisting telemetry so a Worker file
+        # download cannot rely on the earlier "running" row during cleanup.
+        state.completed_mono = time.perf_counter()
+        state.terminal_event_type = "dispatch.failed"
+        try:
+            await app.state.telemetry.upsert({
+                "request_id": request_id,
+                "status": "error",
+                "completion_chars": 0,
+                "error": "Worker dispatch failed (" + type(error).__name__ + ")",
+                "diagnostics": {"responses_v108_dispatch_error_type": type(error).__name__},
+            })
+        except Exception as telemetry_error:
+            logging.getLogger(__name__).warning(
+                "Responses dispatch failure telemetry unavailable request_id=%s error_type=%s",
+                request_id, type(telemetry_error).__name__,
+            )
+            release_wallet_admission_hold("responses_dispatch_telemetry_persistence_failed")
         await broker.release(request_id)
         raise
     return state, request_id, client_id, timeout
@@ -500,10 +646,7 @@ async def _stream(app: FastAPI, request: Request, state: Any, *, principal: ApiP
         if archived_media:
             completed["chat2api"] = {"media_files": archived_media}
         if bool(body.get("store", True)):
-            store: OrderedDict[str, dict[str, Any]] = app.state.responses_v108_store
-            store[response_id] = completed
-            while len(store) > 256:
-                store.popitem(last=False)
+            _store_response(app, response_id, completed, principal.key_id)
         seq += 1
         yield _sse("response.completed", seq, response=completed)
     except asyncio.TimeoutError:
@@ -563,6 +706,7 @@ def install_responses_v108_patch(app: FastAPI) -> FastAPI:
 
     app.openapi_schema = None
     app.state.responses_v108_store = OrderedDict()
+    app.state.responses_v108_owners = {}
     app.state.responses_v108_installed = True
 
     @app.post("/v1/responses")
@@ -630,10 +774,7 @@ def install_responses_v108_patch(app: FastAPI) -> FastAPI:
             if archived_media:
                 response["chat2api"] = {"media_files": archived_media}
             if bool(body.get("store", True)):
-                store: OrderedDict[str, dict[str, Any]] = app.state.responses_v108_store
-                store[response_id] = response
-                while len(store) > 256:
-                    store.popitem(last=False)
+                _store_response(app, response_id, response, principal.key_id)
             return JSONResponse(response)
         except asyncio.TimeoutError:
             try:
@@ -649,10 +790,32 @@ def install_responses_v108_patch(app: FastAPI) -> FastAPI:
 
     @app.get("/v1/responses/{response_id}")
     async def retrieve_response(response_id: str, request: Request):
-        await _authenticate(app, request)
-        value = app.state.responses_v108_store.get(str(response_id))
-        if not value:
+        # Images-only keys may retrieve their own stored image_generation
+        # response, but not arbitrary text/tool Responses objects.
+        principal = await _authenticate(app, request, allow_images_only=True)
+        response_key = str(response_id)
+        value = app.state.responses_v108_store.get(response_key)
+        owner_key_id = app.state.responses_v108_owners.get(response_key)
+        if (
+            not value
+            or not owner_key_id
+            or (principal.kind != "master" and owner_key_id != principal.key_id)
+        ):
+            # Do not reveal whether a response exists under another API key.
             return _error("Response not found", status_code=404, code="response_not_found")
+        if principal.kind != "master" and not {"chat", "admin"}.intersection(principal.scopes):
+            output = value.get("output")
+            image_result = (
+                isinstance(output, list)
+                and bool(output)
+                and all(
+                    isinstance(item, dict) and item.get("type") == "image_generation_call"
+                    for item in output
+                )
+                and not str(value.get("output_text") or "").strip()
+            )
+            if "images" not in principal.scopes or not image_result:
+                raise HTTPException(status_code=403, detail="API key does not have chat scope")
         return JSONResponse(value)
 
     return app

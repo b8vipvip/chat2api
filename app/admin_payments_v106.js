@@ -3,7 +3,11 @@
   if (window.__chat2apiAdminPaymentsV106) return;
   window.__chat2apiAdminPaymentsV106 = true;
   const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[ch]);
+  let currentAdminRole = null;
+  let adminRoleResolved = false;
+  let roleRefreshGeneration = 0;
   const keyHeader = () => {
+    if (!adminRoleResolved || (currentAdminRole && currentAdminRole !== "super_admin")) return {};
     const value = String(document.getElementById("adminKey")?.value || "").trim();
     return value ? {"x-api-key": value} : {};
   };
@@ -18,6 +22,43 @@
   const button = document.querySelector('.nav button[data-view="user-payments"]');
   const view = document.getElementById("view-user-payments");
   if (!button || !view) return;
+
+  function applyRole() {
+    document.documentElement.dataset.adminPaymentRole = currentAdminRole || "";
+    document.documentElement.dataset.adminPaymentSessionReady = adminRoleResolved ? "true" : "false";
+    const canView = ["super_admin", "billing_admin"].includes(currentAdminRole);
+    const canEditSecrets = currentAdminRole === "super_admin";
+    button.hidden = !canView;
+    view.querySelectorAll("input, select, textarea").forEach((node) => { node.disabled = !canEditSecrets; });
+    const saveButton = document.getElementById("payV106Save");
+    if (saveButton) saveButton.disabled = !canEditSecrets;
+    if (!canView) {
+      if (view.classList.contains("active")) view.classList.remove("active");
+      return false;
+    }
+    return true;
+  }
+
+  async function refreshRole() {
+    const generation = ++roleRefreshGeneration;
+    let sessionCheckSucceeded = false;
+    try {
+      const response = await fetch("/api/admin/auth/session", {credentials:"same-origin", cache:"no-store"});
+      if (!response.ok) throw new Error("Session lookup failed");
+      const session = await response.json();
+      if (generation !== roleRefreshGeneration) return;
+      currentAdminRole = session.authenticated ? (session.role || "unknown") : null;
+      sessionCheckSucceeded = true;
+    } catch (_) {
+      if (generation !== roleRefreshGeneration) return;
+      currentAdminRole = null;
+    }
+    adminRoleResolved = sessionCheckSucceeded;
+    if (sessionCheckSucceeded && !currentAdminRole) {
+      try { sessionStorage.removeItem("chat2api_admin_key"); } catch (_) {}
+    }
+    applyRole();
+  }
 
   view.innerHTML = `
     <div class="panel">
@@ -173,6 +214,7 @@
   function activateV106(event) {
     event.preventDefault();
     event.stopImmediatePropagation();
+    if (!["super_admin", "billing_admin"].includes(currentAdminRole)) return;
     document.querySelectorAll(".nav button").forEach((node) => node.classList.toggle("active", node === button));
     document.querySelectorAll(".view").forEach((node) => node.classList.toggle("active", node === view));
     const title = document.getElementById("pageTitle");
@@ -184,4 +226,13 @@
   document.getElementById("payV106Save").onclick = () => save().catch((error) => setStatus("payV106Status", `错误：${error.message}`));
   document.getElementById("payV106TestZpay").onclick = () => test("zpay").catch((error) => setStatus("payV106ZpayStatus", `错误：${error.message}`));
   document.getElementById("payV106TestPaypal").onclick = () => test("paypal").catch((error) => setStatus("payV106PaypalStatus", `错误：${error.message}`));
+  // The control-plane session is authoritative; avoid a second racing lookup.
+  window.addEventListener("chat2api-admin-session-changed", (event) => {
+    roleRefreshGeneration += 1;
+    const session = event.detail || {};
+    currentAdminRole = session.authenticated ? (session.role || "unknown") : null;
+    adminRoleResolved = true;
+    applyRole();
+  });
+  refreshRole();
 })();

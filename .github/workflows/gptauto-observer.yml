@@ -23,7 +23,7 @@ on:
         description: Successful Release run ID verified by reconciler
         required: false
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, closed]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]
   push:
     branches: [main, master]
   workflow_run:
@@ -181,6 +181,7 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body || '' }}
           PR_STATE: ${{ github.event.pull_request.state || '' }}
           PR_MERGED: ${{ github.event.pull_request.merged || false }}
+          PR_DRAFT: ${{ github.event.pull_request.draft || false }}
           MERGE_SHA: ${{ inputs.merge_sha || github.event.pull_request.merge_commit_sha || '' }}
           RUN_ID: ${{ github.event.workflow_run.id || github.run_id }}
           RECONCILED_MAIN_CI_RUN_ID: ${{ inputs.main_ci_run_id || '' }}
@@ -235,6 +236,7 @@ jobs:
             PR_BODY="$(jq -r '.body // ""' <<<"$pr_json")"
             PR_STATE="$(jq -r '.state // ""' <<<"$pr_json")"
             PR_MERGED="$(jq -r 'if .merged_at then "true" else "false" end' <<<"$pr_json")"
+            PR_DRAFT="$(jq -r '.draft // false' <<<"$pr_json")"
             MERGE_SHA="$(jq -r '.merge_commit_sha // ""' <<<"$pr_json")"
             PR_HEAD_SHA="$(jq -r '.head.sha // ""' <<<"$pr_json")"
             PR_BASE_REF="$(jq -r '.base.ref // ""' <<<"$pr_json")"
@@ -278,7 +280,7 @@ jobs:
           PYTHONPATH=.github python -m gptauto.observer capture \
             --event "$EVENT_NAME" --repo "$REPOSITORY" --default-branch "$DEFAULT_BRANCH" \
             --branch "$REF_NAME" --head-sha "$HEAD_SHA" --pr-number "$PR_NUMBER" \
-            --pr-title "$PR_TITLE" --pr-body "$PR_BODY" --pr-state "$PR_STATE" --pr-merged "$PR_MERGED" \
+            --pr-title "$PR_TITLE" --pr-body "$PR_BODY" --pr-state "$PR_STATE" --pr-draft "$PR_DRAFT" --pr-merged "$PR_MERGED" \
             --merge-sha "$MERGE_SHA" --run-id "$RUN_ID" --actor "$ACTOR" \
             --workflow-name "$WORKFLOW_NAME" --workflow-conclusion "$WORKFLOW_CONCLUSION" \
             --release-tag "$RELEASE_TAG" --release-state "$RELEASE_STATE" \
@@ -345,7 +347,8 @@ jobs:
             echo "- Superseded PR workflow runs are cancelled on synchronize events."
             echo "- Short in-progress CI runs are coalesced for up to two minutes before an Executor handoff."
             echo "- PR CI evidence is the latest exact-head CI/pull_request run; older success cannot mask a newer run."
-            echo "- action_required is USER_ACTION_REQUIRED, never repair evidence."
+            echo "- action_required and Draft PR state are USER_ACTION_REQUIRED, never repair evidence."
+            echo "- A ready_for_review event resumes the same Draft-blocked task; Draft PRs are never auto-merged."
             echo "- The five-minute watchdog is insurance only and skips healthy queued/in_progress CI."
             echo "- Non-default-base PRs are auxiliary evidence only and never receive autonomous merge authority."
           } >> "$GITHUB_STEP_SUMMARY"

@@ -7,16 +7,18 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt
 
 from .admin_auth import SESSION_COOKIE as ADMIN_SESSION_COOKIE
 from .admin_audit import AdminAuditError, AdminAuditStore
 from .api_keys import load_or_create_data_secret, token_hash
+from .responses_multimodal_input_v183 import verify_raster_image
+
 from .user_commerce import (
     BillingStore,
     PaymentConfigStore,
@@ -29,6 +31,7 @@ from .user_commerce import (
 PATCH_REVISION = 104
 USER_JS_ASSET = "/assets/chat2api-user-console-v104.js"
 ADMIN_JS_ASSET = "/assets/chat2api-admin-commerce-v104.js"
+CHAT_IMAGE_DROP_JS_ASSET = "/assets/chat2api-image-drop-v1.js"
 CHAT_CLIENT_JS_ASSET = "/assets/chat2api-chat-client-v1.js"
 CHAT_CLIENT_CSS_ASSET = "/assets/chat2api-chat-client-v1.css"
 
@@ -37,6 +40,7 @@ class RegisterBody(BaseModel):
     email: str = Field(min_length=3, max_length=254)
     password: str = Field(min_length=8, max_length=256)
     display_name: str = Field(default="", max_length=80)
+    invite_code: str | None = Field(default=None, min_length=32, max_length=128)
 
 
 class LoginBody(BaseModel):
@@ -90,7 +94,7 @@ class PaymentBody(BaseModel):
 
 
 class RechargeBody(BaseModel):
-    amount_cents: int = Field(ge=1, le=10_000_000)
+    amount_cents: StrictInt = Field(ge=1, le=10_000_000)
     channel: str = Field(pattern=r"^(alipay|wechat)$")
 
 
@@ -207,12 +211,52 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
         }
 
     def sync_user_charges(user_id: str) -> None:
-        owned = accounts.key_ids(user_id)
+        owned = set(accounts.key_ids(user_id))
         if not owned:
             return
-        for row in telemetry.recent(500):
-            if str(row.get("api_key_id") or "") in owned and str(row.get("status") or "") == "completed":
+
+        # Keep the normal recent-history repair path, but do not rely on the
+        # 500-row in-memory window for a wallet hold that survived a process
+        # crash between telemetry persistence and charge/release projection.
+        rows_by_id = {
+            str(row.get("request_id") or ""): row
+            for row in telemetry.recent(500)
+            if str(row.get("request_id") or "")
+        }
+        active_holds = billing.active_reservations_for_user(user_id)
+        active_request_ids = {
+            str(row.get("request_id") or "")
+            for row in active_holds
+            if str(row.get("request_id") or "")
+        }
+        if active_request_ids:
+            persisted_lookup = getattr(telemetry, "get_many_persisted", None)
+            if callable(persisted_lookup):
+                try:
+                    # Exact request IDs are searched in the bounded persisted
+                    # JSONL tail; absent evidence leaves the hold untouched.
+                    rows_by_id.update(persisted_lookup(active_request_ids))
+                except (OSError, ValueError, TypeError):
+                    # Recovery is best effort. Never release funds without a
+                    # durable terminal row proving the request outcome.
+                    pass
+
+        for row in rows_by_id.values():
+            if str(row.get("api_key_id") or "") not in owned:
+                continue
+            status = str(row.get("status") or "").lower()
+            if status == "completed":
                 billing.record_charge(user_id, row, pricing)
+            elif status in {"error", "cancelled", "stalled", "failed", "timeout"}:
+                billing.release_reservation(
+                    str(row.get("request_id") or ""), user_id,
+                    reason="reconciled_terminal_" + status,
+                )
+
+    # The production lifespan invokes this after TelemetryStore has loaded,
+    # so a process restart can reconcile every durable active wallet hold
+    # before the first authenticated request arrives.
+    app.state.wallet_charge_reconciler = sync_user_charges
 
     def public_request(row: dict[str, Any]) -> dict[str, Any]:
         diagnostics = row.get("diagnostics") if isinstance(row.get("diagnostics"), dict) else {}
@@ -256,13 +300,18 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
     original_upsert = telemetry.upsert
 
     async def metered_upsert(
-        item: dict[str, Any], *, merge_diagnostics: bool = False,
+        item: dict[str, Any], *,
+        merge_diagnostics: bool = False,
+        create_only: bool = False,
     ) -> dict[str, Any]:
-        # TelemetryStore.upsert accepts the keyword-only merge_diagnostics
-        # contract. The billing wrapper must preserve it verbatim: otherwise
-        # new passive SSE/Playground diagnostics crash *before Worker dispatch*
-        # (real 2026-11-07 HTTP 500, metered_upsert unexpected keyword).
-        row = await original_upsert(item, merge_diagnostics=merge_diagnostics)
+        # Preserve TelemetryStore's complete keyword-only write contract.
+        # Request admission uses create_only to prevent a replay from replacing
+        # an existing request row; diagnostic observers use merge_diagnostics.
+        row = await original_upsert(
+            item,
+            merge_diagnostics=merge_diagnostics,
+            create_only=create_only,
+        )
         # Read-only telemetry must never trigger repeated charging on a
         # request already marked completed.
         if not merge_diagnostics and str(row.get("status") or "") == "completed":
@@ -294,6 +343,13 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
             },
         )
 
+    @app.get(CHAT_IMAGE_DROP_JS_ASSET, include_in_schema=False)
+    async def chat_image_drop_v1_js() -> Response:
+        return Response(
+            Path(__file__).with_name("chat_image_drop_v1.js").read_text(encoding="utf-8"),
+            media_type="application/javascript",
+            headers={"Cache-Control": "no-store, no-cache, must-revalidate", "X-Content-Type-Options": "nosniff"},
+        )
     @app.get(CHAT_CLIENT_JS_ASSET, include_in_schema=False)
     async def chat_client_js() -> Response:
         return Response(
@@ -329,14 +385,55 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
     @app.post("/api/user/register")
     async def user_register(body: RegisterBody, request: Request) -> JSONResponse:
         control = getattr(app.state, "control_plane", None)
-        if control is not None and control.public_client()["registration_mode"] != "open":
+        registration_mode = (
+            control.public_client()["registration_mode"] if control is not None else "open"
+        )
+        if registration_mode == "closed":
             raise HTTPException(status_code=403, detail="New user registration is disabled")
+
+        invitations = getattr(app.state, "invitations", None)
+        reservation_id = None
+        if registration_mode == "invite_only":
+            if invitations is None:
+                raise HTTPException(status_code=503, detail="Invitation registration is unavailable")
+            if not body.invite_code:
+                raise HTTPException(status_code=403, detail="A valid invitation code is required")
+            try:
+                reservation_id = invitations.reserve(body.invite_code, body.email)
+            except ValueError as error:
+                raise HTTPException(status_code=403, detail="Invitation code is invalid or unavailable") from error
+        def release_invitation_after_failure() -> None:
+            if not reservation_id:
+                return
+            try:
+                invitations.release(reservation_id)
+            except Exception:
+                import logging
+                logging.getLogger(__name__).exception(
+                    "Invitation reservation release failed after registration error"
+                )
+
         try:
             user = accounts.register(body.email, body.password, body.display_name)
             token = accounts.create_session(str(user["user_id"]))
         except ValueError as error:
+            release_invitation_after_failure()
             raise HTTPException(status_code=409, detail=str(error)) from error
-        response = JSONResponse({"ok": True, "user": user})
+        except Exception:
+            release_invitation_after_failure()
+            raise
+
+        if reservation_id:
+            # A failed finalize leaves a non-reusable reserved invitation; it
+            # must be reconciled by an administrator rather than silently reused.
+            try:
+                invitations.consume(reservation_id)
+            except Exception:
+                import logging
+                logging.getLogger(__name__).exception(
+                    "Invitation finalization failed after account creation"
+                )
+        response = JSONResponse({"ok": True, "user": user}, headers={"Cache-Control": "no-store"})
         response.set_cookie(USER_SESSION_COOKIE, token, httponly=True, secure=request.url.scheme == "https", samesite="lax", max_age=accounts.session_ttl_seconds, path="/")
         return response
 
@@ -360,7 +457,13 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
     @app.get("/api/user/me")
     async def user_me(request: Request) -> dict[str, Any]:
         user = current_user(request)
-        return {"ok": True, "user": user, "balance_cents": billing.balance_cents(str(user["user_id"]))}
+        user_id = str(user["user_id"])
+        return {
+            "ok": True, "user": user,
+            "balance_cents": billing.balance_cents(user_id),
+            "reserved_cents": billing.reserved_cents(user_id),
+            "available_balance_cents": billing.available_balance_cents(user_id),
+        }
 
     @app.patch("/api/user/profile")
     async def user_profile(body: ProfileBody, request: Request) -> dict[str, Any]:
@@ -404,6 +507,98 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
         except (KeyError, ValueError) as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
 
+    @app.get("/api/user/files/{file_id}/content")
+    async def user_file_content(file_id: str, request: Request) -> Response:
+        """Serve account-owned image attachments through the HttpOnly session."""
+        user = current_user(request)
+        file_store = app.state.file_store
+        item = file_store.get(file_id)
+        allowed_image_types = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+        if (
+            not item or item.purpose != "vision" or item.mime_type not in allowed_image_types
+            or not accounts.owns_key(str(user["user_id"]), str(item.owner_key_id or ""))
+        ):
+            raise HTTPException(status_code=404, detail="图片附件不存在")
+        try:
+            stored, payload = file_store.read(file_id)
+        except (KeyError, FileNotFoundError) as error:
+            raise HTTPException(
+                status_code=404, detail="图片附件内容不存在",
+                headers={"Cache-Control": "private, no-store", "Vary": "Cookie"},
+            ) from error
+        except OSError as error:
+            raise HTTPException(
+                status_code=503, detail="图片附件暂时不可用",
+                headers={"Cache-Control": "private, no-store", "Vary": "Cookie"},
+            ) from error
+        try:
+            verify_raster_image(payload, stored.mime_type)
+        except ValueError as error:
+            raise HTTPException(
+                status_code=415, detail="图片附件内容无效",
+                headers={"Cache-Control": "private, no-store", "Vary": "Cookie"},
+            ) from error
+        return Response(
+            payload,
+            media_type=stored.mime_type,
+            headers={
+                "Cache-Control": "private, no-store",
+                "Vary": "Cookie",
+                "Content-Disposition": "inline",
+                "Content-Security-Policy": "default-src 'none'; sandbox",
+                "X-Content-Type-Options": "nosniff",
+                "Cross-Origin-Resource-Policy": "same-origin",
+                "Referrer-Policy": "no-referrer",
+                "ETag": f'"sha256-{stored.sha256}"',
+                "X-Chat2API-Content-SHA256": stored.sha256,
+            },
+        )
+
+    @app.delete("/api/user/files/{file_id}")
+    async def user_delete_image(file_id: str, request: Request, response: Response) -> dict[str, bool]:
+        response.headers["Cache-Control"] = "private, no-store"
+        response.headers["Vary"] = "Cookie"
+        origin = str(request.headers.get("origin") or "").strip()
+        try:
+            parsed_origin = urlsplit(origin)
+        except ValueError as error:
+            raise HTTPException(status_code=403, detail="附件删除必须使用同源用户会话请求") from error
+        request_host = str(request.headers.get("host") or "").strip().lower()
+        forwarded_proto = str(request.headers.get("x-forwarded-proto") or "").split(",", 1)[0].strip().lower()
+        expected_scheme = forwarded_proto if forwarded_proto in {"http", "https"} else request.url.scheme.lower()
+        fetch_site = str(request.headers.get("sec-fetch-site") or "").strip().lower()
+        if (
+            parsed_origin.scheme.lower() != expected_scheme or not parsed_origin.netloc
+            or parsed_origin.netloc.lower() != request_host or parsed_origin.path not in {"", "/"}
+            or parsed_origin.query or parsed_origin.fragment or fetch_site not in {"", "same-origin"}
+        ):
+            raise HTTPException(status_code=403, detail="附件删除必须使用同源用户会话请求")
+        user = current_user(request)
+        file_store = app.state.file_store
+        item = file_store.get(file_id)
+        allowed_image_types = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+        allowed_document_types = {
+            "application/pdf", "text/plain", "text/markdown", "text/csv", "application/json", "application/rtf",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        }
+        allowed_attachment = bool(item) and (
+            (item.purpose == "vision" and item.mime_type in allowed_image_types)
+            or (item.purpose == "assistants" and item.mime_type in allowed_document_types)
+        )
+        if (
+            not allowed_attachment
+            or not accounts.owns_key(str(user["user_id"]), str(item.owner_key_id or ""))
+        ):
+            raise HTTPException(status_code=404, detail="附件不存在")
+        try:
+            await file_store.delete(file_id, str(item.owner_key_id))
+        except (KeyError, PermissionError) as error:
+            raise HTTPException(status_code=404, detail="附件不存在") from error
+        except OSError as error:
+            raise HTTPException(status_code=503, detail="附件暂时不可用") from error
+        return {"deleted": True}
     @app.patch("/api/user/keys/{key_id}/quota")
     async def user_update_key_quota(key_id: str, body: UserKeyQuotaBody, request: Request) -> dict[str, Any]:
         user = current_user(request)
@@ -466,15 +661,23 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
         user_id = str(user["user_id"])
         sync_user_charges(user_id)
         charge_rows = billing.charges_for_user(user_id)
+        refund_rows = billing.refunds_for_user(user_id)
         order_rows = billing.orders_for_user(user_id)
         payload = pricing.public()
+        debited_cents = sum(int(row.get("cost_cny_cents") or 0) for row in charge_rows if row.get("debited"))
+        refunded_cents = sum(int(row.get("amount_cents") or 0) for row in refund_rows)
         return {
             "balance_cents": billing.balance_cents(user_id),
+            "reserved_cents": billing.reserved_cents(user_id),
+            "available_balance_cents": billing.available_balance_cents(user_id),
             "billing_enabled": bool(payload.get("billing_enabled")),
             "usd_cny_rate": float(payload.get("usd_cny_rate") or 0),
             "estimated_spend_cents": sum(int(row.get("cost_cny_cents") or 0) for row in charge_rows),
-            "debited_spend_cents": sum(int(row.get("cost_cny_cents") or 0) for row in charge_rows if row.get("debited")),
+            "debited_spend_cents": debited_cents,
+            "refunded_cents": refunded_cents,
+            "net_debited_spend_cents": max(0, debited_cents - refunded_cents),
             "charges": charge_rows[:100],
+            "refunds": refund_rows[:100],
             "orders": order_rows[:50],
             "payment": {
                 "enabled": bool(payments.public().get("enabled") and payments.public().get("configured")),
@@ -520,6 +723,8 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
             "estimated_tokens": total_tokens,
             "estimated_spend_cents": sum(int(row.get("cost_cny_cents") or 0) for row in charges),
             "balance_cents": billing.balance_cents(user_id),
+            "reserved_cents": billing.reserved_cents(user_id),
+            "available_balance_cents": billing.available_balance_cents(user_id),
             "avg_latency_ms": round(sum(latencies) / len(latencies), 1) if latencies else None,
             "by_model": [{"model": key, "requests": value} for key, value in by_model.most_common()],
             "by_status": [{"status": key, "requests": value} for key, value in by_status.items()],
@@ -665,7 +870,10 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
         # until a reviewed billing-scoped user projection exists.
         if role == "super_admin":
             for row in page:
-                row["balance_cents"] = billing.balance_cents(str(row["user_id"]))
+                user_id = str(row["user_id"])
+                row["balance_cents"] = billing.balance_cents(user_id)
+                row["reserved_cents"] = billing.reserved_cents(user_id)
+                row["available_balance_cents"] = billing.available_balance_cents(user_id)
         return {"data": page, "total": total, "limit": limit, "offset": offset}
 
     @app.patch("/api/admin/users/{user_id}")
@@ -958,6 +1166,11 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
                     None,
                 )
                 owner = accounts.owner_for_key(str(matched.key_id)) if matched else None
+                if owner and billing.reserved_cents(owner) > 0:
+                    # Reconcile recent terminal charges/releases before checking
+                    # available funds; this recovers a process interruption
+                    # between telemetry persistence and the billing projection.
+                    sync_user_charges(owner)
                 if owner and not accounts.is_enabled(owner):
                     return JSONResponse(
                         status_code=401,
@@ -969,7 +1182,7 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
                             }
                         },
                     )
-                if owner and bool(pricing.public().get("billing_enabled")) and billing.balance_cents(owner) <= 0:
+                if owner and bool(pricing.public().get("billing_enabled")) and billing.available_balance_cents(owner) <= 0:
                     return JSONResponse(
                         status_code=402,
                         content={

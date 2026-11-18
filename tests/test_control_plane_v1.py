@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.admin_audit import AdminAuditError
 from app.admin_auth import AdminLoginRateLimiter, AdminSessionStore
 from app.config import Settings
 from app.control_plane import ControlPlaneError, ControlPlaneStore, ROLES, permission_for_admin_route
 from app.control_plane_v1_patch import install_control_plane_v1
+from app.tenant_membership_v1_patch import install_tenant_memberships
+from app.model_entitlement_v1_patch import install_model_entitlements
 from app.main import create_app
 from app.user_console_v104_patch import install_user_console_v104_patch
 from app.v17_patch import install_v17_patch
@@ -58,12 +63,57 @@ def test_control_plane_store_fails_closed_and_never_persists_raw_password(tmp_pa
     assert store.path.read_text(encoding="utf-8") == "{broken"
 
 
+def test_client_policy_audit_completion_failure_preserves_committed_success(tmp_path: Path, monkeypatch):
+    app = make_app(tmp_path)
+    audit = app.state.admin_audit
+    original_append = audit.append
+
+    def fail_requested(**kwargs):
+        if kwargs["action"] == "client.policy_requested":
+            raise AdminAuditError("simulated audit failure")
+        return original_append(**kwargs)
+
+    monkeypatch.setattr(audit, "append", fail_requested)
+    with TestClient(app) as client:
+        assert login(client, "owner", "strong-root-password").status_code == 200
+        denied = client.put(
+            "/api/admin/control/client", headers=ORIGIN, json={"announcement": "maintenance"}
+        )
+        assert denied.status_code == 503
+        assert app.state.control_plane.public_client()["announcement"] == ""
+
+        def fail_completion(**kwargs):
+            if kwargs["action"] == "client.policy_completed":
+                raise AdminAuditError("simulated completion failure")
+            return original_append(**kwargs)
+
+        monkeypatch.setattr(audit, "append", fail_completion)
+        committed = client.put(
+            "/api/admin/control/client",
+            headers={**ORIGIN, "X-Request-ID": "control-audit-123"},
+            json={"announcement": "maintenance"},
+        )
+        assert committed.status_code == 200, committed.text
+        assert committed.headers["X-Admin-Audit-Status"] == "completion-pending"
+        assert app.state.control_plane.public_client()["announcement"] == "maintenance"
+        assert app.state.admin_audit_completion_pending is True
+        rows = audit.recent(20)
+        assert any(row["action"] == "client.policy_requested" and row["request_id"] == "control-audit-123" for row in rows)
+        assert not any(row["action"] == "client.policy_completed" for row in rows)
+
+
 def test_role_route_map_is_explicit_and_secret_read_denied_to_key_admin():
     assert permission_for_admin_route("/api/admin/users/u1", "PATCH") == "users:write"
+    assert permission_for_admin_route("/api/admin/users/u1/keys", "GET") == "user_keys:read"
+    assert permission_for_admin_route("/api/admin/users/u1/keys/key1", "PATCH") == "user_keys:write"
+    assert "user_keys:read" not in ROLES["api_key_admin"]
+    assert "user_keys:read" in ROLES["support"]
+    assert "user_keys:write" not in ROLES["support"]
     assert permission_for_admin_route("/api/admin/keys/id1", "PATCH") == "keys:write"
     assert permission_for_admin_route("/api/admin/keys/id1/secret", "GET") == "secrets:read"
     assert permission_for_admin_route("/api/admin/keys/id1/settings", "PATCH") == "keys:write"
     assert permission_for_admin_route("/api/admin/control/client", "PUT") == "clients:write"
+    assert permission_for_admin_route("/api/admin/control/self/password", "POST") == "admin:self_password"
     assert permission_for_admin_route("/api/admin/unreviewed-future-feature", "GET") is None
     assert permission_for_admin_route("/api/admin/keys/id1/export", "GET") is None
     assert permission_for_admin_route("/api/admin/users/u1/secret", "GET") is None
@@ -234,3 +284,47 @@ def test_legacy_admin_session_storage_stays_backward_compatible(tmp_path: Path):
     revived = AdminSessionStore("owner", "password", storage_path=path)
     assert revived.identity(token) == "owner"
     assert revived.authenticate(token)
+
+
+def test_control_plane_load_repairs_existing_file_permissions(tmp_path: Path):
+    if os.name == "nt":
+        pytest.skip("POSIX file mode bits are not enforced on Windows")
+    store = ControlPlaneStore(tmp_path, "owner")
+    store.create_admin("support_agent", "long-enough-password", "support")
+    os.chmod(store.path, 0o644)
+
+    reopened = ControlPlaneStore(tmp_path, "owner")
+
+    assert reopened.verify_admin("support_agent", "long-enough-password")
+    assert stat.S_IMODE(store.path.stat().st_mode) == 0o600
+
+
+def test_control_plane_atomic_save_never_rolls_memory_back_after_disk_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    store = ControlPlaneStore(tmp_path, "owner")
+
+    def fail_chmod(*_args, **_kwargs):
+        raise OSError("simulated post-commit chmod failure")
+
+    monkeypatch.setattr("app.control_plane.os.chmod", fail_chmod)
+
+    updated = store.update_client({"announcement": "committed"})
+
+    persisted = json.loads(store.path.read_text(encoding="utf-8"))
+    assert updated["announcement"] == "committed"
+    assert store.public_client()["announcement"] == "committed"
+    assert persisted["client"]["announcement"] == "committed"
+
+
+def test_user_role_and_subscription_admin_routes_have_distinct_rbac_permissions():
+    from app.control_plane import permission_for_admin_route
+
+    assert permission_for_admin_route("/api/admin/users/usr_12345/role", "PUT") == "users:write"
+    assert permission_for_admin_route("/api/admin/users/usr_12345/subscription", "GET") == "billing:read"
+    assert permission_for_admin_route("/api/admin/users/usr_12345/subscription", "PUT") == "billing:write"
+    assert permission_for_admin_route("/api/admin/users/usr_12345/subscription", "DELETE") == "billing:write"
+    assert permission_for_admin_route("/api/admin/subscription-plans", "GET") == "billing:read"
+    assert permission_for_admin_route("/api/admin/subscription-plans/pro", "PUT") == "billing:write"
+    assert permission_for_admin_route("/api/admin/model-entitlements/user_role/trusted", "PUT") == "models:write"
+    assert permission_for_admin_route("/api/admin/model-entitlements/subscription_plan/pro", "PUT") == "models:write"
