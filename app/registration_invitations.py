@@ -264,11 +264,14 @@ class InvitationStore:
                 conn.close()
 
     def revoke(self, invitation_id: str) -> bool:
-        now = int(time.time())
         with self.lock:
             conn = self._connect()
             try:
                 conn.execute("BEGIN IMMEDIATE")
+                # Sample time only after SQLite grants the write transaction.
+                # Otherwise lock contention can turn an expired invitation into
+                # a revocation using a stale pre-lock timestamp.
+                now = int(time.time())
                 # Expiry is authoritative even if no list/reserve request has
                 # materialized the state transition yet. Do not relabel an
                 # already-expired invitation as an administrator revocation.
