@@ -319,7 +319,10 @@ def install_v17_patch(app: FastAPI) -> FastAPI:
                         capabilities["sticky_api_key_extension_routing"] = True
                 if path == "/api/admin/keys" and isinstance(payload.get("data"), list):
                     payload["data"] = [row for row in payload["data"] if row.get("key_id") != "master"]
-            headers = {key: value for key, value in response.headers.items() if key.lower() not in {"content-length", "content-type"}}
+            headers = {
+                key: value for key, value in response.headers.items()
+                if key.lower() not in {"content-length", "content-type", "cache-control"}
+            }
             headers["Cache-Control"] = "no-store"
             return JSONResponse(payload, status_code=response.status_code, headers=headers)
 
@@ -329,7 +332,10 @@ def install_v17_patch(app: FastAPI) -> FastAPI:
             marker = '<script src="/assets/chat2api-v17.js"></script>'
             if marker not in text:
                 text = text.replace("</body>", marker + "</body>")
-            headers = {key: value for key, value in response.headers.items() if key.lower() not in {"content-length", "content-type"}}
+            headers = {
+                key: value for key, value in response.headers.items()
+                if key.lower() not in {"content-length", "content-type", "cache-control"}
+            }
             headers["Cache-Control"] = "no-store"
             return Response(text, status_code=response.status_code, media_type="text/html", headers=headers)
 

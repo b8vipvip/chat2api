@@ -78,7 +78,7 @@ def permission_for_admin_route(path: str, method: str) -> str | None:
     if path == "/api/admin/quota-reservations/reconcile":
         return "quota:write"
     if path == "/api/admin/tenants" or re.fullmatch(
-        r"/api/admin/tenants/[^/]+/(?:members(?:/[^/]+)?|keys(?:/[^/]+)?)", path
+        r"/api/admin/tenants/[^/]+/(?:members(?:/[^/]+)?|keys(?:/[^/]+)?|invitations(?:/[^/]+)?)", path
     ):
         return "tenants:" + suffix
     if re.fullmatch(r"/api/admin/users/[^/]+/role", path):
