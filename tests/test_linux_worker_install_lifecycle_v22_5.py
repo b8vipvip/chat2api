@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from app.linux_worker_install_patch import install_linux_worker_install_patch
 from app.linux_worker_installs import LinuxWorkerInstallStore
 from app.linux_worker_patch import install_linux_worker_patch
+from app.linux_workers import token_hash
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,9 +32,19 @@ def test_install_resume_only_accepts_the_identity_consumed_by_the_same_enrollmen
     install_linux_worker_install_patch(app)
 
     store = app.state.linux_workers
-    enrollment = store.create_enrollment("Resume Worker")
+    install = app.state.linux_worker_installs.create("Resume Worker")
+    digest = token_hash(install["code"])
+    store.data["enrollments"][digest] = {
+        "code_hash": digest,
+        "name": install["name"],
+        "created_at": install["created_at"],
+        "expires_at": "9999-12-31T23:59:59Z",
+        "used_at": None,
+        "install_id": install["install_id"],
+    }
+    store._save()
     credentials = {
-        "enroll_code": enrollment["code"],
+        "enroll_code": install["code"],
         "worker_id": "wrk_not-yet-enrolled",
         "worker_token": "not-a-token",
     }
@@ -44,7 +55,7 @@ def test_install_resume_only_accepts_the_identity_consumed_by_the_same_enrollmen
         assert pending.status_code == 200
         assert pending.json() == {"valid": False}
 
-        actual = store.enroll(enrollment["code"], {"platform": "linux"})
+        actual = store.enroll(install["code"], {"platform": "linux"})
         credentials.update(actual)
 
         # A used code is resumable only with the exact worker id and token.
@@ -55,6 +66,7 @@ def test_install_resume_only_accepts_the_identity_consumed_by_the_same_enrollmen
         wrong_code = {**credentials, "enroll_code": "AAAA-BBBB-CCCC"}
         assert client.post("/api/workers/install-resume", json=wrong_code).json() == {"valid": False}
         assert client.post("/api/workers/install-resume", json=credentials).json() == {"valid": True}
+        assert app.state.linux_worker_installs.get(install["install_id"])["worker_id"] == credentials["worker_id"]
         identity_check = client.post(
             "/api/workers/identity/validate",
             json={"worker_id": credentials["worker_id"], "worker_token": credentials["worker_token"]},
