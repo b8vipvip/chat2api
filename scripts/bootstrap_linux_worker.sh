@@ -12,6 +12,7 @@ PROFILE_DIR="/home/chat2api/.config/chat2api-chrome-worker-01"
 PIP_INDEX_URL="${CHAT2API_PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
 INSTALL_SUCCESS=0
 LAST_MESSAGE="安装过程异常退出"
+REGISTRATION_MODE="existing"
 
 while (($#)); do
   case "$1" in
@@ -87,6 +88,37 @@ fi
 if [[ $UPGRADE_ONLY -eq 1 && $VALID_IDENTITY -ne 1 ]]; then
   LAST_MESSAGE="升级模式要求现有有效 Worker 身份；请使用后台生成的新安装命令重新注册"
   exit 1
+fi
+
+# A fresh install command must not reuse an arbitrary, syntactically valid
+# worker.json. Resume only when the current server proves that this exact
+# enrollment code was already consumed by this exact worker identity.
+if [[ $UPGRADE_ONLY -ne 1 && $VALID_IDENTITY -eq 1 ]]; then
+  RESUME_RESPONSE="$(
+    python3 - "$ENROLL_CODE" /etc/chat2api-worker/worker.json <<'PY' |
+import json,sys
+from pathlib import Path
+identity=json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+print(json.dumps({
+    "enroll_code": sys.argv[1],
+    "worker_id": identity.get("worker_id", ""),
+    "worker_token": identity.get("worker_token", ""),
+}))
+PY
+    curl -fsS --connect-timeout 8 --max-time 15 \
+      -H 'Content-Type: application/json' --data-binary @- \
+      "$SERVER/api/workers/install-resume" 2>/dev/null
+  )" || RESUME_RESPONSE=""
+  if [[ -n "$RESUME_RESPONSE" ]] && python3 - "$RESUME_RESPONSE" <<'PY' >/dev/null 2>&1
+import json,sys
+assert json.loads(sys.argv[1]).get("valid") is True
+PY
+  then
+    echo "[cleanup] 当前 Worker 身份已由服务端确认为本安装记录，按幂等升级处理"
+  else
+    echo "[cleanup] 现有 Worker 身份不属于当前安装记录，重新注册（保留 Chrome Profile）"
+    VALID_IDENTITY=0
+  fi
 fi
 
 if [[ $VALID_IDENTITY -eq 0 ]]; then
@@ -223,6 +255,7 @@ if [[ ! -s /etc/chat2api-worker/worker.json ]]; then
   fi
   install -o root -g chat2api -m 640 "$ENROLL_RESPONSE" /etc/chat2api-worker/worker.json
   rm -f "$ENROLL_RESPONSE"
+  REGISTRATION_MODE="enrolled"
 fi
 # Always validate an existing identity before any service starts. This also
 # rejects the historical five-byte "true\n" file produced by the old jq pipe.
@@ -418,7 +451,7 @@ report_progress "installed" "complete" "Worker 安装完成，Chrome Bridge 已�
 echo "=== chat2api Linux Worker installed ==="
 echo "Worker ID: $(jq -r .worker_id /etc/chat2api-worker/worker.json)"
 echo "Server: $SERVER"
-echo "Registration: $([[ $UPGRADE_ONLY -eq 1 ]] && echo existing || echo enrolled)"
+echo "Registration: $REGISTRATION_MODE"
 for unit in xray xvfb chrome worker-agent worker-watchdog.timer extension-autoreload.timer; do echo "$unit: $(systemctl is-active chat2api-$unit || true)"; done
 echo "Worker Browser: $(/home/chat2api/.cache/chat2api-chrome-for-testing/chrome --version 2>/dev/null || echo Chrome-for-Testing)"
 echo "Chrome Bridge: $(jq -r .version "$WORKER_DIR/chrome_extension/manifest.json") (自动加载 / 自动配对，无需手工配对码)"
