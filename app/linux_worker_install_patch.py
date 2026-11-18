@@ -56,8 +56,10 @@ def install_linux_worker_install_patch(app: FastAPI) -> FastAPI:
         with worker_store._lock:
             if not worker_store.authenticate(worker_id, worker_token):
                 return {"valid": False, "connected": False}
-            sockets = getattr(app.state, "worker_sockets", {})
             worker = worker_store.data.get("workers", {}).get(worker_id) or {}
+            if str(worker.get("platform") or "").strip().lower() != "linux":
+                return {"valid": False, "connected": False}
+            sockets = getattr(app.state, "worker_sockets", {})
             # A socket accepted without the first Agent heartbeat is not ready
             # for command dispatch and must not be reported as installed.
             connected = bool(sockets.get(worker_id)) and bool(worker.get("last_seen_at"))
@@ -90,6 +92,9 @@ def install_linux_worker_install_patch(app: FastAPI) -> FastAPI:
             if not enrollment.get("used_at") or str(enrollment.get("worker_id") or "") != worker_id:
                 return {"valid": False}
             if not worker_store.authenticate(worker_id, worker_token):
+                return {"valid": False}
+            worker = worker_store.data.get("workers", {}).get(worker_id) or {}
+            if str(worker.get("platform") or "").strip().lower() != "linux":
                 return {"valid": False}
             install_id = str(enrollment.get("install_id") or "")
             if install_id:
