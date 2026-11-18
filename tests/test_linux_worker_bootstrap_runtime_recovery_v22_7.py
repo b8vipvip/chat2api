@@ -1,5 +1,6 @@
 from pathlib import Path
 import re
+import subprocess
 
 
 def _runtime_version(source: str) -> tuple[int, int, int]:
@@ -36,6 +37,17 @@ def test_health_waits_for_services_instead_of_single_instant_check():
     assert 'systemctl reset-failed chat2api-chrome.service chat2api-worker-agent.service' in source
     assert 'Worker 浏览器未在限定时间内就绪' in source
 
+
+
+def test_bootstrap_shell_syntax_is_valid():
+    source = Path("scripts/bootstrap_linux_worker.sh")
+    result = subprocess.run(
+        ["bash", "-n", str(source)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_fresh_install_validates_identity_against_the_current_enrollment():
