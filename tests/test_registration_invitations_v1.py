@@ -162,6 +162,21 @@ def test_invitation_release_revoke_and_expiry_states(tmp_path: Path, monkeypatch
     assert store.list_invitations()[0]["status"] == "expired"
 
 
+def test_revoke_does_not_relabel_expired_invitation_as_revoked(tmp_path: Path, monkeypatch):
+    store = InvitationStore(tmp_path)
+    created = store.create("expired@example.com", "root", expires_in_seconds=300)
+    invitation_id = created["invitation"]["invitation_id"]
+    original = __import__("time").time
+    monkeypatch.setattr("app.registration_invitations.time.time", lambda: original() + 301)
+
+    # Revoke must materialize expiry and return false; it must not rewrite
+    # the historical reason for the invitation becoming unavailable.
+    assert store.revoke(invitation_id) is False
+    assert store.list_invitations()[0]["status"] == "expired"
+    with pytest.raises(InvitationError):
+        store.reserve(created["code"], "expired@example.com")
+
+
 def test_invite_only_registration_consumes_code_only_after_success(tmp_path: Path):
     app = make_app(tmp_path)
     app.state.control_plane.update_client({"registration_mode": "invite_only"})
