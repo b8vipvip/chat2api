@@ -150,6 +150,13 @@ dispatch("stream-1","evidence",{response_ok:true,response_status:200,
   evidence_source:"network_response_metadata",
 });
 let bridged=await takeLast();
+const firstEmittedEvent=isolatedEmits.filter(msg=>msg.type==="chat2api.event")
+  .at(-1)?.event;
+assert.equal(firstEmittedEvent?.request_id,"req_modelconflict123");
+assert.equal(firstEmittedEvent?.diagnostics?.model_evidence_revision,144,
+  "Worker bridge must preserve the current model evidence protocol revision");
+assert.equal(firstEmittedEvent?.diagnostics?.model_evidence_transport,"main-world-fetch",
+  "Worker bridge must preserve the MAIN-world network observer provenance");
 assert.equal(bridged.served_model,"gpt-6");
 assert.equal(bridged.default_model,"gpt-5.6-sol");
 assert.equal(bridged.reasoning,"high");
