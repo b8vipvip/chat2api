@@ -148,7 +148,7 @@ def test_admin_audit_read_redacts_legacy_secret_fields_without_rewriting_hash_ch
     }
     event_hash = hashlib.sha256(store._canonical(payload)).hexdigest()
     raw_row = {**payload, "event_hash": event_hash}
-    store.path.write_text(json.dumps(raw_row, ensure_ascii=False) + "\\n", encoding="utf-8")
+    store.path.write_text(json.dumps(raw_row, ensure_ascii=False) + "\n", encoding="utf-8")
 
     visible = store.recent()
     assert visible[0]["details"]["password"] == "[REDACTED]"
