@@ -70,6 +70,12 @@ the Control Plane maps this route to `billing:write`. Caller body:
   `model_id` (served model) and `priced_model_id` (price source). Positive-rate
   requests reserve at least one cent using upward cent rounding, so tiny
   estimates still retain their admission snapshot.
+- A completed legacy telemetry row without a durable wallet admission
+  marker is never backfilled into a new debit using the current billing toggle,
+  current price card or current FX rate. Existing persisted charge rows remain
+  idempotently readable/recoverable; unmarked historical rows are left
+  uncharged pending explicit reconciliation because their admission-time
+  billing decision and price snapshot cannot be reconstructed safely.
 - Requests admitted while wallet billing is disabled, or against an explicit
   enabled zero-rate model, persist a zero-value terminal admission marker.
   A later billing toggle or price edit cannot retroactively turn those
