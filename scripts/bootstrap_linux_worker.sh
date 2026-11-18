@@ -446,6 +446,63 @@ if [[ -n "$PAIRING_CODE" ]]; then
   fi
 fi
 
+set_stage "worker-connection" "验证服务端 Worker 身份并等待 WebSocket 在线"
+WORKER_CONNECTED=0
+for attempt in $(seq 1 45); do
+  IDENTITY_RESPONSE="$(
+    python3 - /etc/chat2api-worker/worker.json <<'PY' |
+import json,sys
+from pathlib import Path
+identity=json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(json.dumps({
+    "worker_id": identity.get("worker_id", ""),
+    "worker_token": identity.get("worker_token", ""),
+}))
+PY
+    curl -fsS --connect-timeout 2 --max-time 4 \
+      -H 'Content-Type: application/json' --data-binary @- \
+      "$SERVER/api/workers/identity/validate" 2>/dev/null
+  )" || IDENTITY_RESPONSE=""
+
+  VALIDATE_STATE=""
+  if [[ -n "$IDENTITY_RESPONSE" ]]; then
+    VALIDATE_STATE="$(python3 - "$IDENTITY_RESPONSE" <<'PY' 2>/dev/null || true
+import json,sys
+try:
+    payload=json.loads(sys.argv[1])
+except Exception:
+    print("waiting")
+else:
+    if payload.get("valid") is not True:
+        print("invalid")
+    elif payload.get("connected") is True:
+        print("connected")
+    else:
+        print("waiting")
+PY
+)"
+  fi
+
+  if [[ "$VALIDATE_STATE" == "connected" ]]; then
+    WORKER_CONNECTED=1
+    break
+  fi
+  if [[ "$VALIDATE_STATE" == "invalid" ]]; then
+    LAST_MESSAGE="当前 Worker 身份未被服务端接受，安装未完成"
+    exit 1
+  fi
+  if (( attempt == 1 || attempt % 10 == 0 )); then
+    LAST_MESSAGE="等待 Worker Agent 与当前服务端建立 WebSocket 连接（${attempt}/45）"
+    echo "[worker-connection] $LAST_MESSAGE"
+    report_progress "installing" "$STAGE" "$LAST_MESSAGE"
+  fi
+  sleep 2
+done
+if [[ $WORKER_CONNECTED -ne 1 ]]; then
+  LAST_MESSAGE="Worker Agent 未能在 90 秒内连接当前服务端，安装未完成；请检查 WebSocket 握手和 Agent 日志"
+  exit 1
+fi
+
 INSTALL_SUCCESS=1
 report_progress "installed" "complete" "Worker 安装完成，Chrome Bridge 已自动加载并配对"
 echo "=== chat2api Linux Worker installed ==="
