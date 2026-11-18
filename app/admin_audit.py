@@ -22,7 +22,7 @@ _SENSITIVE_AUDIT_FIELDS = frozenset({
     "access_token", "refresh_token", "id_token", "token", "token_hash",
     "token_value", "authorization", "proxy_authorization", "cookie", "set_cookie",
     "session_cookie", "session_token", "csrf_token", "invitation_code", "invite_code",
-    "one_time_code", "otp", "bearer", "key", "key_value", "master_key",
+    "one_time_code", "otp", "bearer", "jwt", "jwt_token", "key", "key_value", "master_key",
     "signing_key", "webhook_secret",
 })
 _SAFE_AUDIT_IDENTIFIERS = frozenset({
