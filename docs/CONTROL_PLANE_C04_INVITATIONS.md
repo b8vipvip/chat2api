@@ -1,64 +1,37 @@
-# C-04 — Invite-only registration and invitation lifecycle
+# C-04a — invite-only registration
 
-Status: **Production-integrated; lifecycle correction under review in PR #823.**
+Status: **Draft / partial**. This is a server-side invitation service stacked on C-01 (#801). It does not change the production composition root; a later single C integration PR must install `install_registration_invitations` after the existing user-console and admin-session installers.
 
-The invitation service, registration policy, admin API and existing Admin Console composition were integrated into the production entry through PR #824. This document describes the current mainline behavior; PR #823 adds a bounded expiry/revocation race correction and is not considered merged until its exact-head CI and review gates complete.
+## Implemented
 
-## Implemented behavior
+- `InvitationStore` persists only SHA256 hashes of high-entropy one-time codes in a private SQLite file.
+- Invitations are bound to a normalized email address and have a bounded 5-minute to 30-day expiry.
+- Atomic `BEGIN IMMEDIATE` reservation prevents concurrent reuse. Registration consumes the invitation after account/session creation succeeds; validation or account-creation failure releases the reservation.
+- An interrupted registration leaves a `reserved` invitation unavailable for reuse. This deliberately fails closed; the admin can revoke/inspect and issue a replacement rather than silently reopening a possibly-used code.
+- Admin APIs:
+  - `GET /api/admin/control/invitations` returns bounded metadata only.
+  - `POST /api/admin/control/invitations` issues a code once and returns it only in that response.
+  - `POST /api/admin/control/invitations/{id}/revoke` revokes an unreserved, unconsumed invitation.
+- Admin mutations require same-origin and are audited before the state change. C-01 route permissions map invitation read/write to `users:read` / `users:write`.
+- Public registration policy now supports `open`, `closed`, and `invite_only`. The existing `/api/user/register` endpoint remains the single registration owner.
+- User Console registration reads the public policy and displays the invite-code field only for invite-only mode. The server remains authoritative if the public config cannot load; the one-time code is cleared from the DOM after successful authentication and on logout/session expiry.
+- Correct email whitespace validation and deterministic newest-first ordering for records created in the same second.
+- Admin invitation responses and successful registration/session responses carry `Cache-Control: no-store`.
+- Public announcement text is rendered through DOM `textContent`, not HTML injection.
+- Every delegated administrator role has an explicit self-password permission and a current-password-verified rotation endpoint. Passwords are PBKDF2-rehashed and all existing sessions for that administrator are immediately revoked. Root password remains environment-managed; root can reset delegated administrator passwords through the admin API.
 
-- Invitation codes are high-entropy, one-time values generated with `secrets.token_urlsafe(32)`. Only SHA-256 token hashes are persisted; raw codes are returned once in the issue response.
-- Each invitation is bound to a normalized email address. Email comparison is case-insensitive after trimming and case-folding.
-- Expiry is bounded from 5 minutes to 30 days.
-- Reservation uses SQLite `BEGIN IMMEDIATE` so concurrent registrations cannot reserve the same code.
-- A registration consumes its invitation only after account creation succeeds. Failed account creation releases an active reservation; an interrupted reservation fails closed and is not automatically made reusable.
-- Reservation leases expire after 30 minutes. An expired reservation becomes unavailable; an administrator must inspect the user directory and issue a replacement rather than silently reusing a potentially consumed code.
-- An unreserved, unconsumed invitation can be revoked. A reservation cannot be revoked mid-registration.
-- Registration policy supports `open`, `closed`, and `invite_only`; the existing `/api/user/register` route remains the registration owner.
-- The User Console reads public registration policy, displays the invite-code field only in invite-only mode, and clears the one-time code on authentication transitions.
-- Admin invitation listing returns bounded metadata only. Raw invitation codes, token hashes and reservation IDs are not exposed in list responses.
-- Invitation admin mutations pass the existing administrator session and same-origin request guard. A request audit event is written before mutation; completion is audited after mutation. If the pre-mutation audit is unavailable, the mutation is denied. If completion audit fails after commit, the API reports the committed result with `X-Admin-Audit-Status: completion-pending` rather than falsely reporting that the mutation did not happen.
-- Invitation issue/list responses and successful registration/session responses use `Cache-Control: no-store`.
-- Public announcement text uses DOM `textContent`, not HTML injection.
-- Delegated administrator password rotation verifies the current password, rehashes the new password and revokes that administrator's existing sessions. Root credentials remain environment-managed.
+## Security / failure semantics
 
-## Invitation state transitions
+- Raw invitation codes and token hashes never appear in list responses or audit details.
+- Codes are high entropy, ASCII-only, email-bound and single-use. A code for another email is rejected without reserving it.
+- A concurrent second registration cannot reserve the same code.
+- A reserved code cannot be revoked mid-registration; it can be consumed by the already-started request.
+- A crash after reservation but before finalization leaves the code reserved and unavailable. No automatic TTL release is performed because the account may already have been created. Reissue a new invitation after checking the user directory.
+- Email addresses are stored in the existing local-data security model; this SQLite file is mode 0600 but is not field-encrypted. G0/DataKeyring remains deferred.
 
-| From | Operation | To | Notes |
-| --- | --- | --- | --- |
-| `issued` | valid email-bound reservation | `reserved` | Atomic; only one concurrent request wins |
-| `reserved` | registration succeeds | `consumed` | One-time code cannot be reused |
-| `reserved` | registration fails and reservation is still active | `issued` | Explicit release for recoverable failures |
-| `reserved` | reservation lease expires | `expired` | Fail closed; never silently reissue |
-| `issued` | invitation expiry passes | `expired` | Expiry is authoritative |
-| `issued` | administrator revokes | `revoked` | Reserved/consumed invitations are not revoked |
+## Not yet complete
 
-PR #823 corrects the boundary where an invitation had passed `expires_at` but no list/reserve request had yet materialized the `expired` status. Revocation now first materializes expiry and only revokes invitations whose expiry is still in the future. It samples the clock after SQLite grants the write transaction, preventing lock wait from using a stale pre-transaction timestamp. The regression tests cover both an already-expired invitation and expiry occurring at the transaction boundary.
-
-## Verification already present in the repository
-
-The invitation regression suite covers:
-- email normalization and invalid email rejection;
-- hash-only storage, email binding, one-time use and replay rejection;
-- concurrent reservation;
-- reservation lease expiry and fail-closed recovery;
-- release, revoke and expiry state behavior;
-- invite-only, closed and open registration modes;
-- invitation consumption only after successful registration;
-- duplicate-account failure and reservation release;
-- delegated admin permission boundaries and password rotation;
-- request/completion audit events and audit failure semantics;
-- one-time code clearing in the User Console.
-
-The central C-track production integration was merged through PR #824. PR #823 is limited to the invitation store, its regression tests and this documentation; no separate service or registration route is introduced.
-
-## Remaining acceptance gates
-
-Keep Issue #809 open until the following are verified and documented:
-- complete API/browser negative tests for CSRF, cross-Origin and session revocation across the invitation routes;
-- mobile viewport and accessibility review of the existing Admin Console/User Console flows;
-- full operator acceptance of create, list, revoke, expiry, email binding, replay and interrupted-registration recovery;
-- login failure throttling and password-rotation acceptance across all applicable admin roles;
-- approved email-address retention/encryption policy. The invitation database is mode `0600`, but email addresses are not field-encrypted; G0/DataKeyring remains deferred;
-- production backup/restore and multi-instance SQLite topology. The current local SQLite store is not a claim of shared multi-host transactional support.
-
-Do not mark the full C-04 issue complete based solely on PR merge or green CI. Production integration, automated code acceptance, mobile/operator review and the deferred data-protection gate are separate states.
+- This PR is stacked on #801 and is not production-wired until the central C composition-root PR installs the invitation service.
+- C-07 invitation issue/list/revoke controls and the `invite_only` selector are implemented on separate Draft PR #820. They are not yet wired to this service because both PRs await the central C composition-root integration.
+- Root administrator password remains environment-managed; delegated admin password rotation and MFA are separate pending controls.
+- Real browser/mobile E2E, production data backup/restore and multi-instance database support remain release gates.

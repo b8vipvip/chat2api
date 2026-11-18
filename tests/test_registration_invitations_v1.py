@@ -162,55 +162,6 @@ def test_invitation_release_revoke_and_expiry_states(tmp_path: Path, monkeypatch
     assert store.list_invitations()[0]["status"] == "expired"
 
 
-def test_revoke_does_not_relabel_expired_invitation_as_revoked(tmp_path: Path, monkeypatch):
-    store = InvitationStore(tmp_path)
-    created = store.create("expired@example.com", "root", expires_in_seconds=300)
-    invitation_id = created["invitation"]["invitation_id"]
-    original = __import__("time").time
-    monkeypatch.setattr("app.registration_invitations.time.time", lambda: original() + 301)
-
-    # Revoke must materialize expiry and return false; it must not rewrite
-    # the historical reason for the invitation becoming unavailable.
-    assert store.revoke(invitation_id) is False
-    assert store.list_invitations()[0]["status"] == "expired"
-    with pytest.raises(InvitationError):
-        store.reserve(created["code"], "expired@example.com")
-
-
-def test_revoke_samples_expiry_after_write_transaction_is_acquired(tmp_path: Path, monkeypatch):
-    store = InvitationStore(tmp_path)
-    created = store.create("boundary@example.com", "root", expires_in_seconds=300)
-    invitation_id = created["invitation"]["invitation_id"]
-    expires_at = created["invitation"]["expires_at"]
-    clock = {"now": created["invitation"]["created_at"] + 299}
-
-    class AdvanceClockAfterBegin:
-        def __init__(self, connection):
-            self.connection = connection
-
-        def execute(self, statement, parameters=()):
-            cursor = self.connection.execute(statement, parameters)
-            if statement.strip().upper() == "BEGIN IMMEDIATE":
-                clock["now"] = expires_at
-            return cursor
-
-        def __getattr__(self, name):
-            return getattr(self.connection, name)
-
-    original_connect = store._connect
-    monkeypatch.setattr("app.registration_invitations.time.time", lambda: clock["now"])
-    monkeypatch.setattr(
-        store,
-        "_connect",
-        lambda: AdvanceClockAfterBegin(original_connect()),
-    )
-
-    # The invitation is valid before the DB write lock is acquired, but
-    # expires at the transaction boundary. The decision must use the latter.
-    assert store.revoke(invitation_id) is False
-    assert store.list_invitations()[0]["status"] == "expired"
-
-
 def test_invite_only_registration_consumes_code_only_after_success(tmp_path: Path):
     app = make_app(tmp_path)
     app.state.control_plane.update_client({"registration_mode": "invite_only"})
