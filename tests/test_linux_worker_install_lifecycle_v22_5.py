@@ -77,6 +77,12 @@ def test_install_resume_only_accepts_the_identity_consumed_by_the_same_enrollmen
             "/api/workers/identity/validate",
             json={"worker_id": credentials["worker_id"], "worker_token": credentials["worker_token"]},
         )
+        assert identity_check.json() == {"valid": True, "connected": False}
+        store.heartbeat(credentials["worker_id"], {"status": "ready"})
+        identity_check = client.post(
+            "/api/workers/identity/validate",
+            json={"worker_id": credentials["worker_id"], "worker_token": credentials["worker_token"]},
+        )
         assert identity_check.json() == {"valid": True, "connected": True}
 
 
