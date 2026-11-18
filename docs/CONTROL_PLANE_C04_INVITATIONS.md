@@ -51,6 +51,17 @@ The invitation regression suite covers:
 
 The central C-track production integration was merged through PR #824. PR #823 is limited to the invitation store, its regression tests and this documentation; no separate service or registration route is introduced.
 
+## Automated same-origin regression follow-up
+
+PR #843 adds negative tests against the production invitation mutation routes for:
+- missing `Origin`;
+- cross-site Fetch Metadata;
+- mismatched Origin host;
+- non-root Origin path;
+- cross-origin revocation preserving the issued invitation.
+
+The existing exact same-origin issue/revoke path remains covered as the positive control. These tests validate the invitation endpoints only; they do not replace the full C-07 route-by-role CSRF/cross-Origin matrix or browser/mobile operator review.
+
 ## Remaining acceptance gates
 
 Keep Issue #809 open until the following are verified and documented:
