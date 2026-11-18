@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from fastapi import FastAPI
 
 from app import model_capability_routing_patch as routing
-from app.linux_worker_registry import ClientRegistry
+from app.registry import ClientRegistry
 from app.worker_model_tasks_v147_patch import install_manual_worker_text_model_tasks_v147_patch
 
 
