@@ -211,6 +211,52 @@ def test_revoke_samples_expiry_after_write_transaction_is_acquired(tmp_path: Pat
     assert store.list_invitations()[0]["status"] == "expired"
 
 
+def test_admin_invitation_mutations_reject_cross_origin_and_missing_origin(tmp_path: Path):
+    app = make_app(tmp_path)
+    app.state.control_plane.update_client({"registration_mode": "invite_only"})
+    with TestClient(app) as client:
+        assert login(client).status_code == 200
+
+        invalid_headers = (
+            {"Origin": "https://attacker.example", "Sec-Fetch-Site": "cross-site"},
+            {"Sec-Fetch-Site": "same-origin"},
+            {"Origin": "http://evil.testserver", "Sec-Fetch-Site": "same-origin"},
+            {"Origin": "http://testserver", "Sec-Fetch-Site": "cross-site"},
+            {"Origin": "http://testserver/attacker", "Sec-Fetch-Site": "same-origin"},
+        )
+        for headers in invalid_headers:
+            rejected = client.post(
+                "/api/admin/control/invitations",
+                json={"email": "blocked@example.com"},
+                headers=headers,
+            )
+            assert rejected.status_code == 403
+
+        assert app.state.invitations.list_invitations() == []
+
+        issued = client.post(
+            "/api/admin/control/invitations",
+            json={"email": "owner@example.com"},
+            headers=ORIGIN,
+        )
+        assert issued.status_code == 201
+        invitation_id = issued.json()["invitation"]["invitation_id"]
+
+        cross_origin_revoke = client.post(
+            f"/api/admin/control/invitations/{invitation_id}/revoke",
+            headers={"Origin": "https://attacker.example", "Sec-Fetch-Site": "cross-site"},
+        )
+        assert cross_origin_revoke.status_code == 403
+        assert app.state.invitations.list_invitations()[0]["status"] == "issued"
+
+        same_origin_revoke = client.post(
+            f"/api/admin/control/invitations/{invitation_id}/revoke",
+            headers=ORIGIN,
+        )
+        assert same_origin_revoke.status_code == 200
+        assert app.state.invitations.list_invitations()[0]["status"] == "revoked"
+
+
 def test_invite_only_registration_consumes_code_only_after_success(tmp_path: Path):
     app = make_app(tmp_path)
     app.state.control_plane.update_client({"registration_mode": "invite_only"})
