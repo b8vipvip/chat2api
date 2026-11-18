@@ -22,7 +22,7 @@ _SENSITIVE_AUDIT_FIELDS = frozenset({
     "access_token", "refresh_token", "id_token", "token", "token_hash",
     "token_value", "authorization", "proxy_authorization", "cookie", "set_cookie",
     "session_cookie", "session_token", "csrf_token", "invitation_code", "invite_code",
-    "one_time_code", "otp", "bearer", "key", "key_value", "master_key",
+    "one_time_code", "otp", "bearer", "jwt", "jwt_token", "key", "key_value", "master_key",
     "signing_key", "webhook_secret",
 })
 _SAFE_AUDIT_IDENTIFIERS = frozenset({
@@ -43,7 +43,12 @@ _SENSITIVE_AUDIT_PREFIXES = (
 
 
 def _sensitive_audit_field(name: Any) -> bool:
-    normalized = re.sub(r"[^a-z0-9]+", "_", str(name or "").casefold()).strip("_")
+    raw_name = str(name or "")
+    # Normalize both lowerCamelCase and acronym-prefixed names (CSRFToken,
+    # APIKey, refreshToken) before applying the field-name denylist.
+    camel_separated = re.sub(r"([A-Z]{2,})([A-Z][a-z])", r"\1_\2", raw_name)
+    camel_separated = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", camel_separated)
+    normalized = re.sub(r"[^a-z0-9]+", "_", camel_separated.casefold()).strip("_")
     if normalized in _SAFE_AUDIT_IDENTIFIERS:
         return False
     if normalized in _SENSITIVE_AUDIT_FIELDS:
