@@ -64,8 +64,10 @@ PY
 
 # Stamp the exact repository commit for safe next-update baseline validation.
 ARG CHAT2API_BUILD_COMMIT=unknown
+ARG CHAT2API_RELEASE_VERSION=0.22.292
 ENV CHAT2API_BUILD_COMMIT=${CHAT2API_BUILD_COMMIT}
-LABEL org.opencontainers.image.revision="${CHAT2API_BUILD_COMMIT}"
+LABEL org.opencontainers.image.revision="${CHAT2API_BUILD_COMMIT}" \
+      org.opencontainers.image.version="${CHAT2API_RELEASE_VERSION}"
 
 EXPOSE 8765
 # exec makes uvicorn PID 1 inside the container so Docker SIGTERM reaches the
