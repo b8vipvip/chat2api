@@ -54,6 +54,7 @@ jobs:
 
           changed_paths="$(git diff --name-only "$base" "$target")"
           if grep -Fxq "app/linux_worker_install_patch.py" <<<"$changed_paths" ||
+             grep -Fxq "app/runtime_contract.py" <<<"$changed_paths" ||
              grep -Fxq "scripts/bootstrap_linux_worker.sh" <<<"$changed_paths"; then
             echo "Linux Worker install/control-plane runtime changed; require a full production image build"
             exit 0
