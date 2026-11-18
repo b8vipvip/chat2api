@@ -265,7 +265,7 @@ def test_runtime_marks_worker_release_without_bridge_protocol_bump():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
     assert 'SERVER_RUNTIME_VERSION = "0.22.24"' in runtime
-    assert 'CHROME_BRIDGE_VERSION = "0.22.291"' in runtime
+    assert 'CHROME_BRIDGE_VERSION = "0.22.292"' in runtime
     assert "install_runtime_contract(app)" in entry
     assert "install_linux_worker_pairing_patch(app)" in entry
     assert "install_linux_worker_proxy_name_patch(app)" in entry
