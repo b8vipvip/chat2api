@@ -57,7 +57,10 @@ def install_linux_worker_install_patch(app: FastAPI) -> FastAPI:
             if not worker_store.authenticate(worker_id, worker_token):
                 return {"valid": False, "connected": False}
             sockets = getattr(app.state, "worker_sockets", {})
-            connected = bool(sockets.get(worker_id))
+            worker = worker_store.data.get("workers", {}).get(worker_id) or {}
+            # A socket accepted without the first Agent heartbeat is not ready
+            # for command dispatch and must not be reported as installed.
+            connected = bool(sockets.get(worker_id)) and bool(worker.get("last_seen_at"))
         return {"valid": True, "connected": connected}
 
     @app.post("/api/workers/install-resume")
