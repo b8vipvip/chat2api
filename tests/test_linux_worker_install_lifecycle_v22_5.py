@@ -116,6 +116,31 @@ def test_install_record_has_no_time_expiry_and_tracks_terminal_disable(tmp_path)
     assert failed["failed_at"]
 
 
+def test_unlinked_false_installed_record_can_be_retried(tmp_path):
+    store = LinuxWorkerInstallStore(tmp_path)
+    item = store.create("Unlinked Worker")
+    installed = store.record_progress(
+        item["code"],
+        stage="complete",
+        state="installed",
+        message="旧安装脚本错误地报告完成",
+    )
+    assert installed["state"] == "installed"
+    assert installed["worker_id"] is None
+    assert installed["consumed_at"] is None
+    assert installed["enabled"] is False
+
+    retried = store.record_progress(
+        item["code"],
+        stage="cleanup",
+        state="installing",
+        message="重新验证并注册 Worker",
+    )
+    assert retried["state"] == "installing"
+    assert retried["enabled"] is True
+    assert retried["completed_at"] is None
+
+
 def test_pending_disabled_command_can_be_reenabled_but_consumed_cannot(tmp_path):
     store = LinuxWorkerInstallStore(tmp_path)
     item = store.create("Worker")
