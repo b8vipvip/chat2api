@@ -22,7 +22,7 @@ from typing import Any
 SLUG = re.compile(r"^[a-z][a-z0-9-]{2,47}$")
 USER_ID = re.compile(r"^usr_[A-Za-z0-9_-]{5,128}$")
 KEY_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,160}$")
-EMAIL = re.compile(r"^[^@\\s]{1,64}@[^@\\s.]+(?:\\.[^@\\s.]+)+$")
+EMAIL = re.compile(r"^[^@\s]{1,64}@[^@\s.]+(?:\.[^@\s.]+)+$")
 INVITATION_ID = re.compile(r"^tinv_[0-9a-f]{24}$")
 ROLES = frozenset({"owner", "admin", "member", "viewer"})
 
