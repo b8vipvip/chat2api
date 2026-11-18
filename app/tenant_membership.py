@@ -442,10 +442,12 @@ class TenantMembershipStore:
                         (invitation_id,),
                     )
                     expired = True
+                elif str(invited_email) != normalized_email:
+                    raise TenantMembershipError("Invitation email does not match the signed-in account")
                 elif role not in INVITABLE_ROLES:
                     # Revoke invitations created by older versions that could
-                    # grant owner. Rejecting the request alone would leave the
-                    # legacy token reusable after a future rollback/redeploy.
+                    # grant owner. Verify the intended email first so a bearer
+                    # of a leaked code cannot invalidate someone else's invite.
                     self.db.execute(
                         """UPDATE tenant_invitations
                            SET status='revoked',revoked_at=?
@@ -453,8 +455,6 @@ class TenantMembershipStore:
                         (_now(), invitation_id),
                     )
                     invalid_role = True
-                elif str(invited_email) != normalized_email:
-                    raise TenantMembershipError("Invitation email does not match the signed-in account")
                 else:
                     existing = self.db.execute(
                         "SELECT role FROM tenant_memberships WHERE tenant_id=? AND user_id=?",
