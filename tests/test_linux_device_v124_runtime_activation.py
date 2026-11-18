@@ -78,3 +78,17 @@ def test_v124_admin_html_owner_removes_legacy_linux_assets_before_injecting_itse
     assert "LEGACY_LINUX_ASSET_RE.sub" in source
     assert 'ASSET_PATH = "/assets/chat2api-linux-device-authority-v124.js"' in source
     assert "no-store, no-cache, must-revalidate" in source
+
+def test_v124_device_creation_is_idempotent_and_serialized():
+    source = (ROOT / "app" / "linux_worker_device_authority_v124_patch.py").read_text(encoding="utf-8")
+    assert "device_create_lock = asyncio.Lock()" in source
+    assert "async with device_create_lock:" in source
+    assert "existing = next(" in source
+    assert '"existing": True' in source
+    assert "reveal_or_rotate(pairing_id)" in source
+
+
+def test_v124_worker_console_uses_server_worker_id_not_extension_client_id():
+    source = (ROOT / "app" / "admin_linux_device_authority_v124.js").read_text(encoding="utf-8")
+    assert 'String(worker?.worker_id||"").trim()' in source
+    assert 'return /^wrk_[A-Za-z0-9]{8,120}$/.test(id)?id:"wrk_ 待分配";' in source
