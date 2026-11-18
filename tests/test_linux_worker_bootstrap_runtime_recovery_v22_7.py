@@ -37,6 +37,20 @@ def test_health_waits_for_services_instead_of_single_instant_check():
     assert 'Worker 浏览器未在限定时间内就绪' in source
 
 
+
+def test_fresh_install_validates_identity_against_the_current_enrollment():
+    bootstrap = Path("scripts/bootstrap_linux_worker.sh").read_text(encoding="utf-8")
+    api = Path("app/linux_worker_install_patch.py").read_text(encoding="utf-8")
+
+    assert "/api/workers/install-resume" in bootstrap
+    assert "IDENTITY_MATCHES_ENROLLMENT" not in bootstrap or "RESUME_RESPONSE" in bootstrap
+    assert 'if [[ $UPGRADE_ONLY -ne 1 && $VALID_IDENTITY -eq 1 ]]; then' in bootstrap
+    assert 'echo "Registration: $REGISTRATION_MODE"' in bootstrap
+    assert '@app.post("/api/workers/install-resume")' in api
+    assert 'enrollment.get("worker_id") or "") != worker_id' in api
+    assert "worker_store.authenticate(worker_id, worker_token)" in api
+
+
 def test_runtime_marks_bootstrap_recovery_release():
     runtime = Path("app/runtime_contract.py").read_text(encoding="utf-8")
     assert _runtime_version(runtime) >= (0, 22, 7)
