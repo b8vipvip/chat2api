@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -15,6 +16,24 @@ from pathlib import Path
 
 
 def reconcile(status_path: Path, *, service_result: str, exit_status: str = "") -> bool:
+    data_dir = status_path.parent
+    app_dir = data_dir.parent
+    compose_backup = data_dir / ".admin-update-docker-compose.backup"
+    compose_target = app_dir / "docker-compose.yml"
+
+    # The updater preserves a locally customized compose file across its hard
+    # checkout. ExecStopPost is the final recovery boundary if systemd kills the
+    # updater before Bash can run its EXIT trap.
+    if compose_backup.is_file():
+        try:
+            if service_result == "success":
+                compose_backup.unlink()
+            else:
+                shutil.copy2(compose_backup, compose_target)
+                compose_backup.unlink()
+        except OSError:
+            pass
+
     if service_result in {"", "success"} or not status_path.is_file():
         return False
     try:
