@@ -124,7 +124,7 @@ def test_server_packages_bundle_and_admin_uses_worker_lifecycle_list():
     assert "安装完成或失败后自动停用" in admin
     assert "有效期至" not in admin
     assert _runtime_version(runtime) >= (0, 22, 5)
-    assert 'CHROME_BRIDGE_VERSION = "0.22.293"' in runtime
+    assert 'CHROME_BRIDGE_VERSION = "0.22.294"' in runtime
 
 def test_active_install_feed_does_not_surface_orphan_legacy_workers_as_second_devices():
     source = (ROOT / "app" / "linux_worker_install_patch.py").read_text(encoding="utf-8")
