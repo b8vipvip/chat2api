@@ -382,10 +382,17 @@ def install_worker_auto_login_v153_patch(app: FastAPI) -> FastAPI:
 
     previous_touch = registry.touch
 
-    async def touch_with_relogin(client_id: str, metadata: dict[str, Any] | None = None) -> None:
-        await previous_touch(client_id, metadata)
+    async def touch_with_relogin(
+        client_id: str,
+        metadata: dict[str, Any] | None = None,
+        *,
+        websocket: Any | None = None,
+    ) -> bool:
+        accepted = await previous_touch(client_id, metadata, websocket=websocket)
+        if not accepted:
+            return False
         if not isinstance(metadata, dict):
-            return
+            return True
         worker = linux.worker_for_extension(client_id)
         worker_id = str(worker.get("worker_id") or "") if worker else client_id
         attempt = runtime(worker_id)
@@ -441,20 +448,20 @@ def install_worker_auto_login_v153_patch(app: FastAPI) -> FastAPI:
             if attempt and checked_at >= int(attempt.get("started_at_ms") or 0):
                 attempt["status"] = "logged_in"
                 failures.pop(worker_id, None)
-            return
+            return True
 
         confidence = str(metadata.get("chatgpt_login_confidence") or "").lower()
         if not fresh or state != "login_required" or confidence not in {"high", "medium"}:
             observations.pop(worker_id, None)
-            return
+            return True
 
         count, last_checked_at = observations.get(worker_id, (0, 0))
         if checked_at <= last_checked_at:
-            return  # Duplicate status/heartbeat, not another login probe.
+            return True  # Duplicate status/heartbeat, not another login probe.
         count += 1
         observations[worker_id] = (count, checked_at)
         if count < 2:
-            return
+            return True
         try:
             profile = vault.get(worker_id)
             if profile and profile.get("enabled"):
@@ -462,6 +469,7 @@ def install_worker_auto_login_v153_patch(app: FastAPI) -> FastAPI:
         except (HTTPException, RuntimeError, ValueError):
             # Offline workers and corrupt profiles must not break telemetry.
             pass
+        return True
 
     registry.touch = touch_with_relogin
 
