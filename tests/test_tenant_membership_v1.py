@@ -187,7 +187,11 @@ def test_workspace_invitation_is_email_bound_single_use_and_revocable(tmp_path: 
         tenant["tenant_id"], "revoked@example.com", "viewer", "root",
     )
     assert store.revoke_invitation(tenant["tenant_id"], revoked["invitation_id"]) is True
-    assert store.list_invitations(tenant["tenant_id"])[0]["status"] == "revoked"
+    revoked_row = next(
+        row for row in store.list_invitations(tenant["tenant_id"])
+        if row["invitation_id"] == revoked["invitation_id"]
+    )
+    assert revoked_row["status"] == "revoked"
     with pytest.raises(TenantMembershipError, match="no longer available"):
         store.accept_invitation(revoked_code, "usr_revoked12345", "revoked@example.com")
 
