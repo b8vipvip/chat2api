@@ -279,7 +279,7 @@ class TenantMembershipStore:
 
     @staticmethod
     def _normalize_invitation_email(email: str) -> str:
-        normalized = str(email or "").strip().casefold()
+        normalized = str(email or "").strip().lower()
         if len(normalized) > 254 or not EMAIL.fullmatch(normalized):
             raise TenantMembershipError("Invalid invitation email")
         return normalized

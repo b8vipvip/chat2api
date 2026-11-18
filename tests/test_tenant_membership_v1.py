@@ -274,8 +274,11 @@ def test_tenant_invitation_api_issues_revokes_and_accepts_with_authenticated_ema
 
         audit_rows = app.state.admin_audit.recent(50)
         assert any(row["action"] == "tenant.invitation_issue_completed" for row in audit_rows)
+        assert any(row["action"] == "tenant.invitation_accept_completed" for row in audit_rows)
         assert any(row["action"] == "tenant.invitation_revoke_completed" for row in audit_rows)
         assert all(code not in json.dumps(row) for row in audit_rows)
+        assert issued.headers["Cache-Control"] == "no-store"
+        assert accepted.headers["Cache-Control"] == "no-store"
 
 
 def test_tenant_mutation_audit_failure_does_not_report_a_committed_change_as_failed(tmp_path: Path, monkeypatch):
