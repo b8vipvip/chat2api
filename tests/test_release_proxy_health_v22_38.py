@@ -54,8 +54,8 @@ def test_release_versions_are_explicit_and_consistent() -> None:
     assert 'REQUIRED_BUNDLE = "0.22.294"' in preflight
     assert 'REQUIRED_BUNDLE = "0.22.294"' in contract
     assert 'REQUIRED_BUNDLE = "0.22.294"' in contract71
-    assert '__version__ = "0.7.1"' in package
-    assert 'version = "0.7.1"' in project
+    assert '__version__ = "0.7.2"' in package
+    assert 'version = "0.7.2"' in project
 
     for token in (
         '"network_response_recovery": True',
