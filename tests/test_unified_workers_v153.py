@@ -143,3 +143,12 @@ print(json.dumps(sorted({
     assert "/api/admin/worker-login/{worker_id}/trigger" in paths
     assert "/api/admin/worker-login/{worker_id}/manual" in paths
     assert "/api/admin/worker-login/{worker_id}/totp" in paths
+
+
+def test_orphan_linux_bridge_is_labeled_separately_from_a_linux_device() -> None:
+    unified = (ROOT / "app/admin_unified_workers_v153.js").read_text(encoding="utf-8")
+    assert 'const orphanLinuxBridge=!group.linux&&os==="Linux";' in unified
+    assert '"Bridge未关联"' in unified
+    assert '"未绑定 Linux Worker"' in unified
+    assert '"Bridge 绑定冲突"' in unified
+    assert '" · 未关联 Linux Worker 的 Bridge：" ' in unified or '" · 未关联 Linux Worker 的 Bridge："' in unified
