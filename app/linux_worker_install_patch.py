@@ -40,6 +40,36 @@ def install_linux_worker_install_patch(app: FastAPI) -> FastAPI:
             f"--server {server_url(request)} --enroll-code {item['code']}"
         )
 
+    @app.post("/api/workers/install-resume")
+    async def worker_install_resume(request: Request) -> dict[str, bool]:
+        """Only resume a local identity when it belongs to this exact install code.
+
+        A syntactically valid worker.json can be left behind by another server.
+        Never treat its mere presence as proof that the current install enrolled it.
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            return {"valid": False}
+        if not isinstance(body, dict):
+            return {"valid": False}
+        code = str(body.get("enroll_code") or "").strip().upper()
+        worker_id = str(body.get("worker_id") or "").strip()
+        worker_token = str(body.get("worker_token") or "")
+        if not code or not worker_id or not worker_token:
+            return {"valid": False}
+
+        digest = code_hash(code)
+        with worker_store._lock:
+            enrollment = worker_store.data.get("enrollments", {}).get(digest)
+            if not isinstance(enrollment, dict):
+                return {"valid": False}
+            if not enrollment.get("used_at") or str(enrollment.get("worker_id") or "") != worker_id:
+                return {"valid": False}
+            if not worker_store.authenticate(worker_id, worker_token):
+                return {"valid": False}
+        return {"valid": True}
+
     def legacy_item(code: str) -> dict[str, Any] | None:
         return worker_store.data["enrollments"].get(code_hash(str(code).strip().upper()))
 
