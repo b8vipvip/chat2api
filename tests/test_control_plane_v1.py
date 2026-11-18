@@ -4,12 +4,13 @@ import json
 import os
 import stat
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.admin_audit import AdminAuditError
-from app.admin_auth import AdminLoginRateLimiter, AdminSessionStore
+from app.admin_auth import AdminLoginRateLimiter, AdminSessionStore, same_origin_admin_request
 from app.config import Settings
 from app.control_plane import ControlPlaneError, ControlPlaneStore, ROLES, permission_for_admin_route
 from app.control_plane_v1_patch import install_control_plane_v1
@@ -328,3 +329,47 @@ def test_user_role_and_subscription_admin_routes_have_distinct_rbac_permissions(
     assert permission_for_admin_route("/api/admin/subscription-plans/pro", "PUT") == "billing:write"
     assert permission_for_admin_route("/api/admin/model-entitlements/user_role/trusted", "PUT") == "models:write"
     assert permission_for_admin_route("/api/admin/model-entitlements/subscription_plan/pro", "PUT") == "models:write"
+
+
+
+def test_same_origin_admin_request_requires_exact_browser_origin() -> None:
+    def request(headers: dict[str, str], scheme: str = "https"):
+        return SimpleNamespace(headers=headers, url=SimpleNamespace(scheme=scheme))
+
+    host = "admin.example:8443"
+    valid = {
+        "host": host,
+        "origin": f"https://{host}",
+        "x-forwarded-proto": "https, http",
+        "sec-fetch-site": "same-origin",
+    }
+    assert same_origin_admin_request(request(valid, scheme="http")) is True
+
+    # Origin remains mandatory even when Fetch Metadata is absent.
+    assert same_origin_admin_request(request({
+        "host": host,
+        "origin": f"https://{host}",
+    })) is True
+
+    invalid_headers = (
+        {"host": host},
+        {"host": host, "origin": "https://attacker.example"},
+        {"host": host, "origin": f"https://{host}.attacker.example"},
+        {"host": host, "origin": f"https://user@{host}"},
+        {"host": host, "origin": f"https://{host}/admin"},
+        {"host": host, "origin": f"https://{host}?next=/"},
+        {"host": host, "origin": f"https://{host}#fragment"},
+        {"host": host, "origin": f"http://{host}"},
+        {"host": host, "origin": f"https://{host}", "sec-fetch-site": "cross-site"},
+        {"host": host, "origin": f"https://{host}", "sec-fetch-site": "same-site"},
+    )
+    for headers in invalid_headers:
+        assert same_origin_admin_request(request(headers)) is False
+
+    # An invalid forwarded scheme is not trusted; the request URL scheme is
+    # used instead, so an HTTPS Origin cannot pass an HTTP request.
+    assert same_origin_admin_request(request({
+        "host": host,
+        "origin": f"https://{host}",
+        "x-forwarded-proto": "javascript",
+    }, scheme="http")) is False
