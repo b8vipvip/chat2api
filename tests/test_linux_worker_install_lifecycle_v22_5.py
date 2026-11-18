@@ -1,7 +1,13 @@
 from pathlib import Path
 import re
+from types import SimpleNamespace
 
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from app.linux_worker_install_patch import install_linux_worker_install_patch
 from app.linux_worker_installs import LinuxWorkerInstallStore
+from app.linux_worker_patch import install_linux_worker_patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -11,6 +17,44 @@ def _runtime_version(source: str) -> tuple[int, int, int]:
     match = re.search(r'SERVER_RUNTIME_VERSION = "(\d+)\.(\d+)\.(\d+)"', source)
     assert match
     return tuple(map(int, match.groups()))
+
+
+
+def test_install_resume_only_accepts_the_identity_consumed_by_the_same_enrollment(tmp_path):
+    app = FastAPI()
+    app.state.settings = SimpleNamespace(
+        data_dir=tmp_path,
+        resolved_public_url=lambda _: "https://chat2api.example",
+    )
+    app.state.admin_sessions = SimpleNamespace(authenticate=lambda _: False)
+    install_linux_worker_patch(app)
+    install_linux_worker_install_patch(app)
+
+    store = app.state.linux_workers
+    enrollment = store.create_enrollment("Resume Worker")
+    credentials = {
+        "enroll_code": enrollment["code"],
+        "worker_id": "wrk_not-yet-enrolled",
+        "worker_token": "not-a-token",
+    }
+
+    with TestClient(app) as client:
+        # A pending enrollment cannot authorize reuse of a local identity.
+        pending = client.post("/api/workers/install-resume", json=credentials)
+        assert pending.status_code == 200
+        assert pending.json() == {"valid": False}
+
+        actual = store.enroll(enrollment["code"], {"platform": "linux"})
+        credentials.update(actual)
+
+        # A used code is resumable only with the exact worker id and token.
+        wrong_token = {**credentials, "worker_token": "wrong"}
+        assert client.post("/api/workers/install-resume", json=wrong_token).json() == {"valid": False}
+        wrong_worker = {**credentials, "worker_id": "wrk_another-worker"}
+        assert client.post("/api/workers/install-resume", json=wrong_worker).json() == {"valid": False}
+        wrong_code = {**credentials, "enroll_code": "AAAA-BBBB-CCCC"}
+        assert client.post("/api/workers/install-resume", json=wrong_code).json() == {"valid": False}
+        assert client.post("/api/workers/install-resume", json=credentials).json() == {"valid": True}
 
 
 def test_install_record_has_no_time_expiry_and_tracks_terminal_disable(tmp_path):
