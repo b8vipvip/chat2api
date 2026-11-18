@@ -125,7 +125,10 @@ class TenantMembershipStore:
         with self.lock:
             return self.db.execute("SELECT 1 FROM tenant_workspaces WHERE id=?", (tenant_id,)).fetchone() is not None
 
-    def upsert_member(self, tenant_id: str, user_id: str, role: str) -> dict[str, Any]:
+    def upsert_member(
+        self, tenant_id: str, user_id: str, role: str, *,
+        allow_owner_change: bool = True,
+    ) -> dict[str, Any]:
         if not isinstance(user_id, str) or not USER_ID.fullmatch(user_id):
             raise TenantMembershipError("Invalid user_id")
         if role not in ROLES:
@@ -140,6 +143,14 @@ class TenantMembershipStore:
                     "SELECT role FROM tenant_memberships WHERE tenant_id=? AND user_id=?",
                     (tenant_id, user_id),
                 ).fetchone()
+                # Enforce the privileged transition while holding the same
+                # SQLite write lock as the membership mutation. An API-layer
+                # preflight alone would allow a concurrent promotion to race
+                # with a delegated demotion/removal.
+                if not allow_owner_change and (
+                    role == "owner" or (existing and existing[0] == "owner" and role != "owner")
+                ):
+                    raise TenantMembershipError("Workspace owner transitions require super_admin")
                 if existing and existing[0] == "owner" and role != "owner":
                     owners = self.db.execute(
                         "SELECT COUNT(*) FROM tenant_memberships WHERE tenant_id=? AND role='owner'",
@@ -153,7 +164,9 @@ class TenantMembershipStore:
                 """, (tenant_id, user_id, role, _now()))
         return {"tenant_id": tenant_id, "user_id": user_id, "role": role}
 
-    def remove_member(self, tenant_id: str, user_id: str) -> None:
+    def remove_member(
+        self, tenant_id: str, user_id: str, *, allow_owner_change: bool = True,
+    ) -> None:
         with self.lock:
             with self.db:
                 self.db.execute("BEGIN IMMEDIATE")
@@ -163,6 +176,8 @@ class TenantMembershipStore:
                 ).fetchone()
                 if not existing:
                     raise KeyError("Unknown workspace membership")
+                if existing[0] == "owner" and not allow_owner_change:
+                    raise TenantMembershipError("Workspace owner transitions require super_admin")
                 bound = self.db.execute(
                     "SELECT COUNT(*) FROM tenant_api_keys WHERE tenant_id=? AND user_id=?",
                     (tenant_id, user_id),
