@@ -559,6 +559,15 @@ def test_legacy_owner_invitation_is_revoked_before_membership_acceptance(tmp_pat
         (invitation["invitation_id"],),
     )
 
+    with pytest.raises(TenantMembershipError, match="email does not match"):
+        store.accept_invitation(
+            code, "usr_legacy_invitee123", "attacker@example.com",
+        )
+    assert next(
+        item for item in store.list_invitations(tenant["tenant_id"])
+        if item["invitation_id"] == invitation["invitation_id"]
+    )["status"] == "issued"
+
     with pytest.raises(TenantMembershipError, match="role is no longer permitted"):
         store.accept_invitation(
             code, "usr_legacy_invitee123", "legacy-owner@example.com",
