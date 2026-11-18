@@ -541,3 +541,34 @@ def test_non_master_api_key_cannot_delete_master_owned_file(tmp_path: Path):
         assert app.state.file_store.get(item.file_id) is not None
         _stored, payload = app.state.file_store.read(item.file_id)
         assert payload == b"privileged asset"
+
+
+
+def test_legacy_owner_invitation_is_revoked_before_membership_acceptance(tmp_path: Path):
+    store = TenantMembershipStore(tmp_path)
+    tenant = store.create("legacy-owner-invite", "Legacy Owner Invitation")
+    store.upsert_member(tenant["tenant_id"], "usr_legacy_owner123", "owner")
+
+    # Simulate an outstanding invitation written by a version that still
+    # allowed owner-role invitations.
+    invitation, code = store.create_invitation(
+        tenant["tenant_id"], "legacy-owner@example.com", "member", "root",
+    )
+    store.db.execute(
+        "UPDATE tenant_invitations SET role='owner' WHERE invitation_id=?",
+        (invitation["invitation_id"],),
+    )
+
+    with pytest.raises(TenantMembershipError, match="role is no longer permitted"):
+        store.accept_invitation(
+            code, "usr_legacy_invitee123", "legacy-owner@example.com",
+        )
+
+    row = next(
+        item for item in store.list_invitations(tenant["tenant_id"])
+        if item["invitation_id"] == invitation["invitation_id"]
+    )
+    assert row["status"] == "revoked"
+    assert row["revoked_at"]
+    assert store.role_for(tenant["tenant_id"], "usr_legacy_invitee123") is None
+    store.close()
