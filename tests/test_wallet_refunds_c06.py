@@ -1131,6 +1131,50 @@ def test_wallet_ledger_preserves_valid_negative_integer_debt_balance(tmp_path: P
 
 
 
+def _seed_cross_owner_charge_reservation_pair(billing: BillingStore, pricing: PricingStore) -> None:
+    other_user = "usr_other_reservation_owner"
+    billing.credit(other_user, 100)
+    price = pricing.model("gpt-5.6-sol")
+    assert isinstance(price, dict)
+    billing.reserve_for_request(
+        other_user, "req_cross_owner_seed",
+        model_id="gpt-5.6-sol", estimated_cny_cents=1,
+        input_tokens=1, output_tokens=1,
+        price_snapshot=price, price_catalog_snapshot={}, usd_cny_rate=7.0,
+    )
+    row = billing.reservations.pop("req_cross_owner_seed")
+    row["request_id"] = "req_refundable"
+    billing.reservations["req_refundable"] = row
+
+
+def test_wallet_ledger_rejects_cross_owner_charge_and_reservation_pair(tmp_path: Path) -> None:
+    billing, pricing = _charged_wallet(tmp_path)
+    _seed_cross_owner_charge_reservation_pair(billing, pricing)
+    billing._save()
+
+    with pytest.raises(RuntimeError, match="Billing ledger is unreadable"):
+        BillingStore(tmp_path)
+
+
+def test_replayed_charge_cannot_settle_another_users_reservation(tmp_path: Path) -> None:
+    billing, pricing = _charged_wallet(tmp_path)
+    _seed_cross_owner_charge_reservation_pair(billing, pricing)
+    original = dict(billing.reservations["req_refundable"])
+
+    with pytest.raises(WalletReservationError, match="another user"):
+        billing.record_charge("usr_refund", {
+            "request_id": "req_refundable",
+            "status": "completed",
+            "requested_model": "gpt-5.6-sol",
+            "usage": {
+                "prompt_tokens": 1000, "completion_tokens": 500,
+                "total_tokens": 1500, "estimated": True,
+            },
+        }, pricing)
+
+    assert billing.reservations["req_refundable"] == original
+
+
 def test_reused_request_id_returns_conflict_without_releasing_original_holds(tmp_path: Path) -> None:
     import asyncio
     from fastapi import HTTPException
