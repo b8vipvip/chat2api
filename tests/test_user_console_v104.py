@@ -159,6 +159,15 @@ def test_billing_records_request_once_and_uses_price_snapshot(tmp_path: Path) ->
     pricing.update(billing_enabled=True, usd_cny_rate=7.0, models=payload["models"])
     billing = BillingStore(tmp_path)
     billing.credit("usr_test", 1000)
+    billing.reserve_for_request(
+        "usr_test", "req_1",
+        model_id="gpt-5.6-sol",
+        estimated_cny_cents=100,
+        input_tokens=1000,
+        output_tokens=500,
+        price_snapshot=pricing.model("gpt-5.6-sol"),
+        usd_cny_rate=7.0,
+    )
     request = {
         "request_id": "req_1",
         "status": "completed",
@@ -263,7 +272,7 @@ def test_admin_console_extension_adds_user_price_payment_and_audit_navigation() 
 
 
 def test_user_commerce_runtime_and_production_dependencies_are_published() -> None:
-    assert SERVER_RUNTIME_VERSION == "0.22.292"
+    assert SERVER_RUNTIME_VERSION == "0.22.291"
     runtime_source = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
     requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
     project = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
@@ -1300,3 +1309,44 @@ def test_user_account_store_mutations_roll_back_after_save_failure(
     assert store.users == previous_users
     assert store.sessions == previous_sessions
 
+
+
+def test_legacy_completed_requests_without_admission_are_not_retroactively_charged(tmp_path: Path) -> None:
+    pricing = PricingStore(tmp_path)
+    payload = pricing.public()
+    pricing.update(billing_enabled=True, usd_cny_rate=9.0, models=payload["models"])
+    billing = BillingStore(tmp_path)
+    billing.credit("usr_legacy_history", 1000)
+
+    # This completed row predates durable wallet admission. Current billing
+    # settings and today's price card are not evidence that it was billable
+    # when the request was accepted.
+    legacy_request = {
+        "request_id": "req_legacy_without_hold",
+        "status": "completed",
+        "requested_model": "gpt-5.6-sol",
+        "usage": {
+            "prompt_tokens": 1000,
+            "completion_tokens": 500,
+            "total_tokens": 1500,
+        },
+        "diagnostics": {},
+    }
+    assert billing.record_charge("usr_legacy_history", legacy_request, pricing) is None
+    assert billing.charge_for_request("req_legacy_without_hold") is None
+    assert billing.balance_cents("usr_legacy_history") == 1000
+
+    # Missing usage cannot be converted into a zero-cost terminal charge either.
+    missing_usage = {
+        **legacy_request,
+        "request_id": "req_legacy_missing_usage",
+        "usage": {},
+    }
+    assert billing.record_charge("usr_legacy_history", missing_usage, pricing) is None
+    assert billing.charge_for_request("req_legacy_missing_usage") is None
+    assert billing.balance_cents("usr_legacy_history") == 1000
+
+    reopened = BillingStore(tmp_path)
+    assert reopened.charge_for_request("req_legacy_without_hold") is None
+    assert reopened.charge_for_request("req_legacy_missing_usage") is None
+    assert reopened.balance_cents("usr_legacy_history") == 1000
