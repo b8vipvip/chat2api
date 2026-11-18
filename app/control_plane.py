@@ -13,6 +13,7 @@ import json
 import os
 import re
 import secrets
+import stat
 import threading
 import uuid
 from pathlib import Path
@@ -27,7 +28,7 @@ ROLES: dict[str, frozenset[str]] = {
     "api_key_admin": frozenset({"keys:read", "keys:write", "quota:read", "quota:write", "admin:self_password"}),
     "billing_admin": frozenset({"billing:read", "billing:write", "quota:read", "admin:self_password"}),
     "plugin_admin": frozenset({"plugins:read", "plugins:write", "admin:self_password"}),
-    "support": frozenset({"users:read", "keys:read", "models:read", "clients:read", "diagnostics:read", "admin:self_password"}),
+    "support": frozenset({"users:read", "keys:read", "user_keys:read", "models:read", "clients:read", "diagnostics:read", "admin:self_password"}),
 }
 ADMIN_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{2,63}$")
 ITERATIONS = 310_000
@@ -67,7 +68,7 @@ def permission_for_admin_route(path: str, method: str) -> str | None:
     if path == "/api/admin/control/roles":
         return "admins:read"
     if path == "/api/admin/model-entitlements" or re.fullmatch(
-        r"/api/admin/model-entitlements/(global|key|user|tenant|tenant_role)/[^/]+", path
+        r"/api/admin/model-entitlements/(global|key|user|tenant|tenant_role|user_role|subscription_plan)/[^/]+", path
     ):
         return "models:" + suffix
     if path == "/api/admin/audit":
@@ -80,8 +81,19 @@ def permission_for_admin_route(path: str, method: str) -> str | None:
         r"/api/admin/tenants/[^/]+/(?:members(?:/[^/]+)?|keys(?:/[^/]+)?)", path
     ):
         return "tenants:" + suffix
+    if re.fullmatch(r"/api/admin/users/[^/]+/role", path):
+        return "users:" + suffix
+    if path == "/api/admin/subscription-plans" or re.fullmatch(
+        r"/api/admin/subscription-plans/[^/]+", path
+    ) or re.fullmatch(r"/api/admin/users/[^/]+/subscription", path):
+        return "billing:" + suffix
+    # User-owned API keys are distinct from platform-managed API keys.
+    # Only support (read-only) and super_admin (wildcard) may inspect them;
+    # api_key_admin must not gain cross-user access through keys:read.
+    if re.fullmatch(r"/api/admin/users/[^/]+/keys(?:/[^/]+)?", path):
+        return "user_keys:" + suffix
     if path == "/api/admin/users" or re.fullmatch(
-        r"/api/admin/users/[^/]+(?:/sessions/revoke|/keys(?:/[^/]+)?)?", path
+        r"/api/admin/users/[^/]+(?:/sessions/revoke)?", path
     ):
         return "users:" + suffix
     if re.fullmatch(r"/api/admin/keys/[^/]+/secret", path):
@@ -92,6 +104,10 @@ def permission_for_admin_route(path: str, method: str) -> str | None:
         return "keys:" + suffix
     if path == "/api/admin/user-pricing":
         return "billing:" + suffix
+    if re.fullmatch(r"/api/admin/billing/charges/[^/]+/refund", path):
+        # Wallet refunds move user funds; grant only the explicit billing-write
+        # capability and do not expose a read permission for this write-only route.
+        return "billing:write" if write else None
     if path == "/api/admin/user-payments":
         # Payment provider private keys remain root-only until G0 DataKeyring
         # migration and its rotation/rollback evidence are accepted.
@@ -151,8 +167,20 @@ class ControlPlaneStore:
             raise ControlPlaneError("Control-plane storage cannot be a symbolic link")
         if not self.path.exists():
             return
+        fd = -1
         try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(self.path, flags)
+            metadata = os.fstat(fd)
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                raise ValueError("control-plane storage must be a single-link regular file")
+            if os.name != "nt" and hasattr(os, "fchmod"):
+                # Repair legacy permissions through the opened descriptor so
+                # a path swap cannot redirect chmod to another file.
+                os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "r", encoding="utf-8") as handle:
+                fd = -1
+                payload = json.load(handle)
             if not isinstance(payload, dict) or payload.get("version") != POLICY_VERSION:
                 raise ValueError("unsupported control-plane schema")
             client = payload["client"]
@@ -182,6 +210,9 @@ class ControlPlaneStore:
             self.client = dict(client)
         except (OSError, ValueError, KeyError, TypeError) as exc:
             raise ControlPlaneError("Control-plane storage is corrupt or unreadable; refusing to reset") from exc
+        finally:
+            if fd >= 0:
+                os.close(fd)
 
     def _save(self) -> None:
         payload = {"version": POLICY_VERSION, "client": self.client, "admins": list(self.admins.values())}
@@ -196,8 +227,11 @@ class ControlPlaneStore:
                 file.write("\n")
                 file.flush()
                 os.fsync(file.fileno())
+            # The temporary file is created with mode 0600. Rename
+            # preserves that mode; do not perform a fallible chmod after the
+            # atomic commit point or callers could roll memory back while disk
+            # already contains the new policy snapshot.
             os.replace(tmp, self.path)
-            os.chmod(self.path, 0o600)
         finally:
             tmp.unlink(missing_ok=True)
 

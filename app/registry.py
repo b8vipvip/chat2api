@@ -221,36 +221,49 @@ class ClientRegistry:
                 self.sockets.pop(client_id, None)
                 self.worker_pool_capacity_received_at.pop(client_id, None)
 
-    async def touch(self, client_id: str, metadata: dict[str, Any] | None = None) -> None:
-        client = self.clients.get(client_id)
-        if not client:
-            return
-        client.last_seen_at = utc_now()
-        changed = False
-        if metadata:
-            if metadata.get("worker_pool_admission_revision") == 224:
-                self.worker_pool_capacity_received_at[client_id] = time.monotonic()
-            for key, value in metadata.items():
-                if client.metadata.get(key) != value:
-                    client.metadata[key] = value
-                    changed = True
-            # The persisted version is initially populated at pairing, but a
-            # paired extension can be upgraded in-place without rotating its
-            # device identity. Accept only a bounded manifest-style version
-            # from the already authenticated Worker socket.
-            reported_version = metadata.get("extension_version")
-            if isinstance(reported_version, str):
-                reported_version = reported_version.strip()
-                if re.fullmatch(r"\d{1,3}\.\d{1,3}\.\d{1,5}(?:[-+][A-Za-z0-9._-]{1,20})?", reported_version):
-                    if client.version != reported_version:
-                        client.version = reported_version
+    async def touch(
+        self,
+        client_id: str,
+        metadata: dict[str, Any] | None = None,
+        *,
+        websocket: WebSocket | None = None,
+    ) -> bool:
+        # A replaced socket may remain runnable briefly while its close frame
+        # propagates. It must not refresh the new socket's heartbeat, capacity,
+        # version or device metadata.
+        async with self.lock:
+            if websocket is not None and self.sockets.get(client_id) is not websocket:
+                return False
+            client = self.clients.get(client_id)
+            if not client:
+                return False
+            client.last_seen_at = utc_now()
+            changed = False
+            if metadata:
+                if metadata.get("worker_pool_admission_revision") == 224:
+                    self.worker_pool_capacity_received_at[client_id] = time.monotonic()
+                for key, value in metadata.items():
+                    if client.metadata.get(key) != value:
+                        client.metadata[key] = value
                         changed = True
-            reported_device = str(metadata.get("device_id") or "").strip()
-            if reported_device and client.device_id != reported_device:
-                client.device_id = reported_device
-                changed = True
-        if changed:
-            await self.save()
+                # The persisted version is initially populated at pairing, but a
+                # paired extension can be upgraded in-place without rotating its
+                # device identity. Accept only a bounded manifest-style version
+                # from the already authenticated current Worker socket.
+                reported_version = metadata.get("extension_version")
+                if isinstance(reported_version, str):
+                    reported_version = reported_version.strip()
+                    if re.fullmatch(r"\d{1,3}\.\d{1,3}\.\d{1,5}(?:[-+][A-Za-z0-9._-]{1,20})?", reported_version):
+                        if client.version != reported_version:
+                            client.version = reported_version
+                            changed = True
+                reported_device = str(metadata.get("device_id") or "").strip()
+                if reported_device and client.device_id != reported_device:
+                    client.device_id = reported_device
+                    changed = True
+            if changed:
+                await self.save()
+            return True
 
     async def set_connection_enabled(self, client_id: str, enabled: bool) -> PersistedClient:
         async with self.lock:
@@ -296,22 +309,79 @@ class ClientRegistry:
             raise RuntimeError("Chrome extension connection is disabled")
         request_type = str(payload.get("type") or "") if isinstance(payload, dict) else ""
         if request_type in {
-            "chat.request", "image.request", "voice.request", "voice.live.start", "voice.live.request",
+            "chat.request", "image.request", "voice.request", "voice.live.start",
+            "voice.live.request", "dictation.request",
         } and not self.chatgpt_routing_ready(client_id):
             raise RuntimeError(
                 "Chrome extension is online but ChatGPT is not logged in or the composer is not ready"
             )
-        websocket = self.sockets.get(client_id)
-        if not websocket:
-            raise RuntimeError("Chrome extension is offline")
         lock = self.socket_locks.setdefault(client_id, asyncio.Lock())
+        initial_request_types = {
+            "chat.request", "image.request", "voice.request",
+            "voice.live.start", "voice.live.request", "dictation.request",
+        }
+        request_followup_types = {
+            "chat.cancel", "voice.cancel", "dictation.cancel",
+            "voice.live.audio", "voice.live.text", "voice.live.multimodal",
+            "voice.live.cancel_response", "voice.live.stop",
+        }
+        # A server timeout may set completed_mono before sending the Worker
+        # cancellation. Cancellation is the one follow-up allowed after that
+        # server-owned cutoff, but never after a Worker terminal.
+        cancellation_types = {
+            "chat.cancel", "voice.cancel", "dictation.cancel",
+            "voice.live.cancel_response", "voice.live.stop",
+        }
         async with lock:
-            if request_type in {"chat.request", "image.request"}:
-                request_id = str(payload.get("request_id") or "")
-                broker = getattr(self, "request_broker", None)
-                state = getattr(broker, "requests", {}).get(request_id) if broker else None
+            # Re-read the socket while holding its send lock. A reconnect
+            # between lookup and send must never redirect an active request's
+            # follow-up/cancel message to a different Worker connection.
+            websocket = self.sockets.get(client_id)
+            if not websocket:
+                raise RuntimeError("Chrome extension is offline")
+            request_id = str(payload.get("request_id") or "")
+            broker = getattr(self, "request_broker", None)
+            state = getattr(broker, "requests", {}).get(request_id) if broker and request_id else None
+            if request_type in initial_request_types:
                 if state is not None:
-                    state.dispatch_socket = websocket
+                    if str(getattr(state, "client_id", "") or "") != client_id:
+                        raise RuntimeError("Request is not assigned to this Worker")
+                    # Bind once to the socket that received the initial
+                    # dispatch. A reused request ID cannot migrate to a new
+                    # connection after reconnect.
+                    # Test doubles and older in-memory Broker states may not
+                    # carry the optional socket field; treat absence as unbound,
+                    # then bind exactly once to this dispatch connection.
+                    dispatch_socket = getattr(state, "dispatch_socket", None)
+                    if dispatch_socket is None:
+                        state.dispatch_socket = websocket
+                    elif dispatch_socket is not websocket:
+                        raise RuntimeError("Request Worker connection changed")
+            elif request_type in request_followup_types:
+                expected_socket = getattr(state, "dispatch_socket", None) if state is not None else None
+                terminal_event_type = getattr(state, "terminal_event_type", None) if state is not None else None
+                # A terminal browser error/cancel must still allow the server to
+                # stop the same live voice session. This is a cleanup command,
+                # not a second generation or a new terminal decision. Keep it
+                # bound to the exact original/current socket like every other
+                # request-scoped follow-up.
+                allow_voice_live_terminal_cleanup = (
+                    request_type == "voice.live.stop"
+                    and terminal_event_type in {"image.error", "image.cancelled"}
+                )
+                if (
+                    state is None
+                    or expected_socket is None
+                    or str(getattr(state, "client_id", "") or "") != client_id
+                    or websocket is not expected_socket
+                    or (terminal_event_type is not None and not allow_voice_live_terminal_cleanup)
+                    or (
+                        getattr(state, "completed_mono", None) is not None
+                        and request_type not in cancellation_types
+                    )
+                ):
+                    raise RuntimeError("Request Worker connection changed or is unavailable")
+                websocket = expected_socket
             await websocket.send_json(payload)
 
     def online_client_ids(self) -> list[str]:

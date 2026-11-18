@@ -7,10 +7,11 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from app.admin_audit import AdminAuditError
 from app.config import Settings
 from app.control_plane_v1_patch import install_control_plane_v1
 from app.main import create_app
-from app.registration_invitations import InvitationError, InvitationStore
+from app.registration_invitations import InvitationError, InvitationStore, RESERVATION_TTL_SECONDS
 from app.registration_invitations_v1_patch import install_registration_invitations
 from app.user_console_v104_patch import install_user_console_v104_patch
 from app.v17_patch import install_v17_patch
@@ -101,9 +102,28 @@ def test_revocation_does_not_interrupt_a_reserved_registration(tmp_path: Path):
     created = store.create("alice@example.com", "root")
     invitation_id = created["invitation"]["invitation_id"]
     reservation = store.reserve(created["code"], "alice@example.com")
+    assert store.list_invitations()[0]["status"] == "reserved"
     assert store.revoke(invitation_id) is False
     store.consume(reservation)
     assert store.list_invitations()[0]["status"] == "consumed"
+
+
+def test_abandoned_invitation_reservation_expires_and_is_never_reissued(tmp_path: Path, monkeypatch):
+    store = InvitationStore(tmp_path)
+    created = store.create("alice@example.com", "root", expires_in_seconds=3600)
+    reservation = store.reserve(created["code"], "alice@example.com")
+    original = __import__("time").time
+    monkeypatch.setattr(
+        "app.registration_invitations.time.time",
+        lambda: original() + RESERVATION_TTL_SECONDS + 1,
+    )
+
+    with pytest.raises(InvitationError):
+        store.reserve(created["code"], "alice@example.com")
+    assert store.list_invitations()[0]["status"] == "expired"
+    assert store.release(reservation) is False
+    with pytest.raises(InvitationError):
+        store.consume(reservation)
 
 
 def test_invitation_reservation_is_atomic_under_concurrent_use(tmp_path: Path):
@@ -353,3 +373,100 @@ def test_delegated_user_admin_can_issue_invitation_but_not_root_only_routes(tmp_
 
         secret = client.get("/api/admin/keys/master/secret")
         assert secret.status_code in {401, 403, 404}
+
+
+def test_invitation_mutations_write_request_and_completion_audit_events(tmp_path: Path):
+    app = make_app(tmp_path)
+    app.state.control_plane.update_client({"registration_mode": "invite_only"})
+    with TestClient(app) as client:
+        assert login(client).status_code == 200
+        create_request_id = "req_invitation_create_audit_001"
+        created = client.post(
+            "/api/admin/control/invitations",
+            json={"email": "audit@example.com"},
+            headers={**ORIGIN, "X-Request-ID": create_request_id},
+        )
+        assert created.status_code == 201
+        assert created.headers["X-Admin-Audit-Status"] == "complete"
+        invitation_id = created.json()["invitation"]["invitation_id"]
+        events = [
+            row for row in app.state.admin_audit.recent(30)
+            if row["request_id"] == create_request_id
+        ]
+        assert {row["action"] for row in events} == {
+            "invitation.create_requested", "invitation.create_completed"
+        }
+        assert len(events) == 2
+        assert all(row["target_type"] == "registration_invitation" for row in events)
+        assert created.json()["code"] not in json.dumps(events)
+
+        revoke_request_id = "req_invitation_revoke_audit_001"
+        revoked = client.post(
+            f"/api/admin/control/invitations/{invitation_id}/revoke",
+            headers={**ORIGIN, "X-Request-ID": revoke_request_id},
+        )
+        assert revoked.status_code == 200
+        assert revoked.headers["X-Admin-Audit-Status"] == "complete"
+        revoke_events = [
+            row for row in app.state.admin_audit.recent(30)
+            if row["request_id"] == revoke_request_id
+        ]
+        assert {row["action"] for row in revoke_events} == {
+            "invitation.revoke_requested", "invitation.revoke_completed"
+        }
+        assert len(revoke_events) == 2
+
+
+def test_invitation_completion_audit_failure_reports_committed_success(tmp_path: Path, monkeypatch):
+    app = make_app(tmp_path)
+    app.state.control_plane.update_client({"registration_mode": "invite_only"})
+    with TestClient(app) as client:
+        assert login(client).status_code == 200
+        original_append = app.state.admin_audit.append
+
+        def fail_completion(**kwargs):
+            if str(kwargs.get("action", "")).endswith("_completed"):
+                raise AdminAuditError("injected completion audit failure")
+            return original_append(**kwargs)
+
+        monkeypatch.setattr(app.state.admin_audit, "append", fail_completion)
+        created = client.post(
+            "/api/admin/control/invitations",
+            json={"email": "pending-audit@example.com"},
+            headers=ORIGIN,
+        )
+        assert created.status_code == 201
+        assert created.headers["X-Admin-Audit-Status"] == "completion-pending"
+        invitation_id = created.json()["invitation"]["invitation_id"]
+        assert app.state.invitations.list_invitations()[0]["invitation_id"] == invitation_id
+        assert app.state.invitations.list_invitations()[0]["status"] == "issued"
+        assert app.state.admin_audit_completion_pending is True
+
+        revoked = client.post(
+            f"/api/admin/control/invitations/{invitation_id}/revoke",
+            headers=ORIGIN,
+        )
+        assert revoked.status_code == 200
+        assert revoked.headers["X-Admin-Audit-Status"] == "completion-pending"
+        assert app.state.invitations.list_invitations()[0]["status"] == "revoked"
+
+
+def test_invitation_request_audit_failure_blocks_mutation(tmp_path: Path, monkeypatch):
+    app = make_app(tmp_path)
+    app.state.control_plane.update_client({"registration_mode": "invite_only"})
+    with TestClient(app) as client:
+        assert login(client).status_code == 200
+
+        def fail_requested(**kwargs):
+            if str(kwargs.get("action", "")).endswith("_requested"):
+                raise AdminAuditError("injected request audit failure")
+            raise AssertionError("No invitation mutation should be attempted")
+
+        monkeypatch.setattr(app.state.admin_audit, "append", fail_requested)
+        response = client.post(
+            "/api/admin/control/invitations",
+            json={"email": "blocked@example.com"},
+            headers=ORIGIN,
+        )
+        assert response.status_code == 503
+        assert app.state.invitations.list_invitations() == []

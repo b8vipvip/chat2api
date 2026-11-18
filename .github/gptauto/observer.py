@@ -63,6 +63,9 @@ def observation_dispatch_key(task: Task, phase: str) -> str:
         "release_published": bool(m.get("release_published")),
         "release_required": bool(m.get("release_required")),
         "blocked_reason": m.get("blocked_reason") or "",
+        "pr_draft": bool(m.get("pr_draft")),
+        "pr_state": str(m.get("pr_state") or "").lower(),
+        "pr_merged": bool(m.get("pr_merged")),
     }
     payload = json.dumps(identity, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
@@ -119,10 +122,12 @@ def capture(
     pr_ci_actor="",
     pr_ci_run_attempt="",
     blocked_reason="",
+    pr_draft="false",
 ):
     tid = observed_task_id(repo, pr_number, head_sha, merge_sha)
     goal = pr_title.strip() or ("Observe repository change " + (merge_sha or head_sha)[:12])
     merged = str(pr_merged).lower() == "true"
+    closed_unmerged = bool(pr_number) and str(pr_state or "").strip().lower() == "closed" and not merged
     release_required = _release_required_with_override(release_required_override, pr_title, pr_body, release_tag)
     evidence_provenance = str(provenance or "repository_observer").strip() or "repository_observer"
     workflow_success = _passed(workflow_conclusion)
@@ -130,9 +135,17 @@ def capture(
     pr_ci_conclusion_lc = str(pr_ci_conclusion or "").lower()
     pr_ci_status_lc = str(pr_ci_status or "").lower()
     approval_required = workflow_conclusion_lc == "action_required" or pr_ci_conclusion_lc == "action_required"
+    draft_review_required = (
+        str(pr_draft or "").strip().lower() in {"true", "1", "yes"}
+        and bool(pr_number)
+        and not merged
+        and not closed_unmerged
+    )
     effective_blocked_reason = str(blocked_reason or "")
     if approval_required and not effective_blocked_reason:
         effective_blocked_reason = "workflow_approval_required"
+    elif draft_review_required:
+        effective_blocked_reason = "pr_draft_waiting_for_review"
 
     release_event_published = event == "release" and str(release_state or "").lower() in {"published", "released"}
     explicit_release_published = str(release_published or "").strip().lower() in {"true", "1", "yes"}
@@ -257,7 +270,9 @@ def capture(
                 )
             )
 
-    if approval_required and pr_number and not merged:
+    if closed_unmerged:
+        state = State.VERIFY
+    elif (approval_required or draft_review_required) and pr_number and not merged:
         state = State.BLOCKED
     elif pr_number and not merged:
         state = State.EXECUTE
@@ -292,6 +307,9 @@ def capture(
             "event_head_sha": head_sha,
             "current_pr_head_sha": current_pr_head_sha or head_sha,
             "pr_number": pr_number,
+            "pr_state": str(pr_state or "").strip().lower(),
+            "pr_merged": bool(merged),
+            "pr_draft": str(pr_draft or "").strip().lower() in {"true", "1", "yes"},
             "merge_sha": merge_sha,
             "run_id": run_id,
             "artifact_name": "gptauto-" + tid,
@@ -326,6 +344,7 @@ def capture(
                     "event": event,
                     "actor": actor,
                     "pr_state": pr_state,
+                    "pr_draft": str(pr_draft or "").strip().lower() in {"true", "1", "yes"},
                     "workflow": workflow_name,
                     "conclusion": workflow_conclusion,
                     "pr_ci_status": pr_ci_status,
@@ -366,6 +385,9 @@ def capture(
                 "pr_ci_actor",
                 "pr_ci_run_attempt",
                 "blocked_reason",
+                "pr_state",
+                "pr_merged",
+                "pr_draft",
             ):
                 merged_metadata[key] = t.metadata.get(key, "")
             t.metadata = merged_metadata
@@ -425,6 +447,7 @@ def main():
         "pr-title",
         "pr-body",
         "pr-state",
+        "pr-draft",
         "pr-merged",
         "merge-sha",
         "run-id",
@@ -486,6 +509,7 @@ def main():
                 pr_ci_actor=a.pr_ci_actor,
                 pr_ci_run_attempt=a.pr_ci_run_attempt,
                 blocked_reason=a.blocked_reason,
+                pr_draft=a.pr_draft,
             ),
             ensure_ascii=False,
         )

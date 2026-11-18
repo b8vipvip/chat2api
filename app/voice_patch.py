@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import secrets
 import time
@@ -14,9 +15,15 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from .api_keys import ApiPrincipal
+from . import model_capability_routing_patch as model_routing
 from .token_usage import usage_for
 from .prompt_config import build_speech_prompt
+from .quota_reservation_runtime_v1 import (
+    authorize_wallet_dispatch, is_request_id_conflict, reserve_audio_request_quota,
+)
+from .telemetry import DuplicateRequestIdentity
 
+logger = logging.getLogger(__name__)
 PATCH_VERSION = "0.6.0"
 
 
@@ -123,11 +130,13 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
         *, request_id: str, response_id: str, client_id: str, principal: ApiPrincipal,
         model: str, request_type: str, prompt: str, transcript: str, state,
         status_value: str, error: str | None = None, audio_bytes: int = 0,
+        input_file_ids: list[str] | None = None,
+        create_only: bool = False,
     ) -> tuple[dict[str, int], dict[str, object]]:
         usage, token_meta = _audio_usage(prompt, transcript)
         diagnostics = dict(state.diagnostics)
         diagnostics["audio_bytes"] = int(audio_bytes)
-        await telemetry.append(
+        await telemetry.upsert(
             {
                 "request_id": request_id,
                 "response_id": response_id,
@@ -138,6 +147,9 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
                 "requested_model": model,
                 "request_type": request_type,
                 "attachments_count": 1 if request_type == "voice_conversation" else 0,
+                "input_file_ids": list(dict.fromkeys(
+                    str(value) for value in (input_file_ids or []) if value
+                )),
                 "stream": False,
                 "prompt_mode": "voice",
                 "prompt_chars": len(prompt),
@@ -149,7 +161,8 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
                 "timings": state.timings(),
                 "diagnostics": diagnostics,
                 "error": error,
-            }
+            },
+            create_only=create_only,
         )
         return usage, token_meta
 
@@ -166,6 +179,11 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=400, detail="Invalid voicereq_ request ID")
         request_id = request_id or ("voicereq_" + uuid.uuid4().hex)
         response_id = "voice_" + uuid.uuid4().hex
+        input_file_ids = (
+            [str(audio_spec.get("file_id"))]
+            if isinstance(audio_spec, dict) and audio_spec.get("file_id")
+            else []
+        )
         prompt_policy: dict[str, object] = {}
         if request_type == "voice_generation":
             prompt, prompt_policy = build_speech_prompt(
@@ -176,13 +194,73 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
         # business key, or bypass the sole Worker-list enable switch.
         route_token = registry.routing_key_context.set(principal.key_id)
         try:
-            selected_client = resolve_client(client_id)
+            # Audio endpoints carry their model in SpeechRequest/
+            # VoiceConversationRequest, not in the shared HTTP model middleware.
+            # Bind that exact request model before the entitlement resolver runs.
+            with model_routing.model_target_context(
+                model, needs_multimodal=bool(audio_spec)
+            ):
+                selected_client = resolve_client(client_id)
         finally:
             registry.routing_key_context.reset(route_token)
+        if telemetry.get(request_id):
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "request_id_conflict", "message": "request_id already exists"},
+            )
         try:
             state = await broker.create(request_id, selected_client)
         except RuntimeError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+
+        quota_reservation = None
+        if request_type in {"voice_generation", "voice_conversation"}:
+            try:
+                quota_reservation = await reserve_audio_request_quota(
+                    app, request_id, principal, prompt, model_id=model,
+                )
+            except HTTPException as quota_error:
+                state.completed_mono = time.perf_counter()
+                state.diagnostics["quota_reservation_v1"] = {
+                    "state": "rejected",
+                    "http_status": quota_error.status_code,
+                    "estimate_policy": "text_input_tokens_plus_4096_audio_admission_floor_v1",
+                }
+                if not is_request_id_conflict(quota_error):
+                    try:
+                        await record_voice(
+                            request_id=request_id, response_id=response_id, client_id=selected_client,
+                            principal=principal, model=model, request_type=request_type, prompt=prompt,
+                            transcript="", state=state, status_value="error",
+                            error=str(quota_error.detail), input_file_ids=input_file_ids, create_only=True,
+                        )
+                    except DuplicateRequestIdentity:
+                        await broker.release(request_id)
+                        raise HTTPException(
+                            status_code=409,
+                            detail={"code": "request_id_conflict", "message": "request_id already exists"},
+                        ) from quota_error
+                    except Exception as telemetry_error:
+                        logger.warning(
+                            "Voice quota rejection could not be persisted request_id=%s error_type=%s",
+                            request_id, type(telemetry_error).__name__,
+                        )
+                try:
+                    await broker.release(request_id)
+                except Exception as release_error:
+                    logger.warning(
+                        "Voice quota rejection broker release failed request_id=%s error_type=%s",
+                        request_id, type(release_error).__name__,
+                    )
+                raise
+
+            if quota_reservation:
+                state.diagnostics["quota_reservation_v1"] = {
+                    "state": "reserved",
+                    "reserved_tokens": int(quota_reservation.get("reserved_tokens") or 0),
+                    "estimate_policy": "text_input_tokens_plus_4096_audio_admission_floor_v1",
+                    "provider_usage_verified": False,
+                }
         registry.busy_clients.add(selected_client)
         if prompt_policy:
             state.diagnostics.update(prompt_policy)
@@ -192,7 +270,8 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
             await record_voice(
                 request_id=request_id, response_id=response_id, client_id=selected_client,
                 principal=principal, model=model, request_type=request_type, prompt=prompt,
-                transcript="", state=state, status_value="running",
+                transcript="", state=state, status_value="running", create_only=True,
+                input_file_ids=input_file_ids,
             )
             # The only TTS preset authority is this endpoint. The Worker
             # sees the final prompt unchanged, including across retries.
@@ -204,6 +283,9 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
                     "final_prompt_chars": len(prompt),
                     "prompt_config_revision": prompt_policy.get("speech_prefix_revision"),
                 })
+            await asyncio.to_thread(
+                authorize_wallet_dispatch, app, request_id, principal,
+            )
             await registry.send(
                 selected_client,
                 {
@@ -238,6 +320,7 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
                 state=state,
                 status_value="completed",
                 audio_bytes=int(voice.get("size") or 0),
+                input_file_ids=input_file_ids,
             )
             return {
                 "id": response_id,
@@ -255,6 +338,49 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
                     "token_usage": token_meta,
                 },
             }
+        except DuplicateRequestIdentity as error:
+            if quota_reservation:
+                try:
+                    app.state.quota_reservations.release(request_id, principal.key_id)
+                except Exception as release_error:
+                    logger.warning(
+                        "Voice quota release after duplicate request ID failed request_id=%s error_type=%s",
+                        request_id, type(release_error).__name__,
+                    )
+            accounts = getattr(app.state, "user_accounts", None)
+            billing = getattr(app.state, "user_billing", None)
+            try:
+                owner = accounts.owner_for_key(principal.key_id) if accounts is not None else None
+                if owner and billing is not None:
+                    billing.release_reservation(
+                        request_id, str(owner), reason="request_admission_projection_conflict",
+                    )
+            except Exception as release_error:
+                logger.warning(
+                    "Voice wallet hold cleanup after duplicate request ID failed request_id=%s error_type=%s",
+                    request_id, type(release_error).__name__,
+                )
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "request_id_conflict", "message": "request_id already exists"},
+            ) from error
+        except HTTPException as error:
+            # Preserve infrastructure/admission status codes instead of
+            # rewriting a wallet dispatch-marker failure as a browser 502.
+            state.completed_mono = state.completed_mono or time.perf_counter()
+            try:
+                await record_voice(
+                    request_id=request_id, response_id=response_id, client_id=selected_client,
+                    principal=principal, model=model, request_type=request_type, prompt=prompt,
+                    transcript="", state=state, status_value="error",
+                    error=str(error.detail), input_file_ids=input_file_ids,
+                )
+            except Exception as telemetry_error:
+                logger.warning(
+                    "Voice admission failure telemetry deferred request_id=%s error_type=%s",
+                    request_id, type(telemetry_error).__name__,
+                )
+            raise
         except asyncio.TimeoutError as error:
             state.diagnostics["voice_failure_code"] = "VOICE_SERVER_WAIT_TIMEOUT"
             state.diagnostics["voice_failure_stage"] = str(state.diagnostics.get("voice_stage") or "unknown")
@@ -268,6 +394,7 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
                 principal=principal, model=model, request_type=request_type, prompt=prompt,
                 transcript="", state=state, status_value="error",
                 error="VOICE_SERVER_WAIT_TIMEOUT: Timed out waiting for GPT-Live",
+                input_file_ids=input_file_ids,
             )
             raise HTTPException(status_code=504,
                 detail="VOICE_SERVER_WAIT_TIMEOUT: Timed out waiting for GPT-Live") from error
@@ -282,10 +409,34 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
                 transcript="", state=state,
                 status_value="cancelled" if state.diagnostics.get("playground_cancelled") else "error",
                 error=str(error),
+                input_file_ids=input_file_ids,
             )
             raise HTTPException(status_code=502, detail=str(error)) from error
         finally:
             registry.busy_clients.discard(selected_client)
+            if quota_reservation:
+                current = telemetry.get(request_id)
+                if str((current or {}).get("status") or "") != "completed":
+                    try:
+                        app.state.quota_reservations.release(request_id, principal.key_id)
+                    except Exception as release_error:
+                        logger.warning(
+                            "Voice quota reservation cleanup deferred request_id=%s error_type=%s",
+                            request_id, type(release_error).__name__,
+                        )
+                    accounts = getattr(app.state, "user_accounts", None)
+                    billing = getattr(app.state, "user_billing", None)
+                    try:
+                        owner = accounts.owner_for_key(principal.key_id) if accounts is not None else None
+                        if owner and billing is not None:
+                            billing.release_reservation(
+                                request_id, str(owner), reason="voice_request_not_completed",
+                            )
+                    except Exception as release_error:
+                        logger.warning(
+                            "Voice wallet reservation cleanup deferred request_id=%s error_type=%s",
+                            request_id, type(release_error).__name__,
+                        )
             await broker.release(request_id)
 
     @app.post("/v1/audio/speech")

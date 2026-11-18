@@ -14,6 +14,10 @@ from .runtime_code_identity import runtime_code_sha
 from .timezone_utils import beijing_now_iso, to_beijing_iso
 
 
+class DuplicateRequestIdentity(RuntimeError):
+    """Raised when a new request attempts to claim an existing request ID."""
+
+
 def utc_now() -> str:
     """Backward-compatible helper name; canonical timestamps are Asia/Shanghai."""
     return beijing_now_iso()
@@ -126,11 +130,52 @@ class TelemetryStore:
         except (OSError, ValueError, TypeError):
             self.items.clear()
 
+    async def recover_queued_after_restart(
+        self, active_request_ids: set[str] | None = None,
+    ) -> int:
+        """Terminalize queued requests left behind by a previous server process.
+
+        A queued row is written before Worker selection and before Broker
+        allocation. It therefore proves that no Worker dispatch occurred.
+        After restart the old admission queue no longer exists, so releasing
+        those admission holds is safe. Running rows are deliberately untouched:
+        they may have consumed provider usage before the process stopped.
+        """
+        active = {str(value) for value in (active_request_ids or set()) if value}
+        recovered = 0
+        for row in self.recent(self.items.maxlen or 500):
+            request_id = str(row.get("request_id") or "")
+            if (
+                not request_id
+                or request_id in active
+                or str(row.get("status") or "").lower() != "queued"
+            ):
+                continue
+            diagnostics = row.get("diagnostics")
+            diagnostics = dict(diagnostics) if isinstance(diagnostics, dict) else {}
+            diagnostics["request_admission_recovery"] = "server-restart-before-worker-dispatch"
+            diagnostics["request_admission_failure_kind"] = "server_restart"
+            try:
+                await self.upsert({
+                    **row,
+                    "status": "stalled",
+                    "error": "Server restarted before Worker dispatch",
+                    "diagnostics": diagnostics,
+                })
+                recovered += 1
+            except Exception:
+                # Keep the row visible for explicit reconciliation; do not
+                # fail startup because one telemetry callback could not run.
+                continue
+        return recovered
+
     async def append(self, item: dict[str, Any]) -> None:
         await self.upsert(item)
 
     async def upsert(
-        self, item: dict[str, Any], *, merge_diagnostics: bool = False,
+        self, item: dict[str, Any], *,
+        merge_diagnostics: bool = False,
+        create_only: bool = False,
     ) -> dict[str, Any]:
         record = dict(item)
         trace_id = current_trace_id.get()
@@ -138,7 +183,25 @@ class TelemetryStore:
             record.setdefault("trace_id", trace_id)
         async with self.lock:
             request_id = str(record.get("request_id") or "")
+            if create_only and not request_id:
+                raise ValueError("create-only telemetry requires a request_id")
             existing = self.get(request_id) if request_id else None
+            if existing:
+                existing_response_id = str(existing.get("response_id") or "")
+                incoming_response_id = str(record.get("response_id") or "")
+                if (
+                    existing_response_id and incoming_response_id
+                    and existing_response_id != incoming_response_id
+                ):
+                    # A request ID is immutable once admitted. Without this
+                    # guard, a second POST could overwrite the queued/running
+                    # row of the first request before Broker/quota admission
+                    # rejects the duplicate dispatch.
+                    raise DuplicateRequestIdentity(
+                        "request_id is already bound to another response"
+                    )
+            if create_only and existing:
+                raise DuplicateRequestIdentity("request_id already exists")
             if merge_diagnostics:
                 # Read AND merge inside the same lock protecting the append.
                 # A passive SSE observer must never overwrite a more recent
@@ -263,6 +326,33 @@ class TelemetryStore:
             if str(row.get("request_id") or "") == request_id:
                 return dict(row)
         return None
+
+    def get_many_persisted(self, request_ids: set[str]) -> dict[str, dict[str, Any]]:
+        """Return the newest persisted rows for exact IDs using the bounded JSONL tail.
+
+        Recovery may need a committing request older than the in-memory 500-row
+        window. This read-only path scans one bounded tail once for all IDs.
+        """
+        targets = {str(value) for value in request_ids if str(value)}
+        if not targets:
+            return {}
+        found: dict[str, dict[str, Any]] = {}
+        try:
+            for row in iter_recent_jsonl(self.path):
+                request_id = str(row.get("request_id") or "")
+                if request_id in targets and request_id not in found:
+                    found[request_id] = _normalize_record_time(row)
+                    if len(found) == len(targets):
+                        break
+        except OSError:
+            # A failed disk read is not proof of completion. In-memory rows
+            # remain a best-effort fallback; unresolved reservations stay held.
+            pass
+        for request_id in targets - set(found):
+            cached = self.get(request_id)
+            if cached is not None:
+                found[request_id] = cached
+        return found
 
     def query(
         self,
