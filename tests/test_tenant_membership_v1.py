@@ -541,3 +541,69 @@ def test_non_master_api_key_cannot_delete_master_owned_file(tmp_path: Path):
         assert app.state.file_store.get(item.file_id) is not None
         _stored, payload = app.state.file_store.read(item.file_id)
         assert payload == b"privileged asset"
+
+
+
+def test_legacy_owner_invitation_is_revoked_before_membership_acceptance(tmp_path: Path):
+    store = TenantMembershipStore(tmp_path)
+    tenant = store.create("legacy-owner-invite", "Legacy Owner Invitation")
+    store.upsert_member(tenant["tenant_id"], "usr_legacy_owner123", "owner")
+
+    # Simulate an outstanding invitation written by a version that still
+    # allowed owner-role invitations.
+    invitation, code = store.create_invitation(
+        tenant["tenant_id"], "legacy-owner@example.com", "member", "root",
+    )
+    store.db.execute(
+        "UPDATE tenant_invitations SET role='owner' WHERE invitation_id=?",
+        (invitation["invitation_id"],),
+    )
+
+    with pytest.raises(TenantMembershipError, match="email does not match"):
+        store.accept_invitation(
+            code, "usr_legacy_invitee123", "attacker@example.com",
+        )
+    assert next(
+        item for item in store.list_invitations(tenant["tenant_id"])
+        if item["invitation_id"] == invitation["invitation_id"]
+    )["status"] == "issued"
+
+    with pytest.raises(TenantMembershipError, match="role is no longer permitted"):
+        store.accept_invitation(
+            code, "usr_legacy_invitee123", "legacy-owner@example.com",
+        )
+
+    row = next(
+        item for item in store.list_invitations(tenant["tenant_id"])
+        if item["invitation_id"] == invitation["invitation_id"]
+    )
+    assert row["status"] == "revoked"
+    assert row["revoked_at"]
+    assert store.role_for(tenant["tenant_id"], "usr_legacy_invitee123") is None
+    store.close()
+
+
+
+def test_workspace_owner_transitions_are_enforced_inside_the_write_transaction(tmp_path: Path):
+    store = TenantMembershipStore(tmp_path)
+    tenant = store.create("owner-transaction-guard", "Owner Transaction Guard")
+    tenant_id = tenant["tenant_id"]
+    owner_id = "usr_owner_txn12345"
+    member_id = "usr_member_txn12345"
+    store.upsert_member(tenant_id, owner_id, "owner")
+    store.upsert_member(tenant_id, member_id, "member")
+
+    with pytest.raises(TenantMembershipError, match="owner transitions require super_admin"):
+        store.upsert_member(
+            tenant_id, member_id, "owner", allow_owner_change=False,
+        )
+    with pytest.raises(TenantMembershipError, match="owner transitions require super_admin"):
+        store.upsert_member(
+            tenant_id, owner_id, "member", allow_owner_change=False,
+        )
+    with pytest.raises(TenantMembershipError, match="owner transitions require super_admin"):
+        store.remove_member(tenant_id, owner_id, allow_owner_change=False)
+
+    assert store.role_for(tenant_id, owner_id) == "owner"
+    assert store.role_for(tenant_id, member_id) == "member"
+    store.close()

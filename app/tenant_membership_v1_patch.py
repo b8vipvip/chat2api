@@ -68,6 +68,18 @@ def install_tenant_memberships(app: FastAPI) -> FastAPI:
         username = identity(cookie) if callable(identity) else app.state.settings.admin_username
         return str(username)
 
+    def owner_change_allowed(actor: str) -> bool:
+        """Resolve the actor's owner-transition privilege for the store transaction."""
+        control = getattr(app.state, "control_plane", None)
+        if control is not None:
+            role = control.role_for(actor)
+        else:
+            # Lightweight unit-test apps may install membership routes without
+            # the production RBAC store; only the configured root is privileged.
+            root_name = str(app.state.settings.admin_username or "")
+            role = "super_admin" if actor.casefold() == root_name.casefold() else None
+        return role == "super_admin"
+
     def audit_write(
         request: Request, actor: str, action: str, kind: str, target: str, details: dict, *, required: bool = True
     ) -> bool:
@@ -122,14 +134,20 @@ def install_tenant_memberships(app: FastAPI) -> FastAPI:
         if accounts.admin_get(body.user_id) is None:
             raise HTTPException(status_code=404, detail="Unknown user")
         actor = admin_actor(request)
+        allow_owner_change = owner_change_allowed(actor)
         audit_write(request, actor, "tenant.member_change_requested", "membership", tenant_id, {
             "user_id": body.user_id, "role": body.role,
         })
         try:
-            result = store.upsert_member(tenant_id, body.user_id, body.role)
+            result = store.upsert_member(
+                tenant_id, body.user_id, body.role,
+                allow_owner_change=allow_owner_change,
+            )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Unknown tenant") from exc
         except TenantMembershipError as exc:
+            if str(exc) == "Workspace owner transitions require super_admin":
+                raise HTTPException(status_code=403, detail=str(exc)) from exc
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         audit_ok = audit_write(request, actor, "tenant.member_change_completed", "membership", tenant_id, {
             "user_id": body.user_id, "role": body.role,
@@ -140,12 +158,17 @@ def install_tenant_memberships(app: FastAPI) -> FastAPI:
     @app.delete("/api/admin/tenants/{tenant_id}/members/{user_id}")
     async def admin_remove_member(tenant_id: str, user_id: str, request: Request, response: Response) -> dict[str, bool]:
         actor = admin_actor(request)
+        allow_owner_change = owner_change_allowed(actor)
         audit_write(request, actor, "tenant.member_remove_requested", "membership", tenant_id, {"user_id": user_id})
         try:
-            store.remove_member(tenant_id, user_id)
+            store.remove_member(
+                tenant_id, user_id, allow_owner_change=allow_owner_change,
+            )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Unknown membership") from exc
         except TenantMembershipError as exc:
+            if str(exc) == "Workspace owner transitions require super_admin":
+                raise HTTPException(status_code=403, detail=str(exc)) from exc
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         audit_ok = audit_write(request, actor, "tenant.member_remove_completed", "membership", tenant_id, {"user_id": user_id}, required=False)
         response.headers["X-Admin-Audit-Status"] = "complete" if audit_ok else "completion-pending"
