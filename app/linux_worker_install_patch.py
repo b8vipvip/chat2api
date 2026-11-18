@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -60,9 +61,20 @@ def install_linux_worker_install_patch(app: FastAPI) -> FastAPI:
             if str(worker.get("platform") or "").strip().lower() != "linux":
                 return {"valid": False, "connected": False}
             sockets = getattr(app.state, "worker_sockets", {})
-            # A socket accepted without the first Agent heartbeat is not ready
+            # A socket accepted without a recent Agent heartbeat is not ready
             # for command dispatch and must not be reported as installed.
-            connected = bool(sockets.get(worker_id)) and bool(worker.get("last_seen_at"))
+            heartbeat_recent = False
+            last_seen = str(worker.get("last_seen_at") or "")
+            if last_seen:
+                try:
+                    seen_at = datetime.fromisoformat(last_seen.replace("Z", "+00:00"))
+                    if seen_at.tzinfo is None:
+                        seen_at = seen_at.replace(tzinfo=timezone.utc)
+                    age_seconds = (datetime.now(timezone.utc) - seen_at).total_seconds()
+                    heartbeat_recent = -5 <= age_seconds <= 45
+                except (TypeError, ValueError):
+                    heartbeat_recent = False
+            connected = bool(sockets.get(worker_id)) and heartbeat_recent
         return {"valid": True, "connected": connected}
 
     @app.post("/api/workers/install-resume")
