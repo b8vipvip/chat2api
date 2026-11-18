@@ -1,14 +1,15 @@
 """C-02a membership-only APIs. Not a tenant authorization retrofit for /v1."""
 from __future__ import annotations
 
+import hashlib
 import logging
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, Response
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from .admin_audit import AdminAuditError, AdminAuditStore
-from .admin_auth import SESSION_COOKIE
+from .admin_auth import SESSION_COOKIE, same_origin_admin_request
 from .tenant_membership import TenantMembershipError, TenantMembershipStore
 from .user_commerce import USER_SESSION_COOKIE
 
@@ -31,6 +32,18 @@ class MembershipUpsert(BaseModel):
 class TenantKeyBind(BaseModel):
     model_config = ConfigDict(extra="forbid")
     user_id: str
+
+
+class TenantInvitationCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    email: str = Field(min_length=5, max_length=254)
+    role: str
+    expires_in_seconds: int = Field(default=7 * 24 * 3600, ge=300, le=30 * 24 * 3600)
+
+
+class TenantInvitationAccept(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    code: str = Field(min_length=32, max_length=256)
 
 
 def install_tenant_memberships(app: FastAPI) -> FastAPI:
@@ -137,6 +150,78 @@ def install_tenant_memberships(app: FastAPI) -> FastAPI:
         audit_ok = audit_write(request, actor, "tenant.member_remove_completed", "membership", tenant_id, {"user_id": user_id}, required=False)
         response.headers["X-Admin-Audit-Status"] = "complete" if audit_ok else "completion-pending"
         return {"removed": True}
+
+    @app.get("/api/admin/tenants/{tenant_id}/invitations")
+    async def admin_tenant_invitations(tenant_id: str) -> dict[str, Any]:
+        try:
+            return {"data": store.list_invitations(tenant_id)}
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Unknown tenant") from exc
+
+    @app.post("/api/admin/tenants/{tenant_id}/invitations", status_code=201)
+    async def admin_create_tenant_invitation(
+        tenant_id: str, body: TenantInvitationCreate, request: Request, response: Response
+    ) -> dict[str, Any]:
+        actor = admin_actor(request)
+        email_hash = hashlib.sha256(body.email.strip().casefold().encode("utf-8")).hexdigest()[:16]
+        audit_write(request, actor, "tenant.invitation_issue_requested", "tenant_invitation", tenant_id, {
+            "email_hash": email_hash, "role": body.role,
+            "expires_in_seconds": body.expires_in_seconds,
+        })
+        try:
+            invitation, code = store.create_invitation(
+                tenant_id, body.email, body.role, actor,
+                expires_in_seconds=body.expires_in_seconds,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Unknown tenant") from exc
+        except TenantMembershipError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        audit_ok = audit_write(request, actor, "tenant.invitation_issue_completed", "tenant_invitation",
+                               invitation["invitation_id"], {"email_hash": email_hash, "role": body.role},
+                               required=False)
+        response.headers["X-Admin-Audit-Status"] = "complete" if audit_ok else "completion-pending"
+        # The raw one-time code is returned only in this issue response; the
+        # database and audit journal retain only its hash / non-secret metadata.
+        return {"invitation": invitation, "code": code}
+
+    @app.delete("/api/admin/tenants/{tenant_id}/invitations/{invitation_id}")
+    async def admin_revoke_tenant_invitation(
+        tenant_id: str, invitation_id: str, request: Request, response: Response
+    ) -> dict[str, bool]:
+        actor = admin_actor(request)
+        audit_write(request, actor, "tenant.invitation_revoke_requested", "tenant_invitation",
+                    invitation_id, {"tenant_id": tenant_id})
+        try:
+            revoked = store.revoke_invitation(tenant_id, invitation_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Unknown tenant invitation") from exc
+        except TenantMembershipError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        audit_ok = audit_write(request, actor, "tenant.invitation_revoke_completed", "tenant_invitation",
+                               invitation_id, {"tenant_id": tenant_id, "revoked": revoked},
+                               required=False)
+        response.headers["X-Admin-Audit-Status"] = "complete" if audit_ok else "completion-pending"
+        return {"revoked": revoked}
+
+    @app.post("/api/user/tenants/invitations/accept")
+    async def accept_tenant_invitation(
+        body: TenantInvitationAccept, request: Request
+    ) -> dict[str, Any]:
+        if not same_origin_admin_request(request):
+            raise HTTPException(status_code=403, detail="Workspace invitation acceptance requires a same-origin request")
+        user = accounts.authenticate(request.cookies.get(USER_SESSION_COOKIE))
+        if not user:
+            raise HTTPException(status_code=401, detail="User login required")
+        try:
+            membership = store.accept_invitation(
+                body.code, str(user.get("user_id") or ""), str(user.get("email") or ""),
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Unknown tenant invitation") from exc
+        except TenantMembershipError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"membership": membership}
 
     @app.get("/api/admin/tenants/{tenant_id}/keys")
     async def admin_tenant_keys(tenant_id: str) -> dict[str, Any]:
