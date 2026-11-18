@@ -91,6 +91,15 @@ def authorize_wallet_dispatch(app: Any, request_id: str, principal: Any) -> bool
                 )
             # Legacy keys without an account owner have no wallet ledger entry.
             return False
+        # Validate principal ownership before accepting any terminal marker.
+        # An unbilled admission has no active funds to reserve, but its durable
+        # request_id is still owned by the account that created it. A different
+        # or now-unowned key must not borrow that marker to reach a Worker.
+        if accounts is None or not key_id or not owner:
+            raise WalletReservationError("Wallet reservation owner context is unavailable")
+        reservation_owner = str(reservation.get("user_id") or "").strip()
+        if not reservation_owner or reservation_owner != str(owner):
+            raise WalletReservationError("Wallet reservation owner does not match the API key")
         if (
             str(reservation.get("state") or "") == "released"
             and str(reservation.get("release_reason") or "") in {
@@ -98,17 +107,13 @@ def authorize_wallet_dispatch(app: Any, request_id: str, principal: Any) -> bool
             }
         ):
             # Intentional free/unbilled admissions have a durable marker and
-            # therefore remain valid even though no active hold exists.
+            # therefore remain valid only for the same authoritative owner.
             return False
         if (
             str(reservation.get("state") or "") != "reserved"
             or reservation.get("admission_protocol_version") != 1
         ):
             raise WalletReservationError("Wallet reservation is not dispatchable")
-        if accounts is None or not key_id or not owner:
-            raise WalletReservationError("Wallet reservation owner context is unavailable")
-        if str(reservation.get("user_id") or "") != str(owner):
-            raise WalletReservationError("Wallet reservation owner does not match the API key")
         if not billing.mark_dispatch_authorized(str(request_id), str(owner)):
             raise WalletReservationError("Wallet dispatch authorization marker was not persisted")
         return True

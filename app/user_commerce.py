@@ -828,6 +828,16 @@ class BillingStore:
                 ),
             )
 
+            # A request ID is the shared idempotency identity across the
+            # wallet charge and admission ledgers. If both records exist, they
+            # must belong to the same account; otherwise replay recovery could
+            # settle or release another user's reservation.
+            for request_id in charges.keys() & reservations.keys():
+                if str(charges[request_id].get("user_id") or "") != str(
+                    reservations[request_id].get("user_id") or ""
+                ):
+                    raise ValueError("billing ledger charge/reservation owner mismatch")
+
             # These fields control money movement and reservation accounting;
             # accepting truthy strings or unknown states would let corrupted
             # records masquerade as paid/debited or disappear from active holds.
@@ -1300,6 +1310,8 @@ class BillingStore:
                 if str(existing.get("user_id") or "") != user_id:
                     raise WalletReservationError("Request is already charged to another user")
                 reservation = self.reservations.get(request_id)
+                if reservation and str(reservation.get("user_id") or "") != user_id:
+                    raise WalletReservationError("Request wallet reservation belongs to another user")
                 if reservation and reservation.get("state") == "reserved":
                     previous = dict(reservation)
                     reservation.update({

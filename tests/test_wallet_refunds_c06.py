@@ -197,6 +197,40 @@ def test_wallet_dispatch_authorization_allows_explicit_unbilled_admission(tmp_pa
     assert billing.unstarted_admissions() == []
 
 
+@pytest.mark.parametrize("resolved_owner", ["usr_wallet_other_owner", None])
+def test_unbilled_wallet_admission_cannot_be_borrowed_by_another_or_unowned_key(
+    tmp_path: Path, resolved_owner: str | None,
+) -> None:
+    user_id = "usr_wallet_unbilled_owner"
+    request_id = "req_wallet_unbilled_owner"
+    billing = BillingStore(tmp_path)
+    price = {
+        "model_id": "free-model", "enabled": True,
+        "input_usd_per_million": 0.0,
+        "cached_input_usd_per_million": 0.0,
+        "output_usd_per_million": 0.0,
+    }
+    billing.record_unbilled_admission(
+        user_id, request_id, model_id="free-model",
+        input_tokens=10, output_tokens=4096, reason="zero_price_at_admission",
+        price_snapshot=price, usd_cny_rate=7.0,
+    )
+    original = dict(billing.reservations[request_id])
+    app = SimpleNamespace(state=SimpleNamespace(
+        user_accounts=SimpleNamespace(owner_for_key=lambda _key_id: resolved_owner),
+        user_billing=billing,
+    ))
+
+    with pytest.raises(HTTPException) as error:
+        authorize_wallet_dispatch(
+            app, request_id,
+            SimpleNamespace(kind="user", key_id="key-wallet-unbilled-other"),
+        )
+
+    assert error.value.status_code == 503
+    assert billing.reservations[request_id] == original
+
+
 def test_wallet_pre_dispatch_hold_recovery_is_versioned_and_durable(tmp_path: Path, monkeypatch) -> None:
     user_id = "usr_pre_dispatch_recovery"
     price = _price_row("paid-model", 10_000.0)
@@ -1095,6 +1129,50 @@ def test_wallet_ledger_preserves_valid_negative_integer_debt_balance(tmp_path: P
     )
     assert BillingStore(tmp_path).balance_cents("usr_debt") == -125
 
+
+
+def _seed_cross_owner_charge_reservation_pair(billing: BillingStore, pricing: PricingStore) -> None:
+    other_user = "usr_other_reservation_owner"
+    billing.credit(other_user, 100)
+    price = pricing.model("gpt-5.6-sol")
+    assert isinstance(price, dict)
+    billing.reserve_for_request(
+        other_user, "req_cross_owner_seed",
+        model_id="gpt-5.6-sol", estimated_cny_cents=1,
+        input_tokens=1, output_tokens=1,
+        price_snapshot=price, price_catalog_snapshot={}, usd_cny_rate=7.0,
+    )
+    row = billing.reservations.pop("req_cross_owner_seed")
+    row["request_id"] = "req_refundable"
+    billing.reservations["req_refundable"] = row
+
+
+def test_wallet_ledger_rejects_cross_owner_charge_and_reservation_pair(tmp_path: Path) -> None:
+    billing, pricing = _charged_wallet(tmp_path)
+    _seed_cross_owner_charge_reservation_pair(billing, pricing)
+    billing._save()
+
+    with pytest.raises(RuntimeError, match="Billing ledger is unreadable"):
+        BillingStore(tmp_path)
+
+
+def test_replayed_charge_cannot_settle_another_users_reservation(tmp_path: Path) -> None:
+    billing, pricing = _charged_wallet(tmp_path)
+    _seed_cross_owner_charge_reservation_pair(billing, pricing)
+    original = dict(billing.reservations["req_refundable"])
+
+    with pytest.raises(WalletReservationError, match="another user"):
+        billing.record_charge("usr_refund", {
+            "request_id": "req_refundable",
+            "status": "completed",
+            "requested_model": "gpt-5.6-sol",
+            "usage": {
+                "prompt_tokens": 1000, "completion_tokens": 500,
+                "total_tokens": 1500, "estimated": True,
+            },
+        }, pricing)
+
+    assert billing.reservations["req_refundable"] == original
 
 
 def test_reused_request_id_returns_conflict_without_releasing_original_holds(tmp_path: Path) -> None:
