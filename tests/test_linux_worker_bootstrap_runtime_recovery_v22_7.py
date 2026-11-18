@@ -43,7 +43,7 @@ def test_fresh_install_validates_identity_against_the_current_enrollment():
     api = Path("app/linux_worker_install_patch.py").read_text(encoding="utf-8")
 
     assert "/api/workers/install-resume" in bootstrap
-    assert "IDENTITY_MATCHES_ENROLLMENT" not in bootstrap or "RESUME_RESPONSE" in bootstrap
+    assert "RESUME_RESPONSE" in bootstrap
     assert 'if [[ $UPGRADE_ONLY -ne 1 && $VALID_IDENTITY -eq 1 ]]; then' in bootstrap
     assert 'echo "Registration: $REGISTRATION_MODE"' in bootstrap
     assert '@app.post("/api/workers/install-resume")' in api
