@@ -197,6 +197,40 @@ def test_wallet_dispatch_authorization_allows_explicit_unbilled_admission(tmp_pa
     assert billing.unstarted_admissions() == []
 
 
+@pytest.mark.parametrize("resolved_owner", ["usr_wallet_other_owner", None])
+def test_unbilled_wallet_admission_cannot_be_borrowed_by_another_or_unowned_key(
+    tmp_path: Path, resolved_owner: str | None,
+) -> None:
+    user_id = "usr_wallet_unbilled_owner"
+    request_id = "req_wallet_unbilled_owner"
+    billing = BillingStore(tmp_path)
+    price = {
+        "model_id": "free-model", "enabled": True,
+        "input_usd_per_million": 0.0,
+        "cached_input_usd_per_million": 0.0,
+        "output_usd_per_million": 0.0,
+    }
+    billing.record_unbilled_admission(
+        user_id, request_id, model_id="free-model",
+        input_tokens=10, output_tokens=4096, reason="zero_price_at_admission",
+        price_snapshot=price, usd_cny_rate=7.0,
+    )
+    original = dict(billing.reservations[request_id])
+    app = SimpleNamespace(state=SimpleNamespace(
+        user_accounts=SimpleNamespace(owner_for_key=lambda _key_id: resolved_owner),
+        user_billing=billing,
+    ))
+
+    with pytest.raises(HTTPException) as error:
+        authorize_wallet_dispatch(
+            app, request_id,
+            SimpleNamespace(kind="user", key_id="key-wallet-unbilled-other"),
+        )
+
+    assert error.value.status_code == 503
+    assert billing.reservations[request_id] == original
+
+
 def test_wallet_pre_dispatch_hold_recovery_is_versioned_and_durable(tmp_path: Path, monkeypatch) -> None:
     user_id = "usr_pre_dispatch_recovery"
     price = _price_row("paid-model", 10_000.0)
