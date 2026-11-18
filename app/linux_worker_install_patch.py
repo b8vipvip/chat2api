@@ -40,6 +40,26 @@ def install_linux_worker_install_patch(app: FastAPI) -> FastAPI:
             f"--server {server_url(request)} --enroll-code {item['code']}"
         )
 
+    @app.post("/api/workers/identity/validate")
+    async def worker_identity_validate(request: Request) -> dict[str, Any]:
+        """Verify the installed credential and report the live control socket."""
+        try:
+            body = await request.json()
+        except Exception:
+            return {"valid": False, "connected": False}
+        if not isinstance(body, dict):
+            return {"valid": False, "connected": False}
+        worker_id = str(body.get("worker_id") or "").strip()
+        worker_token = str(body.get("worker_token") or "")
+        if not worker_id or not worker_token:
+            return {"valid": False, "connected": False}
+        with worker_store._lock:
+            if not worker_store.authenticate(worker_id, worker_token):
+                return {"valid": False, "connected": False}
+            sockets = getattr(app.state, "worker_sockets", {})
+            connected = bool(sockets.get(worker_id))
+        return {"valid": True, "connected": connected}
+
     @app.post("/api/workers/install-resume")
     async def worker_install_resume(request: Request) -> dict[str, bool]:
         """Only resume a local identity when it belongs to this exact install code.
