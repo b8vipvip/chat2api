@@ -158,9 +158,20 @@ def install_linux_worker_bridge_binding_patch(app: FastAPI) -> FastAPI:
         base_set_connection_enabled = registry.set_connection_enabled
         base_delete_client = registry.delete_client
 
-        async def touch_with_worker_sync(client_id: str, metadata: dict[str, Any] | None = None) -> None:
-            await base_touch(client_id, metadata)
+        async def touch_with_worker_sync(
+            client_id: str,
+            metadata: dict[str, Any] | None = None,
+            *,
+            websocket: Any | None = None,
+        ) -> bool:
+            # Preserve the registry's current-socket guard through every
+            # installed touch decorator. A stale socket must not refresh
+            # worker metadata or trigger a worker-binding synchronization.
+            accepted = await base_touch(client_id, metadata, websocket=websocket)
+            if not accepted:
+                return False
             await sync_client(client_id)
+            return True
 
         async def attach_with_worker_sync(client_id: str, websocket) -> None:
             await base_attach(client_id, websocket)
