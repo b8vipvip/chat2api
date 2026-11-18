@@ -59,6 +59,7 @@ asyncio.run(main())
 
 def test_all_worker_touch_decorators_forward_the_websocket_keyword_and_result():
     cases = (
+        ("app/linux_worker_bridge_binding.py", "touch_with_worker_sync", "base_touch"),
         ("app/worker_auto_login_v153_patch.py", "touch_with_relogin", "previous_touch"),
         ("app/worker_text_model_management_v146_patch.py", "touch_with_history", "base_touch"),
         ("app/worker_model_tasks_v147_patch.py", "touch_tasks", "base_touch"),
@@ -66,7 +67,7 @@ def test_all_worker_touch_decorators_forward_the_websocket_keyword_and_result():
     for relative, function, predecessor in cases:
         source = (ROOT / relative).read_text(encoding="utf-8")
         start = source.index(f"async def {function}")
-        end = source.index(f"\n    registry.touch =", start)
+        end = source.index("registry.touch =", start)
         block = source[start:end]
         assert "websocket: Any | None = None" in block
         assert f"await {predecessor}(client_id, metadata, websocket=websocket)" in block
