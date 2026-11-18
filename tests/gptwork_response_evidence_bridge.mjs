@@ -33,6 +33,7 @@ const onlyDefaults=await capture([
   {message:{metadata:{default_model_slug:"gpt-5.6-sol-wm",model_slug:"gpt-5.6-sol"}}},
   {profile:{default_model_slug:"gpt-6-astra-wm"}},
 ]);
+assert.equal(onlyDefaults.response_ok,true);
 assert.equal(onlyDefaults.served_model,null);
 assert.equal(onlyDefaults.default_model,null);
 assert.equal(onlyDefaults.model_conflict,false,
@@ -43,6 +44,7 @@ const explicitServed=await capture([
   {served_model_slug:"gpt-6-astra-wm",default_model_slug:"gpt-5.6-sol-wm"},
   {profile:{default_model_slug:"gpt-6-astra-wm"}},
 ]);
+assert.equal(explicitServed.response_ok,true);
 assert.equal(explicitServed.served_model,"gpt-6-astra");
 assert.equal(explicitServed.default_model_conflict,true);
 assert.equal(explicitServed.model_conflict,false);
@@ -69,14 +71,11 @@ assert.equal(pageAlias.served_model,null,
   "page-routing aliases cannot prove that a concrete upstream model served");
 assert.equal(pageAlias.default_model,null);
 
-const failedResponse = await capture([
-  {served_model_slug:"gpt-6-astra-wm"},
-],{},403);
-assert.equal(failedResponse.served_model,null,
-  "model-looking fields in an HTTP error body cannot prove a served model");
-assert.equal(failedResponse.model_conflict,false);
-assert.equal(failedResponse.response_ok,false);
-assert.equal(failedResponse.response_status,403);
+const failedHttpBody = await capture([{resolved_model_slug:"gpt-6-astra-wm"}], {}, 403);
+assert.equal(failedHttpBody.response_ok,false);
+assert.equal(failedHttpBody.response_status,403);
+assert.equal(failedHttpBody.served_model,null,
+  "resolved_model_slug in a failed HTTP body must not be treated as served-model proof");
 
 // Thousands of SSE blocks must be accumulated in linear work and bounded
 // memory. The former adapter re-parsed every prior object on each new frame
@@ -144,20 +143,24 @@ const takeLast=async()=>{
 };
 issueRequest("req_modelconflict123");
 dispatch("stream-1","request",{request_model:"gpt-6",request_wire_model:"gpt-6"});
-dispatch("stream-1","evidence",{
-  response_ok:true,response_status:200,
+dispatch("stream-1","evidence",{response_ok:true,response_status:200,
   served_model:"gpt-6",model_field:"resolved_model_slug",
   default_model:"gpt-5.6-sol",default_model_field:"default_model_slug",
   reasoning:"high",reasoning_field:"reasoning_level",
   evidence_source:"network_response_metadata",
 });
 let bridged=await takeLast();
+const firstEmittedEvent=isolatedEmits.filter(msg=>msg.type==="chat2api.event")
+  .at(-1)?.event;
+assert.equal(firstEmittedEvent?.request_id,"req_modelconflict123");
+assert.equal(firstEmittedEvent?.diagnostics?.model_evidence_revision,144,
+  "Worker bridge must preserve the current model evidence protocol revision");
+assert.equal(firstEmittedEvent?.diagnostics?.model_evidence_transport,"main-world-fetch",
+  "Worker bridge must preserve the MAIN-world network observer provenance");
 assert.equal(bridged.served_model,"gpt-6");
 assert.equal(bridged.default_model,"gpt-5.6-sol");
 assert.equal(bridged.reasoning,"high");
-assert.equal(bridged.response_ok,true);
-assert.equal(bridged.response_status,200);
-dispatch("stream-1","evidence",{
+dispatch("stream-1","evidence",{response_ok:true,response_status:200,
   served_model:null,default_model:null,reasoning:null,
   model_conflict:true,default_model_conflict:true,reasoning_conflict:true,
   model_field:null,default_model_field:null,reasoning_field:null,
@@ -174,7 +177,7 @@ assert.equal(bridged.default_model_field,null);
 assert.equal(bridged.reasoning,null);
 assert.equal(bridged.reasoning_conflict,true);
 assert.equal(bridged.reasoning_field,null);
-dispatch("stream-1","evidence",{
+dispatch("stream-1","evidence",{response_ok:true,response_status:200,
   served_model:"gpt-6",default_model:"gpt-5.6-sol",
   reasoning:"high",model_conflict:false,
   default_model_conflict:false,reasoning_conflict:false,
@@ -196,9 +199,7 @@ bridged=await takeLast();
 assert.equal(bridged.served_model,"gpt-6-astra");
 assert.equal(bridged.model_field,"response-header");
 assert.equal(bridged.evidence_source,"network_response_header");
-assert.equal(bridged.response_ok,true);
-assert.equal(bridged.response_status,200);
-dispatch("stream-2","evidence",{
+dispatch("stream-2","evidence",{response_ok:true,response_status:200,
   served_model:null,model_conflict:true,model_field:null,
   evidence_source:"network_response_metadata",
 });
@@ -215,6 +216,28 @@ dispatch("stream-3","response",{ok:false,status:403,
 await takeLast();
 assert.equal(isolatedEmits.length,beforeError,
   "failed HTTP responses must not create served-model proof");
+dispatch("stream-3","evidence",{response_ok:true,response_status:403,
+  served_model:"gpt-6",model_field:"resolved_model_slug",
+  evidence_source:"network_response_metadata"});
+bridged=await takeLast();
+assert.equal(bridged.response_ok,false,
+  "a contradictory response_ok=true must not override HTTP 403");
+assert.equal(bridged.served_model,null,
+  "body evidence from a failed HTTP response must not create served-model proof");
+assert.equal(bridged.model_conflict,false,
+  "error-body model conflicts are not served-model evidence");
+
+// Legacy or malformed evidence without an HTTP status remains unverified.
+issueRequest("req_missingstatus123");
+dispatch("stream-4","request",{request_model:"gpt-6"});
+await takeLast();
+dispatch("stream-4","evidence",{response_ok:true,served_model:"gpt-6",
+  model_field:"resolved_model_slug",evidence_source:"network_response_metadata"});
+bridged=await takeLast();
+assert.equal(bridged.response_ok,false);
+assert.equal(bridged.response_status,null);
+assert.equal(bridged.served_model,null,
+  "a success flag without an HTTP status cannot prove the served model");
 // Deliberately delay an earlier model proof's session storage write. The
 // network parser may publish a conflict while this async write is pending.
 // The *last* stored and emitted state must be the latest conflict, never A.
@@ -223,14 +246,14 @@ dispatch("stream-race","request",{request_model:"gpt-6",
   request_wire_model:"gpt-6"});
 await takeLast();
 stallNextEvidenceWrite=true;
-dispatch("stream-race","evidence",{response_ok:true,response_status:200,
-  served_model:"gpt-6",model_field:"served_model_slug",
+dispatch("stream-race","evidence",{response_ok:true,response_status:200,served_model:"gpt-6",
+  model_field:"served_model_slug",
   evidence_source:"network_response_metadata"});
 for(let i=0;i<10&&!releaseStalledEvidenceWrite;i++)
   await new Promise(resolve=>setImmediate(resolve));
 assert.equal(typeof releaseStalledEvidenceWrite,"function",
   "first model storage write must be held in-flight");
-dispatch("stream-race","evidence",{served_model:null,
+dispatch("stream-race","evidence",{response_ok:true,response_status:200,served_model:null,
   model_conflict:true,model_field:null,
   evidence_source:"network_response_metadata"});
 releaseStalledEvidenceWrite();
@@ -238,26 +261,9 @@ bridged=await takeLast();
 assert.equal(bridged.served_model,null,
   "older async model proof cannot overwrite a later conflict");
 assert.equal(bridged.model_conflict,true);
-assert.equal(bridged.response_ok,true);
-assert.equal(bridged.response_status,200);
 
 assert.equal(storedEvidence.at(-1).served_model,null);
 assert.equal(storedEvidence.at(-1).model_conflict,true);
-
-// A concrete-looking field carried by an HTTP error response must never
-// survive the isolated bridge as a served-model claim.
-issueRequest("req_http_errorbody123");
-dispatch("stream-error-body","request",{request_model:"gpt-6"});
-dispatch("stream-error-body","evidence",{
-  response_ok:false,response_status:403,
-  served_model:"gpt-6",model_field:"resolved_model_slug",
-  evidence_source:"network_response_metadata",
-});
-bridged=await takeLast();
-assert.equal(bridged.served_model,null);
-assert.equal(bridged.model_field,null);
-assert.equal(bridged.response_ok,false);
-assert.equal(bridged.response_status,403);
 
 // A request's model authority must not leak into the next native ChatGPT
 // conversation. The exact stream's completion clears only its own active
