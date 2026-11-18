@@ -67,7 +67,7 @@ def test_all_worker_touch_decorators_forward_the_websocket_keyword_and_result():
     for relative, function, predecessor in cases:
         source = (ROOT / relative).read_text(encoding="utf-8")
         start = source.index(f"async def {function}")
-        end = source.index(f"\n    registry.touch =", start)
+        end = source.index("registry.touch =", start)
         block = source[start:end]
         assert "websocket: Any | None = None" in block
         assert f"await {predecessor}(client_id, metadata, websocket=websocket)" in block
