@@ -85,6 +85,17 @@ def test_install_resume_only_accepts_the_identity_consumed_by_the_same_enrollmen
         )
         assert identity_check.json() == {"valid": True, "connected": True}
 
+        windows_enrollment = store.create_enrollment("Windows Worker")
+        windows_credentials = store.enroll(windows_enrollment["code"], {"platform": "windows"})
+        windows_check = client.post(
+            "/api/workers/identity/validate",
+            json={
+                "worker_id": windows_credentials["worker_id"],
+                "worker_token": windows_credentials["worker_token"],
+            },
+        )
+        assert windows_check.json() == {"valid": False, "connected": False}
+
 
 def test_install_record_has_no_time_expiry_and_tracks_terminal_disable(tmp_path):
     store = LinuxWorkerInstallStore(tmp_path)
