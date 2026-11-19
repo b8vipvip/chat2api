@@ -598,6 +598,55 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                     "() => document.querySelector('[data-view=control-admins]')?.disabled === false",
                     timeout=5000,
                 )
+
+                # Mobile viewport and keyboard-only accessibility smoke for the
+                # same production session UI and role-aware navigation.
+                mobile_context = browser.new_context(
+                    viewport={"width": 390, "height": 844},
+                    is_mobile=True,
+                    has_touch=True,
+                )
+                try:
+                    mobile_page = mobile_context.new_page()
+                    _login(mobile_page, base_url, root_username, root_password, "super_admin")
+                    mobile_metrics = mobile_page.evaluate(
+                        """() => ({
+                          viewport: window.innerWidth,
+                          document: document.documentElement.scrollWidth,
+                          body: document.body.scrollWidth,
+                          loginGate: getComputedStyle(document.getElementById("adminLoginGate")).display,
+                          logoutVisible: !document.getElementById("adminSessionLogout").hidden
+                        })"""
+                    )
+                    assert mobile_metrics["document"] <= mobile_metrics["viewport"] + 1, mobile_metrics
+                    assert mobile_metrics["body"] <= mobile_metrics["viewport"] + 1, mobile_metrics
+                    assert mobile_metrics["loginGate"] == "none", mobile_metrics
+                    assert mobile_metrics["logoutVisible"] is True, mobile_metrics
+
+                    rbac_button = mobile_page.get_by_role("button", name="管理员 RBAC")
+                    assert rbac_button.is_visible()
+                    rbac_button.focus()
+                    assert rbac_button.evaluate("(node) => document.activeElement === node")
+                    mobile_page.keyboard.press("Enter")
+                    mobile_page.wait_for_function(
+                        "() => document.getElementById('view-control-admins')?.classList.contains('active')",
+                        timeout=5000,
+                    )
+
+                    mobile_page.locator("#adminSessionLogout").click()
+                    mobile_page.wait_for_function(
+                        "() => document.getElementById('adminSessionState')?.textContent.includes('未登录')",
+                        timeout=10000,
+                    )
+                    _open_admin_login_dialog(mobile_page)
+                    assert mobile_page.get_by_role("dialog", name="管理员登录").is_visible()
+                    assert mobile_page.get_by_label("管理员用户名").is_visible()
+                    assert mobile_page.get_by_label("管理员密码").is_visible()
+                    mobile_page.keyboard.press("Escape")
+                    assert not mobile_page.locator("#adminSessionLoginDialog").evaluate("(node) => node.open")
+                finally:
+                    mobile_context.close()
+
                 # Exercise the real tenant-list DOM sink with hostile API text.
                 # The C-track UI must render it as text, never as executable markup.
                 page.evaluate(
