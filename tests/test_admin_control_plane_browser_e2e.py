@@ -164,7 +164,9 @@ def _check_mobile_invitation_registration(browser, admin, base_url):
     mobile = browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
     try:
         page = mobile.new_page()
-        page.goto(base_url + "/console")
+        with page.expect_response(lambda r: r.url.endswith("/assets/chat2api-user-console-v104.js")) as script:
+            page.goto(base_url + "/console")
+        assert script.value.ok
         page.get_by_role("button", name="注册", exact=True).click()
         form = page.locator("#registerForm")
         form.get_by_label("邮箱").fill(email)
@@ -175,6 +177,7 @@ def _check_mobile_invitation_registration(browser, admin, base_url):
             form.get_by_role("button", name="创建账户").click()
         assert registered.value.status == 200
         page.locator("#appShell").wait_for(state="visible")
+        assert page.request.get(base_url + "/api/user/models").ok
         assert not form.get_by_label("邀请代码").input_value()
         admin.locator("#cInviteReload").click()
         admin.locator("#cInviteRows tr").filter(has_text=email).get_by_text("consumed", exact=True).wait_for()
