@@ -10,6 +10,8 @@ def test_production_entry_installs_c_track_services_and_protects_admin_routes(tm
     repository_root = Path(__file__).resolve().parents[1]
     script = r"""
 from app.entry import app
+from app.control_plane import ROLES, permission_for_admin_route
+import re
 from app.admin import admin_response
 from fastapi.testclient import TestClient
 
@@ -62,6 +64,44 @@ for method, path in expected:
         and method in (getattr(route, "methods", None) or set())
     ]
     assert len(matches) == 1, (method, path, len(matches))
+
+# Exercise every registered production admin route/method against every role.
+# New or unclassified routes remain root-only until explicitly granted.
+store = app.state.control_plane
+role_users = {"super_admin": "c-track-root"}
+for role in ROLES:
+    if role == "super_admin":
+        continue
+    username = f"matrix_{role}"
+    store.create_admin(username, "matrix-route-password", role)
+    role_users[role] = username
+
+registered_admin_routes = set()
+for route in app.routes:
+    route_path = getattr(route, "path", None)
+    if not isinstance(route_path, str):
+        continue
+    if not (route_path.startswith("/api/admin/") or route_path == "/api/clients"):
+        continue
+    if route_path.startswith("/api/admin/auth/"):
+        # Login/session/logout are available to every authenticated identity;
+        # they are covered by the same-origin mutation matrix below.
+        continue
+    for method in getattr(route, "methods", None) or set():
+        method = str(method).upper()
+        if method in {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"}:
+            registered_admin_routes.add((method, route_path))
+
+assert registered_admin_routes
+for method, route_path in sorted(registered_admin_routes):
+    permission = permission_for_admin_route(route_path, method)
+    for role, username in role_users.items():
+        expected_access = role == "super_admin" or (
+            permission is not None and permission in ROLES[role]
+        )
+        assert store.permitted(username, route_path, method) is expected_access, (
+            role, method, route_path, permission,
+        )
 
 html = admin_response("tenants").body.decode("utf-8")
 assert "/assets/chat2api-control-plane-admin-v1.js" in html
@@ -136,6 +176,48 @@ with TestClient(app) as client:
     ):
         response = client.get(path)
         assert response.status_code == 401, (path, response.status_code, response.text)
+
+    # Every registered admin/client state-changing route rejects missing Origin
+    # and cross-site Origin before authentication, body validation or mutation.
+    write_routes = sorted({
+        (str(method).upper(), route.path)
+        for route in app.routes
+        if isinstance(getattr(route, "path", None), str)
+        and (route.path.startswith("/api/admin/") or route.path == "/api/clients")
+        for method in (getattr(route, "methods", None) or set())
+        if str(method).upper() in {"POST", "PUT", "PATCH", "DELETE"}
+    })
+    assert write_routes
+    for method, route_template in write_routes:
+        route_path = re.sub(r"\{[^{}]+\}", "probe", route_template)
+        for label, headers in (
+            ("missing-origin", {"Sec-Fetch-Site": "same-origin"}),
+            ("cross-site", {
+                "Origin": "https://attacker.invalid",
+                "Sec-Fetch-Site": "cross-site",
+            }),
+        ):
+            response = client.request(method, route_path, headers=headers)
+            assert response.status_code == 403, (
+                label, method, route_template, response.status_code, response.text,
+            )
+
+    same_origin = {
+        "Origin": "http://testserver",
+        "Sec-Fetch-Site": "same-origin",
+    }
+    login = client.post(
+        "/api/admin/auth/login",
+        headers=same_origin,
+        json={"username": "c-track-root", "password": "c-track-root-test-password"},
+    )
+    assert login.status_code == 200, login.text
+    allowed = client.put(
+        "/api/admin/control/client",
+        headers=same_origin,
+        json={"announcement": "same-origin route accepted"},
+    )
+    assert allowed.status_code == 200, allowed.text
 
 print("C-track production entry integration passed")
 """
