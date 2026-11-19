@@ -780,3 +780,13 @@ def test_windows_worker_server_origin_migration_and_socket_generation_guard():
     assert "actionMessageUntil" in popup
     assert "不要反复更换设备码来修复地址或连接问题" in popup
     assert "Extension WebSocket authentication rejected client_id=%s reason=%s" in server
+
+
+
+def test_linux_worker_public_worker_id_is_advertised_without_changing_internal_controller_keys():
+    from app.runtime_contract import RUNTIME_FEATURE_REVISION
+    linux_ui = (ROOT / "app" / "admin_linux_device_authority_v124.js").read_text(encoding="utf-8")
+    assert "linux-worker-public-ext-id-v1" in RUNTIME_FEATURE_REVISION
+    assert 'String(worker?.extension_client_id||"").trim()' in linux_ui
+    assert 'const id=String(w.worker_id||"");' in linux_ui
+    assert 'data-linux-worker-id="${esc(id)}"' in linux_ui
