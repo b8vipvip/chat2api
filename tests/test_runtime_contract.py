@@ -794,3 +794,9 @@ def test_linux_worker_public_worker_id_is_advertised_without_changing_internal_c
     assert 'String(worker?.extension_client_id||"").trim()' in linux_ui
     assert 'const id=String(w.worker_id||"");' in linux_ui
     assert 'data-linux-worker-id="${esc(id)}"' in linux_ui
+
+
+
+def test_windows_platform_os_normalization_is_advertised():
+    from app.runtime_contract import RUNTIME_FEATURE_REVISION
+    assert "windows-platform-os-win-normalization-v1" in RUNTIME_FEATURE_REVISION

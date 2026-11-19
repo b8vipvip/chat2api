@@ -386,10 +386,16 @@
     if(group.linux)return "Linux";
     for(const client of group.clients){
       const m=client.metadata||{};
-      const p=text(m.platform||m.os||m.os_name||m.system||client.platform).toLowerCase();
-      if(p.includes("linux"))return "Linux";
-      if(p.includes("windows")||p==="win32")return "Windows";
-      if(p.includes("mac"))return "macOS";
+      // Chrome runtime.getPlatformInfo() reports "win", "mac" and "linux".
+      // background_platform_v26 persists that value as metadata.platform_os.
+      // Read it first and normalize the Chrome OS tokens before rendering.
+      const values=[m.platform_os,m.platform,m.os,m.os_name,m.system,client.platform,client.os];
+      for(const value of values){
+        const p=text(value).trim().toLowerCase().replace(/[_\\s]+/g,"-");
+        if(p==="win"||p==="win32"||p==="win64"||p.startsWith("windows"))return "Windows";
+        if(p==="linux"||p.includes("linux"))return "Linux";
+        if(p==="mac"||p==="macos"||p==="darwin"||p.includes("mac-os"))return "macOS";
+      }
     }
     return group.clients.length?"未识别":"待识别";
   }

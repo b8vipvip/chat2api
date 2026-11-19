@@ -8,6 +8,7 @@ const networkSource = readFileSync(new URL("../chrome_extension/background_netwo
 const storage = {};
 const storageListeners = [];
 const fetchCalls = [];
+let runtimePlatformInfo = { os: "linux", arch: "x86-64", nacl_arch: "x86-64" };
 let fetchHandler = async () => ({ ok: true, status: 200, json: async () => ({ success: true, country_code: "US" }) });
 const socketPayloads = [];
 
@@ -25,7 +26,7 @@ const sandbox = {
   },
   chrome: {
     runtime: {
-      async getPlatformInfo() { return { os: "linux", arch: "x86-64", nacl_arch: "x86-64" }; },
+      async getPlatformInfo() { return runtimePlatformInfo; },
     },
     storage: {
       local: {
@@ -134,5 +135,23 @@ const offline = await gate.probe(true);
 assert.equal(offline.status, "offline");
 assert.equal(offline.external_ready, false);
 assert.equal(fetchCalls.length, beforeOfflineFetches, "Offline detection must not attempt IP lookup");
+
+// Chrome on Windows reports the platform token "win", not "windows" or
+// "win32". Verify that the extension publishes that canonical OS value.
+platform.value = null;
+runtimePlatformInfo = { os: "win", arch: "x86-64", nacl_arch: "x86-64" };
+const windows = await platform.detect();
+assert.equal(windows.os, "win");
+assert.equal(windows.supported_desktop, true);
+fetchCalls.length = 0;
+await sandbox.fetch("https://server.example/api/extensions/register", {
+  method: "POST",
+  body: JSON.stringify({ name: "Windows worker", metadata: {} }),
+});
+const windowsRegistration = JSON.parse(fetchCalls[0].init.body);
+assert.equal(windowsRegistration.metadata.platform_os, "win");
+socketPayloads.length = 0;
+await sandbox.trySendSocket({ type: "extension.status", metadata: {} });
+assert.equal(socketPayloads[0].payload.metadata.platform_os, "win");
 
 console.log("network_platform_v26 VM contract passed");
