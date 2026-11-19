@@ -64,6 +64,16 @@ def test_diagnostic_error_redaction_is_recursive_and_handles_plain_text():
     assert "bearer-secret-value" not in plain
     assert "nested-refresh-secret" not in plain
 
+    # Plain-text upstream errors sometimes embed JSON snippets. Quoted
+    # camelCase keys and cookie/pairing credentials must be redacted too.
+    quoted_json = safe_error_response(
+        b'''upstream error: {"refreshToken":"nested-refresh-secret",'''
+        b'''"cookie":"plain-cookie-secret","x-pairing-code":"pairing-secret"}''',
+        "text/plain",
+    )
+    for secret in ("nested-refresh-secret", "plain-cookie-secret", "pairing-secret"):
+        assert secret not in quoted_json
+
 
 def test_diagnostic_paths_redact_capability_tokens():
     paths = (

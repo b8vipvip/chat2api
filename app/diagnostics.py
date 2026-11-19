@@ -36,11 +36,7 @@ _SENSITIVE = {
     "verificationcode", "resetcode", "resettoken",
 }
 _SECRET_ASSIGNMENT_RE = re.compile(
-    r"(?i)\b(authorization|proxy[-_]?authorization|x[-_]?api[-_]?key|api[-_]?key|"
-    r"access[-_]?token|refresh[-_]?token|id[-_]?token|session[-_]?token|"
-    r"csrf[-_]?token|client[-_]?secret|password|passwd|passphrase|secret|"
-    r"invite[-_]?code|invitation[-_]?code|pairing[-_]?code|signature|"
-    r"signed[-_]?url|jwt)\b(\s*[:=]\s*)(?:\"[^\"]*\"|'[^']*'|[^\s,;&]+)"
+    r"""(?i)["']?\b(authorization|proxy[-_]?authorization|x[-_]?api[-_]?key|api[-_]?key|access[-_]?token|refresh[-_]?token|id[-_]?token|session[-_]?token|csrf[-_]?token|client[-_]?secret|password|passwd|passphrase|secret|token|invite[-_]?code|invitation[-_]?code|pairing[-_]?code|x[-_]?pairing[-_]?code|signature|signed[-_]?url|jwt|cookie|set[-_]?cookie|session[-_]?cookie)\b["']?(\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;&]+)"""
 )
 _BEARER_RE = re.compile(r"(?i)\b(Bearer|Basic)\s+[A-Za-z0-9._~+/-]{8,}={0,2}")
 _JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b")
