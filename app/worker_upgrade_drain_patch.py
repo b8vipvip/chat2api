@@ -68,6 +68,16 @@ def install_worker_upgrade_drain_patch(app: FastAPI) -> FastAPI:
     base_online_client_ids = registry.online_client_ids
     host_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
+    async def persist_registry() -> bool:
+        save = getattr(registry, "save", None)
+        if not callable(save):
+            return True
+        try:
+            await save()
+            return True
+        except Exception:
+            return False
+
     def host_workers(worker_id: str) -> list[tuple[str, dict[str, Any]]]:
         with store._lock:
             rows = [
@@ -146,9 +156,8 @@ def install_worker_upgrade_drain_patch(app: FastAPI) -> FastAPI:
                 next_metadata.pop("worker_maintenance", None)
                 client.metadata = next_metadata
                 changed = True
-        save = getattr(registry, "save", None)
-        if changed and callable(save):
-            await save()
+        if changed:
+            await persist_registry()
 
     def routing_ready(client_id: str) -> bool:
         return not maintenance_active(str(client_id)) and bool(base_routing_ready(str(client_id)))
@@ -200,9 +209,10 @@ def install_worker_upgrade_drain_patch(app: FastAPI) -> FastAPI:
             }
             for client_id in client_ids:
                 set_maintenance(client_id, marker)
-            save = getattr(registry, "save", None)
-            if callable(save):
-                await save()
+            if not await persist_registry():
+                for client_id in client_ids:
+                    clear_client_maintenance(client_id)
+                return {"ok": False, "error": "worker_maintenance_persist_failed"}
 
             loop = asyncio.get_running_loop()
             deadline = loop.time() + max(0.1, timeout)
