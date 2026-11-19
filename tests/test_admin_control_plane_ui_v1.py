@@ -22,7 +22,7 @@ def test_admin_console_exposes_c_views_and_one_control_plane_asset():
     assert 'data-view="plugins"' in html
     assert 'data-view="quota-ledger"' in html
     assert ".nav button[hidden]{display:none!important}" in html
-    assert 'data-view="api-keys"' in html
+    assert 'data-view="api-keys"' not in html
     assert 'id="view-api-keys"' in html
     assert 'id="view-users"' not in html
     assert 'id="view-quota-ledger"' in html
@@ -34,7 +34,12 @@ def test_admin_console_exposes_c_views_and_one_control_plane_asset():
     assert 'id="cUserRoleRows"' in html
     assert 'id="cSubHistory"' in html
     assert '/assets/chat2api-control-plane-admin-v1.js' in html
+    assert 'id="adminSessionLoginDialog"' in html
+    assert 'id="adminSessionOpenLogin"' in html
+    assert 'id="adminSessionUser"' in html
     assert 'id="adminSessionPassword"' in html
+    assert 'id="adminSessionLogin"' in html
+    assert 'id="adminSessionLogout"' in html
     assert 'id="adminSessionRotatePassword"' in html
     assert 'id="adminPasswordDialog"' in html
     assert "api/admin/auth/session" in html
@@ -56,6 +61,9 @@ def test_control_plane_ui_asset_is_served_with_safe_cache_and_content_headers():
         assert "textContent" in response.text
         assert "innerHTML" not in response.text
         assert "adminSessionPassword" in response.text
+        assert "adminSessionLoginDialog" in response.text
+        assert "adminSessionOpenLogin" in response.text
+        assert "WEB_USER_NAV_ITEMS" in response.text
         assert "/api/admin/control/self/password" in response.text
         assert "new_password" in response.text
         assert "adminSessionRotatePassword" in response.text
@@ -146,3 +154,37 @@ def test_admin_bootstrap_tolerates_removed_legacy_connect_and_key_controls():
     assert "$('connect').disabled" not in bootstrap
     assert "$('refresh').disabled" not in bootstrap
     assert "$('adminKey').value" not in bootstrap
+
+def test_web_user_navigation_is_grouped_and_duplicate_api_key_entry_is_removed():
+    root = Path(__file__).resolve().parents[1]
+    html = admin_response("overview").body.decode("utf-8")
+    nav = html.split('<div class="nav">', 1)[1].split("</div>", 1)[0]
+    assert 'data-view="control-admins"' in nav
+    assert 'data-view="api-keys"' not in nav
+
+    source = (root / "app" / "admin_control_plane_admin_v1.js").read_text(encoding="utf-8")
+    assert 'group.dataset.navGroup = "web-user"' in source
+    for view in (
+        "client-policy", "registration-invitations", "tenants", "user-roles",
+        "subscriptions", "model-entitlements", "plugins", "quota-ledger",
+        "user-pricing", "user-payments", "admin-users",
+    ):
+        assert f'"{view}"' in source
+    assert 'webGroup.hidden = visibleItems.length === 0' in source
+    assert 'loginButton.hidden = authenticated' in source
+    assert 'logoutButton.hidden = !authenticated' in source
+    assert 'dialog.showModal()' in source
+
+
+def test_admin_header_uses_one_modal_login_and_one_session_identity():
+    root = Path(__file__).resolve().parents[1]
+    html = (root / "app" / "admin.py").read_text(encoding="utf-8")
+    assert 'id="sessionAuthControls"' in html
+    assert 'id="adminSessionOpenLogin"' in html
+    assert 'id="adminSessionLogout"' in html
+    assert 'id="adminSessionLoginDialog"' in html
+    assert '<div class="sessionAuth"><input id="adminSessionUser"' not in html
+
+    v17 = (root / "app" / "admin_v17.js").read_text(encoding="utf-8")
+    assert 'id="refresh" type="button">刷新' in v17
+    assert "adminIdentity" not in v17

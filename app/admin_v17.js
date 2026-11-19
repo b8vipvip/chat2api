@@ -50,9 +50,7 @@
   const hasSessionLogin = Boolean(document.getElementById("adminSessionLogin"));
   if (auth) {
     auth.innerHTML = `
-      <span id="adminIdentity" class="muted" style="align-self:center;white-space:nowrap"></span>
-      <button class="action" id="adminLogout" style="display:none">退出登录</button>
-      <button class="action" id="refresh">刷新</button>`;
+      <button class="action" id="refresh" type="button">刷新</button>`;
     document.getElementById("refresh").onclick = () => show((location.hash || "#overview").slice(1));
   }
 
@@ -77,10 +75,6 @@
     adminLoggedIn = Boolean(value);
     document.documentElement.dataset.adminV17Authenticated = adminLoggedIn ? "true" : "false";
     gate.style.display = adminLoggedIn || hasSessionLogin ? "none" : "flex";
-    const identity = document.getElementById("adminIdentity");
-    if (identity) identity.textContent = adminLoggedIn ? `管理员 · ${username || "admin"}` : "";
-    const logout = document.getElementById("adminLogout");
-    if (logout) logout.style.display = adminLoggedIn && !hasSessionLogin ? "inline-block" : "none";
     if (!adminLoggedIn && !hasSessionLogin) status("请登录管理员账号", "muted");
   }
 
@@ -136,7 +130,8 @@
   document.getElementById("adminPassword").addEventListener("keydown", event => {
     if (event.key === "Enter") document.getElementById("adminLoginButton").click();
   });
-  document.getElementById("adminLogout").onclick = async () => {
+  const legacyLogout = document.getElementById("adminLogout");
+  if (legacyLogout) legacyLogout.onclick = async () => {
     const generation = ++authStateGeneration;
     await nativeFetch("/api/admin/auth/logout", {method: "POST", credentials: "same-origin"}).catch(() => {});
     if (generation !== authStateGeneration) return;

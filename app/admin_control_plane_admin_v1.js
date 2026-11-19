@@ -17,6 +17,51 @@
     "user-payments": ["super_admin", "billing_admin"],
     "admin-users": ["super_admin", "user_admin", "system_admin", "support"]
   };
+  const WEB_USER_NAV_ITEMS = [
+    "client-policy", "registration-invitations", "tenants", "user-roles",
+    "subscriptions", "model-entitlements", "plugins", "quota-ledger",
+    "user-pricing", "user-payments", "admin-users"
+  ];
+
+  function buildWebUserNavigation() {
+    const nav = document.querySelector(".nav");
+    if (!nav) return null;
+    let group = document.getElementById("web-user-nav-group");
+    if (!group) {
+      group = document.createElement("details");
+      group.id = "web-user-nav-group";
+      group.className = "nav-group";
+      group.dataset.navGroup = "web-user";
+      const summary = document.createElement("summary");
+      summary.textContent = "Web 用户端";
+      summary.setAttribute("aria-label", "展开 Web 用户端二级导航");
+      const submenu = document.createElement("div");
+      submenu.className = "nav-submenu";
+      submenu.setAttribute("aria-label", "Web 用户端管理");
+      group.append(summary, submenu);
+      const rbacButton = nav.querySelector('button[data-view="control-admins"]');
+      if (rbacButton) rbacButton.insertAdjacentElement("afterend", group);
+      else nav.appendChild(group);
+    }
+    const submenu = group.querySelector(".nav-submenu");
+    for (const view of WEB_USER_NAV_ITEMS) {
+      const item = nav.querySelector('button[data-view="' + view + '"]');
+      if (item && item.parentElement !== submenu) submenu.appendChild(item);
+    }
+    group.addEventListener("click", (event) => {
+      if (event.target.closest(".nav-submenu button[data-view]")) group.open = true;
+    });
+    window.addEventListener("hashchange", () => {
+      const activeView = location.hash.replace(/^#/, "");
+      const activeItem = Array.from(group.querySelectorAll(".nav-submenu button[data-view]"))
+        .find((item) => item.dataset.view === activeView && !item.hidden);
+      if (activeItem) group.open = true;
+    });
+    return group;
+  }
+
+  buildWebUserNavigation();
+
   let adminSession = null;
   let sessionRefreshGeneration = 0;
   let invitationDisplayGeneration = 0;
@@ -74,6 +119,21 @@
     return !!(adminSession && adminSession.authenticated && allowed.includes(adminSession.role));
   }
 
+  function renderSessionControls() {
+    const authenticated = Boolean(adminSession && adminSession.authenticated);
+    const loginButton = $("adminSessionOpenLogin");
+    const logoutButton = $("adminSessionLogout");
+    const state = $("adminSessionState");
+    if (loginButton) loginButton.hidden = authenticated;
+    if (logoutButton) logoutButton.hidden = !authenticated;
+    if (state) {
+      state.textContent = authenticated
+        ? "已登录：" + adminSession.username + " · " + (adminSession.role || "unknown")
+        : "未登录";
+      state.className = authenticated ? "sessionIdentity ok" : "sessionIdentity muted";
+    }
+  }
+
   function applyNavigation() {
     // The existing Commerce module creates these nav buttons dynamically.
     // Adopt them into the same server-session RBAC visibility contract.
@@ -100,6 +160,14 @@
       node.style.display = visible ? "" : "none";
       node.disabled = !root;
     });
+    const webGroup = document.getElementById("web-user-nav-group");
+    if (webGroup) {
+      const visibleItems = Array.from(webGroup.querySelectorAll(".nav-submenu > button[data-view]"))
+        .filter((node) => !node.hidden && node.style.display !== "none");
+      webGroup.hidden = visibleItems.length === 0;
+      if (visibleItems.some((node) => node.classList.contains("active"))) webGroup.open = true;
+    }
+    renderSessionControls();
     if ($("adminKey")) $("adminKey").disabled = !!(adminSession && adminSession.authenticated && !root);
     if ($("connect")) $("connect").hidden = !!(adminSession && adminSession.authenticated && !root);
     if ($("adminSessionRotatePassword")) {
@@ -135,13 +203,7 @@
       const nextSession = await sessionApi("/api/admin/auth/session");
       if (generation !== sessionRefreshGeneration) return adminSession;
       adminSession = nextSession;
-      const state = $("adminSessionState");
-      if (state) {
-        state.textContent = adminSession.authenticated
-          ? "已登录：" + adminSession.username + " · " + (adminSession.role || "unknown")
-          : "未登录管理会话";
-        state.className = adminSession.authenticated ? "ok" : "muted";
-      }
+      renderSessionControls();
       if (adminSession.authenticated && adminSession.role !== "super_admin") {
         // Prevent a stale root API key from a previous administrator session
         // from being reused by the legacy inline admin API helper.
@@ -169,6 +231,7 @@
     } catch (error) {
       if (generation !== sessionRefreshGeneration) return adminSession;
       adminSession = null;
+      renderSessionControls();
       applyNavigation();
       window.dispatchEvent(new CustomEvent("chat2api-admin-session-changed", {
         detail: { authenticated: false, role: null, username: "" },
@@ -184,14 +247,33 @@
     void refreshSession();
   });
 
+  $("adminSessionOpenLogin")?.addEventListener("click", () => {
+    const dialog = $("adminSessionLoginDialog");
+    const error = $("adminSessionLoginError");
+    if (error) error.textContent = "";
+    if (dialog && !dialog.open) dialog.showModal();
+    $("adminSessionUser")?.focus();
+  });
+  $("adminSessionLoginClose")?.addEventListener("click", () => $("adminSessionLoginDialog")?.close());
+  $("adminSessionLoginCancel")?.addEventListener("click", () => $("adminSessionLoginDialog")?.close());
+  $("adminSessionPassword")?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      $("adminSessionLogin")?.click();
+    }
+  });
+
   $("adminSessionLogin")?.addEventListener("click", async () => {
     const username = $("adminSessionUser").value.trim();
     const password = $("adminSessionPassword").value;
     if (!username || !password) {
-      setStatus("adminSessionState", "请输入管理员用户名和密码", true);
+      setStatus("adminSessionLoginError", "请输入管理员用户名和密码", true);
       return;
     }
-    $("adminSessionLogin").disabled = true;
+    const loginButton = $("adminSessionLogin");
+    const errorNode = $("adminSessionLoginError");
+    if (errorNode) errorNode.textContent = "";
+    loginButton.disabled = true;
     try {
       await sessionApi("/api/admin/auth/login", {
         method: "POST",
@@ -200,12 +282,15 @@
       $("adminSessionPassword").value = "";
       await refreshSession();
       if (adminSession && adminSession.authenticated) {
+        $("adminSessionLoginDialog")?.close();
         if (typeof status === "function") status("管理员 Session 已建立 · " + adminSession.role, "ok");
+      } else if (errorNode) {
+        errorNode.textContent = "登录状态尚未确认，请重试";
       }
     } catch (error) {
-      setStatus("adminSessionState", "登录失败：" + error.message, true);
+      setStatus("adminSessionLoginError", error.message, true);
     } finally {
-      $("adminSessionLogin").disabled = false;
+      loginButton.disabled = false;
     }
   });
 
