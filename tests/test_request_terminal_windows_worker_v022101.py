@@ -70,9 +70,11 @@ def test_windows_manual_pairing_forces_fresh_identity_and_keeps_auto_binding_off
 def test_windows_popup_distinguishes_transport_drop_from_active_request_lease() -> None:
     popup = source("chrome_extension/popup.js")
 
-    assert "/WebSocket closed \\(1006\\)/i.test(text)" in popup
+    assert "/WebSocket closed \\(1006(?:, [^)]+)?\\)/i.test(text)" in popup
     assert "/worker_active_request_lease|still has active requests/i.test(text)" in popup
     assert "Worker 会自动重连" in popup
+    assert "服务端未完成 WebSocket 握手" in popup
+    assert "不要反复更换设备码" in popup
     assert "当前 Worker 仍有请求未进入终态" in popup
 
 
