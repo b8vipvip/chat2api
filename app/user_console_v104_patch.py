@@ -194,6 +194,23 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
         master = str(getattr(settings, "api_key", "") or "")
         return bool(supplied and master and secrets.compare_digest(supplied, master))
 
+    def admin_actor(request: Request) -> str:
+        # v17 sets this only after authenticating the admin session and
+        # authorizing the route. Resolve the session identity as a fallback
+        # for lightweight apps that install this module without v17.
+        actor = str(getattr(request.state, "admin_username", "") or "").strip()
+        if actor:
+            return actor
+        if admin_sessions is not None:
+            token = request.cookies.get(ADMIN_SESSION_COOKIE)
+            identity = getattr(admin_sessions, "identity", None)
+            if callable(identity):
+                resolved = identity(token)
+                if resolved:
+                    return str(resolved)
+        # The master API key is a root-only credential in legacy/test apps.
+        return str(settings.admin_username)
+
     def current_user(request: Request) -> dict[str, Any]:
         user = accounts.authenticate(request.cookies.get(USER_SESSION_COOKIE))
         if not user:
@@ -883,7 +900,7 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
         if not admin_ok(request):
             raise HTTPException(status_code=401, detail="Administrator login required")
         audit_context = {
-            "actor": settings.admin_username,
+            "actor": admin_actor(request),
             "action": "user.status_change_requested",
             "target_type": "user",
             "target_id": user_id,
@@ -920,7 +937,7 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
         if not admin_ok(request):
             raise HTTPException(status_code=401, detail="Administrator login required")
         audit_context = {
-            "actor": settings.admin_username,
+            "actor": admin_actor(request),
             "action": "user.sessions_revoke_requested",
             "target_type": "user",
             "target_id": user_id,
@@ -1009,7 +1026,7 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
             )
 
         audit_context = {
-            "actor": settings.admin_username,
+            "actor": admin_actor(request),
             "action": "api_key.update_requested",
             "target_type": "api_key",
             "target_id": key_id,
@@ -1049,7 +1066,7 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=404, detail="用户 API Key 不存在")
 
         audit_context = {
-            "actor": settings.admin_username,
+            "actor": admin_actor(request),
             "action": "api_key.revoke_requested",
             "target_type": "api_key",
             "target_id": key_id,

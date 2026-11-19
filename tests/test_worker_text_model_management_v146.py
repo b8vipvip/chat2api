@@ -44,8 +44,9 @@ def test_persistent_admin_model_audit_auth_routing_and_worker_history(tmp_path: 
             return True
         def model_catalog(self, online_only=True):
             return [{"id": "gpt-5.6-sol", "clients": ["ext_TX03"]}]
-        async def touch(self, client_id, metadata=None):
+        async def touch(self, client_id, metadata=None, *, websocket=None):
             self.clients[client_id].metadata.update(metadata or {})
+            return True
 
     app = FastAPI()
     app.state.settings = SimpleNamespace(data_dir=tmp_path)

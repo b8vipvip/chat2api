@@ -373,3 +373,228 @@ def test_same_origin_admin_request_requires_exact_browser_origin() -> None:
         "origin": f"https://{host}",
         "x-forwarded-proto": "javascript",
     }, scheme="http")) is False
+
+
+
+def test_workspace_owner_role_transitions_are_super_admin_only(tmp_path: Path):
+    app = make_app(tmp_path)
+    install_tenant_memberships(app)
+
+    with TestClient(app) as root:
+        assert login(root, "owner", "strong-root-password").status_code == 200
+        created_admin = root.post(
+            "/api/admin/control/admins",
+            headers=ORIGIN,
+            json={
+                "username": "tenant_operator",
+                "password": "strong-tenant-operator-password",
+                "role": "system_admin",
+            },
+        )
+        assert created_admin.status_code == 201, created_admin.text
+
+        tenant_response = root.post(
+            "/api/admin/tenants",
+            headers=ORIGIN,
+            json={"slug": "owner-guard-team", "display_name": "Owner Guard Team"},
+        )
+        assert tenant_response.status_code == 201, tenant_response.text
+        tenant_id = tenant_response.json()["tenant"]["tenant_id"]
+
+        first_user = root.post("/api/user/register", json={
+            "email": "owner-guard-first@example.com",
+            "password": "owner-guard-first-password",
+        })
+        second_user = root.post("/api/user/register", json={
+            "email": "owner-guard-second@example.com",
+            "password": "owner-guard-second-password",
+        })
+        assert first_user.status_code == second_user.status_code == 200
+        first_id = first_user.json()["user"]["user_id"]
+        second_id = second_user.json()["user"]["user_id"]
+
+        initial_owner = root.put(
+            f"/api/admin/tenants/{tenant_id}/members",
+            headers=ORIGIN,
+            json={"user_id": first_id, "role": "owner"},
+        )
+        assert initial_owner.status_code == 200, initial_owner.text
+
+        with TestClient(app) as delegated:
+            assert login(
+                delegated, "tenant_operator", "strong-tenant-operator-password",
+            ).status_code == 200
+
+            # A delegated administrator has tenants:write, but cannot create
+            # a new owner, demote an existing owner, or remove an owner.
+            promote = delegated.put(
+                f"/api/admin/tenants/{tenant_id}/members",
+                headers=ORIGIN,
+                json={"user_id": second_id, "role": "owner"},
+            )
+            assert promote.status_code == 403, promote.text
+
+            demote = delegated.put(
+                f"/api/admin/tenants/{tenant_id}/members",
+                headers=ORIGIN,
+                json={"user_id": first_id, "role": "member"},
+            )
+            assert demote.status_code == 403, demote.text
+
+            remove = delegated.delete(
+                f"/api/admin/tenants/{tenant_id}/members/{first_id}",
+                headers=ORIGIN,
+            )
+            assert remove.status_code == 403, remove.text
+
+            # Ordinary delegated member management remains available.
+            member = delegated.put(
+                f"/api/admin/tenants/{tenant_id}/members",
+                headers=ORIGIN,
+                json={"user_id": second_id, "role": "member"},
+            )
+            assert member.status_code == 200, member.text
+
+            # The invitation path is separately constrained to non-owner roles.
+            owner_invite = delegated.post(
+                f"/api/admin/tenants/{tenant_id}/invitations",
+                headers=ORIGIN,
+                json={"email": "owner-invite@example.com", "role": "owner"},
+            )
+            assert owner_invite.status_code == 400, owner_invite.text
+
+            rows = delegated.get(f"/api/admin/tenants/{tenant_id}/members")
+            assert rows.status_code == 200
+            roles = {row["user_id"]: row["role"] for row in rows.json()["data"]}
+            assert roles == {first_id: "owner", second_id: "member"}
+
+        # The configured root super_admin retains the explicit ownership path.
+        second_owner = root.put(
+            f"/api/admin/tenants/{tenant_id}/members",
+            headers=ORIGIN,
+            json={"user_id": second_id, "role": "owner"},
+        )
+        assert second_owner.status_code == 200, second_owner.text
+        assert app.state.tenant_memberships.role_for(tenant_id, second_id) == "owner"
+
+
+def test_user_status_and_session_revocation_audit_use_delegated_user_admin_identity(tmp_path: Path):
+    from app.user_commerce import USER_SESSION_COOKIE
+
+    app = make_app(tmp_path)
+    with TestClient(app) as root:
+        assert login(root, "owner", "strong-root-password").status_code == 200
+        first = root.post("/api/user/register", json={
+            "email": "audit-disable@example.com", "password": "audit-disable-password",
+        })
+        second = root.post("/api/user/register", json={
+            "email": "audit-revoke@example.com", "password": "audit-revoke-password",
+        })
+        assert first.status_code == second.status_code == 200
+        first_id = first.json()["user"]["user_id"]
+        second_id = second.json()["user"]["user_id"]
+
+        created = root.post("/api/admin/control/admins", headers=ORIGIN, json={
+            "username": "users_auditor",
+            "password": "strong-users-auditor-password",
+            "role": "user_admin",
+        })
+        assert created.status_code == 201, created.text
+
+        first_session = app.state.user_accounts.create_session(first_id)
+        second_session = app.state.user_accounts.create_session(second_id)
+        with TestClient(app) as delegated, TestClient(app) as first_client, TestClient(app) as second_client:
+            first_client.cookies.set(USER_SESSION_COOKIE, first_session)
+            second_client.cookies.set(USER_SESSION_COOKIE, second_session)
+            assert first_client.get("/api/user/keys").status_code == 200
+            assert second_client.get("/api/user/keys").status_code == 200
+            assert login(
+                delegated, "users_auditor", "strong-users-auditor-password",
+            ).status_code == 200
+
+            disabled = delegated.patch(
+                f"/api/admin/users/{first_id}",
+                headers=ORIGIN,
+                json={"enabled": False},
+            )
+            assert disabled.status_code == 200, disabled.text
+            assert disabled.json()["revoked_sessions"] >= 1
+            assert first_client.get("/api/user/keys").status_code == 401
+            assert second_client.get("/api/user/keys").status_code == 200
+
+            revoked = delegated.post(
+                f"/api/admin/users/{second_id}/sessions/revoke",
+                headers=ORIGIN,
+            )
+            assert revoked.status_code == 200, revoked.text
+            assert revoked.json()["revoked_sessions"] >= 1
+            assert second_client.get("/api/user/keys").status_code == 401
+
+    rows = app.state.admin_audit.recent(100)
+    expected_actions = {
+        "user.status_change_requested",
+        "user.status_change_completed",
+        "user.sessions_revoke_requested",
+        "user.sessions_revoke_completed",
+    }
+    actor_rows = [
+        row for row in rows
+        if row["action"] in expected_actions and row["target_id"] in {first_id, second_id}
+    ]
+    assert {row["action"] for row in actor_rows} == expected_actions
+    assert all(row["actor"] == "users_auditor" for row in actor_rows)
+
+
+def test_user_api_key_update_and_revoke_audit_use_delegated_super_admin_identity(tmp_path: Path):
+    from app.user_commerce import USER_SESSION_COOKIE
+
+    app = make_app(tmp_path)
+    with TestClient(app) as root:
+        assert login(root, "owner", "strong-root-password").status_code == 200
+        registered = root.post("/api/user/register", json={
+            "email": "audit-key-owner@example.com",
+            "password": "audit-key-owner-password",
+        })
+        assert registered.status_code == 200, registered.text
+        user_id = registered.json()["user"]["user_id"]
+
+        created = root.post("/api/admin/control/admins", headers=ORIGIN, json={
+            "username": "key_auditor",
+            "password": "strong-key-auditor-password",
+            "role": "super_admin",
+        })
+        assert created.status_code == 201, created.text
+
+        user_session = app.state.user_accounts.create_session(user_id)
+        with TestClient(app) as user_client, TestClient(app) as delegated:
+            user_client.cookies.set(USER_SESSION_COOKIE, user_session)
+            created_key = user_client.post("/api/user/keys", json={"name": "Audit attribution key"})
+            assert created_key.status_code == 200, created_key.text
+            key_id = created_key.json()["key"]["key_id"]
+
+            assert login(delegated, "key_auditor", "strong-key-auditor-password").status_code == 200
+            updated = delegated.patch(
+                f"/api/admin/users/{user_id}/keys/{key_id}",
+                headers=ORIGIN,
+                json={"enabled": False},
+            )
+            assert updated.status_code == 200, updated.text
+            revoked = delegated.delete(
+                f"/api/admin/users/{user_id}/keys/{key_id}",
+                headers=ORIGIN,
+            )
+            assert revoked.status_code == 200, revoked.text
+
+    rows = app.state.admin_audit.recent(100)
+    expected_actions = {
+        "api_key.update_requested",
+        "api_key.update_completed",
+        "api_key.revoke_requested",
+        "api_key.revoke_completed",
+    }
+    actor_rows = [
+        row for row in rows
+        if row["action"] in expected_actions and row["target_id"] == key_id
+    ]
+    assert {row["action"] for row in actor_rows} == expected_actions
+    assert all(row["actor"] == "key_auditor" for row in actor_rows)

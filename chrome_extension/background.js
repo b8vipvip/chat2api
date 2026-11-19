@@ -1,5 +1,7 @@
+const DEFAULT_SERVER_URL = "https://api.numbot.cn";
+const LEGACY_DEFAULT_SERVER_URL = "https://chat2api.mv3.cn";
 const DEFAULTS = {
-  serverUrl: "https://chat2api.mv3.cn",
+  serverUrl: DEFAULT_SERVER_URL,
   pairingCode: "",
   clientId: "",
   clientToken: "",
@@ -26,7 +28,26 @@ let modelDiscoveryInFlight = null;
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-async function config() { return chrome.storage.local.get(DEFAULTS); }
+function isLegacyDefaultServer(value) {
+  try {
+    const url = new URL(String(value || ""));
+    return url.origin === LEGACY_DEFAULT_SERVER_URL &&
+      (url.pathname === "/" || url.pathname === "") &&
+      !url.search && !url.hash;
+  } catch (_) {
+    return false;
+  }
+}
+async function config() {
+  const settings = await chrome.storage.local.get(DEFAULTS);
+  // Migrate only the exact historical repository default. Explicit custom
+  // server origins and reverse-proxy paths remain untouched.
+  if (isLegacyDefaultServer(settings.serverUrl)) {
+    settings.serverUrl = DEFAULTS.serverUrl;
+    await chrome.storage.local.set({ serverUrl: settings.serverUrl });
+  }
+  return settings;
+}
 async function updateState(socketState, socketError = "") {
   await chrome.storage.local.set({ socketState, socketError, socketUpdatedAt: new Date().toISOString() });
 }
@@ -36,6 +57,10 @@ function wsUrl(serverUrl, clientId, token) {
   url.pathname = `/ws/extensions/${encodeURIComponent(clientId)}`;
   url.search = `?token=${encodeURIComponent(token)}`;
   return url.toString();
+}
+function serverHost(serverUrl) {
+  try { return new URL(serverUrl).host; }
+  catch (_) { return "invalid-server-url"; }
 }
 function isChatGptUrl(value = "") {
   try { return ["chatgpt.com", "www.chatgpt.com", "chat.openai.com"].includes(new URL(value).hostname); }
@@ -401,13 +426,25 @@ async function connectSocket() {
   if (!settings.clientId || !settings.clientToken) { await updateState("unpaired"); return; }
   if (socket && [WebSocket.OPEN, WebSocket.CONNECTING].includes(socket.readyState)) return;
   await updateState("connecting");
-  try { socket = new WebSocket(wsUrl(settings.serverUrl, settings.clientId, settings.clientToken)); }
-  catch (error) { await updateState("error", String(error?.message || error)); scheduleReconnect(); return; }
-  socket.onopen = async () => {
+  let connection;
+  try {
+    connection = new WebSocket(wsUrl(settings.serverUrl, settings.clientId, settings.clientToken));
+    socket = connection;
+  } catch (error) {
+    await updateState("error", `${String(error?.message || error)} · server=${serverHost(settings.serverUrl)}`);
+    scheduleReconnect();
+    return;
+  }
+  // Every handler belongs to the exact socket it was created for. A delayed
+  // close/error from a replaced socket must never mark the new socket offline.
+  connection.onopen = async () => {
+    if (socket !== connection) return;
     reconnectAttempt = 0;
     await updateState("connected");
+    if (socket !== connection) return;
     const nativeTool=await (globalThis.__CHAT2API_WINDOWS_NATIVE_PAGE_DIAG_V1__?.getToolStatus?.()
       || Promise.resolve({})).catch(()=>({}));
+    if (socket !== connection) return;
     await sendSocket({
       type: "extension.hello",
       metadata: {
@@ -418,11 +455,16 @@ async function connectSocket() {
         ...nativeCapacityControlMetadata(),
       },
     });
+    if (socket !== connection) return;
     await maybeAutoBind();
+    if (socket !== connection) return;
     await sendExtensionStatus(false);
-    keepAliveTimer = setInterval(() => trySendSocket({ type: "heartbeat", ts: Date.now() }), 20000);
+    keepAliveTimer = setInterval(() => {
+      if (socket === connection) trySendSocket({ type: "heartbeat", ts: Date.now() });
+    }, 20000);
   };
-  socket.onmessage = event => {
+  connection.onmessage = event => {
+    if (socket !== connection) return;
     try {
       const message = JSON.parse(event.data);
       if (message?.type === "chat.native.ack") {
@@ -447,12 +489,18 @@ async function connectSocket() {
       handleServerMessage(message).catch(console.error);
     } catch (error) { console.warn("chat2api invalid server message", error); }
   };
-  socket.onerror = () => updateState("error", "WebSocket connection error");
-  socket.onclose = event => {
+  connection.onerror = () => {
+    if (socket !== connection) return;
+    updateState("error", `WebSocket connection error · server=${serverHost(settings.serverUrl)}`);
+  };
+  connection.onclose = event => {
+    if (socket !== connection) return;
+    socket = null;
     rejectPendingFileChunks("socket-closed-before-server-ack");
     rejectPendingNativeAcks("socket-closed-before-native-ack");
     clearInterval(keepAliveTimer);
-    updateState("disconnected", event.reason || `WebSocket closed (${event.code})`);
+    const detail = event.reason || `WebSocket closed (${event.code}${event.wasClean ? ", clean" : ", abnormal"})`;
+    updateState("disconnected", `${detail} · server=${serverHost(settings.serverUrl)}`);
     scheduleReconnect();
   };
 }

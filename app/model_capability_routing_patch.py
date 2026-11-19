@@ -283,6 +283,8 @@ def install_model_capability_routing_patch(app: FastAPI) -> FastAPI:
             return _select_mini(registry, needs_multimodal=bool(target.get("needs_multimodal")))
         eligible = _idle_compatible(registry, model, needs_multimodal=bool(target.get("needs_multimodal")))
         if not eligible:
+            if model == "default":
+                raise ConnectionError("No ChatGPT-ready Chrome extension is available for the current page model.")
             online_idle = [client_id for client_id in registry.online_client_ids() if client_id not in registry.busy_clients]
             available = "; ".join(_description(registry, client_id) for client_id in online_idle)
             raise ConnectionError(

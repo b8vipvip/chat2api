@@ -32,8 +32,13 @@ class FakeRegistry:
     async def send(self, client_id: str, payload: dict) -> None:
         self.sent.append((client_id, payload.copy()))
 
-    async def touch(self, client_id: str, metadata: dict | None = None) -> None:
+    async def touch(
+        self, client_id: str, metadata: dict | None = None, *, websocket=None,
+    ) -> bool:
+        if websocket is not None and self.sockets.get(client_id) is not websocket:
+            return False
         self.touched.append((client_id, metadata))
+        return True
 
 
 class FakeLinuxWorkers:

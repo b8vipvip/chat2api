@@ -91,6 +91,12 @@ def test_admin_audit_redacts_nested_secrets_before_persisting_and_hashing(tmp_pa
         "raw-cookie-value",
         "raw-invitation-code",
         "raw-client-secret",
+        "raw-refresh-token",
+        "raw-access-token",
+        "raw-session-token",
+        "raw-csrf-token",
+        "raw-bearer-token",
+        "raw-jwt-token",
     )
     row = store.append(
         actor="owner",
@@ -101,6 +107,15 @@ def test_admin_audit_redacts_nested_secrets_before_persisting_and_hashing(tmp_pa
             "apiKey": secrets_in_fixture[0],
             "password": secrets_in_fixture[1],
             "refresh_token": secrets_in_fixture[2],
+            "refreshToken": secrets_in_fixture[6],
+            "accessToken": secrets_in_fixture[7],
+            "sessionToken": secrets_in_fixture[8],
+            "CSRFToken": secrets_in_fixture[9],
+            "bearerToken": secrets_in_fixture[10],
+            "jwt": secrets_in_fixture[11],
+            "tokenCount": 42,
+            "tokenID": "token_safe_identifier",
+            "apiKeyID": "api_key_safe_identifier",
             "nested": {
                 "Authorization": "Bearer raw-access-token",
                 "cookie": secrets_in_fixture[3],
@@ -118,6 +133,15 @@ def test_admin_audit_redacts_nested_secrets_before_persisting_and_hashing(tmp_pa
     assert row["details"]["apiKey"] == "[REDACTED]"
     assert row["details"]["password"] == "[REDACTED]"
     assert row["details"]["refresh_token"] == "[REDACTED]"
+    assert row["details"]["refreshToken"] == "[REDACTED]"
+    assert row["details"]["accessToken"] == "[REDACTED]"
+    assert row["details"]["sessionToken"] == "[REDACTED]"
+    assert row["details"]["CSRFToken"] == "[REDACTED]"
+    assert row["details"]["bearerToken"] == "[REDACTED]"
+    assert row["details"]["jwt"] == "[REDACTED]"
+    assert row["details"]["tokenCount"] == 42
+    assert row["details"]["tokenID"] == "token_safe_identifier"
+    assert row["details"]["apiKeyID"] == "api_key_safe_identifier"
     assert row["details"]["nested"]["Authorization"] == "[REDACTED]"
     assert row["details"]["nested"]["cookie"] == "[REDACTED]"
     assert row["details"]["nested"]["invite_code"] == "[REDACTED]"

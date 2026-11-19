@@ -160,6 +160,8 @@
     if(known.live)return `<span data-linux-standby-source="live" title="实时物理核验的未分配可接待窗口" style="color:#22c55e;font-weight:700">${count}</span>`;
     return `<span data-linux-standby-source="cached" title="本次物理核验未成功；显示45秒内的上次核验值，不能视为实时容量" style="color:#f59e0b;font-weight:700">${count}</span><small class="v124-muted" style="color:#f59e0b;white-space:nowrap"> 上次核验</small>`;
   }
+  let createDeviceBusy=false;
+
   function renderDevices(){
     const body=document.getElementById("linuxDeviceRowsV124");
     if(!body)return;
@@ -177,8 +179,8 @@
     if(summary)summary.textContent=`设备：${state.devices.length} · Linux Worker：${state.devices.reduce((n,d)=>n+(d.workers||[]).length,0)}`;
   }
 
-  // UI identity only: the internal wrk_ key remains unchanged for commands,
-  // data attributes and Linux Controller ownership.
+  // Public UI identity is always the canonical Chrome extension ID.
+  // Keep the internal wrk_ controller key only in data attributes/API actions.
   const visibleWorkerId = worker => {
     const id=String(worker?.extension_client_id||"").trim();
     return /^ext_[A-Za-z0-9_-]{5,120}$/.test(id)?id:"ext_ 待绑定";
@@ -215,7 +217,7 @@
         const concurrency=Math.max(1,Math.min(32,Number(ext.max_concurrency||capacity.limit_units||1)));
         // Single server-owned maximum concurrency, never a separate window count.
         const limits=ext.client_id?`<div data-v121-worker-limits="${esc(ext.client_id)}" style="display:inline-flex;gap:6px;align-items:center;white-space:nowrap;min-width:78px"><strong data-v121-limit-summary>${concurrency}</strong><button type="button" class="action" data-v121-edit-limits title="编辑最大并发请求数">✎</button></div>`:"-";
-                rows.push(`<tr data-linux-worker-id="${esc(id)}"><td><code>${esc(publicId)}</code><div class="v124-muted">Worker ${slot}</div></td><td>${esc(accountLabel)}</td><td><span class="v124-pill v124-worker-status ${mismatch?"bad":tone}">${esc(mismatch?"Bridge 绑定冲突":status==="运行正常"&&(ext.busy===true||Number(running)>0)?"忙碌":status)}</span></td><td>${esc(running)} / ${reserve}</td><td>${limits}</td><td>${esc(d.device_name)}<div class="v124-muted">Slot ${slot}</div></td><td>${esc(chatgpt(w,ext))}</td><td><div class="v124-actions"><button class="action" data-worker-login-edit="${esc(id)}">登录</button><button class="action" data-worker-action="initialize" data-worker="${esc(id)}">初始化</button><button class="action" data-login-worker="${esc(id)}" data-name="${esc(d.device_name)} · Worker ${slot}">远程</button><button class="action" data-diagnostics="${esc(id)}">诊断日志</button><button class="action ${w.enabled===false?"good":"danger"}" data-linux-worker-enable="${esc(id)}" data-enabled="${w.enabled===false?"1":"0"}">${w.enabled===false?"启用":"禁用"}</button><button class="action danger" data-linux-worker-delete="${esc(id)}" data-worker-slot="${slot}">删除</button></div></td></tr>`);
+                rows.push(`<tr data-linux-worker-id="${esc(id)}"><td><code title="公开扩展身份；内部 Controller ID 仅用于服务端路由">${esc(publicId)}</code><div class="v124-muted">Worker ${slot}</div></td><td>${esc(accountLabel)}</td><td><span class="v124-pill v124-worker-status ${mismatch?"bad":tone}">${esc(mismatch?"Bridge 绑定冲突":status==="运行正常"&&(ext.busy===true||Number(running)>0)?"忙碌":status)}</span></td><td>${esc(running)} / ${reserve}</td><td>${limits}</td><td>${esc(d.device_name)}<div class="v124-muted">Slot ${slot}</div></td><td>${esc(chatgpt(w,ext))}</td><td><div class="v124-actions"><button class="action" data-worker-login-edit="${esc(id)}">登录</button><button class="action" data-worker-action="initialize" data-worker="${esc(id)}">初始化</button><button class="action" data-login-worker="${esc(id)}" data-name="${esc(d.device_name)} · Worker ${slot}">远程</button><button class="action" data-diagnostics="${esc(id)}">诊断日志</button><button class="action ${w.enabled===false?"good":"danger"}" data-linux-worker-enable="${esc(id)}" data-enabled="${w.enabled===false?"1":"0"}">${w.enabled===false?"启用":"禁用"}</button><button class="action danger" data-linux-worker-delete="${esc(id)}" data-worker-slot="${slot}">删除</button></div></td></tr>`);
       }
     }
     body.innerHTML=rows.join("")||'<tr><td colspan="8" class="v124-muted">暂无 Linux Worker。请先在设备列表新增设备。</td></tr>';
@@ -230,7 +232,7 @@
     if(!d){if(name)name.textContent="未选择设备";box.textContent="请从设备列表选择需要管理的设备。";return;}
     if(name)name.textContent=`${d.device_name} · ${(d.workers||[]).length} Worker`;
     box.innerHTML='<div class="v124-muted">此处仅管理设备内 Worker 数量。初始化、远程、诊断日志等操作请在下方 Worker 列表中按 Worker ID 操作。</div>'+
-      (d.workers||[]).map(w=>`<div style="padding:8px 0;border-bottom:1px solid #334155">Worker ${Number(w.worker_slot||1)} · <code>${esc(visibleWorkerId(w))}</code></div>`).join("");
+      (d.workers||[]).map(w=>`<div style="padding:8px 0;border-bottom:1px solid #334155">Worker ${Number(w.worker_slot||1)} · <code title="公开扩展身份；内部 Controller ID 仅用于服务端路由">${esc(visibleWorkerId(w))}</code></div>`).join("");
   }
 
   function renamePairingHeader(){const body=document.getElementById("pairingBody");const first=body?.closest("table")?.querySelector("thead th:first-child");if(first)first.textContent="设备名称";}
@@ -253,7 +255,25 @@
     document.addEventListener("click",async event=>{const t=event.target?.closest?.("button");if(!t)return;try{
       if(t.dataset.closeDialog){if(t.dataset.closeDialog==="linuxWorkerLoginDialog"){await closeLogin();return;}document.getElementById(t.dataset.closeDialog)?.close();return;}
       if(t.id==="createLinuxDeviceV124"){await openCreate();return;} if(t.id==="proxyManagerV124"){await openProxyManager();return;} if(t.dataset.manageDevice){state.selectedDevice=String(t.dataset.manageDevice||"");renderManager();document.getElementById("linuxWorkerManagerV124").showModal();return;} if(t.id==="refreshLinuxDevicesV124"||t.id==="refreshManagerV124"){await refreshAll(true);return;}
-      if(t.id==="generateDeviceV124"){const r=await api("/api/admin/linux-devices",{method:"POST",body:{pairing_id:document.getElementById("devicePairingV124").value,proxy_id:document.getElementById("deviceProxyV124").value}});document.getElementById("deviceCommandV124").textContent=r.install_command||"";document.getElementById("deviceCommandBoxV124").style.display="block";document.getElementById("deviceCreateResultV124").textContent=`设备「${r.device_name}」已预留。`;await refreshAll(true);return;}
+      if(t.id==="generateDeviceV124"){
+        if(createDeviceBusy)return;
+        createDeviceBusy=true;
+        const original=t.textContent;
+        t.disabled=true;
+        t.textContent="生成中…";
+        try{
+          const r=await api("/api/admin/linux-devices",{method:"POST",body:{pairing_id:document.getElementById("devicePairingV124").value,proxy_id:document.getElementById("deviceProxyV124").value}});
+          document.getElementById("deviceCommandV124").textContent=r.install_command||"";
+          document.getElementById("deviceCommandBoxV124").style.display="block";
+          document.getElementById("deviceCreateResultV124").textContent=r.existing?"设备已存在，已复用原安装命令。":`设备「${r.device_name}」已预留。`;
+          await refreshAll(true);
+        }finally{
+          createDeviceBusy=false;
+          t.disabled=false;
+          t.textContent=original;
+        }
+        return;
+      }
       if(t.id==="copyDeviceCommandV124"){await navigator.clipboard.writeText(document.getElementById("deviceCommandV124").textContent||"");return;} if(t.dataset.copyDevice!==undefined){const d=state.devices[Number(t.dataset.copyDevice)];if(d?.install_command)await navigator.clipboard.writeText(d.install_command);return;} if(t.dataset.copyText){await navigator.clipboard.writeText(t.dataset.copyText);return;}
       if(t.id==="addProxyV124"){await api("/api/admin/linux-worker-proxies",{method:"POST",body:{name:document.getElementById("proxyNameV124").value,share_link:document.getElementById("proxyLinkV124").value}});document.getElementById("proxyNameV124").value="";document.getElementById("proxyLinkV124").value="";await loadOptions();renderProxyManager();return;} if(t.dataset.deleteProxy){if(confirm("确定删除这个代理？")){await api(`/api/admin/linux-worker-proxies/${encodeURIComponent(t.dataset.deleteProxy)}`,{method:"DELETE"});await loadOptions();renderProxyManager();}return;}
       if(t.dataset.proxyWorker){await openProxy(t.dataset.proxyWorker);return;} if(t.id==="applyQuickProxyV124"){const p=state.proxies.find(x=>x.proxy_id===document.getElementById("quickProxyV124").value);if(!p)return;const out=document.getElementById("quickProxyResultV124");out.textContent="正在应用代理…";await api(`/api/admin/linux-workers/${encodeURIComponent(state.selectedProxyWorker)}/proxy`,{method:"POST",body:{share_link:p.share_link}});await api(`/api/admin/linux-workers/${encodeURIComponent(state.selectedProxyWorker)}/proxy-label`,{method:"POST",body:{name:p.name}}).catch(()=>null);out.textContent="代理已应用";state.health.delete(state.selectedProxyWorker);await refreshAll(true);return;} if(t.id==="testQuickProxyV124"){const out=document.getElementById("quickProxyResultV124");out.textContent="测试中…";const h=await testWorker(state.selectedProxyWorker);state.health.set(state.selectedProxyWorker,h);out.textContent=h.networkReady?"当前代理可达":"当前代理不可达";renderDevices();renderWorkers();return;}

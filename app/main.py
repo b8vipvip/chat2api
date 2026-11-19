@@ -3080,7 +3080,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.websocket("/ws/extensions/{client_id}")
     async def extension_socket(websocket: WebSocket, client_id: str, token: str = Query(default="")) -> None:
         if not await registry.authenticate(client_id, token):
-            await websocket.close(code=4401, reason="Invalid extension token")
+            client = registry.clients.get(client_id)
+            if client is None:
+                reason = "unknown_client"
+            elif not client.connection_enabled:
+                reason = "connection_disabled"
+            elif not registry.worker_admin_enabled(client_id):
+                reason = "worker_disabled"
+            else:
+                reason = "invalid_token"
+            logger.warning(
+                "Extension WebSocket authentication rejected client_id=%s reason=%s",
+                client_id, reason,
+            )
+            await websocket.close(code=4401, reason="Invalid extension credentials")
             return
         await websocket.accept()
         await registry.attach(client_id, websocket)

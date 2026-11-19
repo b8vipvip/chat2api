@@ -828,6 +828,16 @@ class BillingStore:
                 ),
             )
 
+            # A request ID is the shared idempotency identity across the
+            # wallet charge and admission ledgers. If both records exist, they
+            # must belong to the same account; otherwise replay recovery could
+            # settle or release another user's reservation.
+            for request_id in charges.keys() & reservations.keys():
+                if str(charges[request_id].get("user_id") or "") != str(
+                    reservations[request_id].get("user_id") or ""
+                ):
+                    raise ValueError("billing ledger charge/reservation owner mismatch")
+
             # These fields control money movement and reservation accounting;
             # accepting truthy strings or unknown states would let corrupted
             # records masquerade as paid/debited or disappear from active holds.
@@ -1300,6 +1310,8 @@ class BillingStore:
                 if str(existing.get("user_id") or "") != user_id:
                     raise WalletReservationError("Request is already charged to another user")
                 reservation = self.reservations.get(request_id)
+                if reservation and str(reservation.get("user_id") or "") != user_id:
+                    raise WalletReservationError("Request wallet reservation belongs to another user")
                 if reservation and reservation.get("state") == "reserved":
                     previous = dict(reservation)
                     reservation.update({
@@ -1315,9 +1327,16 @@ class BillingStore:
                 return dict(existing)
             diagnostics = request_row.get("diagnostics") if isinstance(request_row.get("diagnostics"), dict) else {}
             reservation = self.reservations.get(request_id)
-            if reservation and str(reservation.get("user_id") or "") != user_id:
+            if reservation is None:
+                # A completed legacy row without a durable admission marker
+                # cannot prove that billing was enabled, or which price/FX
+                # applied, when the request was accepted. Never backfill a
+                # debit from today's pricing configuration: doing so could
+                # retroactively charge traffic that was originally free.
+                return None
+            if str(reservation.get("user_id") or "") != user_id:
                 raise WalletReservationError("Request wallet reservation belongs to another user")
-            reserved_model = str((reservation or {}).get("model_id") or "")
+            reserved_model = str(reservation.get("model_id") or "")
             actual_model_id = str(diagnostics.get("actual_model") or "").strip()
             requested_model_id = str(request_row.get("requested_model") or "").strip()
             model_id = actual_model_id or requested_model_id or reserved_model
@@ -1373,12 +1392,6 @@ class BillingStore:
                         return None
                     price = dict(snapshot)
                     priced_model_id = reserved_model
-            else:
-                price = pricing.model(model_id)
-                if price and price.get("enabled", True) is not True:
-                    price = None
-                fx = float(pricing.public().get("usd_cny_rate") or 0)
-                priced_model_id = str((price or {}).get("model_id") or model_id)
             if not price:
                 if reservation and reservation.get("state") == "reserved":
                     previous = dict(reservation)

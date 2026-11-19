@@ -704,6 +704,8 @@ def install_linux_worker_device_authority_v124_patch(app: FastAPI) -> FastAPI:
                 device["install_command"] = repaired
         return {"data": rows, "authority": "linux-device-v124", "revision": PATCH_REVISION}
 
+    device_create_lock = asyncio.Lock()
+
     @app.get("/api/admin/linux-devices/setup-options")
     async def linux_device_setup_options(request: Request) -> dict[str, Any]:
         admin(request)
@@ -715,18 +717,33 @@ def install_linux_worker_device_authority_v124_patch(app: FastAPI) -> FastAPI:
         body = await request.json()
         pairing_id = str(body.get("pairing_id") or "").strip()
         proxy_id = str(body.get("proxy_id") or "").strip()
-        options = await setup_options()
-        pairing = next((item for item in options["pairing_codes"] if item["pairing_id"] == pairing_id), None)
-        proxy = next((item for item in options["proxies"] if item["proxy_id"] == proxy_id), None)
-        if not pairing or not pairing.get("enabled") or pairing.get("paired"):
-            raise HTTPException(409, "请选择启用且未配对的设备码")
-        if not proxy:
-            raise HTTPException(404, "代理不存在，请先在代理管理中添加")
-        for row in _device_rows(app):
-            if str(row.get("device_pairing_id") or "") == pairing_id:
-                raise HTTPException(409, "这个设备码已经属于一个 Linux 设备")
-        pairing_code, _ = await app.state.pairings.reveal_or_rotate(pairing_id)
-        return create_install(request, pairing=pairing, pairing_code=pairing_code, proxy=proxy)
+        async with device_create_lock:
+            options = await setup_options()
+            pairing = next((item for item in options["pairing_codes"] if item["pairing_id"] == pairing_id), None)
+            proxy = next((item for item in options["proxies"] if item["proxy_id"] == proxy_id), None)
+            if not pairing or not pairing.get("enabled") or pairing.get("paired"):
+                raise HTTPException(409, "请选择启用且未配对的设备码")
+            if not proxy:
+                raise HTTPException(404, "代理不存在，请先在代理管理中添加")
+            existing = next(
+                (row for row in _device_rows(app) if str(row.get("device_pairing_id") or "") == pairing_id),
+                None,
+            )
+            if existing:
+                # Browser double-clicks and retried HTTP requests must be idempotent:
+                # return the already-reserved install instead of allocating a second
+                # device id / enrollment code.
+                return {
+                    "existing": True,
+                    "device_id": str(existing.get("device_id") or ""),
+                    "device_name": str(existing.get("device_name") or "Linux 设备"),
+                    "install": existing,
+                    "install_command": str(existing.get("install_command") or ""),
+                    "pairing_id": pairing_id,
+                    "proxy_id": str(existing.get("proxy_id") or proxy_id),
+                }
+            pairing_code, _ = await app.state.pairings.reveal_or_rotate(pairing_id)
+            return create_install(request, pairing=pairing, pairing_code=pairing_code, proxy=proxy)
 
     @app.post("/api/admin/linux-devices/{device_id}/workers")
     async def add_linux_device_worker(device_id: str, request: Request) -> dict[str, Any]:

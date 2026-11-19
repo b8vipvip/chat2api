@@ -121,10 +121,22 @@ class LinuxWorkerInstallStore:
             item = self._by_code_locked(code)
             if not item:
                 raise ValueError("Unknown install command")
-            if not item.get("enabled") and state not in TERMINAL_STATES:
-                raise ValueError("Install command is disabled")
-            if item.get("state") == "installed":
+            # A historical bootstrap could report "installed" without ever
+            # consuming its enrollment or linking a Worker. Such an unlinked
+            # record is a false success, not a terminal installation.
+            recovering_unlinked_install = (
+                item.get("state") == "installed"
+                and not str(item.get("worker_id") or "").strip()
+                and not item.get("consumed_at")
+            )
+            if item.get("state") == "installed" and not recovering_unlinked_install:
                 return self.admin_public(dict(item))
+            if not item.get("enabled") and state not in TERMINAL_STATES and not recovering_unlinked_install:
+                raise ValueError("Install command is disabled")
+            if recovering_unlinked_install and state in {"installing", "enrolling"}:
+                item["enabled"] = True
+                item["completed_at"] = None
+                item["failed_at"] = None
             now = _iso()
             if not item.get("started_at") and state in {"installing", "enrolling"}:
                 item["started_at"] = now

@@ -106,21 +106,32 @@ def install_manual_worker_text_model_tasks_v147_patch(app: FastAPI) -> FastAPI:
                 task["updated_at"] = datetime.now(timezone.utc).isoformat()
         return changed
 
-    async def touch_tasks(client_id: str, metadata: dict[str, Any] | None = None) -> None:
-        await base_touch(client_id, metadata)
+    async def touch_tasks(
+        client_id: str,
+        metadata: dict[str, Any] | None = None,
+        *,
+        websocket: Any | None = None,
+    ) -> bool:
+        # Preserve the registry's current-socket guard and boolean contract.
+        # The extension WebSocket handler relies on this return value to ignore
+        # stale sockets; dropping either the keyword or result disconnects every
+        # Worker before its first heartbeat can be accepted.
+        accepted = await base_touch(client_id, metadata, websocket=websocket)
+        if not accepted:
+            return False
         if not isinstance(metadata, dict):
-            return
+            return True
         report = metadata.get("model_task_report_v147")
         if not isinstance(report, dict):
-            return
+            return True
         task_id = str(report.get("task_id") or "")
         async with lock:
             task = task_by_id(task_id)
             if not task or client_id not in task["workers"]:
-                return
+                return True
             worker = task["workers"][client_id]
             if worker["state"] in TERMINAL:
-                return
+                return True
             state = str(report.get("state") or "running")[:24]
             if state not in {"queued", "running", "completed", "failed"}:
                 state = "running"
@@ -140,12 +151,15 @@ def install_manual_worker_text_model_tasks_v147_patch(app: FastAPI) -> FastAPI:
             )
             task["updated_at"] = worker["updated_at"]
             await save()
+        return True
 
     registry.touch = touch_tasks
 
     def supports_model(client_id: str, requested: str) -> bool:
         model = normalize_concrete_model_id(requested)
-        if not model or model in snapshot().get("disabled", []):
+        if not model:
+            return str(requested).strip().lower() == "default" and base_supports(client_id, requested)
+        if model in snapshot().get("disabled", []):
             return False
         if base_supports(client_id, requested):
             return True

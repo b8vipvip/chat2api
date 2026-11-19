@@ -34,13 +34,15 @@ def _authority(target: dict[str, Any] | None) -> dict[str, Any] | None:
     reasoning = normalize_reasoning_level(
         target.get("reasoning") or target.get("reasoning_effort") or target.get("preferred_reasoning")
     )
+    page_default = routed == "default"
     return {
         "revision": PATCH_REVISION,
         "authority": PATCH_ID,
-        "strict": True,
+        "strict": not page_default,
+        "default_page_route": page_default,
         "requested_model": requested or routed,
         "routed_model": routed,
-        "transport_model": model_transport_id(routed),
+        "transport_model": None if page_default else model_transport_id(routed),
         "reasoning_requested": reasoning,
     }
 
@@ -115,7 +117,8 @@ def _trace(authority: dict[str, Any] | None, evidence: dict[str, Any] | None) ->
     # This is served-model evidence, not a profile-default mismatch.
     # A network-confirmed different model must be visible as a conflict
     # even when the lower-level observer did not flag an intra-stream clash.
-    served_mismatch = bool(routed and served and routed != served)
+    expected_model = normalize_concrete_model_id(routed)
+    served_mismatch = bool(expected_model and served and expected_model != served)
     # A response-body conflict can be retained without a single model field,
     # but only when it came from the recognized network-response observer.
     conflict = (bool(evidence.get("model_conflict"))
@@ -149,7 +152,7 @@ def _trace(authority: dict[str, Any] | None, evidence: dict[str, Any] | None) ->
     fallback_reason = str(evidence.get("fallback_reason") or "").strip() or None
     if authority_violation:
         fallback_reason = fallback_reason or "worker_request_model_rewrite"
-    elif routed and served and routed != served:
+    elif served_mismatch:
         fallback_reason = fallback_reason or "upstream_served_model_mismatch"
     return {
         "requested_model": requested,
@@ -171,7 +174,7 @@ def _trace(authority: dict[str, Any] | None, evidence: dict[str, Any] | None) ->
         "model_verified": verified,
         "model_conflict": conflict,
         "model_default_profile_conflict": bool(evidence.get("default_model_conflict")),
-        "model_default_profile_mismatch": bool(routed and default_model and routed != default_model),
+        "model_default_profile_mismatch": bool(expected_model and default_model and expected_model != default_model),
         "model_authority_violation": authority_violation,
         "model_verification_level": level,
         "model_evidence_source": evidence.get("evidence_source") or ("network_response_metadata" if served else None),
@@ -275,10 +278,10 @@ def install_model_observability_v144_patch(app: FastAPI) -> FastAPI:
             if authority:
                 options = dict(message.get("options") or {})
                 free_route = getattr(registry, "is_free_default_route", None)
-                if callable(free_route) and free_route(client_id, authority["routed_model"]):
+                options["free_default_route"] = bool(callable(free_route) and free_route(client_id, authority["routed_model"]))
+                if options["free_default_route"]:
                     authority = {**authority, "strict": False, "default_page_route": True,
                                  "transport_model": None}
-                options["free_default_route"] = authority.get("default_page_route") is True
                 options["model_authority"] = authority
                 message["options"] = options
                 routing = dict(message.get("routing") or {})

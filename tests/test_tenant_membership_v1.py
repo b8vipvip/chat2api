@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 
 import pytest
 from fastapi.testclient import TestClient
@@ -145,6 +146,147 @@ def test_admin_and_user_routes_enforce_session_csrf_and_scoped_member_discovery(
         # No change to the existing Mode 2 business API's auth contract.
         assert root.get("/v1/models").status_code == 401
         assert any(x["action"] == "tenant.member_change_completed" for x in app.state.admin_audit.recent(20))
+
+
+def test_workspace_invitation_is_email_bound_single_use_and_revocable(tmp_path: Path, monkeypatch):
+    import json
+    import time
+
+    store = TenantMembershipStore(tmp_path)
+    tenant = store.create("invite-team", "Invitation Team")
+    store.upsert_member(tenant["tenant_id"], "usr_owner12345", "owner")
+
+    with pytest.raises(TenantMembershipError, match="owner assignment requires an explicit admin action"):
+        store.create_invitation(tenant["tenant_id"], "owner-target@example.com", "owner", "root")
+
+    invitation, code = store.create_invitation(
+        tenant["tenant_id"], "Member@Example.com", "member", "root",
+        expires_in_seconds=600,
+    )
+    assert invitation["email"] == "member@example.com"
+    assert invitation["status"] == "issued"
+    assert len(code) >= 32
+    listed = store.list_invitations(tenant["tenant_id"])
+    assert listed[0]["invitation_id"] == invitation["invitation_id"]
+    assert "code" not in listed[0] and "token_hash" not in listed[0]
+    stored_hash = store.db.execute(
+        "SELECT token_hash FROM tenant_invitations WHERE invitation_id=?",
+        (invitation["invitation_id"],),
+    ).fetchone()[0]
+    assert stored_hash != code
+    assert stored_hash == __import__("hashlib").sha256(code.encode("utf-8")).hexdigest()
+
+    with pytest.raises(TenantMembershipError, match="email does not match"):
+        store.accept_invitation(code, "usr_member12345", "attacker@example.com")
+    accepted = store.accept_invitation(code, "usr_member12345", "MEMBER@example.com")
+    assert accepted == {
+        "tenant_id": tenant["tenant_id"], "user_id": "usr_member12345", "role": "member",
+    }
+    with pytest.raises(TenantMembershipError, match="no longer available"):
+        store.accept_invitation(code, "usr_member12345", "member@example.com")
+    assert store.role_for(tenant["tenant_id"], "usr_member12345") == "member"
+
+    revoked, revoked_code = store.create_invitation(
+        tenant["tenant_id"], "revoked@example.com", "viewer", "root",
+    )
+    assert store.revoke_invitation(tenant["tenant_id"], revoked["invitation_id"]) is True
+    revoked_row = next(
+        row for row in store.list_invitations(tenant["tenant_id"])
+        if row["invitation_id"] == revoked["invitation_id"]
+    )
+    assert revoked_row["status"] == "revoked"
+    with pytest.raises(TenantMembershipError, match="no longer available"):
+        store.accept_invitation(revoked_code, "usr_revoked12345", "revoked@example.com")
+
+    expiring, expiring_code = store.create_invitation(
+        tenant["tenant_id"], "expired@example.com", "viewer", "root",
+        expires_in_seconds=300,
+    )
+    original_time = time.time
+    monkeypatch.setattr("app.tenant_membership.time.time", lambda: original_time() + 301)
+    with pytest.raises(TenantMembershipError, match="expired"):
+        store.accept_invitation(expiring_code, "usr_expired12345", "expired@example.com")
+    assert next(
+        row for row in store.list_invitations(tenant["tenant_id"])
+        if row["invitation_id"] == expiring["invitation_id"]
+    )["status"] == "expired"
+    store.close()
+
+
+def test_tenant_invitation_api_issues_revokes_and_accepts_with_authenticated_email(tmp_path: Path):
+    from app.user_commerce import USER_SESSION_COOKIE
+
+    app = app_with_tenants(tmp_path)
+    with TestClient(app) as admin, TestClient(app) as member:
+        assert admin.post("/api/admin/auth/login", json={
+            "username": "owner", "password": "strong-admin-password",
+        }, headers=ORIGIN).status_code == 200
+        created = admin.post("/api/admin/tenants", json={
+            "slug": "invite-api-team", "display_name": "Invite API Team",
+        }, headers=ORIGIN)
+        assert created.status_code == 201, created.text
+        tenant_id = created.json()["tenant"]["tenant_id"]
+
+        registered = member.post("/api/user/register", json={
+            "email": "api-member@example.com", "password": "member-password-123",
+        })
+        assert registered.status_code == 200, registered.text
+        user_id = registered.json()["user"]["user_id"]
+        assert member.cookies.get(USER_SESSION_COOKIE)
+
+        issued = admin.post(
+            f"/api/admin/tenants/{tenant_id}/invitations",
+            headers=ORIGIN,
+            json={"email": "API-MEMBER@example.com", "role": "member"},
+        )
+        assert issued.status_code == 201, issued.text
+        code = issued.json()["code"]
+        invitation_id = issued.json()["invitation"]["invitation_id"]
+        listing = admin.get(f"/api/admin/tenants/{tenant_id}/invitations")
+        assert listing.status_code == 200
+        assert "code" not in listing.text and "token_hash" not in listing.text
+
+        missing_origin = member.post(
+            "/api/user/tenants/invitations/accept", json={"code": code},
+        )
+        assert missing_origin.status_code == 403
+        wrong_origin = member.post(
+            "/api/user/tenants/invitations/accept", json={"code": code},
+            headers={"Origin": "https://attacker.example", "Sec-Fetch-Site": "cross-site"},
+        )
+        assert wrong_origin.status_code == 403
+
+        accepted = member.post(
+            "/api/user/tenants/invitations/accept", json={"code": code}, headers=ORIGIN,
+        )
+        assert accepted.status_code == 200, accepted.text
+        assert accepted.json()["membership"]["user_id"] == user_id
+        assert [row["tenant_id"] for row in member.get("/api/user/tenants").json()["data"]] == [tenant_id]
+        replay = member.post(
+            "/api/user/tenants/invitations/accept", json={"code": code}, headers=ORIGIN,
+        )
+        assert replay.status_code == 409
+
+        revoked = admin.post(
+            f"/api/admin/tenants/{tenant_id}/invitations",
+            headers=ORIGIN,
+            json={"email": "revoked@example.com", "role": "viewer"},
+        )
+        assert revoked.status_code == 201
+        revoke_id = revoked.json()["invitation"]["invitation_id"]
+        revoked_response = admin.delete(
+            f"/api/admin/tenants/{tenant_id}/invitations/{revoke_id}", headers=ORIGIN,
+        )
+        assert revoked_response.status_code == 200
+        assert revoked_response.json()["revoked"] is True
+
+        audit_rows = app.state.admin_audit.recent(50)
+        assert any(row["action"] == "tenant.invitation_issue_completed" for row in audit_rows)
+        assert any(row["action"] == "tenant.invitation_accept_completed" for row in audit_rows)
+        assert any(row["action"] == "tenant.invitation_revoke_completed" for row in audit_rows)
+        assert all(code not in json.dumps(row) for row in audit_rows)
+        assert issued.headers["Cache-Control"] == "no-store"
+        assert accepted.headers["Cache-Control"] == "no-store"
 
 
 def test_tenant_mutation_audit_failure_does_not_report_a_committed_change_as_failed(tmp_path: Path, monkeypatch):
@@ -399,3 +541,69 @@ def test_non_master_api_key_cannot_delete_master_owned_file(tmp_path: Path):
         assert app.state.file_store.get(item.file_id) is not None
         _stored, payload = app.state.file_store.read(item.file_id)
         assert payload == b"privileged asset"
+
+
+
+def test_legacy_owner_invitation_is_revoked_before_membership_acceptance(tmp_path: Path):
+    store = TenantMembershipStore(tmp_path)
+    tenant = store.create("legacy-owner-invite", "Legacy Owner Invitation")
+    store.upsert_member(tenant["tenant_id"], "usr_legacy_owner123", "owner")
+
+    # Simulate an outstanding invitation written by a version that still
+    # allowed owner-role invitations.
+    invitation, code = store.create_invitation(
+        tenant["tenant_id"], "legacy-owner@example.com", "member", "root",
+    )
+    store.db.execute(
+        "UPDATE tenant_invitations SET role='owner' WHERE invitation_id=?",
+        (invitation["invitation_id"],),
+    )
+
+    with pytest.raises(TenantMembershipError, match="email does not match"):
+        store.accept_invitation(
+            code, "usr_legacy_invitee123", "attacker@example.com",
+        )
+    assert next(
+        item for item in store.list_invitations(tenant["tenant_id"])
+        if item["invitation_id"] == invitation["invitation_id"]
+    )["status"] == "issued"
+
+    with pytest.raises(TenantMembershipError, match="role is no longer permitted"):
+        store.accept_invitation(
+            code, "usr_legacy_invitee123", "legacy-owner@example.com",
+        )
+
+    row = next(
+        item for item in store.list_invitations(tenant["tenant_id"])
+        if item["invitation_id"] == invitation["invitation_id"]
+    )
+    assert row["status"] == "revoked"
+    assert row["revoked_at"]
+    assert store.role_for(tenant["tenant_id"], "usr_legacy_invitee123") is None
+    store.close()
+
+
+
+def test_workspace_owner_transitions_are_enforced_inside_the_write_transaction(tmp_path: Path):
+    store = TenantMembershipStore(tmp_path)
+    tenant = store.create("owner-transaction-guard", "Owner Transaction Guard")
+    tenant_id = tenant["tenant_id"]
+    owner_id = "usr_owner_txn12345"
+    member_id = "usr_member_txn12345"
+    store.upsert_member(tenant_id, owner_id, "owner")
+    store.upsert_member(tenant_id, member_id, "member")
+
+    with pytest.raises(TenantMembershipError, match="owner transitions require super_admin"):
+        store.upsert_member(
+            tenant_id, member_id, "owner", allow_owner_change=False,
+        )
+    with pytest.raises(TenantMembershipError, match="owner transitions require super_admin"):
+        store.upsert_member(
+            tenant_id, owner_id, "member", allow_owner_change=False,
+        )
+    with pytest.raises(TenantMembershipError, match="owner transitions require super_admin"):
+        store.remove_member(tenant_id, owner_id, allow_owner_change=False)
+
+    assert store.role_for(tenant_id, owner_id) == "owner"
+    assert store.role_for(tenant_id, member_id) == "member"
+    store.close()

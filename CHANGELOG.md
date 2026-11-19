@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.22.295 — 2026-11-19
+
+### Windows Worker binding and reconnect
+
+- Change the Windows Chrome Bridge default server origin to `https://api.numbot.cn`, matching the current deployment, and migrate only the exact legacy default `https://chat2api.mv3.cn`; explicitly configured custom origins and reverse-proxy paths are preserved.
+- Show the active server host in the extension popup so a device code can be checked against the correct management server.
+- Keep device-registration HTTP errors visible instead of allowing the previous WebSocket 1006 status to overwrite the actual pairing response.
+- Bind WebSocket event handlers to their originating socket and ignore delayed close/error events from replaced connections, preventing an old socket from marking a new Worker connection offline.
+- Include the target server host and abnormal-close details in extension diagnostics; log server-side WebSocket authentication rejection categories without recording credentials.
+
+### Versions
+
+- Server Runtime: `0.22.295`.
+- Chrome Bridge / Bundle: `0.22.295`.
+- Python package remains `0.7.2`.
+
 ## v0.22.73 — 2026-09-10
 
 ### Strict per-API Worker FIFO

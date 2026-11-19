@@ -19,13 +19,13 @@ def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_formal_release_v02275_versions_and_worker_entry_are_aligned() -> None:
+def test_formal_release_v02296_versions_and_worker_entry_are_aligned() -> None:
     manifest = json.loads(read("chrome_extension/manifest.json"))
     entry = read("chrome_extension/background_entry.js")
 
-    assert SERVER_RUNTIME_VERSION == "0.22.291"
-    assert CHROME_BRIDGE_VERSION == "0.22.291"
-    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.22.291"
+    assert SERVER_RUNTIME_VERSION == "0.22.297"
+    assert CHROME_BRIDGE_VERSION == "0.22.297"
+    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.22.297"
     assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION
     assert '"background_route_close_terminal_v91.js"' in entry
     assert '"conversation_routing.js"' in entry
@@ -51,12 +51,12 @@ def test_formal_release_v02275_versions_and_worker_entry_are_aligned() -> None:
         assert f'"{retired}"' not in entry
 
 
-def test_v02275_runtime_contract_advertises_only_active_authorities() -> None:
+def test_v02296_runtime_contract_advertises_only_active_authorities() -> None:
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
     features = payload["features"]
     bridge = payload["chrome_bridge"]
 
-    assert bridge["bundle_version"] == "0.22.291"
+    assert bridge["bundle_version"] == "0.22.297"
     assert bridge["route_window_authority_revision"] == 30
     assert bridge["window_observer_revision"] == 90
     assert bridge["route_close_terminal_revision"] == 91
@@ -96,7 +96,7 @@ def test_v02275_runtime_contract_advertises_only_active_authorities() -> None:
         assert marker in revision
 
 
-def test_v02275_bundle_markers_contracts_and_preflight_match_manifest() -> None:
+def test_v02296_bundle_markers_contracts_and_preflight_match_manifest() -> None:
     for path in (
         "chrome_extension/content_bundle_marker_v48.js",
         "chrome_extension/content_bundle_marker_v71.js",
@@ -104,7 +104,7 @@ def test_v02275_bundle_markers_contracts_and_preflight_match_manifest() -> None:
         "chrome_extension/content_runtime_contract_v71.js",
         "chrome_extension/background_runtime_preflight_v48.js",
     ):
-        assert "0.22.291" in read(path), path
+        assert "0.22.297" in read(path), path
         assert "0.8.29" not in read(path), path
 
 
