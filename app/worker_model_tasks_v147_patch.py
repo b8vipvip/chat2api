@@ -157,7 +157,9 @@ def install_manual_worker_text_model_tasks_v147_patch(app: FastAPI) -> FastAPI:
 
     def supports_model(client_id: str, requested: str) -> bool:
         model = normalize_concrete_model_id(requested)
-        if not model or model in snapshot().get("disabled", []):
+        if not model:
+            return str(requested).strip().lower() == "default" and base_supports(client_id, requested)
+        if model in snapshot().get("disabled", []):
             return False
         if base_supports(client_id, requested):
             return True

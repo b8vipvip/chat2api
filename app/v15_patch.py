@@ -24,9 +24,8 @@ def _is_supplied(value: Any) -> bool:
 def _target_from_payload_v15(payload: dict[str, Any]) -> dict[str, Any]:
     """Normalize OpenAI-compatible model/reasoning selection.
 
-    Omitted reasoning is intentionally deterministic: every text request defaults
-    to medium instead of inheriting whatever reasoning state happens to be visible
-    in the current ChatGPT composer.
+    Omitted reasoning defaults to medium for a named model. The explicit
+    page-default route preserves the composer's current reasoning setting.
     """
 
     model = v13_patch._normalize_model(payload.get("model") or v13_patch.DEFAULT_TEXT_MODEL)
@@ -46,6 +45,8 @@ def _target_from_payload_v15(payload: dict[str, Any]) -> dict[str, Any]:
         reasoning_level, reasoning_effort = v13_patch._normalize_reasoning(nested_value)
     elif direct_supplied:
         reasoning_level, reasoning_effort = v13_patch._normalize_reasoning(direct)
+    elif model == "default":
+        reasoning_level, reasoning_effort = None, None
     else:
         reasoning_level, reasoning_effort = DEFAULT_REASONING_LEVEL, DEFAULT_REASONING_EFFORT
 
