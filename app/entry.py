@@ -71,6 +71,7 @@ from .linux_worker_repair_command_patch import install_linux_worker_repair_comma
 from .linux_worker_diagnostics_patch import install_linux_worker_diagnostics_patch
 from .linux_worker_initialize_patch import install_linux_worker_initialize_patch
 from .linux_worker_upgrade_patch import install_linux_worker_upgrade_patch
+from .worker_upgrade_drain_patch import install_worker_upgrade_drain_patch
 from .linux_worker_enable_patch import install_linux_worker_enable_patch
 from .linux_worker_console_polling_patch import install_linux_worker_console_polling_patch
 from .stream_keepalive_patch import install_stream_keepalive_patch
@@ -213,6 +214,7 @@ install_linux_worker_initialize_patch(app)
 # it can extend the fully-patched bootstrap, including the v43 initialization
 # helper and sudo rule.
 install_linux_worker_upgrade_patch(app)
+install_worker_upgrade_drain_patch(app)
 # The reversible routing toggle is presentation/routing-only and is deliberately
 # installed after pairing. Pairing may keep the physical extension transport
 # healthy, while this final boundary decides whether it is eligible for requests.

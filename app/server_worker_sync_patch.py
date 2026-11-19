@@ -463,6 +463,15 @@ class ServerWorkerSyncCoordinator:
             error = str((result or {}).get("error") or "unknown_error") if isinstance(result, dict) else "unknown_error"
             detail = str((result or {}).get("detail") or "") if isinstance(result, dict) else ""
             diagnostic = error + (f" · {detail}" if detail else "")
+            if error == "worker_active_requests_drain_timeout":
+                message = "Worker 仍有正在执行的 API 请求，本轮更新已安全延期；请求完成后会自动重试"
+                self._update_worker_meta(
+                    worker_id,
+                    target_commit=target_commit,
+                    state="busy",
+                    last_error=message,
+                )
+                return
             if error in _UNSUPPORTED_UPGRADE_ERRORS:
                 state = "manual-repair-required"
                 upgrade_state = "unsupported"
@@ -516,6 +525,8 @@ class ServerWorkerSyncCoordinator:
                 bucket = "manual_repair_required"
             elif state in {"scheduled", "running", "queued"}:
                 bucket = "scheduled"
+            elif state == "busy":
+                bucket = "busy"
             elif not online:
                 bucket = "pending_offline"
             elif state == "failed" and int(sync.get("attempts") or 0) >= MAX_AUTO_ATTEMPTS_PER_COMMIT:
