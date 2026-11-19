@@ -22,6 +22,15 @@ def same_origin_admin_request(request) -> bool:
     same-origin. This helper does not make arbitrary forwarded hosts trusted.
     """
     origin = str(request.headers.get("origin") or "").strip()
+    fetch_site = str(request.headers.get("sec-fetch-site") or "").strip().lower()
+    if fetch_site not in {"", "same-origin"}:
+        return False
+    # Modern browsers provide Fetch Metadata on same-origin requests even in
+    # contexts where Origin is omitted. Trust that browser-controlled signal
+    # only when it explicitly says same-origin; requests with neither signal
+    # remain rejected.
+    if not origin:
+        return fetch_site == "same-origin"
     try:
         parsed = urlsplit(origin)
     except ValueError:
@@ -38,7 +47,6 @@ def same_origin_admin_request(request) -> bool:
         if forwarded_proto in {"http", "https"}
         else str(request.url.scheme or "").lower()
     )
-    fetch_site = str(request.headers.get("sec-fetch-site") or "").strip().lower()
     return bool(
         parsed.scheme.lower() == expected_scheme
         and parsed.scheme.lower() in {"http", "https"}
@@ -47,7 +55,6 @@ def same_origin_admin_request(request) -> bool:
         and parsed.path in {"", "/"}
         and not parsed.query
         and not parsed.fragment
-        and fetch_site in {"", "same-origin"}
     )
 
 

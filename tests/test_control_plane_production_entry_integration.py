@@ -238,6 +238,22 @@ with TestClient(app) as client:
     )
     assert metadata_only.status_code == 200, metadata_only.text
 
+    # The Worker-switch middleware short-circuits the normal v17 pipeline.
+    # A delegated support Session must not gain system:write through that path.
+    support_login = client.post(
+        "/api/admin/auth/login",
+        headers=same_origin,
+        json={"username": role_users["support"], "password": "matrix-route-password"},
+    )
+    assert support_login.status_code == 200, support_login.text
+    delegated_worker_action = client.post(
+        "/api/admin/extensions/probe/disconnect",
+        headers=same_origin,
+    )
+    assert delegated_worker_action.status_code == 403, (
+        delegated_worker_action.status_code, delegated_worker_action.text,
+    )
+
 print("C-track production entry integration passed")
 """
     env = os.environ.copy()

@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 
-from .admin_auth import SESSION_COOKIE
+from .admin_auth import SESSION_COOKIE, same_origin_admin_request
 from .extension_capacity_control_patch import _request_extension_control
 from .timezone_utils import beijing_now_iso
 
@@ -367,8 +367,23 @@ def install_worker_disable_authority_patch(app: FastAPI) -> FastAPI:
 
         match = EXTENSION_ACTION_RE.match(path) if request.method == "POST" else None
         if match:
+            # This middleware short-circuits the normal v17 request pipeline.
+            # Re-apply its CSRF and delegated-role gates before performing any
+            # Worker mutation; otherwise a valid low-privilege Session could
+            # bypass both controls through this legacy interception path.
+            if not same_origin_admin_request(request):
+                return JSONResponse(
+                    {"detail": "Administrator state changes require a same-origin request"},
+                    status_code=403,
+                )
             if not admin_ok(request):
                 return JSONResponse({"detail": "Administrator login required"}, status_code=401)
+            sessions = getattr(app.state, "admin_sessions", None)
+            control = getattr(app.state, "control_plane", None)
+            username = sessions.identity(request.cookies.get(SESSION_COOKIE)) if sessions else None
+            if not username or control is None or not control.permitted(username, path, request.method):
+                return JSONResponse({"detail": "Administrator permission denied"}, status_code=403)
+            request.state.admin_username = username
             client_id, action = match.groups()
             logger.info("Worker switch HTTP action=%s client=%s path=%s peer=%s", action, client_id, path, getattr(request.client, "host", "-"))
             try:
