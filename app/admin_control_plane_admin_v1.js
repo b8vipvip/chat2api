@@ -462,6 +462,7 @@
   async function loadClientPolicy() {
     try {
       const data = await sessionApi("/api/admin/control/client");
+      $("cClientDomain").value = data.client_domain || "";
       $("cRegistrationMode").value = data.registration_mode;
       $("cWebChatEnabled").value = String(data.web_chat_enabled);
       $("cAnnouncement").value = data.announcement || "";
@@ -473,6 +474,7 @@
       await sessionApi("/api/admin/control/client", {
         method: "PUT",
         body: {
+          client_domain: $("cClientDomain").value.trim(),
           registration_mode: $("cRegistrationMode").value,
           web_chat_enabled: $("cWebChatEnabled").value === "true",
           announcement: $("cAnnouncement").value

@@ -252,11 +252,14 @@ def test_client_flags_persist_enforce_registration_and_do_not_change_mode2(tmp_p
 
         assert client.put("/api/admin/control/client", json={"registration_mode": "closed"}).status_code == 403
         updated = client.put("/api/admin/control/client", json={
+            "client_domain": "aba.numbot.cn",
             "registration_mode": "closed", "web_chat_enabled": False,
             "announcement": "Planned maintenance"
         }, headers=ORIGIN)
         assert updated.status_code == 200, updated.text
         assert updated.json()["web_chat_enabled"] is False
+        assert updated.json()["client_domain"] == "https://aba.numbot.cn"
+        assert client.get("/api/client/config").json()["client_domain"] == "https://aba.numbot.cn"
         assert client.get("/chat").status_code == 403
         assert client.post("/api/user/register", json={
             "email": "new@example.com", "password": "long-password-123"
@@ -271,6 +274,7 @@ def test_client_flags_persist_enforce_registration_and_do_not_change_mode2(tmp_p
     restarted = make_app(tmp_path)
     with TestClient(restarted) as new_client:
         assert new_client.get("/api/client/config").json()["registration_mode"] == "closed"
+        assert new_client.get("/api/client/config").json()["client_domain"] == "https://aba.numbot.cn"
         assert new_client.get("/chat").status_code == 403
 
 
@@ -598,3 +602,41 @@ def test_user_api_key_update_and_revoke_audit_use_delegated_super_admin_identity
     ]
     assert {row["action"] for row in actor_rows} == expected_actions
     assert all(row["actor"] == "key_auditor" for row in actor_rows)
+
+
+def test_control_plane_migrates_legacy_client_policy_and_normalizes_client_domain(tmp_path: Path):
+    path = tmp_path / "control_plane_v1.json"
+    path.write_text(json.dumps({
+        "version": 1,
+        "client": {
+            "registration_mode": "open",
+            "web_chat_enabled": True,
+            "announcement": "legacy",
+        },
+        "admins": [],
+    }), encoding="utf-8")
+
+    store = ControlPlaneStore(tmp_path, "owner")
+    assert store.public_client()["client_domain"] == ""
+    assert store.public_client()["announcement"] == "legacy"
+
+    updated = store.update_client({"client_domain": "  Example.COM:8443/  "})
+    assert updated["client_domain"] == "https://example.com:8443"
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["client"]["client_domain"] == "https://example.com:8443"
+
+
+@pytest.mark.parametrize("bad_domain", [
+    "ftp://example.com",
+    "https://user:password@example.com",
+    "https://example.com/path",
+    "https://example.com?next=/",
+    "https://example.com#section",
+    "https://example.com:0",
+    "https://bad_domain.example",
+])
+def test_control_plane_rejects_invalid_client_domains_without_mutating_policy(tmp_path: Path, bad_domain: str):
+    store = ControlPlaneStore(tmp_path, "owner")
+    with pytest.raises(ControlPlaneError, match="client_domain"):
+        store.update_client({"client_domain": bad_domain})
+    assert store.public_client()["client_domain"] == ""

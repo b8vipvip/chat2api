@@ -12,6 +12,8 @@ def test_admin_console_exposes_c_views_and_one_control_plane_asset():
     assert 'data-view="client-policy"' in html
     assert 'data-view="registration-invitations"' in html
     assert 'id="view-registration-invitations"' in html
+    assert 'id="cClientDomain"' in html
+    assert 'placeholder="https://chat.example.com"' in html
     assert 'value="invite_only"' in html
     assert 'data-view="tenants"' in html
     assert 'data-view="user-roles"' in html
@@ -69,6 +71,8 @@ def test_control_plane_ui_asset_is_served_with_safe_cache_and_content_headers():
         assert "adminSessionRotatePassword" in response.text
         assert "loadQuotaReservations" in response.text
         assert "loadInvitations" in response.text
+        assert 'data.client_domain' in response.text
+        assert 'client_domain: $("cClientDomain").value.trim()' in response.text
         assert "/api/admin/control/invitations" in response.text
         assert '"user-roles": ["super_admin", "user_admin"]' in response.text
         assert '"subscriptions": ["super_admin", "billing_admin"]' in response.text
@@ -187,5 +191,14 @@ def test_admin_header_uses_one_modal_login_and_one_session_identity():
     assert '<div class="sessionAuth"><input id="adminSessionUser"' not in html
 
     v17 = (root / "app" / "admin_v17.js").read_text(encoding="utf-8")
-    assert 'id="refresh" type="button">刷新' in v17
+    assert 'auth.remove()' in v17
+    assert 'id="refresh"' not in v17
     assert "adminIdentity" not in v17
+    assert '<div class="auth">' not in html
+
+
+def test_user_console_uses_configured_client_domain_for_api_docs():
+    source = (Path(__file__).resolve().parents[1] / "app" / "user_console_v104.js").read_text(encoding="utf-8")
+    assert 'clientDomain: ""' in source
+    assert 'state.clientDomain = typeof policy.client_domain === "string" ? policy.client_domain.trim() : ""' in source
+    assert 'const base = state.clientDomain || location.origin;' in source

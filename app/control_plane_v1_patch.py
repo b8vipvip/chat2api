@@ -38,6 +38,7 @@ class AdminPasswordUpdate(BaseModel):
 
 class ClientPolicyUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    client_domain: str | None = Field(default=None, max_length=255)
     registration_mode: str | None = None
     web_chat_enabled: bool | None = None
     announcement: str | None = Field(default=None, max_length=500)

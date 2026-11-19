@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import re
@@ -17,6 +18,7 @@ import stat
 import threading
 import uuid
 from pathlib import Path
+from urllib.parse import urlsplit
 from typing import Any
 
 
@@ -32,7 +34,7 @@ ROLES: dict[str, frozenset[str]] = {
 }
 ADMIN_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{2,63}$")
 ITERATIONS = 310_000
-DEFAULT_CLIENT = {"registration_mode": "open", "web_chat_enabled": True, "announcement": ""}
+DEFAULT_CLIENT = {"registration_mode": "open", "web_chat_enabled": True, "announcement": "", "client_domain": ""}
 
 
 class ControlPlaneError(ValueError):
@@ -187,9 +189,15 @@ class ControlPlaneStore:
             admins = payload["admins"]
             if not isinstance(client, dict) or not isinstance(admins, list):
                 raise ValueError("invalid control-plane structure")
-            if set(client) != set(DEFAULT_CLIENT):
+            legacy_client_keys = set(DEFAULT_CLIENT) - {"client_domain"}
+            if set(client) == legacy_client_keys:
+                # Older installations predate the public client-domain setting.
+                # Supply its empty default rather than refusing service startup.
+                client = {**DEFAULT_CLIENT, **client}
+            elif set(client) != set(DEFAULT_CLIENT):
                 raise ValueError("unexpected client policy keys")
             self._validate_client(client)
+            client["client_domain"] = self._normalize_client_domain(client["client_domain"])
             loaded = {}
             for row in admins:
                 if not isinstance(row, dict):
@@ -236,6 +244,62 @@ class ControlPlaneStore:
             tmp.unlink(missing_ok=True)
 
     @staticmethod
+    def _normalize_client_domain(value: Any) -> str:
+        if not isinstance(value, str) or len(value) > 255:
+            raise ControlPlaneError("client_domain must be a string up to 255 characters")
+        raw = value.strip()
+        if not raw:
+            return ""
+        candidate = raw if "://" in raw else "https://" + raw
+        try:
+            parsed = urlsplit(candidate)
+            port = parsed.port
+        except ValueError as exc:
+            raise ControlPlaneError("client_domain must be a valid HTTP(S) domain or origin") from exc
+        if (
+            parsed.scheme.lower() not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+            or any(character.isspace() for character in parsed.netloc)
+            or port == 0
+        ):
+            raise ControlPlaneError(
+                "client_domain must be a domain or HTTP(S) origin without credentials, path, query or fragment"
+            )
+        hostname = parsed.hostname.rstrip(".").lower()
+        try:
+            address = ipaddress.ip_address(hostname)
+        except ValueError:
+            try:
+                ascii_host = hostname.encode("idna").decode("ascii").lower()
+            except UnicodeError as exc:
+                raise ControlPlaneError("client_domain contains an invalid hostname") from exc
+            labels = ascii_host.split(".")
+            if (
+                len(ascii_host) > 253
+                or any(
+                    not label
+                    or len(label) > 63
+                    or not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", label)
+                    for label in labels
+                )
+            ):
+                raise ControlPlaneError("client_domain contains an invalid hostname")
+            authority = ascii_host
+        else:
+            authority = f"[{address.compressed}]" if address.version == 6 else address.compressed
+        if port is not None:
+            authority += f":{port}"
+        normalized = f"{parsed.scheme.lower()}://{authority}"
+        if len(normalized) > 255:
+            raise ControlPlaneError("client_domain must be no longer than 255 characters")
+        return normalized
+
+    @staticmethod
     def _validate_client(payload: dict[str, Any]) -> None:
         if payload.get("registration_mode") not in {"open", "closed", "invite_only"}:
             raise ControlPlaneError("registration_mode must be open, closed or invite_only")
@@ -244,6 +308,7 @@ class ControlPlaneStore:
         announcement = payload.get("announcement")
         if not isinstance(announcement, str) or len(announcement) > 500:
             raise ControlPlaneError("announcement must be a string up to 500 characters")
+        ControlPlaneStore._normalize_client_domain(payload.get("client_domain"))
 
     def public_client(self) -> dict[str, Any]:
         with self.lock:
@@ -253,7 +318,10 @@ class ControlPlaneStore:
         if not changes or set(changes) - set(DEFAULT_CLIENT):
             raise ControlPlaneError("Unknown or empty client policy update")
         with self.lock:
-            next_client = {**self.client, **changes}
+            normalized_changes = dict(changes)
+            if "client_domain" in normalized_changes:
+                normalized_changes["client_domain"] = self._normalize_client_domain(normalized_changes["client_domain"])
+            next_client = {**self.client, **normalized_changes}
             self._validate_client(next_client)
             previous = self.client
             self.client = next_client

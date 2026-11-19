@@ -47,12 +47,7 @@
   };
 
   const auth = document.querySelector(".auth");
-  const hasSessionLogin = Boolean(document.getElementById("adminSessionLogin"));
-  if (auth) {
-    auth.innerHTML = `
-      <button class="action" id="refresh" type="button">刷新</button>`;
-    document.getElementById("refresh").onclick = () => show((location.hash || "#overview").slice(1));
-  }
+  if (auth) auth.remove();
 
   const gate = document.createElement("div");
   gate.id = "adminLoginGate";

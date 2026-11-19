@@ -6,7 +6,7 @@
   const usd = (micros) => `$${(Number(micros || 0) / 1_000_000).toFixed(6)}`;
   const num = (value) => Number(value || 0).toLocaleString("zh-CN");
   const time = (value) => value ? new Date(value).toLocaleString("zh-CN", {hour12:false}) : "-";
-  const state = { user: null, keys: [], models: [], billing: null, registrationMode: "open" };
+  const state = { user: null, keys: [], models: [], billing: null, registrationMode: "open", clientDomain: "" };
   const titles = {
     dashboard:["数据看板","账户 API 使用概览"], keys:["API 密钥","创建和管理访问密钥"], requests:["请求记录","当前账户的 API 请求"],
     profile:["账户资料","管理账户基础资料"], billing:["费用中心","余额、充值和估算费用"], models:["模型广场","可用模型与当前价格"],
@@ -59,6 +59,8 @@
       const mode = ["open", "closed", "invite_only"].includes(policy.registration_mode)
         ? policy.registration_mode : "closed";
       state.registrationMode = mode;
+      state.clientDomain = typeof policy.client_domain === "string" ? policy.client_domain.trim() : "";
+      loadDocs();
       // Public announcements are untrusted administrator text; never inject HTML.
       $("publicAnnouncement").textContent = String(policy.announcement || "").slice(0, 500);
       const inviteField = $("registerInviteField");
@@ -256,7 +258,7 @@
   }
 
   function loadDocs() {
-    const base = location.origin;
+    const base = state.clientDomain || location.origin;
     $("docBase").textContent = base;
     $("docChat").textContent = `curl ${base}/v1/chat/completions \\\n  -H "Authorization: Bearer YOUR_API_KEY" \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "model": "gpt-5.6-sol",\n    "messages": [{"role":"user","content":"Hello"}],\n    "stream": false\n  }'`;
     $("docFiles").textContent = `POST ${base}/v1/files\nAuthorization: Bearer YOUR_API_KEY\nContent-Type: application/json\n\n{\n  "filename": "example.pdf",\n  "content_base64": "..."\n}`;
