@@ -34,6 +34,13 @@ def _wait_for_server(base_url: str, process: subprocess.Popen, log_path: Path) -
     raise AssertionError("production ASGI entry did not become ready:\n" + log_path.read_text(encoding="utf-8", errors="replace"))
 
 
+def _open_admin_login_dialog(page) -> None:
+    login_button = page.locator("#adminSessionOpenLogin")
+    if login_button.is_visible():
+        login_button.click()
+    page.locator("#adminSessionLoginDialog").wait_for(state="visible")
+
+
 def _login(page, base_url: str, username: str, password: str, role: str) -> None:
     page_errors = []
     console_errors = []
@@ -42,7 +49,7 @@ def _login(page, base_url: str, username: str, password: str, role: str) -> None
     response = page.goto(base_url + "/admin", wait_until="domcontentloaded")
     try:
         page.wait_for_function(
-            "() => { const node = document.querySelector('#adminSessionState'); return !!node && node.textContent !== '未检查管理会话'; }",
+            "() => document.querySelector('#adminSessionState')?.textContent.includes('未登录')",
             timeout=15000,
         )
     except Exception as exc:
@@ -65,8 +72,9 @@ def _login(page, base_url: str, username: str, password: str, role: str) -> None
         }
         raise AssertionError(f"admin session bootstrap did not complete: {diagnostics}") from exc
     state = page.locator("#adminSessionState").text_content() or ""
-    if "未登录管理会话" not in state:
+    if "未登录" not in state:
         raise AssertionError(f"unexpected initial admin session state: {state}; page_errors={page_errors}; console_errors={console_errors}")
+    _open_admin_login_dialog(page)
     page.locator("#adminSessionUser").fill(username)
     page.locator("#adminSessionPassword").fill(password)
     page.locator("#adminSessionLogin").click()
@@ -104,6 +112,14 @@ def _login(page, base_url: str, username: str, password: str, role: str) -> None
         "() => document.documentElement.dataset.adminV17Authenticated === 'true'",
         timeout=10000,
     )
+    assert page.locator("#adminSessionOpenLogin").is_hidden()
+    assert page.locator("#adminSessionLogout").is_visible()
+    group = page.locator("#web-user-nav-group")
+    if group.is_visible():
+        if role == "super_admin":
+            assert not group.evaluate("(node) => node.open"), "Web 用户端 should be collapsed by default"
+        if not group.evaluate("(node) => node.open"):
+            group.locator("summary").click()
 
 
 def _request_status(page, base_url: str, method: str, path: str, data=None, *, origin: str | None = None, fetch_site: str = "same-origin") -> int:
@@ -239,13 +255,13 @@ def test_delegated_admin_browser_navigation_permissions_csrf_and_revocation(tmp_
                     assert response.status == 201, (role, response.status, response.text())
 
                 visible_views = {
-                    "super_admin": {"control-admins", "client-policy", "registration-invitations", "tenants", "model-entitlements", "plugins", "quota-ledger", "api-keys", "user-pricing", "user-payments", "admin-users"},
+                    "super_admin": {"control-admins", "client-policy", "registration-invitations", "tenants", "model-entitlements", "plugins", "quota-ledger", "user-pricing", "user-payments", "admin-users"},
                     "user_admin": {"registration-invitations", "admin-users"},
                     "billing_admin": {"quota-ledger", "user-pricing", "user-payments"},
-                    "support": {"model-entitlements", "api-keys", "admin-users"},
+                    "support": {"model-entitlements", "admin-users"},
                     "system_admin": {"client-policy", "registration-invitations", "tenants", "model-entitlements", "quota-ledger", "admin-users"},
                     "plugin_admin": {"plugins"},
-                    "api_key_admin": {"quota-ledger", "api-keys"},
+                    "api_key_admin": {"quota-ledger"},
                 }
                 default_views = {
                     "super_admin": "control-admins",
@@ -275,7 +291,10 @@ def test_delegated_admin_browser_navigation_permissions_csrf_and_revocation(tmp_
                     console_errors = []
                     page.on("pageerror", lambda error: page_errors.append(str(error)))
                     page.on("console", lambda message: console_errors.append(message.text) if message.type == "error" else None)
-                    page.locator(f'.nav button[data-view="{target_view}"]').click()
+                    if target_view == "api-keys":
+                        page.evaluate("show('api-keys')")
+                    else:
+                        page.locator(f'.nav button[data-view="{target_view}"]').click()
                     try:
                         page.wait_for_function(
                             "view => document.querySelector('#view-' + view)?.classList.contains('active')",
@@ -424,7 +443,7 @@ def test_delegated_admin_browser_navigation_permissions_csrf_and_revocation(tmp_
                 )
                 race_page.locator("#adminSessionLogout").click()
                 race_page.wait_for_function(
-                    "() => document.querySelector('#adminSessionState')?.textContent.includes('未登录管理会话')",
+                    "() => document.querySelector('#adminSessionState')?.textContent.includes('未登录')",
                     timeout=10000,
                 )
                 race_page.evaluate(
@@ -473,7 +492,7 @@ def test_delegated_admin_browser_navigation_permissions_csrf_and_revocation(tmp_
                 assert session.json()["authenticated"] is False
                 user_page.reload(wait_until="domcontentloaded")
                 user_page.wait_for_function(
-                    "() => document.querySelector('#adminSessionState')?.textContent.includes('未登录管理会话')",
+                    "() => document.querySelector('#adminSessionState')?.textContent.includes('未登录')",
                     timeout=20000,
                 )
                 assert not user_page.locator('.nav button[data-view="admin-users"]').is_visible()
@@ -561,12 +580,13 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                     timeout=10000,
                 )
                 page.wait_for_function(
-                    "() => document.getElementById('adminSessionState')?.textContent.includes('未登录管理会话')",
+                    "() => document.getElementById('adminSessionState')?.textContent.includes('未登录')",
                     timeout=10000,
                 )
 
                 # Authenticate as the environment-managed root and create a real
                 # delegated support administrator through the production UI.
+                _open_admin_login_dialog(page)
                 page.locator("#adminSessionUser").fill(root_username)
                 page.locator("#adminSessionPassword").fill(root_password)
                 page.locator("#adminSessionLogin").click()
@@ -660,6 +680,7 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                       sessionStorage.setItem("chat2api_admin_key", "stale-root-key");
                     }"""
                 )
+                _open_admin_login_dialog(page)
                 page.locator("#adminSessionUser").fill(support_username)
                 page.locator("#adminSessionPassword").fill(support_password)
                 page.locator("#adminSessionLogin").click()
@@ -674,7 +695,7 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
 
                 assert page.locator("#view-model-entitlements").evaluate("(node) => node.classList.contains('active')")
                 assert page.locator('[data-view="model-entitlements"]').is_visible()
-                assert page.locator('[data-view="api-keys"]').is_visible()
+                assert page.locator('[data-view="api-keys"]').count() == 0
                 assert page.locator('[data-view="control-admins"]').is_hidden()
                 assert page.locator('[data-view="plugins"]').is_hidden()
                 assert page.locator('[data-view="tenants"]').is_hidden()
@@ -772,6 +793,7 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                     "() => document.getElementById('adminSessionState')?.textContent.includes('未登录')",
                     timeout=10000,
                 )
+                _open_admin_login_dialog(page)
                 page.locator("#adminSessionUser").fill(billing_username)
                 page.locator("#adminSessionPassword").fill(billing_password)
                 page.locator("#adminSessionLogin").click()
@@ -844,6 +866,7 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                     "() => document.getElementById('adminSessionState')?.textContent.includes('未登录')",
                     timeout=10000,
                 )
+                _open_admin_login_dialog(page)
                 page.locator("#adminSessionUser").fill(user_username)
                 page.locator("#adminSessionPassword").fill(user_password)
                 auth_responses.clear()
