@@ -245,10 +245,15 @@ class QuotaReservationStore:
                     return False
                 if row[0] != key_id:
                     raise QuotaReservationError("Reservation API key mismatch")
-                if row[1] in {"released", "expired", "settled"}:
+                if row[1] in {"released", "settled"}:
                     return False
                 if row[1] == "committing":
                     raise QuotaReservationError("Committing usage must be reconciled, not released")
+                # Expiry only releases the admission hold; it does not prove
+                # the request failed. Once a terminal failure/cancellation or
+                # pre-dispatch rollback is observed, persist that stronger
+                # terminal fact so a contradictory late completion cannot
+                # fall through to legacy accounting and charge the request.
                 self.db.execute(
                     "UPDATE quota_reservations SET state='released',updated_at=? WHERE request_id=?",
                     (now, request_id),

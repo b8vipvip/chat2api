@@ -138,6 +138,35 @@ def test_late_completed_projection_cannot_charge_explicitly_released_request(tmp
     store.close()
 
 
+def test_terminal_failure_after_expiry_blocks_late_completed_projection(tmp_path: Path):
+    store = QuotaReservationStore(tmp_path, reservation_ttl_seconds=1)
+    api_keys = FakeApiKeys()
+    row = store.reserve(
+        "req_expired_then_cancelled", "key_1", 25,
+        quota_limit=100, completed_tokens=0,
+    )
+    assert store.expire_reservations(now=row["expires_at"] + 1) == 1
+    assert store.get("req_expired_then_cancelled")["state"] == "expired"
+
+    cancelled = {
+        "request_id": "req_expired_then_cancelled",
+        "api_key_id": "key_1",
+        "status": "cancelled",
+        "usage": {"total_tokens": 25},
+    }
+    assert asyncio.run(store.commit_completed_usage(cancelled, api_keys)) == "released"
+    assert store.get("req_expired_then_cancelled")["state"] == "released"
+
+    late = asyncio.run(store.commit_completed_usage(
+        completed(request_id="req_expired_then_cancelled", tokens=25), api_keys,
+    ))
+    assert late == "ignored_released_reservation"
+    assert store.get("req_expired_then_cancelled")["state"] == "released"
+    assert api_keys.keys["key_1"].tokens_used == 0
+    assert api_keys.keys["key_1"].charged_requests == {}
+    store.close()
+
+
 def test_failed_requests_release_and_committing_requests_are_not_released_or_expired(tmp_path: Path):
     store = QuotaReservationStore(tmp_path, reservation_ttl_seconds=60)
     store.reserve("req_fail", "key_1", 25, quota_limit=100, completed_tokens=0)
