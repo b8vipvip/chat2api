@@ -272,7 +272,7 @@ def test_admin_console_extension_adds_user_price_payment_and_audit_navigation() 
 
 
 def test_user_commerce_runtime_and_production_dependencies_are_published() -> None:
-    assert SERVER_RUNTIME_VERSION == "0.22.297"
+    assert SERVER_RUNTIME_VERSION == "0.22.298"
     runtime_source = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
     requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
     project = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
