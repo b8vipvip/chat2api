@@ -40,17 +40,17 @@ def test_workspace_store_membership_and_last_owner_guard(tmp_path: Path):
     with pytest.raises(TenantMembershipError, match="Invalid tenant slug"):
         store.create("BAD", "Wrong")
     user1, user2 = "usr_ABCDEFGH123", "usr_ABCDEFGH999"
-    store.upsert_member(a["tenant_id"], user1, "owner")
-    store.upsert_member(b["tenant_id"], user2, "owner")
+    store.upsert_member(a["tenant_id"], user1, "owner", allow_owner_change=True)
+    store.upsert_member(b["tenant_id"], user2, "owner", allow_owner_change=True)
     assert store.role_for(a["tenant_id"], user1) == "owner"
     assert store.role_for(b["tenant_id"], user1) is None
     assert [x["tenant_id"] for x in store.list_for_user(user1)] == [a["tenant_id"]]
     assert [x["tenant_id"] for x in store.list_for_user(user2)] == [b["tenant_id"]]
     with pytest.raises(TenantMembershipError, match="last workspace owner"):
-        store.remove_member(a["tenant_id"], user1)
+        store.remove_member(a["tenant_id"], user1, allow_owner_change=True)
     with pytest.raises(TenantMembershipError, match="last workspace owner"):
-        store.upsert_member(a["tenant_id"], user1, "member")
-    store.upsert_member(a["tenant_id"], user2, "owner")
+        store.upsert_member(a["tenant_id"], user1, "member", allow_owner_change=True)
+    store.upsert_member(a["tenant_id"], user2, "owner", allow_owner_change=True)
     store.bind_key(a["tenant_id"], user1, "key_123456789")
     assert store.tenant_for_key("key_123456789") == a["tenant_id"]
     assert store.user_for_key("key_123456789") == user1
@@ -58,10 +58,10 @@ def test_workspace_store_membership_and_last_owner_guard(tmp_path: Path):
     with pytest.raises(TenantMembershipError, match="already bound"):
         store.bind_key(b["tenant_id"], user2, "key_123456789")
     with pytest.raises(TenantMembershipError, match="Unbind"):
-        store.remove_member(a["tenant_id"], user1)
+        store.remove_member(a["tenant_id"], user1, allow_owner_change=True)
     store.unbind_key(a["tenant_id"], "key_123456789")
     assert store.tenant_for_key("key_123456789") is None
-    store.remove_member(a["tenant_id"], user1)
+    store.remove_member(a["tenant_id"], user1, allow_owner_change=True)
     assert store.role_for(a["tenant_id"], user1) is None
     assert store.role_for(a["tenant_id"], user2) == "owner"
     assert store.path.stat().st_mode & 0o777 == 0o600
@@ -154,7 +154,7 @@ def test_workspace_invitation_is_email_bound_single_use_and_revocable(tmp_path: 
 
     store = TenantMembershipStore(tmp_path)
     tenant = store.create("invite-team", "Invitation Team")
-    store.upsert_member(tenant["tenant_id"], "usr_owner12345", "owner")
+    store.upsert_member(tenant["tenant_id"], "usr_owner12345", "owner", allow_owner_change=True)
 
     with pytest.raises(TenantMembershipError, match="owner assignment requires an explicit admin action"):
         store.create_invitation(tenant["tenant_id"], "owner-target@example.com", "owner", "root")
@@ -406,8 +406,8 @@ def test_tenant_membership_does_not_grant_cross_user_resource_access(tmp_path: P
     tenants = app.state.tenant_memberships
     tenant_a = tenants.create("alice-workspace", "Alice Workspace")
     tenant_b = tenants.create("bob-workspace", "Bob Workspace")
-    tenants.upsert_member(tenant_a["tenant_id"], alice_id, "owner")
-    tenants.upsert_member(tenant_b["tenant_id"], bob_id, "owner")
+    tenants.upsert_member(tenant_a["tenant_id"], alice_id, "owner", allow_owner_change=True)
+    tenants.upsert_member(tenant_b["tenant_id"], bob_id, "owner", allow_owner_change=True)
     tenants.upsert_member(tenant_a["tenant_id"], charlie_id, "member")
     tenants.bind_key(tenant_a["tenant_id"], alice_id, alice_key["key_id"])
     tenants.bind_key(tenant_b["tenant_id"], bob_id, bob_key["key_id"])
@@ -547,7 +547,7 @@ def test_non_master_api_key_cannot_delete_master_owned_file(tmp_path: Path):
 def test_legacy_owner_invitation_is_revoked_before_membership_acceptance(tmp_path: Path):
     store = TenantMembershipStore(tmp_path)
     tenant = store.create("legacy-owner-invite", "Legacy Owner Invitation")
-    store.upsert_member(tenant["tenant_id"], "usr_legacy_owner123", "owner")
+    store.upsert_member(tenant["tenant_id"], "usr_legacy_owner123", "owner", allow_owner_change=True)
 
     # Simulate an outstanding invitation written by a version that still
     # allowed owner-role invitations.
@@ -590,7 +590,7 @@ def test_workspace_owner_transitions_are_enforced_inside_the_write_transaction(t
     tenant_id = tenant["tenant_id"]
     owner_id = "usr_owner_txn12345"
     member_id = "usr_member_txn12345"
-    store.upsert_member(tenant_id, owner_id, "owner")
+    store.upsert_member(tenant_id, owner_id, "owner", allow_owner_change=True)
     store.upsert_member(tenant_id, member_id, "member")
 
     with pytest.raises(TenantMembershipError, match="owner transitions require super_admin"):
@@ -606,4 +606,32 @@ def test_workspace_owner_transitions_are_enforced_inside_the_write_transaction(t
 
     assert store.role_for(tenant_id, owner_id) == "owner"
     assert store.role_for(tenant_id, member_id) == "member"
+    store.close()
+
+def test_owner_transitions_are_fail_closed_by_default(tmp_path: Path):
+    store = TenantMembershipStore(tmp_path)
+    tenant = store.create("owner-default-deny", "Owner Default Deny")
+    tenant_id = tenant["tenant_id"]
+    owner_id = "usr_default_owner123"
+    member_id = "usr_default_member123"
+
+    with pytest.raises(TenantMembershipError, match="owner transitions require super_admin"):
+        store.upsert_member(tenant_id, owner_id, "owner")
+    assert store.role_for(tenant_id, owner_id) is None
+
+    store.upsert_member(tenant_id, member_id, "member")
+    with pytest.raises(TenantMembershipError, match="owner transitions require super_admin"):
+        store.upsert_member(tenant_id, member_id, "owner")
+    assert store.role_for(tenant_id, member_id) == "member"
+
+    store.upsert_member(tenant_id, owner_id, "owner", allow_owner_change=True)
+    with pytest.raises(TenantMembershipError, match="owner transitions require super_admin"):
+        store.remove_member(tenant_id, owner_id)
+    assert store.role_for(tenant_id, owner_id) == "owner"
+
+    second_owner_id = "usr_second_owner123"
+    store.upsert_member(tenant_id, second_owner_id, "owner", allow_owner_change=True)
+    store.remove_member(tenant_id, owner_id, allow_owner_change=True)
+    assert store.role_for(tenant_id, owner_id) is None
+    assert store.role_for(tenant_id, second_owner_id) == "owner"
     store.close()

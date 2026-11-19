@@ -127,7 +127,7 @@ class TenantMembershipStore:
 
     def upsert_member(
         self, tenant_id: str, user_id: str, role: str, *,
-        allow_owner_change: bool = True,
+        allow_owner_change: bool = False,
     ) -> dict[str, Any]:
         if not isinstance(user_id, str) or not USER_ID.fullmatch(user_id):
             raise TenantMembershipError("Invalid user_id")
@@ -165,7 +165,7 @@ class TenantMembershipStore:
         return {"tenant_id": tenant_id, "user_id": user_id, "role": role}
 
     def remove_member(
-        self, tenant_id: str, user_id: str, *, allow_owner_change: bool = True,
+        self, tenant_id: str, user_id: str, *, allow_owner_change: bool = False,
     ) -> None:
         with self.lock:
             with self.db:
