@@ -82,7 +82,7 @@ def test_upgrade_command_waits_for_all_same_host_requests_before_restarting(tmp_
         assert registry.chatgpt_routing_ready("ext_primary") is False
         assert registry.chatgpt_routing_ready("ext_slot2") is False
 
-        app.state.clear_worker_upgrade_drain("wrk_primary")
+        await app.state.clear_worker_upgrade_drain("wrk_primary")
         assert registry.chatgpt_routing_ready("ext_primary") is True
         assert registry.chatgpt_routing_ready("ext_slot2") is True
 

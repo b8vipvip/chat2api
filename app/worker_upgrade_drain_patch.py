@@ -134,9 +134,21 @@ def install_worker_upgrade_drain_patch(app: FastAPI) -> FastAPI:
             next_metadata.pop("worker_maintenance", None)
             client.metadata = next_metadata
 
-    def clear_worker_upgrade_drain(worker_id: str) -> None:
+    async def clear_worker_upgrade_drain(worker_id: str) -> None:
+        changed = False
         for client_id in host_client_ids(str(worker_id)):
-            clear_client_maintenance(client_id)
+            client = registry.clients.get(str(client_id))
+            if client is None:
+                continue
+            metadata = getattr(client, "metadata", None)
+            next_metadata = dict(metadata) if isinstance(metadata, dict) else {}
+            if "worker_maintenance" in next_metadata:
+                next_metadata.pop("worker_maintenance", None)
+                client.metadata = next_metadata
+                changed = True
+        save = getattr(registry, "save", None)
+        if changed and callable(save):
+            await save()
 
     def routing_ready(client_id: str) -> bool:
         return not maintenance_active(str(client_id)) and bool(base_routing_ready(str(client_id)))
@@ -188,6 +200,9 @@ def install_worker_upgrade_drain_patch(app: FastAPI) -> FastAPI:
             }
             for client_id in client_ids:
                 set_maintenance(client_id, marker)
+            save = getattr(registry, "save", None)
+            if callable(save):
+                await save()
 
             loop = asyncio.get_running_loop()
             deadline = loop.time() + max(0.1, timeout)
@@ -215,7 +230,7 @@ def install_worker_upgrade_drain_patch(app: FastAPI) -> FastAPI:
 
                     remaining = deadline - now
                     if remaining <= 0:
-                        clear_worker_upgrade_drain(str(worker_id))
+                        await clear_worker_upgrade_drain(str(worker_id))
                         return {
                             "ok": False,
                             "error": "worker_active_requests_drain_timeout",
@@ -224,7 +239,7 @@ def install_worker_upgrade_drain_patch(app: FastAPI) -> FastAPI:
                         }
                     await asyncio.sleep(min(UPGRADE_DRAIN_POLL_SECONDS, remaining))
             except asyncio.CancelledError:
-                clear_worker_upgrade_drain(str(worker_id))
+                await clear_worker_upgrade_drain(str(worker_id))
                 raise
 
     app.state.begin_worker_upgrade_drain = begin_worker_upgrade_drain
@@ -292,12 +307,12 @@ def install_worker_upgrade_drain_patch(app: FastAPI) -> FastAPI:
         try:
             result = await base_send(worker_id, command, arguments, wait=wait, timeout=timeout)
         except BaseException:
-            clear_worker_upgrade_drain(str(worker_id))
+            await clear_worker_upgrade_drain(str(worker_id))
             raise
 
         payload = result.get("result") if isinstance(result, dict) else None
         if not isinstance(payload, dict) or payload.get("ok") is not True:
-            clear_worker_upgrade_drain(str(worker_id))
+            await clear_worker_upgrade_drain(str(worker_id))
         return result
 
     app.state.send_linux_worker_command = send_with_worker_upgrade_drain
@@ -314,7 +329,7 @@ def install_worker_upgrade_drain_patch(app: FastAPI) -> FastAPI:
                 upgrade = metadata.get("worker_upgrade") if isinstance(metadata, dict) else {}
                 state = str(upgrade.get("state") or "") if isinstance(upgrade, dict) else ""
             if state in TERMINAL_UPGRADE_STATES:
-                clear_worker_upgrade_drain(worker_id)
+                await clear_worker_upgrade_drain(worker_id)
         return response
 
     app.state.worker_upgrade_drain_patch_installed = True
