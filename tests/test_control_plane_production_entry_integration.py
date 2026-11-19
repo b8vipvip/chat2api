@@ -188,6 +188,17 @@ with TestClient(app) as client:
         response = client.get(path)
         assert response.status_code == 401, (path, response.status_code, response.text)
 
+    same_origin = {
+        "Origin": "http://testserver",
+        "Sec-Fetch-Site": "same-origin",
+    }
+    login = client.post(
+        "/api/admin/auth/login",
+        headers=same_origin,
+        json={"username": "c-track-root", "password": "c-track-root-test-password"},
+    )
+    assert login.status_code == 200, login.text
+
     # Every registered admin/client state-changing route rejects missing Origin
     # and cross-site Origin before authentication, body validation or mutation.
     write_routes = sorted({
@@ -213,16 +224,6 @@ with TestClient(app) as client:
                 label, method, route_template, response.status_code, response.text,
             )
 
-    same_origin = {
-        "Origin": "http://testserver",
-        "Sec-Fetch-Site": "same-origin",
-    }
-    login = client.post(
-        "/api/admin/auth/login",
-        headers=same_origin,
-        json={"username": "c-track-root", "password": "c-track-root-test-password"},
-    )
-    assert login.status_code == 200, login.text
     allowed = client.put(
         "/api/admin/control/client",
         headers=same_origin,
