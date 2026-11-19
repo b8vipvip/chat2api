@@ -35,6 +35,13 @@ def _wait_for_server(base_url: str, process: subprocess.Popen, log_path: Path) -
 
 
 def _open_admin_login_dialog(page) -> None:
+    page.wait_for_function(
+        """() => {
+          const gate = document.getElementById("adminLoginGate");
+          return !gate || getComputedStyle(gate).display === "none";
+        }""",
+        timeout=10000,
+    )
     login_button = page.locator("#adminSessionOpenLogin")
     if login_button.is_visible():
         login_button.click()

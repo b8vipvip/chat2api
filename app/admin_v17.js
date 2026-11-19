@@ -48,7 +48,10 @@
 
   // The C-track session dialog is the single login owner in production. When
   // present, the legacy full-screen gate must not cover its login button.
-  const hasSessionLogin = Boolean(document.getElementById("adminSessionLoginDialog"));
+  const hasSessionLogin = () => Boolean(
+    document.getElementById("adminSessionLoginDialog") ||
+    document.getElementById("adminSessionOpenLogin")
+  );
 
   const auth = document.querySelector(".auth");
   if (auth) auth.remove();
@@ -70,11 +73,24 @@
     </div>`;
   document.body.appendChild(gate);
 
+  // The control-plane session dialog may be mounted by a deferred script.
+  // Re-check after parsing so the legacy full-screen gate cannot cover the
+  // modern header login while that script initializes.
+  const syncModernLoginGate = () => {
+    if (hasSessionLogin()) gate.style.display = "none";
+  };
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", syncModernLoginGate, { once: true });
+  } else {
+    syncModernLoginGate();
+  }
+
   function setAuthenticated(value, username = "") {
     adminLoggedIn = Boolean(value);
     document.documentElement.dataset.adminV17Authenticated = adminLoggedIn ? "true" : "false";
-    gate.style.display = adminLoggedIn || hasSessionLogin ? "none" : "flex";
-    if (!adminLoggedIn && !hasSessionLogin) status("请登录管理员账号", "muted");
+    const modernSessionLogin = hasSessionLogin();
+    gate.style.display = adminLoggedIn || modernSessionLogin ? "none" : "flex";
+    if (!adminLoggedIn && !modernSessionLogin) status("请登录管理员账号", "muted");
   }
 
   // C-track dispatches this event on window. Listening on document misses

@@ -192,6 +192,9 @@ def test_admin_header_uses_one_modal_login_and_one_session_identity():
 
     v17 = (root / "app" / "admin_v17.js").read_text(encoding="utf-8")
     assert 'auth.remove()' in v17
+    assert 'const hasSessionLogin = () => Boolean(' in v17
+    assert 'document.getElementById("adminSessionOpenLogin")' in v17
+    assert 'syncModernLoginGate' in v17
     assert 'id="refresh"' not in v17
     assert "adminIdentity" not in v17
     assert '<div class="auth">' not in html
