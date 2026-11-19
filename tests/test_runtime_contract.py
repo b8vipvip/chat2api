@@ -33,7 +33,7 @@ def test_python_package_versions_are_aligned():
 def test_chrome_bridge_contract_matches_manifest_bundle():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     assert RELEASE_VERSION == SERVER_RUNTIME_VERSION == CHROME_BRIDGE_VERSION == CHROME_BRIDGE_BUNDLE_VERSION
-    assert RELEASE_VERSION == "0.22.294"
+    assert RELEASE_VERSION == "0.22.295"
     assert manifest["version"] == RELEASE_VERSION
 
 
@@ -68,7 +68,7 @@ def test_realtime_protocol_contract_matches_live_bridge():
 def test_v148_release_contract_keeps_broker_terminal_authority():
     from pathlib import Path
     from app.runtime_contract import RELEASE_VERSION, CHROME_BRIDGE_BUNDLE_VERSION
-    assert RELEASE_VERSION == "0.22.294"
+    assert RELEASE_VERSION == "0.22.295"
     assert CHROME_BRIDGE_BUNDLE_VERSION == RELEASE_VERSION
     root = Path(__file__).resolve().parents[1]
     watchdog = (root / "app/request_stall_patch.py").read_text(encoding="utf-8")
@@ -142,7 +142,7 @@ def test_runtime_contract_is_final_admin_version_owner():
     client = TestClient(runtime)
     html = client.get("/admin").text
     assert f'<script src="{ADMIN_VERSION_ASSET}"></script>' in html
-    assert f'<script src="{ADMIN_EXTENSION_COLUMNS_ASSET}?v=0.22.294"></script>' in html
+    assert f'<script src="{ADMIN_EXTENSION_COLUMNS_ASSET}?v=0.22.295"></script>' in html
     assert html.index('/assets/historical.js') < html.index(ADMIN_VERSION_ASSET) < html.index(ADMIN_EXTENSION_COLUMNS_ASSET)
 
     developers_html = client.get("/developers").text
@@ -761,3 +761,22 @@ def test_v314_aborted_provisional_terminal_does_not_hold_browser_lease():
     result=subprocess.run(["node","tests/network_provisional_terminal_quiet_failure_v314.mjs"],
                           cwd=root,capture_output=True,text=True,timeout=20)
     assert result.returncode==0,result.stdout+result.stderr
+
+
+def test_windows_worker_server_origin_migration_and_socket_generation_guard():
+    background = (ROOT / "chrome_extension" / "background.js").read_text(encoding="utf-8")
+    popup = (ROOT / "chrome_extension" / "popup.js").read_text(encoding="utf-8")
+    popup_html = (ROOT / "chrome_extension" / "popup.html").read_text(encoding="utf-8")
+    server = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
+
+    assert 'const DEFAULT_SERVER_URL = "https://api.numbot.cn";' in background
+    assert 'const LEGACY_DEFAULT_SERVER_URL = "https://chat2api.mv3.cn";' in background
+    assert "isLegacyDefaultServer(settings.serverUrl)" in background
+    assert "settings.serverUrl = DEFAULTS.serverUrl" in background
+    assert "if (socket !== connection) return;" in background
+    assert 'server=${serverHost(settings.serverUrl)}' in background
+    assert 'id="serverTarget"' in popup_html
+    assert "new URL(settings.serverUrl || DEFAULT_SERVER_URL).host" in popup
+    assert "actionMessageUntil" in popup
+    assert "不要反复更换设备码来修复地址或连接问题" in popup
+    assert "Extension WebSocket authentication rejected client_id=%s reason=%s" in server

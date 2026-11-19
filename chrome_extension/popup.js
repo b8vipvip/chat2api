@@ -1,9 +1,10 @@
 const $ = id => document.getElementById(id);
-const DEFAULT_SERVER_URL = "https://chat2api.mv3.cn";
+const DEFAULT_SERVER_URL = "https://api.numbot.cn";
 const TEXT_MODELS = ["gpt-5.6-sol", "gpt-5.5", "gpt-5.5-mini"];
 const REASONING_LABELS = { instant: "极速", medium: "中", high: "高", low: "极速" };
 const EXTENSION_VERSION = chrome.runtime.getManifest().version;
 let formInitialized = false;
+let actionMessageUntil = 0;
 
 async function send(message) { return chrome.runtime.sendMessage(message); }
 async function persistForm() {
@@ -68,18 +69,19 @@ function renderLogin(settings) {
 function humanSocketError(value) {
   const text = String(value || "").trim();
   if (!text) return "";
-  if (/WebSocket closed \(1006\)/i.test(text)) {
-    return "连接异常断开（1006）。Worker 会自动重连；如果你刚更换设备码，请点击“绑定 / 更换设备码”重新注册新身份。";
+  if (/WebSocket closed \(1006(?:, [^)]+)?\)/i.test(text)) {
+    return "连接异常断开（1006）。这通常表示服务端未完成 WebSocket 握手，或连接被反向代理中断。请先核对上方服务端地址是否与管理后台域名一致；地址正确后再检查服务端的 Worker 身份认证日志。不要反复更换设备码来修复地址或连接问题。";
   }
   if (/worker_active_request_lease|still has active requests/i.test(text)) {
     return "当前 Worker 仍有请求未进入终态，暂不能更换设备码。请等待正在处理的请求结束后重试。";
   }
   return text;
 }
-function setMessage(text, kind = "") {
+function setMessage(text, kind = "", stickyMs = 0) {
   const node = $("message");
   node.textContent = text || "";
   node.className = kind ? `message ${kind}` : "message";
+  if (stickyMs > 0) actionMessageUntil = Date.now() + stickyMs;
 }
 async function refresh() {
   const [response, localRuntime] = await Promise.all([
@@ -97,6 +99,11 @@ async function refresh() {
     formInitialized = true;
   }
   const socketState = String(settings.socketState || "disconnected");
+  const target = $("serverTarget");
+  if (target) {
+    try { target.textContent = `当前服务端：${new URL(settings.serverUrl || DEFAULT_SERVER_URL).host}`; }
+    catch (_) { target.textContent = "服务端地址无效，请检查高级设置"; }
+  }
   const status = $("status");
   const worker = settings.clientId ? `Worker ${settings.clientId}` : "尚未绑定设备码";
   status.textContent = `${socketState === "connected" ? "已连接" : socketState === "connecting" ? "连接中" : socketState === "unpaired" ? "未绑定" : "未连接"} · ${worker} · ${networkLabel(settings)}`;
@@ -105,11 +112,13 @@ async function refresh() {
   renderLogin(settings);
   $("binding").textContent = `窗口自动管理 · 当前检测到 ${tabs.length} 个 ChatGPT 页面${Number.isInteger(settings.boundTabId) ? " · 已有活动路由页面" : ""}`;
   renderModels(settings);
-  const socketError = humanSocketError(settings.socketError);
-  if (socketError) setMessage(socketError, socketState === "connected" ? "" : "error");
-  else if (settings.networkProbeError && settings.networkProbeStatus === "error") setMessage(`网络检测：${settings.networkProbeError}`, "error");
-  else if (settings.lastModelSelectionError) setMessage(`上次模型选择失败：${settings.lastModelSelectionError}`, "error");
-  else if (socketState === "connected" && $("message").classList.contains("error")) setMessage("");
+  if (Date.now() >= actionMessageUntil) {
+    const socketError = humanSocketError(settings.socketError);
+    if (socketError) setMessage(socketError, socketState === "connected" ? "" : "error");
+    else if (settings.networkProbeError && settings.networkProbeStatus === "error") setMessage(`网络检测：${settings.networkProbeError}`, "error");
+    else if (settings.lastModelSelectionError) setMessage(`上次模型选择失败：${settings.lastModelSelectionError}`, "error");
+    else if (socketState === "connected" && $("message").classList.contains("error")) setMessage("");
+  }
 }
 for (const id of ["serverUrl", "pairingCode", "extensionName"]) {
   $(id).addEventListener("input", () => persistForm().catch(error => setMessage(`保存配置失败：${String(error?.message || error)}`, "error")));
@@ -149,15 +158,16 @@ $("pair").addEventListener("click", async () => {
     force: true,
     autoBind: false,
   });
-  if (!response?.ok) setMessage(humanSocketError(response?.error) || "设备码绑定失败", "error");
-  else setMessage("设备码绑定成功，已注册新 Worker 身份并开始连接。", "success");
+  if (!response?.ok) setMessage(humanSocketError(response?.error) || "设备码绑定失败", "error", 12000);
+  else setMessage("设备码已提交，正在验证新 Worker 身份与服务端连接。", "success", 8000);
   await refresh();
 });
 $("connect").addEventListener("click", async () => {
   await persistForm();
   setMessage("正在重新连接…");
   const response = await send({ type: "popup.connect" });
-  if (!response?.ok) setMessage(humanSocketError(response?.error) || "连接失败", "error");
+  if (!response?.ok) setMessage(humanSocketError(response?.error) || "连接失败", "error", 8000);
+  else setMessage("已发起重新连接，正在等待 WebSocket 握手结果。", "success", 5000);
   await refresh();
 });
 $("versionInfo").textContent = `v${EXTENSION_VERSION}`;
