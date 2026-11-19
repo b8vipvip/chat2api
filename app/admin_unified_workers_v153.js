@@ -391,7 +391,7 @@
       // Read it first and normalize the Chrome OS tokens before rendering.
       const values=[m.platform_os,m.platform,m.os,m.os_name,m.system,client.platform,client.os];
       for(const value of values){
-        const p=text(value).trim().toLowerCase().replace(/[_\\s]+/g,"-");
+        const p=text(value).trim().toLowerCase().replace(/[_\s]+/g,"-");
         if(p==="win"||p==="win32"||p==="win64"||p.startsWith("windows"))return "Windows";
         if(p==="linux"||p.includes("linux"))return "Linux";
         if(p==="mac"||p==="macos"||p==="darwin"||p.includes("mac-os"))return "macOS";
