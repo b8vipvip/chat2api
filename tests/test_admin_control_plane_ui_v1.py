@@ -46,7 +46,7 @@ def test_admin_console_exposes_c_views_and_one_control_plane_asset():
     assert 'id="adminPasswordDialog"' in html
     assert "api/admin/auth/session" in html
     assert "sessionStorage.removeItem('chat2api_admin_key')" in html
-    assert "sessionStorage.setItem('chat2api_admin_key'" in html
+    assert "sessionStorage.setItem('chat2api_admin_key'" not in html
 
 
 def test_control_plane_ui_asset_is_served_with_safe_cache_and_content_headers():
@@ -148,16 +148,19 @@ def test_admin_v17_consumes_window_session_events_and_ignores_stale_bootstrap_re
     assert 'dataset.adminV17Authenticated = adminLoggedIn ? "true" : "false"' in source
 
 
-def test_admin_bootstrap_tolerates_removed_legacy_connect_and_key_controls():
-    html = (Path(__file__).resolve().parents[1] / "app" / "admin.py").read_text(encoding="utf-8")
-    assert "const connectButton=$('connect'),refreshButton=$('refresh'),adminKeyInput=$('adminKey');" in html
-    assert "if(connectButton)connectButton.disabled=true;" in html
-    assert "if(refreshButton)refreshButton.disabled=true;" in html
-    assert "if(adminKeyInput){adminKeyInput.value='';adminKeyInput.disabled=true;}" in html
-    bootstrap = html.split("const connectButton=$('connect')", 1)[1]
-    assert "$('connect').disabled" not in bootstrap
-    assert "$('refresh').disabled" not in bootstrap
-    assert "$('adminKey').value" not in bootstrap
+def test_admin_bootstrap_uses_session_marker_without_legacy_key_controls():
+    root = Path(__file__).resolve().parents[1]
+    html = (root / "app" / "admin.py").read_text(encoding="utf-8")
+    v17 = (root / "app" / "admin_v17.js").read_text(encoding="utf-8")
+    assert "const connectButton=$('connect'),refreshButton=$('refresh'),adminKeyInput=$('adminKey');" not in html
+    assert "adminKeyInput" not in html
+    assert 'id="adminKey"' not in html
+    assert "sessionStorage.setItem('chat2api_admin_key'" not in html
+    assert "sessionStorage.removeItem('chat2api_admin_key')" in html
+    assert 'const SESSION_MARKER = "__chat2api_admin_session__";' in v17
+    assert 'key = () => adminLoggedIn ? SESSION_MARKER : "";' in v17
+    assert 'if (!value || value === SESSION_MARKER) return {};' in v17
+    assert 'credentials: "same-origin"' in v17
 
 def test_web_user_navigation_is_grouped_and_duplicate_api_key_entry_is_removed():
     root = Path(__file__).resolve().parents[1]

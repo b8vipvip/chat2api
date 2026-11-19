@@ -199,8 +199,8 @@ with TestClient(app) as client:
     )
     assert login.status_code == 200, login.text
 
-    # Every registered admin/client state-changing route rejects missing Origin
-    # and cross-site Origin before authentication, body validation or mutation.
+    # Every registered admin/client state-changing route rejects requests
+    # with neither Origin nor Fetch Metadata, and rejects cross-site Origin.
     write_routes = sorted({
         (str(method).upper(), route.path)
         for route in app.routes
@@ -213,7 +213,7 @@ with TestClient(app) as client:
     for method, route_template in write_routes:
         route_path = re.sub(r"\{[^{}]+\}", "probe", route_template)
         for label, headers in (
-            ("missing-origin", {"Sec-Fetch-Site": "same-origin"}),
+            ("missing-origin", {}),
             ("cross-site", {
                 "Origin": "https://attacker.invalid",
                 "Sec-Fetch-Site": "cross-site",
@@ -230,6 +230,13 @@ with TestClient(app) as client:
         json={"announcement": "same-origin route accepted"},
     )
     assert allowed.status_code == 200, allowed.text
+
+    metadata_only = client.put(
+        "/api/admin/control/client",
+        headers={"Sec-Fetch-Site": "same-origin"},
+        json={"announcement": "same-origin fetch metadata accepted"},
+    )
+    assert metadata_only.status_code == 200, metadata_only.text
 
 print("C-track production entry integration passed")
 """

@@ -14,21 +14,22 @@ from app.diagnostics import (
 def test_diagnostic_query_and_referer_redact_secret_parameters_but_keep_safe_ids():
     query = (
         b"refreshToken=refresh-secret&api_key=api-secret&password=pass-secret"
-        b"&tokenCount=42&apiKeyID=key_safe_identifier"
+        b"&tokenCount=42&apiKeyID=key_safe_identifier&x-pairing-code=pairing-secret"
     )
     safe = _safe_query(query)
-    for secret in ("refresh-secret", "api-secret", "pass-secret"):
+    for secret in ("refresh-secret", "api-secret", "pass-secret", "pairing-secret"):
         assert secret not in safe
     assert "tokenCount=42" in safe
     assert "apiKeyID=key_safe_identifier" in safe
 
     headers = _decode_headers([
         (b"referer", b"https://user:pass@example.test/private?access_token=ref-secret"),
-        (b"origin", b"https://example.test"),
+        (b"origin", b"https://user:pass@example.test/private?token=origin-secret"),
     ])
     assert headers["referer"] == "https://example.test"
     assert headers["origin"] == "https://example.test"
     assert "ref-secret" not in json.dumps(headers)
+    assert "origin-secret" not in json.dumps(headers)
 
 
 def test_diagnostic_error_redaction_is_recursive_and_handles_plain_text():

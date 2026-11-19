@@ -27,6 +27,8 @@ _SENSITIVE = {
     "token", "accesstoken", "refreshtoken", "idtoken", "sessiontoken",
     "csrftoken", "xsrftoken", "password", "passwd", "passphrase",
     "secret", "clientsecret", "clientassertion", "clientcredential",
+    "xpairingcode", "xaccesstoken", "xrefreshtoken", "xcsrftoken",
+    "xxsrftoken", "sessionid", "secretkey", "apisecret",
     "credential", "credentials", "cookie", "setcookie", "pairingcode",
     "invitecode", "invitationcode", "database64", "b64json",
     "signature", "signedurl", "privatekey", "jwt", "bearertoken",
@@ -115,7 +117,7 @@ def _decode_headers(raw: list[tuple[bytes, bytes]]) -> dict[str, str]:
         if name not in {"content-type", "user-agent", "origin", "referer", "accept", "x-chat2api-client"}:
             continue
         decoded = value.decode("latin-1", errors="replace")
-        result[name] = _safe_referer(decoded) if name == "referer" else _redact_text(decoded[:1000])
+        result[name] = _safe_referer(decoded) if name in {"referer", "origin"} else _redact_text(decoded[:1000])
     return result
 
 
