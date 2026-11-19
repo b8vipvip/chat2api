@@ -10,7 +10,7 @@ The invitation service, registration policy, admin API and existing Admin Consol
 - Each invitation is bound to a normalized email address. Email comparison is case-insensitive after trimming and case-folding.
 - Expiry is bounded from 5 minutes to 30 days.
 - Reservation uses SQLite `BEGIN IMMEDIATE` so concurrent registrations cannot reserve the same code.
-- A registration consumes its invitation only after account creation succeeds. Failed account creation releases an active reservation; an interrupted reservation fails closed and is not automatically made reusable.
+- A registration consumes its invitation only after account creation succeeds. Once the account is saved, a session write failure leaves the invitation consumed and the user can sign in with the registered credentials. Failed account creation releases an active reservation; an interrupted reservation fails closed and is not automatically made reusable.
 - Reservation leases expire after 30 minutes. An expired reservation becomes unavailable; an administrator must inspect the user directory and issue a replacement rather than silently reusing a potentially consumed code.
 - An unreserved, unconsumed invitation can be revoked. A reservation cannot be revoked mid-registration.
 - Registration policy supports `open`, `closed`, and `invite_only`; the existing `/api/user/register` route remains the registration owner.
@@ -27,7 +27,7 @@ The invitation service, registration policy, admin API and existing Admin Consol
 | --- | --- | --- | --- |
 | `issued` | valid email-bound reservation | `reserved` | Atomic; only one concurrent request wins |
 | `reserved` | registration succeeds | `consumed` | One-time code cannot be reused |
-| `reserved` | registration fails and reservation is still active | `issued` | Explicit release for recoverable failures |
+| `reserved` | account creation fails and the reservation is still active | `issued` | Explicit release for recoverable failures |
 | `reserved` | reservation lease expires | `expired` | Fail closed; never silently reissue |
 | `issued` | invitation expiry passes | `expired` | Expiry is authoritative |
 | `issued` | administrator revokes | `revoked` | Reserved/consumed invitations are not revoked |

@@ -129,6 +129,63 @@ def _server_error(process: subprocess.Popen[str]) -> str:
         return "server process did not exit after startup failure"
     return stderr or f"server exited with code {process.returncode}"
 
+def _check_mobile_invitation_registration(browser, admin, base_url):
+    policy = "/api/admin/control/client"
+    assert _request_status(admin, base_url, "PUT", policy, {"registration_mode": "invite_only"}) == 200
+    admin.locator('[data-view="registration-invitations"]').click()
+    email = "mobile-invited@example.test"
+    admin.locator("#cInviteEmail").fill(email)
+    admin.locator("#cInviteCreate").click()
+    admin.locator("#cInviteCodePanel").wait_for(state="visible")
+    code = admin.locator("#cInviteCode").inner_text()
+    assert code
+    admin.locator('[data-view="client-policy"]').click()
+    admin.locator('[data-view="registration-invitations"]').click()
+    assert not admin.locator("#cInviteCode").text_content()
+    assert admin.locator("#cInviteCodePanel").is_hidden()
+
+    # Deliver a real issuance response after the administrator has left its view.
+    def leave_before_response(route):
+        response = route.fetch()
+        admin.evaluate("show('client-policy')")
+        route.fulfill(response=response)
+
+    pattern = "**/api/admin/control/invitations"
+    admin.route(pattern, leave_before_response, times=1)
+    delayed_email = "delayed-invitation@example.test"
+    admin.locator("#cInviteEmail").fill(delayed_email)
+    with admin.expect_response(lambda r: r.url.endswith("/api/admin/control/invitations")) as delayed:
+        admin.locator("#cInviteCreate").click()
+    assert delayed.value.status == 201
+    admin.locator('[data-view="registration-invitations"]').click()
+    admin.locator("#cInviteRows tr").filter(has_text=delayed_email).wait_for()
+    assert not admin.locator("#cInviteCode").text_content()
+
+    mobile = browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+    try:
+        page = mobile.new_page()
+        with page.expect_response(lambda r: r.url.endswith("/assets/chat2api-user-console-v104.js")) as script:
+            page.goto(base_url + "/console")
+        assert script.value.ok
+        page.get_by_role("button", name="注册", exact=True).click()
+        form = page.locator("#registerForm")
+        form.get_by_label("邮箱").fill(email)
+        form.get_by_label("密码").fill("mobile-registration-password")
+        form.get_by_label("邀请代码").fill(code)
+        assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+        with page.expect_response(lambda r: r.url.endswith("/api/user/register")) as registered:
+            form.get_by_role("button", name="创建账户").click()
+        assert registered.value.status == 200
+        page.locator("#appShell").wait_for(state="visible")
+        assert page.request.get(base_url + "/api/user/models").ok
+        assert not form.get_by_label("邀请代码").input_value()
+        admin.locator("#cInviteReload").click()
+        admin.locator("#cInviteRows tr").filter(has_text=email).get_by_text("consumed", exact=True).wait_for()
+    finally:
+        mobile.close()
+        assert _request_status(admin, base_url, "PUT", policy, {"registration_mode": "open"}) == 200
+
+
 def test_delegated_admin_browser_navigation_permissions_csrf_and_revocation(tmp_path: Path):
     repository_root = Path(__file__).resolve().parents[1]
     data_dir = tmp_path / "browser-e2e-data"
@@ -163,6 +220,7 @@ def test_delegated_admin_browser_navigation_permissions_csrf_and_revocation(tmp_
                 root_context = browser.new_context()
                 root_page = root_context.new_page()
                 _login(root_page, base_url, root_username, root_password, "super_admin")
+                _check_mobile_invitation_registration(browser, root_page, base_url)
 
                 accounts = {
                     "user_admin": ("e2e_users", "strong-e2e-users-password"),

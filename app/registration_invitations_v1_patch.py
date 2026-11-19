@@ -80,12 +80,13 @@ def install_registration_invitations(app: FastAPI) -> FastAPI:
             getattr(request.state, "admin_username", "")
             or app.state.settings.admin_username
         )
+        email = body.email.strip().lower()
         details = {
-            "email": body.email.casefold(),
+            "email": email,
             "expires_in_seconds": body.expires_in_seconds,
         }
         audit_event(
-            request, actor, "invitation.create", body.email.casefold(), details,
+            request, actor, "invitation.create", email, details,
             required=True,
         )
         try:

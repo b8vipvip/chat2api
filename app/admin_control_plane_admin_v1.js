@@ -19,6 +19,7 @@
   };
   let adminSession = null;
   let sessionRefreshGeneration = 0;
+  let invitationDisplayGeneration = 0;
   let roleCatalogue = {};
   let selectedTenantId = "";
 
@@ -128,6 +129,7 @@
   }
 
   async function refreshSession() {
+    clearInvitationCode();
     const generation = ++sessionRefreshGeneration;
     try {
       const nextSession = await sessionApi("/api/admin/auth/session");
@@ -264,6 +266,7 @@
       return;
     }
     originalShow(view);
+    if (view !== "registration-invitations") clearInvitationCode();
     if (view === "control-admins") loadAdmins();
     if (view === "client-policy") loadClientPolicy();
     if (view === "registration-invitations") loadInvitations();
@@ -420,20 +423,34 @@
     } catch (error) { setStatus("cInviteStatus", error.message, true); }
   }
 
+  function clearInvitationCode() {
+    invitationDisplayGeneration++;
+    $("cInviteCode").textContent = "";
+    $("cInviteCodePanel").classList.add("hidden");
+  }
+  window.addEventListener("pagehide", clearInvitationCode);
+
   $("cInviteCreate")?.addEventListener("click", async () => {
     const email = $("cInviteEmail").value.trim();
     if (!email) return setStatus("cInviteStatus", "请填写受邀邮箱", true);
+    clearInvitationCode();
+    const generation = invitationDisplayGeneration;
     try {
       const result = await sessionApi("/api/admin/control/invitations", {
         method: "POST",
         body: {email, expires_in_seconds: Number($("cInviteTtl").value || 604800)}
       });
+      if (generation !== invitationDisplayGeneration) return;
       $("cInviteCode").textContent = result.code || "";
       $("cInviteCodePanel").classList.remove("hidden");
       $("cInviteEmail").value = "";
       await loadInvitations();
-      setStatus("cInviteStatus", "邀请已创建。请立即复制代码；离开此页面后不会再次显示。");
-    } catch (error) { setStatus("cInviteStatus", error.message, true); }
+      if (generation === invitationDisplayGeneration) {
+        setStatus("cInviteStatus", "邀请已创建。请立即复制代码；离开此页面后不会再次显示。");
+      }
+    } catch (error) {
+      if (generation === invitationDisplayGeneration) setStatus("cInviteStatus", error.message, true);
+    }
   });
   $("cInviteReload")?.addEventListener("click", loadInvitations);
   $("cInviteCopy")?.addEventListener("click", async () => {

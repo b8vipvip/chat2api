@@ -78,7 +78,7 @@ class InvitationStore:
 
     @staticmethod
     def _email(value: str) -> str:
-        email = str(value or "").strip().casefold()
+        email = str(value or "").strip().lower()
         if len(email) > 254 or not EMAIL_RE.fullmatch(email):
             raise InvitationError("A valid email address is required")
         return email
@@ -115,13 +115,13 @@ class InvitationStore:
         if type(expires_in_seconds) is not int or not MIN_TTL_SECONDS <= expires_in_seconds <= MAX_TTL_SECONDS:
             raise InvitationError("Invitation expiry must be between 5 minutes and 30 days")
         code = secrets.token_urlsafe(32)
-        now = int(time.time())
         invitation_id = "inv_" + uuid.uuid4().hex
         digest = hashlib.sha256(code.encode("ascii")).hexdigest()
         with self.lock:
             conn = self._connect()
             try:
                 conn.execute("BEGIN IMMEDIATE")
+                now = int(time.time())
                 conn.execute(
                     """INSERT INTO invitations
                        (invitation_id,email,token_hash,status,created_by,created_at,expires_at)
@@ -160,12 +160,12 @@ class InvitationStore:
         except UnicodeEncodeError as exc:
             raise InvitationError("Invitation code is invalid or unavailable") from exc
         digest = hashlib.sha256(token_bytes).hexdigest()
-        now = int(time.time())
         reservation_id = "invr_" + uuid.uuid4().hex
         with self.lock:
             conn = self._connect()
             try:
                 conn.execute("BEGIN IMMEDIATE")
+                now = int(time.time())
                 # A crashed registration may leave a reservation behind. Expire
                 # the lease after 30 minutes; never silently make that code reusable.
                 conn.execute(
@@ -181,7 +181,7 @@ class InvitationStore:
                     row is None
                     or str(row["status"]) != "issued"
                     or int(row["expires_at"]) <= now
-                    or not secrets.compare_digest(str(row["email"]), normalized_email)
+                    or row["email"] != normalized_email
                 ):
                     if row is not None and str(row["status"]) == "issued" and int(row["expires_at"]) <= now:
                         conn.execute(
@@ -211,8 +211,8 @@ class InvitationStore:
         with self.lock:
             conn = self._connect()
             try:
-                now = int(time.time())
                 conn.execute("BEGIN IMMEDIATE")
+                now = int(time.time())
                 conn.execute(
                     """UPDATE invitations SET status='expired',reservation_id=NULL
                        WHERE reservation_id=? AND status='reserved' AND reserved_at<=?""",
@@ -236,11 +236,11 @@ class InvitationStore:
                 conn.close()
 
     def release(self, reservation_id: str) -> bool:
-        now = int(time.time())
         with self.lock:
             conn = self._connect()
             try:
                 conn.execute("BEGIN IMMEDIATE")
+                now = int(time.time())
                 row = conn.execute(
                     "SELECT invitation_id,expires_at,reserved_at FROM invitations WHERE reservation_id=? AND status='reserved'",
                     (str(reservation_id),),
@@ -295,11 +295,11 @@ class InvitationStore:
 
     def list_invitations(self, *, limit: int = 100) -> list[dict[str, Any]]:
         bounded = max(1, min(int(limit), 200))
-        now = int(time.time())
         with self.lock:
             conn = self._connect()
             try:
                 conn.execute("BEGIN IMMEDIATE")
+                now = int(time.time())
                 conn.execute(
                     "UPDATE invitations SET status='expired' WHERE status='issued' AND expires_at<=?",
                     (now,),

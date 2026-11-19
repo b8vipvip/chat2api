@@ -432,7 +432,6 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
 
         try:
             user = accounts.register(body.email, body.password, body.display_name)
-            token = accounts.create_session(str(user["user_id"]))
         except ValueError as error:
             release_invitation_after_failure()
             raise HTTPException(status_code=409, detail=str(error)) from error
@@ -450,6 +449,10 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
                 logging.getLogger(__name__).exception(
                     "Invitation finalization failed after account creation"
                 )
+        try:
+            token = accounts.create_session(str(user["user_id"]))
+        except OSError as error:
+            raise HTTPException(status_code=503, detail="账户已创建，自动登录暂时不可用，请稍后登录。") from error
         response = JSONResponse({"ok": True, "user": user}, headers={"Cache-Control": "no-store"})
         response.set_cookie(USER_SESSION_COOKIE, token, httponly=True, secure=request.url.scheme == "https", samesite="lax", max_age=accounts.session_ttl_seconds, path="/")
         return response

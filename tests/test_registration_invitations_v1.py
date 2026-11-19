@@ -177,12 +177,16 @@ def test_revoke_does_not_relabel_expired_invitation_as_revoked(tmp_path: Path, m
         store.reserve(created["code"], "expired@example.com")
 
 
-def test_revoke_samples_expiry_after_write_transaction_is_acquired(tmp_path: Path, monkeypatch):
+@pytest.mark.parametrize("operation", ["reserve", "consume", "release", "list", "revoke"])
+def test_invitation_deadlines_use_time_after_write_lock(tmp_path: Path, monkeypatch, operation):
     store = InvitationStore(tmp_path)
-    created = store.create("boundary@example.com", "root", expires_in_seconds=300)
+    created = store.create("boundary@example.com", "root", expires_in_seconds=3600)
     invitation_id = created["invitation"]["invitation_id"]
     expires_at = created["invitation"]["expires_at"]
-    clock = {"now": created["invitation"]["created_at"] + 299}
+    if operation in {"consume", "release", "list"}:
+        reservation = store.reserve(created["code"], "boundary@example.com")
+        expires_at = store.list_invitations()[0]["reserved_at"] + RESERVATION_TTL_SECONDS
+    clock = {"now": expires_at - 1}
 
     class AdvanceClockAfterBegin:
         def __init__(self, connection):
@@ -207,8 +211,20 @@ def test_revoke_samples_expiry_after_write_transaction_is_acquired(tmp_path: Pat
 
     # The invitation is valid before the DB write lock is acquired, but
     # expires at the transaction boundary. The decision must use the latter.
-    assert store.revoke(invitation_id) is False
-    assert store.list_invitations()[0]["status"] == "expired"
+    if operation == "reserve":
+        with pytest.raises(InvitationError):
+            store.reserve(created["code"], "boundary@example.com")
+    elif operation == "consume":
+        with pytest.raises(InvitationError):
+            store.consume(reservation)
+    elif operation == "release":
+        assert store.release(reservation)
+    elif operation == "list":
+        assert store.list_invitations()[0]["status"] == "expired"
+    else:
+        assert store.revoke(invitation_id) is False
+    with original_connect() as connection:
+        assert connection.execute("SELECT status FROM invitations").fetchone()[0] == "expired"
 
 
 def test_admin_invitation_mutations_reject_cross_origin_and_missing_origin(tmp_path: Path):
@@ -316,6 +332,48 @@ def test_invite_only_registration_consumes_code_only_after_success(tmp_path: Pat
             headers=ORIGIN,
         )
         assert revoke.status_code == 404
+
+
+def test_registration_uses_the_account_email_identity_for_unicode_addresses(tmp_path: Path):
+    app = make_app(tmp_path)
+    app.state.control_plane.update_client({"registration_mode": "invite_only"})
+    with TestClient(app) as client:
+        assert login(client).status_code == 200
+        issued = client.post("/api/admin/control/invitations", headers=ORIGIN,
+                             json={"email": "Straße@例子.example"})
+        assert issued.status_code == 201
+        assert issued.json()["invitation"]["email"] == "straße@例子.example"
+        body = {"invite_code": issued.json()["code"], "password": "strong-password-123"}
+        different = client.post("/api/user/register", json={**body, "email": "strasse@例子.example"})
+        assert different.status_code == 403
+        registered = client.post("/api/user/register", json={**body, "email": "Straße@例子.example"})
+        assert registered.status_code == 200
+        assert registered.json()["user"]["email"] == "straße@例子.example"
+
+
+def test_registration_keeps_invitation_consumed_if_session_save_fails(tmp_path, monkeypatch):
+    app = make_app(tmp_path)
+    app.state.control_plane.update_client({"registration_mode": "invite_only"})
+    email = "recover@example.com"
+    code = app.state.invitations.create(email, "root")["code"]
+    credentials = {"email": email, "password": "strong-password-123"}
+    accounts = app.state.user_accounts
+    save = accounts._save
+
+    def fail_session_write():
+        if accounts.sessions:
+            raise OSError("test session storage failure")
+        save()
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        with monkeypatch.context() as fault:
+            fault.setattr(accounts, "_save", fail_session_write)
+            result = client.post("/api/user/register", json={**credentials, "invite_code": code})
+        assert result.status_code == 503
+        assert not result.cookies
+        assert app.state.invitations.list_invitations()[0]["status"] == "consumed"
+        assert client.post("/api/user/register", json={**credentials, "invite_code": code}).status_code == 403
+        assert client.post("/api/user/login", json=credentials).status_code == 200
 
 
 def test_failed_duplicate_registration_releases_invitation_for_admin_recovery(tmp_path: Path):

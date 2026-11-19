@@ -5,8 +5,7 @@ from typing import Any, Callable
 
 from fastapi import FastAPI, Request
 from fastapi.responses import Response
-from fastapi.routing import APIRoute
-from starlette.routing import request_response
+from fastapi.routing import APIRoute, request_response
 
 from . import admin as admin_module
 from . import model_capability_routing_patch as model_routing
