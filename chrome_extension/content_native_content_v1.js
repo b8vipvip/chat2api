@@ -467,37 +467,33 @@
         active.nativeStructuralFailure = "no-safe-complete-reply-root";
       return null;
     }
-    return {version:1,revision:(active.nativeRevision || 0) + 1,root};
+    const revision = Math.max(active.nativeRevision || 0, active.nativeSentRevision || 0) + 1;
+    return {version:1, revision, root};
   }
 
   const MAX_RAW_BYTES = 6 * 1024 * 1024;
   const CHUNK_BYTES = 64 * 1024;
   // Every chunk must receive the server's own ACK, not just a local socket
   // enqueue. The final ACK must also confirm a committed, validated tree.
-  async function deliverChunks(active, tree, bytes, final) {
-    if (!globalThis.crypto?.subtle || !globalThis.btoa) return false;
+  async function deliverChunks(active, tree, bytes, transfer) {
+    if (!globalThis.crypto?.subtle || !globalThis.btoa) return null;
     const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
     const sha256 = [...digest].map(x=>x.toString(16).padStart(2,"0")).join("");
     const count = Math.ceil(bytes.length / CHUNK_BYTES);
-    if (count < 1 || count > 96) return false;
+    if (count < 1 || count > 96) return null;
+    let reply;
     for (let index = 0; index < count; index++) {
+      if (active.nativeTransferInFlight !== transfer) return null;
       const slice = bytes.subarray(index * CHUNK_BYTES,(index + 1) * CHUNK_BYTES);
       const data = btoa(String.fromCharCode(...slice));
-      const reply = await chrome.runtime.sendMessage({type:"chat2api.native.ack",event:{
+      reply = await chrome.runtime.sendMessage({type:"chat2api.native.ack",event:{
         type:"chat.native.chunk",request_id:active.requestId,revision:tree.revision,
         index,count,byte_length:bytes.length,sha256,data,
       }});
-      if (reply?.ok !== true || (index === count - 1 && reply?.committed !== true)) {
-        active.nativeTransportAckError = String(reply?.error || "native-chunk-not-committed").slice(0,80);
-        return false;
-      }
-      // Do not let the page's old reply be replaced by a partial generation.
-      if (active.requestId !== tree.requestId && tree.requestId) return false;
+      if (reply?.ok !== true) return reply;
     }
-    active.nativeChunkComplete = true; // Last chunk was validated and published by server.
-    return true;
+    return reply;
   }
-
 
   const IDENTITY_MIMES = new Set(["image/jpeg","image/png","image/webp","image/gif"]);
   // The media archive accepts originals up to 20 MiB. A 4 MiB hash cap
@@ -755,26 +751,28 @@
   async function capture(active, final = false) {
     if (!active?.requestId || !active.submitStartedAt) return;
     const now = Date.now();
-    if (final && active.nativeTransferInFlight) {
-      // A prior live incremental transfer must not interleave chunks with
-      // the terminal snapshot under the same revision. Keep a hard bound.
-      const deadline=Date.now()+30000;
-      while (active.nativeTransferInFlight && Date.now()<deadline)
-        await new Promise(resolve=>setTimeout(resolve,100));
-    }
-    if (active.nativeTransferInFlight) {
-      active.nativeCaptureFailure="earlier-chunk-transfer-not-finished";
+    // A final capture can supersede an unacknowledged progress revision.
+    // Only its own transfer may publish capture state or send more chunks.
+    if (active.nativeTransferInFlight?.final) {
+      if (final) await active.nativeTransferInFlight.done;
       return;
     }
-    if (!final && now - Number(active.nativeLastAt || 0) <
-          (active.nativeHeavySnapshot ? 6500 : 900)) return;
-    active.nativeTransferInFlight = true;
+    if (!final && (active.nativeFinalCaptureStarted || active.nativeTransferInFlight
+        || now - Number(active.nativeLastAt || 0) < (active.nativeHeavySnapshot ? 6500 : 900))) return;
+    const transfer = {final};
+    active.nativeTransferInFlight = transfer;
     active.nativeLastAt = now;
-    // An earlier incremental revision is not proof that the final DOM tree
-    // was committed. Avoid exporting stale true when final capture fails.
+    transfer.done = captureRevision(active, transfer);
+    await transfer.done;
+  }
+
+  async function captureRevision(active, transfer) {
+    const {final} = transfer;
+    active.nativeFinalCaptureCommitted = false;
     if (final) {
+      active.nativeFinalCaptureStarted = true;
       active.nativeChunkComplete = false;
-      active.nativeFinalCaptureCommitted = false;
+      active.nativeTransportAckError = "";
       // Never reuse a prepared proof from an earlier incremental revision
       // or a different request / previous assistant selection.
       active.nativePreparedEditorMerge = null;
@@ -842,34 +840,32 @@
       active.nativeHeavySnapshot = bytes.byteLength > 640000;
       active.nativeChunkComplete = false;
       active.nativeTransportAckError = "";
-      const transmit = async () => {
-        if (bytes.byteLength <= 900000) {
-          const reply = await chrome.runtime.sendMessage({type:"chat2api.native.ack",event:{
-            type:"chat.native.snapshot",request_id:active.requestId,snapshot:tree,
-          }});
-          if (reply?.ok === true && reply?.committed === true) {
-            active.nativeChunkComplete = true;
-            return true;
-          }
-          active.nativeTransportAckError = String(reply?.error || "native-snapshot-not-committed").slice(0,80);
-          return false;
-        }
-        return deliverChunks(active,tree,bytes,final);
-      };
-      const result = await transmit();
-      if (result) {
-        if (final) active.nativeFinalCaptureCommitted = true;
+      // Reserve the wire revision before the first asynchronous send. A lost
+      // ACK must not let a later, different tree reuse that revision.
+      active.nativeSentRevision = tree.revision;
+      const chunked = bytes.byteLength > 900000;
+      const reply = chunked
+        ? await deliverChunks(active, tree, bytes, transfer)
+        : await chrome.runtime.sendMessage({type:"chat2api.native.ack",event:{
+          type:"chat.native.snapshot",request_id:active.requestId,snapshot:tree,
+        }});
+      if (active.nativeTransferInFlight !== transfer) return;
+      if (reply?.ok === true && reply?.committed === true) {
+        active.nativeChunkComplete = true;
+        active.nativeFinalCaptureCommitted = final;
         active.nativeLastHash = hash;
         active.nativeRevision = tree.revision;
         active.nativeCaptureFailure = "";
-        active.nativeTransportAckError = "";
       } else {
+        const fallback = chunked ? "native-chunk-not-committed" : "native-snapshot-not-committed";
+        active.nativeTransportAckError = String(reply?.error || fallback).slice(0,80);
         active.nativeCaptureFailure = "native-transport-incomplete";
       }
     } catch (_) {
-      active.nativeCaptureFailure = "native-transport-failed";
+      if (active.nativeTransferInFlight === transfer)
+        active.nativeCaptureFailure = "native-transport-failed";
     } finally {
-      active.nativeTransferInFlight = false;
+      if (active.nativeTransferInFlight === transfer) active.nativeTransferInFlight = null;
     }
   }
   globalThis[KEY] = Object.freeze({capture,snapshot});

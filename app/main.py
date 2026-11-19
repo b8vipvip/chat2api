@@ -3226,7 +3226,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                     "sha256", "data")}
                                 committed = native_chunks.ingest(request_id, owner, payload)
                             else:
-                                committed = native_content.publish(
+                                committed = native_chunks.publish_snapshot(
                                     request_id, owner, message.get("snapshot"))
                             accepted = True
                             reason = ""

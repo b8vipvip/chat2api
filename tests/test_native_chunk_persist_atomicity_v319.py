@@ -85,6 +85,21 @@ def test_genuinely_newer_revision_may_supersede_partial_old_one(tmp_path):
     assert assembler.store.get(RID, "owner")["revision"] == 12
 
 
+def test_direct_snapshot_only_retires_an_older_upload_for_its_owner(tmp_path):
+    assembler = native.NativeChunkAssembler(native.NativeContentStore(tmp_path))
+    first = chunk_envelopes(11, text="A" * 66000)
+    assert not assembler.ingest(RID, "owner", first[0])
+    assert assembler.publish_snapshot(RID, "owner", snapshot(10))
+    assert assembler.progress(RID, "owner")["revision"] == 11
+    assert not assembler.publish_snapshot(RID, "other", snapshot(12))
+    assert assembler.progress(RID, "owner")["received_chunks"] == 1
+    assert assembler.publish_snapshot(RID, "owner", snapshot(12, "final"))
+    assert assembler.progress(RID, "owner") == {"state": "none"}
+    assert assembler.store.persist(RID, "owner")
+    reopened = native.NativeContentStore(tmp_path)
+    assert reopened.get(RID, "owner") == snapshot(12, "final")
+
+
 def test_cross_owner_chunk_revision_cannot_override_ongoing_transfer(tmp_path):
     assembler = native.NativeChunkAssembler(native.NativeContentStore(tmp_path))
     old = chunk_envelopes(11, text="A" * 66000)

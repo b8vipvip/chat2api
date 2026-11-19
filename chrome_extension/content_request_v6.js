@@ -2801,6 +2801,23 @@
     };
   }
 
+  function captureNativeProgressIfDue(active, current, now) {
+    const scope = active.nativeVerifiedReplyScope;
+    const candidate = current.latest;
+    if (!native?.capture || !active.requestId || !active.submitStartedAt
+        || active.cancelled || active.completed || !active.networkStreamSeen
+        || active.nativeFinalCaptureStarted || active.nativeTransferInFlight
+        || !current.isNew || !candidate?.isConnected || !scope?.isConnected
+        || !(scope === candidate || scope.contains(candidate))) return;
+    const lastAttempt = active.nativeProgressCaptureAt || active.submitStartedAt;
+    if (now - lastAttempt < 15000) return;
+    active.nativeProgressCaptureAt = now;
+    // Progress is optional. Only the request terminal awaits its own final ACK.
+    try {
+      native.capture(active, false)?.catch(() => {});
+    } catch (_) { /* keep the request monitor running */ }
+  }
+
   async function monitor(active) {
     const timeoutMs = Math.max(5000, Number(active.options.timeout_seconds || 300) * 1000);
     const startedAt = Date.now();
@@ -2860,6 +2877,7 @@
           });
         } catch (_) { /* evidence must never abort the real Worker request */ }
       }
+      captureNativeProgressIfDue(active, current, Date.now());
       const generating = isGenerating();
       const networkText = String(active.networkObservedText || "");
       const networkTerminalText = String(active.networkTerminalText || "");

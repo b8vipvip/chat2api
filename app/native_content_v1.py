@@ -323,6 +323,18 @@ class NativeChunkAssembler:
         self._lock = threading.Lock()
         self._sessions: OrderedDict[str, dict] = OrderedDict()
 
+    def publish_snapshot(self, request_id: str, owner: str, snapshot: dict) -> bool:
+        if not self.store.publish(request_id, owner, snapshot):
+            return False
+        # A small final snapshot can supersede a chunked progress upload.
+        with self._lock:
+            pending = self._sessions.get(request_id)
+            if pending:
+                pending_owner, revision, *_ = pending["identity"]
+                if pending_owner == owner and revision < snapshot["revision"]:
+                    del self._sessions[request_id]
+        return True
+
     def progress(self, request_id: str, owner: str) -> dict:
         """Safe transport state only: never emit chunk bytes or source SHA."""
         self.store._valid_id(request_id)
