@@ -11,7 +11,8 @@ permissions:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # New commits supersede older snapshots; validate the latest main tree rather than queue stale CI runs.
+  cancel-in-progress: true
 
 jobs:
   test:
