@@ -70,7 +70,7 @@ function humanSocketError(value) {
   const text = String(value || "").trim();
   if (!text) return "";
   if (/WebSocket closed \(1006(?:, [^)]+)?\)/i.test(text)) {
-    return "连接异常断开（1006）。这通常表示服务端未完成 WebSocket 握手，或连接被反向代理中断。请先核对上方服务端地址是否与管理后台域名一致；地址正确后再检查服务端的 Worker 身份认证日志。不要反复更换设备码来修复地址或连接问题。";
+    return "连接异常断开（1006）。Worker 会自动重连；这通常表示服务端未完成 WebSocket 握手，或连接被反向代理中断。请先核对上方服务端地址是否与管理后台域名一致；地址正确后再检查服务端的 Worker 身份认证日志。不要反复更换设备码来修复地址或连接问题。";
   }
   if (/worker_active_request_lease|still has active requests/i.test(text)) {
     return "当前 Worker 仍有请求未进入终态，暂不能更换设备码。请等待正在处理的请求结束后重试。";

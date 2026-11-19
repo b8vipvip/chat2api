@@ -779,6 +779,7 @@ def test_windows_worker_server_origin_migration_and_socket_generation_guard():
     assert "new URL(settings.serverUrl || DEFAULT_SERVER_URL).host" in popup
     assert "actionMessageUntil" in popup
     assert "不要反复更换设备码来修复地址或连接问题" in popup
+    assert "Worker 会自动重连" in popup
     assert "Extension WebSocket authentication rejected client_id=%s reason=%s" in server
 
 
