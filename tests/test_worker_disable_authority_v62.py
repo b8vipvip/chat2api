@@ -170,6 +170,59 @@ def test_worker_management_disable_and_enable_share_linux_worker_authority(monke
     assert app.state.registry.clients["ext_linux"].connection_enabled is True
 
 
+
+def test_revoked_linux_worker_remains_a_deny_authority_for_its_extension(monkeypatch) -> None:
+    app, _ = make_app(monkeypatch)
+    worker = app.state.linux_workers.data["workers"]["wrk_linux"]
+    worker["revoked_at"] = "2026-11-19T10:00:00Z"
+    app.state.registry.sockets["ext_linux"] = object()
+
+    # A revoked Worker must not disappear from the authority lookup and turn
+    # its still-bound extension into an unmanaged/routable Chrome client.
+    assert app.state.registry.worker_master_enabled("ext_linux") is False
+    rows = {row["client_id"]: row for row in app.state.registry.summaries()}
+    assert rows["ext_linux"]["admin_enabled"] is False
+    assert rows["ext_linux"]["online"] is False
+
+    # A background save or reconnect attempt cannot revive the revoked client.
+    app.state.registry.clients["ext_linux"].connection_enabled = True
+    asyncio.run(app.state.registry.save())
+    assert app.state.registry.clients["ext_linux"].connection_enabled is False
+
+    app.state.registry.sockets["ext_linux"] = object()
+    result = asyncio.run(app.state.registry.set_connection_enabled("ext_linux", True))
+    assert result.connection_enabled is False
+    assert "ext_linux" not in app.state.registry.sockets
+
+    # The administrative enable path must also fail closed for a revoked record.
+    from fastapi import HTTPException
+    try:
+        asyncio.run(app.state.worker_disable_authority["enable_client"]("ext_linux"))
+    except HTTPException as exc:
+        assert exc.status_code == 409
+        assert "revoked" in str(exc.detail).lower()
+    else:
+        raise AssertionError("revoked Linux Worker was re-enabled")
+
+
+def test_active_replacement_worker_supersedes_old_revoked_extension_binding(monkeypatch) -> None:
+    app, _ = make_app(monkeypatch)
+    app.state.linux_workers.data["workers"]["wrk_linux"]["revoked_at"] = "2026-11-19T10:00:00Z"
+    app.state.linux_workers.data["workers"]["wrk_replacement"] = {
+        "worker_id": "wrk_replacement",
+        "name": "Replacement Linux Worker",
+        "enabled": True,
+        "revoked_at": None,
+        "extension_client_id": "ext_linux",
+        "metadata": {"bridge": {"extension_id": "ext_linux"}},
+    }
+
+    # The replacement binding is authoritative even though the old revoked
+    # record appears first in storage order.
+    assert app.state.registry.worker_master_enabled("ext_linux") is True
+    assert "ext_linux" not in app.state.worker_disable_authority["disabled_linux_client_ids"]()
+
+
 def test_background_registry_save_cannot_revive_disabled_linux_worker(monkeypatch) -> None:
     app, _ = make_app(monkeypatch)
     authority = app.state.worker_disable_authority

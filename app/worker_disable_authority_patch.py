@@ -47,17 +47,25 @@ def install_worker_disable_authority_patch(app: FastAPI) -> FastAPI:
         wanted = str(client_id or "")
         if not wanted:
             return None
+        # Prefer a currently active binding when an old revoked Worker and a
+        # replacement Worker temporarily reference the same extension. If no
+        # active binding exists, retain the revoked record as a deny authority
+        # instead of treating its extension as an unmanaged Chrome client.
+        revoked_match: dict[str, Any] | None = None
         with workers._lock:
             for worker in workers.data.get("workers", {}).values():
-                if worker.get("revoked_at"):
-                    continue
                 direct = str(worker.get("extension_client_id") or "")
                 metadata = worker.get("metadata") if isinstance(worker.get("metadata"), dict) else {}
                 bridge = metadata.get("bridge") if isinstance(metadata.get("bridge"), dict) else {}
                 bridged = str(bridge.get("extension_id") or bridge.get("client_id") or "")
-                if wanted in {direct, bridged}:
-                    return worker
-        return None
+                if wanted not in {direct, bridged}:
+                    continue
+                if worker.get("revoked_at"):
+                    if revoked_match is None:
+                        revoked_match = worker
+                    continue
+                return worker
+        return revoked_match
 
     # The Worker management list is the sole source for the Linux master
     # enabled state. Windows Workers use their existing registry switch.
@@ -74,19 +82,25 @@ def install_worker_disable_authority_patch(app: FastAPI) -> FastAPI:
         return str(worker.get("worker_id") or "") if worker else ""
 
     def disabled_linux_client_ids() -> set[str]:
-        blocked: set[str] = set()
+        # Include revoked bindings in the candidate set. Resolve each client
+        # through worker_for_client() so a live replacement binding wins over
+        # an older revoked record, while a revoked-only binding stays blocked.
+        candidate_client_ids: set[str] = set()
         with workers._lock:
             for worker in workers.data.get("workers", {}).values():
-                if worker.get("revoked_at") or worker.get("enabled") is not False:
-                    continue
                 client_id = str(worker.get("extension_client_id") or "")
                 if client_id:
-                    blocked.add(client_id)
+                    candidate_client_ids.add(client_id)
                 metadata = worker.get("metadata") if isinstance(worker.get("metadata"), dict) else {}
                 bridge = metadata.get("bridge") if isinstance(metadata.get("bridge"), dict) else {}
                 bridged = str(bridge.get("extension_id") or bridge.get("client_id") or "")
                 if bridged:
-                    blocked.add(bridged)
+                    candidate_client_ids.add(bridged)
+        blocked: set[str] = set()
+        for client_id in candidate_client_ids:
+            worker = worker_for_client(client_id)
+            if worker and (worker.get("revoked_at") or worker.get("enabled") is False):
+                blocked.add(client_id)
         return blocked
 
     def persist_worker_switch(
@@ -173,12 +187,14 @@ def install_worker_disable_authority_patch(app: FastAPI) -> FastAPI:
 
         async def set_connection_enabled_authoritative(client_id: str, enabled: bool):
             worker = worker_for_client(client_id)
-            if bool(enabled) and worker and worker.get("enabled") is False:
+            if bool(enabled) and worker and (
+                worker.get("enabled") is False or worker.get("revoked_at")
+            ):
                 if client_id not in registry.clients:
                     raise KeyError("Unknown client_id")
                 # Reject the attempted revival through the real disable boundary,
                 # not a metadata-only save. This also closes any stale WebSocket
-                # left behind by an older reconnect race.
+                # left behind by an older reconnect or revocation race.
                 return await base_set_connection_enabled(client_id, False)
             return await base_set_connection_enabled(client_id, bool(enabled))
 
