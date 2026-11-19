@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.admin_audit import AdminAuditError
+from app.admin_auth import AdminLoginRateLimiter
 from app.config import Settings
 from app.control_plane_v1_patch import install_control_plane_v1
 from app.main import create_app
@@ -39,6 +40,49 @@ def login(client: TestClient):
         json={"username": "owner", "password": "strong-root-password"},
         headers=ORIGIN,
     )
+
+
+def test_admin_login_rate_limit_enforces_identity_and_ip_budgets(tmp_path: Path):
+    app = make_app(tmp_path)
+    app.state.admin_login_rate_limiter = AdminLoginRateLimiter(
+        per_identity_limit=2,
+        per_ip_limit=4,
+        window_seconds=60,
+    )
+    with TestClient(app) as client:
+        wrong = {"username": "owner", "password": "incorrect-password"}
+        assert client.post("/api/admin/auth/login", json=wrong, headers=ORIGIN).status_code == 401
+        assert client.post("/api/admin/auth/login", json=wrong, headers=ORIGIN).status_code == 401
+
+        identity_blocked = client.post("/api/admin/auth/login", json=wrong, headers=ORIGIN)
+        assert identity_blocked.status_code == 429
+        assert int(identity_blocked.headers["Retry-After"]) >= 1
+        assert identity_blocked.headers["Cache-Control"] == "no-store"
+
+        # Another username remains independently eligible until the source-IP
+        # budget is exhausted; the same IP cannot evade that shared budget.
+        other = {"username": "other-admin", "password": "incorrect-password"}
+        assert client.post("/api/admin/auth/login", json=other, headers=ORIGIN).status_code == 401
+        assert client.post("/api/admin/auth/login", json=other, headers=ORIGIN).status_code == 401
+        ip_blocked = client.post("/api/admin/auth/login", json=other, headers=ORIGIN)
+        assert ip_blocked.status_code == 429
+        assert int(ip_blocked.headers["Retry-After"]) >= 1
+
+
+def test_admin_login_success_clears_identity_budget_but_preserves_ip_budget():
+    limiter = AdminLoginRateLimiter(per_identity_limit=2, per_ip_limit=3, window_seconds=60)
+    ip = "192.0.2.10"
+    limiter.record_failure("owner", ip)
+    limiter.record_failure("OWNER", ip)
+    limiter.record_failure("other-admin", ip)
+    assert limiter.retry_after("owner", ip) > 0
+
+    limiter.record_success("owner", ip)
+
+    # The account-specific failures are reset, but a successful login does not
+    # erase the shared source-IP budget for other administrator identities.
+    assert limiter.retry_after("owner", "192.0.2.11") == 0
+    assert limiter.retry_after("other-admin", ip) > 0
 
 
 def test_invitation_email_normalization_and_validation(tmp_path: Path):
