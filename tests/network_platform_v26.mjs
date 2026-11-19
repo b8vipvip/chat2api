@@ -143,6 +143,7 @@ runtimePlatformInfo = { os: "win", arch: "x86-64", nacl_arch: "x86-64" };
 const windows = await platform.detect();
 assert.equal(windows.os, "win");
 assert.equal(windows.supported_desktop, true);
+fetchHandler = async () => ({ ok: true, status: 200, json: async () => ({ success: true }) });
 fetchCalls.length = 0;
 await sandbox.fetch("https://server.example/api/extensions/register", {
   method: "POST",
