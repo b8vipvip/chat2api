@@ -48,3 +48,79 @@ assert.equal(restored.root.children[109].children[129].children[0].text,"p109-12
 const hash=await webcrypto.subtle.digest("SHA-256",raw);
 assert.equal(Buffer.from(hash).toString("hex"),chunked[0].sha256);
 console.log("Large assistant reply: "+raw.length+" bytes / "+chunked.length+" authenticated chunks");
+
+function deferred() {
+  let resolve, reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return {promise, resolve, reject};
+}
+
+const finalText = new Element("P", [{nodeType:3, nodeValue:"Final reply"}]);
+for (const scenario of [
+  {progress: finalText, final: finalText},
+  {progress: root, final: root, earlyAck: true},
+  {progress: root, final: finalText, lostAck: true},
+  {progress: finalText, final: root, failFinal: true},
+]) {
+  const events = [];
+  const started = deferred();
+  const progressAck = deferred();
+  const finalStarted = deferred();
+  const finalAck = deferred();
+  const sendMessage = async ({event}) => {
+    events.push(event);
+    const revision = event.revision ?? event.snapshot.revision;
+    if (revision === 1) {
+      started.resolve();
+      return progressAck.promise;
+    }
+    assert.equal(revision, 2);
+    finalStarted.resolve();
+    await finalAck.promise;
+    return {ok: true, committed: !scenario.failFinal};
+  };
+  const sandbox = {...ctx, chrome: {runtime: {sendMessage}}};
+  delete sandbox.__CHAT2API_NATIVE_CONTENT_V1__;
+  runInNewContext(code, sandbox);
+  const observer = sandbox.__CHAT2API_NATIVE_CONTENT_V1__;
+  const state = {requestId:"req_native_progress_handoff", submitStartedAt:Date.now(),
+    lastCandidateNode:scenario.progress};
+  const partial = observer.capture(state, false);
+  await started.promise;
+  state.lastCandidateNode = scenario.final;
+  const terminal = observer.capture(state, true);
+  await finalStarted.promise;
+  assert.equal(state.nativeFinalCaptureCommitted, false);
+  let secondCallerFinished = false;
+  const duplicate = observer.capture(state, true).then(() => { secondCallerFinished = true; });
+  if (scenario.earlyAck) {
+    progressAck.resolve({ok:true, committed:true});
+    await partial;
+    assert.ok(state.nativeTransferInFlight);
+    assert.equal(state.nativeRevision, undefined);
+  }
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(secondCallerFinished, false);
+  finalAck.resolve();
+  await Promise.all([terminal, duplicate]);
+  if (scenario.lostAck) progressAck.reject(new Error("lost progress ACK"));
+  else progressAck.resolve({ok:true, committed:true});
+  await partial;
+  assert.equal(state.nativeRevision, scenario.failFinal ? undefined : 2);
+  assert.equal(state.nativeChunkComplete, !scenario.failFinal);
+  assert.equal(state.nativeFinalCaptureCommitted, !scenario.failFinal);
+  assert.equal(state.nativeCaptureFailure, scenario.failFinal ? "native-transport-incomplete" : "");
+  assert.equal(events.filter(e => (e.revision ?? e.snapshot.revision) === 1).length, 1);
+  const finalEvents = events.slice(1);
+  if (scenario.final === root) {
+    assert.equal(finalEvents.length, finalEvents[0].count);
+    const payload = Buffer.concat(finalEvents.map(e => Buffer.from(e.data, "base64")));
+    assert.equal(JSON.parse(payload).root.children.length, root.childNodes.length);
+  } else {
+    assert.equal(finalEvents[0].snapshot.root.children[0].text, "Final reply");
+  }
+  state.nativeLastAt = 0;
+  const count = events.length;
+  await observer.capture(state, false);
+  assert.equal(events.length, count);
+}

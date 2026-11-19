@@ -42,7 +42,7 @@ def test_rich_observers_cannot_override_broker_or_worker_terminal():
         assert "await broker.publish(" not in src, f"observer publishes terminal: {path}"
         assert "await telemetry.upsert(" not in src, f"observer overwrites request terminal: {path}"
     broker = (ROOT / "app/broker.py").read_text("utf-8")
-    assert 'if state.terminal_event_type is not None:' in broker
+    assert 'if state.terminal_event_type is not None or state.completed_mono is not None:' in broker
     assert 'return False' in broker
 
 

@@ -72,7 +72,8 @@ def test_layout_revision_must_match_actual_native_snapshot():
 
 
 def test_cancelled_broker_terminal_is_not_mislabeled_error():
-    original = {"status": "running", "client_id": "ext_lease_v316",
+    original = {"request_id": "req_v316_terminal", "status": "running",
+                "client_id": "ext_lease_v316",
                 "diagnostics": {"native_snapshot_terminal_complete": False}}
     for terminal, expected in (
         ("chat.cancelled", "cancelled"),
@@ -80,7 +81,8 @@ def test_cancelled_broker_terminal_is_not_mislabeled_error():
         ("chat.completed", "completed"),
     ):
         broker = SimpleNamespace(
-            terminal_event_type=terminal, client_id="ext_lease_v316",
+            request_id="req_v316_terminal", terminal_event_type=terminal,
+            client_id="ext_lease_v316",
             diagnostics={"some_terminal_observation": True},
         )
         projected = native_terminal_view(original, broker)

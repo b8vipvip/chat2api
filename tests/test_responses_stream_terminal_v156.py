@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.api_keys import ApiPrincipal
+from app.chat_request_service import ChatRequestService
 from app.responses_model_routing_v108_patch import (
     _ResponsesModelContextMiddleware,
     _SSEStreamObserver,
@@ -100,9 +101,14 @@ class _Telemetry:
     def get(self, request_id: str) -> dict | None:
         return next((row for row in reversed(self.rows) if row.get("request_id") == request_id), None)
 
-    async def upsert(self, row: dict) -> dict:
-        existing = self.get(row["request_id"]) or {}
-        merged = {**existing, **row}
+    async def upsert(
+        self, row: dict, *, merge_diagnostics: bool = False, create_only: bool = False,
+    ) -> dict:
+        from app.telemetry import DuplicateRequestIdentity
+        existing = self.get(row["request_id"])
+        if create_only and existing is not None:
+            raise DuplicateRequestIdentity("request_id already exists")
+        merged = {**(existing or {}), **row}
         self.rows.append(merged)
         return merged
 
@@ -229,14 +235,32 @@ def test_outer_middleware_owns_stream_terminal(
     assert row["diagnostics"]["response_stream_event_count"] == len(events)
 
 
-def test_dispatch_correlates_worker_and_protocol_repair_attempts() -> None:
+def test_dispatch_correlates_worker_and_protocol_repair_attempts(monkeypatch) -> None:
+    from app import quota_reservation_runtime_v1 as quota_runtime
+
+    wallet_dispatches: list[str] = []
+    monkeypatch.setattr(
+        quota_runtime, "authorize_wallet_dispatch",
+        lambda _app, request_id, _principal: wallet_dispatches.append(request_id),
+    )
     trace = {"worker_attempt_ids": []}
     request = SimpleNamespace(
         headers={"x-chat2api-request-id": "resp_req_original"},
         scope={"chat2api.responses_trace": trace},
     )
+    requests = {}
     async def create(request_id, client_id):
-        return SimpleNamespace(request_id=request_id)
+        state = SimpleNamespace(
+            request_id=request_id,
+            client_id=client_id,
+            final_future=asyncio.get_running_loop().create_future(),
+            timings=lambda: {},
+        )
+        requests[request_id] = state
+        return state
+
+    async def release(request_id):
+        requests.pop(request_id, None)
 
     async def send(client_id, message):
         return None
@@ -247,9 +271,10 @@ def test_dispatch_correlates_worker_and_protocol_repair_attempts() -> None:
         busy_clients=set(),
         send=send,
     )
-    broker = SimpleNamespace(create=create)
+    broker = SimpleNamespace(create=create, release=release, requests=requests)
     app = SimpleNamespace(state=SimpleNamespace(
         registry=registry, broker=broker,
+        chat_request_service=ChatRequestService(registry, broker),
         settings=SimpleNamespace(request_timeout_seconds=120),
         telemetry=_Telemetry(),
     ))
@@ -265,3 +290,4 @@ def test_dispatch_correlates_worker_and_protocol_repair_attempts() -> None:
     assert trace["worker_request_id"] == "resp_req_original"
     assert trace["worker_attempt_ids"] == ["resp_req_original", "resp_repair_2"]
     assert trace["worker_client_id"] == "ext_worker"
+    assert wallet_dispatches == ["resp_req_original"], "trusted repair must not require a second wallet admission"

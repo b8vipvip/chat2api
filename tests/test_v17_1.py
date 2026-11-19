@@ -66,7 +66,7 @@ def app_v171(tmp_path: Path, password: str):
 
 
 def login(client: TestClient, password: str) -> None:
-    response = client.post("/api/admin/auth/login", json={"username": "owner", "password": password})
+    response = client.post("/api/admin/auth/login", headers={"Origin": "http://testserver"}, json={"username": "owner", "password": password})
     assert response.status_code == 200
 
 
@@ -76,6 +76,7 @@ def test_default_placeholder_admin_password_is_refused(tmp_path: Path) -> None:
         assert health["version"] == "0.17.1"
         response = client.post(
             "/api/admin/auth/login",
+            headers={"Origin": "http://testserver"},
             json={"username": "owner", "password": "change-me-admin"},
         )
         assert response.status_code == 503
@@ -87,7 +88,7 @@ def test_repairing_disabled_device_does_not_reenable_it(tmp_path: Path) -> None:
     app = app_v171(tmp_path, password)
     with TestClient(app) as client:
         login(client, password)
-        pairing_response = client.post("/api/admin/pairing-codes", json={"name": "Office"})
+        pairing_response = client.post("/api/admin/pairing-codes", headers={"Origin": "http://testserver"}, json={"name": "Office"})
         assert pairing_response.status_code == 200
         code = pairing_response.json()["code"]
 
@@ -102,7 +103,7 @@ def test_repairing_disabled_device_does_not_reenable_it(tmp_path: Path) -> None:
         assert first.status_code == 200
         client_id = first.json()["client_id"]
 
-        disabled = client.post(f"/api/admin/extensions/{client_id}/disconnect")
+        disabled = client.post(f"/api/admin/extensions/{client_id}/disconnect", headers={"Origin": "http://testserver"})
         assert disabled.status_code == 200
         assert app.state.registry.clients[client_id].connection_enabled is False
 
@@ -116,7 +117,7 @@ def test_repairing_disabled_device_does_not_reenable_it(tmp_path: Path) -> None:
             with client.websocket_connect(f"/ws/extensions/{client_id}?token={repaired_token}") as websocket:
                 websocket.receive_json()
 
-        enabled = client.post(f"/api/admin/extensions/{client_id}/enable")
+        enabled = client.post(f"/api/admin/extensions/{client_id}/enable", headers={"Origin": "http://testserver"})
         assert enabled.status_code == 200
         with client.websocket_connect(f"/ws/extensions/{client_id}?token={repaired_token}") as websocket:
             assert websocket.receive_json()["type"] == "server.hello"

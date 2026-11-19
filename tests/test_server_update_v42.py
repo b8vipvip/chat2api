@@ -166,3 +166,14 @@ def test_update_scripts_and_ui_parse():
         check=False,
     )
     assert js.returncode == 0, js.stderr
+
+def test_update_preserves_only_docker_compose_local_override_and_recovers_it_after_forced_exit():
+    updater = (ROOT / "scripts" / "chat2api_server_update.sh").read_text(encoding="utf-8")
+    reconcile = (ROOT / "scripts" / "chat2api_update_reconcile.py").read_text(encoding="utf-8")
+    assert "LOCAL_COMPOSE_BACKUP_FILE=" in updater
+    assert ".admin-update-docker-compose.backup" in updater
+    assert "prepare_local_compose_override" in updater
+    assert 'git -C "$APP_DIR" merge-file -p -q' in updater
+    assert "reapplied merged local docker-compose.yml" in updater
+    assert 'if [[ "$path" != "docker-compose.yml" ]]' in updater
+    assert 'shutil.copy2(compose_backup, compose_target)' in reconcile

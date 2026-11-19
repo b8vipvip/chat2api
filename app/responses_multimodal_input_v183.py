@@ -16,7 +16,7 @@ from fastapi import HTTPException, Request
 from PIL import Image, UnidentifiedImageError
 
 from .api_keys import ApiPrincipal
-from .file_store import FileStore
+from .file_store import FileIntegrityError, FileStore
 from .media_archive_v173 import MediaArchive
 
 
@@ -62,6 +62,74 @@ def attachment_specs(file_store: FileStore, file_ids: list[str], principal: ApiP
                        "mime_type": item.mime_type, "size": item.size})
     return result
 
+
+def verify_raster_image(data: bytes, mime: str) -> None:
+    """Validate actual raster bytes, not only a caller-supplied MIME label."""
+    _verify_raster(data, mime)
+
+
+def validate_image_file(file_store: FileStore, file_id: str, principal: ApiPrincipal) -> tuple[Any, bytes]:
+    """Resolve one API-key-owned vision file and verify its stored raster bytes."""
+    attachment_specs(file_store, [file_id], principal)
+    item = file_store.get(file_id)
+    if item is None or item.purpose != "vision":
+        raise ValueError("input_image file_id must reference a vision image attachment")
+    try:
+        stored, payload = file_store.read(file_id)
+    except FileIntegrityError as error:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "stored_file_integrity_unavailable"},
+        ) from error
+    except (KeyError, FileNotFoundError) as error:
+        raise ValueError("input_image file content is unavailable") from error
+    except OSError as error:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "stored_file_integrity_unavailable"},
+        ) from error
+    if stored.size != len(payload):
+        raise ValueError("input_image stored byte count does not match its metadata")
+    if len(payload) > 10 * 1024 * 1024:
+        raise ValueError("input_image exceeds the 10 MiB per-image limit")
+    _verify_raster(payload, stored.mime_type)
+    return stored, payload
+
+_DOCUMENT_MIME_TYPES = {
+    "application/pdf",
+    "text/plain",
+    "text/markdown",
+    "text/csv",
+    "application/json",
+    "application/rtf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+}
+
+
+def validate_document_file(file_store: FileStore, file_id: str, principal: ApiPrincipal) -> tuple[Any, bytes]:
+    """Resolve one owner-scoped Web Chat document and verify its stored bytes."""
+    attachment_specs(file_store, [file_id], principal)
+    item = file_store.get(file_id)
+    if item is None or item.purpose != "assistants" or item.mime_type not in _DOCUMENT_MIME_TYPES:
+        raise ValueError("file content part must reference an assistants document with a supported MIME type")
+    try:
+        stored, payload = file_store.read(file_id)
+    except (KeyError, FileNotFoundError) as error:
+        raise ValueError("file content part document bytes are unavailable") from error
+    except OSError as error:
+        # A storage integrity failure is not a malformed client attachment.
+        # Return a retryable service error without leaking filesystem details.
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "stored_file_integrity_unavailable"},
+        ) from error
+    if not payload or stored.size != len(payload):
+        raise ValueError("file content part document byte count does not match its metadata")
+    if len(payload) > file_store.max_file_bytes:
+        raise ValueError("file content part document exceeds the configured file size limit")
+    return stored, payload
 
 def _verify_raster(data: bytes, mime: str) -> None:
     if mime not in _IMAGE_MIME:
@@ -118,9 +186,7 @@ async def resolve_responses_attachments(
                 image_value if isinstance(image_value, str) and image_value.startswith("file_") else None
             )
             if file_id:
-                item = attachment_specs(file_store, [str(file_id)], principal)[0]
-                if item["mime_type"] not in _IMAGE_MIME:
-                    raise ValueError("input_image file_id must reference a raster image")
+                validate_image_file(file_store, str(file_id), principal)
                 file_ids.append(str(file_id))
                 continue
             if not isinstance(image_value, str) or not image_value:

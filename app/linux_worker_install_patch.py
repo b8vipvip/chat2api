@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +41,94 @@ def install_linux_worker_install_patch(app: FastAPI) -> FastAPI:
             f"--server {server_url(request)} --enroll-code {item['code']}"
         )
 
+    @app.post("/api/workers/identity/validate")
+    async def worker_identity_validate(request: Request) -> dict[str, Any]:
+        """Verify the installed credential and report the live control socket."""
+        try:
+            body = await request.json()
+        except Exception:
+            return {"valid": False, "connected": False}
+        if not isinstance(body, dict):
+            return {"valid": False, "connected": False}
+        worker_id = str(body.get("worker_id") or "").strip()
+        worker_token = str(body.get("worker_token") or "")
+        if not worker_id or not worker_token:
+            return {"valid": False, "connected": False}
+        with worker_store._lock:
+            if not worker_store.authenticate(worker_id, worker_token):
+                return {"valid": False, "connected": False}
+            worker = worker_store.data.get("workers", {}).get(worker_id) or {}
+            if str(worker.get("platform") or "").strip().lower() != "linux":
+                return {"valid": False, "connected": False}
+            sockets = getattr(app.state, "worker_sockets", {})
+            # A socket accepted without a recent Agent heartbeat is not ready
+            # for command dispatch and must not be reported as installed.
+            heartbeat_recent = False
+            heartbeat_age_seconds: float | None = None
+            last_seen = str(worker.get("last_seen_at") or "")
+            if last_seen:
+                try:
+                    seen_at = datetime.fromisoformat(last_seen.replace("Z", "+00:00"))
+                    if seen_at.tzinfo is None:
+                        seen_at = seen_at.replace(tzinfo=timezone.utc)
+                    age_seconds = (datetime.now(timezone.utc) - seen_at).total_seconds()
+                    heartbeat_age_seconds = round(age_seconds, 1)
+                    heartbeat_recent = -5 <= age_seconds <= 45
+                except (TypeError, ValueError):
+                    heartbeat_recent = False
+            connected = bool(sockets.get(worker_id)) and heartbeat_recent
+        return {
+            "valid": True,
+            "connected": connected,
+            "heartbeat_age_seconds": heartbeat_age_seconds,
+        }
+
+    @app.post("/api/workers/install-resume")
+    async def worker_install_resume(request: Request) -> dict[str, bool]:
+        """Only resume a local identity when it belongs to this exact install code.
+
+        A syntactically valid worker.json can be left behind by another server.
+        Never treat its mere presence as proof that the current install enrolled it.
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            return {"valid": False}
+        if not isinstance(body, dict):
+            return {"valid": False}
+        code = str(body.get("enroll_code") or "").strip().upper()
+        worker_id = str(body.get("worker_id") or "").strip()
+        worker_token = str(body.get("worker_token") or "")
+        if not code or not worker_id or not worker_token:
+            return {"valid": False}
+
+        digest = code_hash(code)
+        with worker_store._lock:
+            enrollment = worker_store.data.get("enrollments", {}).get(digest)
+            if not isinstance(enrollment, dict):
+                return {"valid": False}
+            if not enrollment.get("used_at") or str(enrollment.get("worker_id") or "") != worker_id:
+                return {"valid": False}
+            if not worker_store.authenticate(worker_id, worker_token):
+                return {"valid": False}
+            worker = worker_store.data.get("workers", {}).get(worker_id) or {}
+            if str(worker.get("platform") or "").strip().lower() != "linux":
+                return {"valid": False}
+            install_id = str(enrollment.get("install_id") or "")
+            if install_id:
+                install = installs.get(install_id)
+                if not install:
+                    return {"valid": False}
+                linked_worker_id = str(install.get("worker_id") or "")
+                if linked_worker_id and linked_worker_id != worker_id:
+                    return {"valid": False}
+                if not linked_worker_id:
+                    try:
+                        installs.link_worker(code, worker_id)
+                    except ValueError:
+                        return {"valid": False}
+        return {"valid": True}
+
     def legacy_item(code: str) -> dict[str, Any] | None:
         return worker_store.data["enrollments"].get(code_hash(str(code).strip().upper()))
 
@@ -52,7 +141,6 @@ def install_linux_worker_install_patch(app: FastAPI) -> FastAPI:
 
     def combined_rows(request: Request) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
-        linked_workers: set[str] = set()
         for raw in installs.list_admin():
             item = sync_link(raw)
             worker_id = str(item.get("worker_id") or "")
@@ -70,8 +158,6 @@ def install_linux_worker_install_patch(app: FastAPI) -> FastAPI:
                 "last_seen_at": None,
                 "metadata": {},
             }
-            if worker_id:
-                linked_workers.add(worker_id)
             row = {
                 **base,
                 "record_type": "installation",
@@ -92,10 +178,10 @@ def install_linux_worker_install_patch(app: FastAPI) -> FastAPI:
                 "hostname": base.get("hostname") or item.get("hostname") or "",
             }
             rows.append(row)
-        for worker in worker_store.list_public():
-            if str(worker.get("worker_id") or "") in linked_workers:
-                continue
-            rows.append({**worker, "record_type": "worker", "install_state": "legacy", "install_enabled": False})
+        # Legacy/orphan Worker identities are intentionally not mixed into the
+        # active device feed. They remain available through the dedicated
+        # /api/admin/linux-legacy-records authority so a reinstall cannot look
+        # like a second physical device in the normal Worker console.
         rows.sort(key=lambda row: str(row.get("install_created_at") or row.get("created_at") or ""), reverse=True)
         return rows
 

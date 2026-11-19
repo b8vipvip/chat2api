@@ -1,5 +1,6 @@
 from pathlib import Path
 import re
+import subprocess
 
 
 def _runtime_version(source: str) -> tuple[int, int, int]:
@@ -37,7 +38,35 @@ def test_health_waits_for_services_instead_of_single_instant_check():
     assert 'Worker 浏览器未在限定时间内就绪' in source
 
 
+
+def test_bootstrap_shell_syntax_is_valid():
+    source = Path("scripts/bootstrap_linux_worker.sh")
+    result = subprocess.run(
+        ["bash", "-n", str(source)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_fresh_install_validates_identity_against_the_current_enrollment():
+    bootstrap = Path("scripts/bootstrap_linux_worker.sh").read_text(encoding="utf-8")
+    api = Path("app/linux_worker_install_patch.py").read_text(encoding="utf-8")
+
+    assert "/api/workers/install-resume" in bootstrap
+    assert "RESUME_RESPONSE" in bootstrap
+    assert 'if [[ $UPGRADE_ONLY -ne 1 && $VALID_IDENTITY -eq 1 ]]; then' in bootstrap
+    assert 'echo "Registration: $REGISTRATION_MODE"' in bootstrap
+    assert '@app.post("/api/workers/install-resume")' in api
+    assert 'enrollment.get("worker_id") or "") != worker_id' in api
+    assert "worker_store.authenticate(worker_id, worker_token)" in api
+    assert "/api/workers/identity/validate" in bootstrap
+    assert "Worker Agent 未能在 90 秒内连接当前服务端" in bootstrap
+    assert bootstrap.index("worker-connection") < bootstrap.index('INSTALL_SUCCESS=1')
+
+
 def test_runtime_marks_bootstrap_recovery_release():
     runtime = Path("app/runtime_contract.py").read_text(encoding="utf-8")
     assert _runtime_version(runtime) >= (0, 22, 7)
-    assert 'CHROME_BRIDGE_VERSION = "0.22.291"' in runtime
+    assert 'CHROME_BRIDGE_VERSION = "0.22.298"' in runtime

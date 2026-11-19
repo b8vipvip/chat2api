@@ -1,4 +1,29 @@
-from .main import app
+from .config import get_settings
+from .runtime_single_process_guard import (
+    SingleProcessRuntimeGuard,
+    install_single_process_runtime_guard,
+)
+
+# Acquire ownership BEFORE importing app.main: its module-level create_app()
+# constructs persistent stores. A second process must fail before any store
+# constructor can read or mutate the shared data directory.
+_runtime_guard = SingleProcessRuntimeGuard(get_settings().data_dir)
+_runtime_guard.acquire()
+try:
+    from .main import app
+except BaseException:
+    _runtime_guard.release()
+    raise
+
+# Reuse the pre-acquired lock for the full ASGI lifespan; acquire() is
+# idempotent on this guard and release happens after the existing lifespan.
+install_single_process_runtime_guard(app, guard=_runtime_guard)
+from .control_plane_integration_v1 import (
+    install_control_plane_authority_v1,
+    install_control_plane_features_v1,
+)
+from .web_chat_integration_v1 import install_web_chat_features_v1
+from .quota_reservation_runtime_v1 import install_quota_reservation_runtime_v1
 from .voice_patch import install_voice_patch
 from .live_voice_patch import install_live_voice_patch
 from .v7_patch import install_v7_patch
@@ -46,6 +71,7 @@ from .linux_worker_repair_command_patch import install_linux_worker_repair_comma
 from .linux_worker_diagnostics_patch import install_linux_worker_diagnostics_patch
 from .linux_worker_initialize_patch import install_linux_worker_initialize_patch
 from .linux_worker_upgrade_patch import install_linux_worker_upgrade_patch
+from .worker_upgrade_drain_patch import install_worker_upgrade_drain_patch
 from .linux_worker_enable_patch import install_linux_worker_enable_patch
 from .linux_worker_console_polling_patch import install_linux_worker_console_polling_patch
 from .stream_keepalive_patch import install_stream_keepalive_patch
@@ -103,6 +129,9 @@ install_v13_patch(app)
 install_v14_patch(app)
 install_v15_patch(app)
 install_v16_patch(app)
+# C-01 must establish the RBAC policy store before v17 installs the shared
+# administrator-session and route-authorization boundary.
+install_control_plane_authority_v1(app)
 install_v17_patch(app)
 install_v17_crypto_patch(app)
 install_v17_route_migration_patch(app)
@@ -185,6 +214,7 @@ install_linux_worker_initialize_patch(app)
 # it can extend the fully-patched bootstrap, including the v43 initialization
 # helper and sudo rule.
 install_linux_worker_upgrade_patch(app)
+install_worker_upgrade_drain_patch(app)
 # The reversible routing toggle is presentation/routing-only and is deliberately
 # installed after pairing. Pairing may keep the physical extension transport
 # healthy, while this final boundary decides whether it is eligible for requests.
@@ -302,6 +332,11 @@ install_legacy_mini_default_alias(app)
 install_worker_probe_ui_v1(app)
 # Standalone diagnosis has its own audit trail, not the request terminal.
 install_native_page_diagnostics(app)
+# One production composition owner wires the independent C-track services only
+# after user accounts, Worker/model routing and the legacy admin auth stack exist.
+install_control_plane_features_v1(app)
+install_quota_reservation_runtime_v1(app)
+install_web_chat_features_v1(app)
 # The transport-only SSE guard is the final ASGI middleware installation, after
 # every patch that can register a BaseHTTPMiddleware wrapper. The trailing
 # idempotent request-history call only reasserts its table ownership.

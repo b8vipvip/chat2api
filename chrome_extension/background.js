@@ -1,5 +1,7 @@
+const DEFAULT_SERVER_URL = "https://api.numbot.cn";
+const LEGACY_DEFAULT_SERVER_URL = "https://chat2api.mv3.cn";
 const DEFAULTS = {
-  serverUrl: "https://chat2api.mv3.cn",
+  serverUrl: DEFAULT_SERVER_URL,
   pairingCode: "",
   clientId: "",
   clientToken: "",
@@ -26,7 +28,26 @@ let modelDiscoveryInFlight = null;
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-async function config() { return chrome.storage.local.get(DEFAULTS); }
+function isLegacyDefaultServer(value) {
+  try {
+    const url = new URL(String(value || ""));
+    return url.origin === LEGACY_DEFAULT_SERVER_URL &&
+      (url.pathname === "/" || url.pathname === "") &&
+      !url.search && !url.hash;
+  } catch (_) {
+    return false;
+  }
+}
+async function config() {
+  const settings = await chrome.storage.local.get(DEFAULTS);
+  // Migrate only the exact historical repository default. Explicit custom
+  // server origins and reverse-proxy paths remain untouched.
+  if (isLegacyDefaultServer(settings.serverUrl)) {
+    settings.serverUrl = DEFAULTS.serverUrl;
+    await chrome.storage.local.set({ serverUrl: settings.serverUrl });
+  }
+  return settings;
+}
 async function updateState(socketState, socketError = "") {
   await chrome.storage.local.set({ socketState, socketError, socketUpdatedAt: new Date().toISOString() });
 }
@@ -36,6 +57,10 @@ function wsUrl(serverUrl, clientId, token) {
   url.pathname = `/ws/extensions/${encodeURIComponent(clientId)}`;
   url.search = `?token=${encodeURIComponent(token)}`;
   return url.toString();
+}
+function serverHost(serverUrl) {
+  try { return new URL(serverUrl).host; }
+  catch (_) { return "invalid-server-url"; }
 }
 function isChatGptUrl(value = "") {
   try { return ["chatgpt.com", "www.chatgpt.com", "chat.openai.com"].includes(new URL(value).hostname); }
@@ -145,7 +170,7 @@ function rejectPendingNativeAcks(reason) {
 function awaitNativeAck(event) {
   if (!socketReady()) return Promise.resolve({ok:false,committed:false,error:"socket-disconnected"});
   if (!["chat.native.snapshot","chat.native.chunk"].includes(event?.type)
-      || !/^(?:req|resp|imgreq)_[a-zA-Z0-9_-]{6,100}$/.test(String(event?.request_id || ""))
+      || !/^[a-zA-Z0-9_-]{6,120}$/.test(String(event?.request_id || ""))
       || !Number.isInteger(nativeAckRevision(event)) || nativeAckRevision(event) < 1
       || (event.type === "chat.native.chunk"
           && (!Number.isInteger(event.index) || event.index < 0)))
@@ -275,9 +300,28 @@ async function handleServerMessage(message) {
     return;
   }
   if (message.type === "chat.request") {
+    const handlerStarted = performance.now();
+    const timing = value => typeof value === "number" && Number.isFinite(value) && value >= 0
+      ? Math.round(value * 10) / 10 : null;
+    const workerTimings = {
+      worker_dispatch_queue_wait_ms: timing(message.__chat2api_worker_dispatch_queue_wait_ms),
+      worker_route_resolve_ms: timing(message.__chat2api_worker_route_resolve_ms),
+      worker_route_reallocation_ms: timing(message.__chat2api_worker_route_reallocation_ms),
+      worker_target_tab_lookup_ms: null,
+      worker_ensure_content_ms: null,
+      worker_tabs_send_message_ms: null,
+    };
+    let failureStage = "target-tab-lookup";
     try {
+      let stageStarted = performance.now();
       const tab = await resolveTargetTab();
+      workerTimings.worker_target_tab_lookup_ms = Math.max(0, Math.round((performance.now() - stageStarted) * 10) / 10);
+      failureStage = "ensure-content";
+      stageStarted = performance.now();
       await ensureContent(tab.id);
+      workerTimings.worker_ensure_content_ms = Math.max(0, Math.round((performance.now() - stageStarted) * 10) / 10);
+      failureStage = "content-script-message";
+      stageStarted = performance.now();
       const response = await chrome.tabs.sendMessage(tab.id, {
         type: "chat2api.request",
         requestId: message.request_id,
@@ -285,7 +329,22 @@ async function handleServerMessage(message) {
         attachments: message.attachments || [],
         options: message.options || {},
       });
+      workerTimings.worker_tabs_send_message_ms = Math.max(0, Math.round((performance.now() - stageStarted) * 10) / 10);
       if (!response?.ok) throw new Error(response?.error || "ChatGPT tab rejected the request");
+      // This response is the content-script's request-v6 acceptance ACK, not
+      // proof that ChatGPT has started generating or that the request succeeded.
+      if (response.controller === "request-v6" && !response.reroute_pending) {
+        await trySendSocket({
+          type: "chat.diagnostics",
+          request_id: message.request_id,
+          diagnostics: {
+            worker_content_dispatch_ack_v1: true,
+            worker_content_dispatch_ack_source: "background-tabs-sendMessage-request-v6",
+            ...workerTimings,
+            worker_tab_handler_to_content_ack_ms: Math.max(0, Math.round((performance.now() - handlerStarted) * 10) / 10),
+          },
+        });
+      }
     } catch (error) {
       const detail = String(error?.message || error);
       if (message?.routing?.api_key_id && /No tab with id:\s*\d+/i.test(detail)) {
@@ -296,7 +355,14 @@ async function handleServerMessage(message) {
         error.stage = "tab-dispatch";
         throw error;
       }
-      await trySendSocket({ type: "chat.error", request_id: message.request_id, error: detail });
+      await trySendSocket({
+        type: "chat.error", request_id: message.request_id, error: detail,
+        diagnostics: {
+          ...workerTimings,
+          worker_dispatch_failure_stage: failureStage,
+          worker_tab_handler_to_failure_ms: Math.max(0, Math.round((performance.now() - handlerStarted) * 10) / 10),
+        },
+      });
     }
     return;
   }
@@ -360,13 +426,25 @@ async function connectSocket() {
   if (!settings.clientId || !settings.clientToken) { await updateState("unpaired"); return; }
   if (socket && [WebSocket.OPEN, WebSocket.CONNECTING].includes(socket.readyState)) return;
   await updateState("connecting");
-  try { socket = new WebSocket(wsUrl(settings.serverUrl, settings.clientId, settings.clientToken)); }
-  catch (error) { await updateState("error", String(error?.message || error)); scheduleReconnect(); return; }
-  socket.onopen = async () => {
+  let connection;
+  try {
+    connection = new WebSocket(wsUrl(settings.serverUrl, settings.clientId, settings.clientToken));
+    socket = connection;
+  } catch (error) {
+    await updateState("error", `${String(error?.message || error)} · server=${serverHost(settings.serverUrl)}`);
+    scheduleReconnect();
+    return;
+  }
+  // Every handler belongs to the exact socket it was created for. A delayed
+  // close/error from a replaced socket must never mark the new socket offline.
+  connection.onopen = async () => {
+    if (socket !== connection) return;
     reconnectAttempt = 0;
     await updateState("connected");
+    if (socket !== connection) return;
     const nativeTool=await (globalThis.__CHAT2API_WINDOWS_NATIVE_PAGE_DIAG_V1__?.getToolStatus?.()
       || Promise.resolve({})).catch(()=>({}));
+    if (socket !== connection) return;
     await sendSocket({
       type: "extension.hello",
       metadata: {
@@ -377,11 +455,16 @@ async function connectSocket() {
         ...nativeCapacityControlMetadata(),
       },
     });
+    if (socket !== connection) return;
     await maybeAutoBind();
+    if (socket !== connection) return;
     await sendExtensionStatus(false);
-    keepAliveTimer = setInterval(() => trySendSocket({ type: "heartbeat", ts: Date.now() }), 20000);
+    keepAliveTimer = setInterval(() => {
+      if (socket === connection) trySendSocket({ type: "heartbeat", ts: Date.now() });
+    }, 20000);
   };
-  socket.onmessage = event => {
+  connection.onmessage = event => {
+    if (socket !== connection) return;
     try {
       const message = JSON.parse(event.data);
       if (message?.type === "chat.native.ack") {
@@ -406,12 +489,18 @@ async function connectSocket() {
       handleServerMessage(message).catch(console.error);
     } catch (error) { console.warn("chat2api invalid server message", error); }
   };
-  socket.onerror = () => updateState("error", "WebSocket connection error");
-  socket.onclose = event => {
+  connection.onerror = () => {
+    if (socket !== connection) return;
+    updateState("error", `WebSocket connection error · server=${serverHost(settings.serverUrl)}`);
+  };
+  connection.onclose = event => {
+    if (socket !== connection) return;
+    socket = null;
     rejectPendingFileChunks("socket-closed-before-server-ack");
     rejectPendingNativeAcks("socket-closed-before-native-ack");
     clearInterval(keepAliveTimer);
-    updateState("disconnected", event.reason || `WebSocket closed (${event.code})`);
+    const detail = event.reason || `WebSocket closed (${event.code}${event.wasClean ? ", clean" : ", abnormal"})`;
+    updateState("disconnected", `${detail} · server=${serverHost(settings.serverUrl)}`);
     scheduleReconnect();
   };
 }
@@ -428,13 +517,26 @@ function arrayBufferToBase64(buffer) {
   for (let i = 0; i < bytes.length; i += chunk) binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
   return btoa(binary);
 }
-async function fetchAttachment(fileId) {
+async function fetchAttachment(fileId, requestId) {
   const settings = await config();
   if (!settings.clientId || !settings.clientToken) throw new Error("Extension is not paired");
-  const url = `${String(settings.serverUrl).replace(/\/$/, "")}/api/extensions/files/${encodeURIComponent(fileId)}?client_id=${encodeURIComponent(settings.clientId)}&token=${encodeURIComponent(settings.clientToken)}`;
+  const request = String(requestId || "");
+  if (!/^[A-Za-z0-9_-]{6,120}$/.test(request)) {
+    throw new Error("Attachment download requires its original request ID");
+  }
+  const url = `${String(settings.serverUrl).replace(/\/$/, "")}/api/extensions/files/${encodeURIComponent(fileId)}?request_id=${encodeURIComponent(request)}&client_id=${encodeURIComponent(settings.clientId)}&token=${encodeURIComponent(settings.clientToken)}`;
   const response = await fetch(url, { cache: "no-store" });
   if (!response.ok) throw new Error(`Attachment ${fileId} download failed: HTTP ${response.status}`);
-  const filename = response.headers.get("X-Chat2API-Filename") || fileId;
+  const encodedFilename = response.headers.get("X-Chat2API-Filename") || fileId;
+  const filenameEncoding = response.headers.get("X-Chat2API-Filename-Encoding") || "";
+  let filename = encodedFilename;
+  if (filenameEncoding === "percent-utf8") {
+    try {
+      filename = decodeURIComponent(encodedFilename);
+    } catch {
+      filename = fileId;
+    }
+  }
   const mimeType = response.headers.get("Content-Type") || "application/octet-stream";
   const buffer = await response.arrayBuffer();
   return { file_id: fileId, filename, mime_type: mimeType, size: buffer.byteLength, base64: arrayBufferToBase64(buffer) };
@@ -453,7 +555,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   if (message.type === "chat2api.event") { trySendSocket(message.event).then(sent => sendResponse({ ok: sent })); return true; }
   if (message.type === "chat2api.attachment.fetch") {
-    fetchAttachment(message.fileId).then(data => sendResponse({ ok: true, data })).catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));
+    fetchAttachment(message.fileId, message.requestId).then(data => sendResponse({ ok: true, data })).catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));
     return true;
   }
   if (message.type === "popup.status") { Promise.all([config(), chatTabs()]).then(([settings, tabs]) => sendResponse({ ok: true, settings, tabs })); return true; }

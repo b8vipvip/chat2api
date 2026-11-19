@@ -27,6 +27,7 @@ CONTRACT_TESTS = {
     "tests/test_single_response_observer_v53.py",
     "tests/test_response_epoch_rich_v69.py",
     "tests/test_worker_runtime_refresh_v71.py",
+    "tests/test_worker_attachment_request_id_contract_c03b.py",
     "tests/runtime_preflight_refresh_v71.mjs",
 }
 

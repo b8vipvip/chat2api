@@ -68,6 +68,9 @@ def app_v18(tmp_path: Path):
 
 
 def login(client: TestClient) -> None:
+    client.headers.update(
+        {"Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"}
+    )
     response = client.post(
         "/api/admin/auth/login",
         json={"username": "admin", "password": "strong-admin-password-for-v18"},

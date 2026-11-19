@@ -138,7 +138,25 @@
   const remotePoint = event => { const image = document.getElementById("linuxLoginFrame"); const rect = image.getBoundingClientRect(); if (!rect.width || !rect.height) return null; return {x:Math.round((event.clientX-rect.left)/rect.width*loginSourceWidth),y:Math.round((event.clientY-rect.top)/rect.height*loginSourceHeight)}; };
 
   button.addEventListener("click", () => { document.querySelectorAll(".view").forEach(node => node.classList.remove("active")); document.querySelectorAll(".nav button").forEach(node => node.classList.toggle("active", node === button)); section.classList.add("active"); document.getElementById("pageTitle").textContent = "Linux Worker"; location.hash = "linux-workers"; load(); });
-  document.getElementById("createLinuxWorker").addEventListener("click", async () => { const name = document.getElementById("linuxWorkerName").value || "Linux Worker"; await request("/api/admin/linux-worker-installations", {method:"POST",body:JSON.stringify({name})}); document.getElementById("linuxWorkerName").value = ""; await load(); });
+  let createInstallBusy = false;
+  document.getElementById("createLinuxWorker").addEventListener("click", async event => {
+    if (createInstallBusy) return;
+    createInstallBusy = true;
+    const button = event.currentTarget;
+    const originalText = button.textContent;
+    button.disabled = true;
+    button.textContent = "生成中…";
+    try {
+      const name = document.getElementById("linuxWorkerName").value || "Linux Worker";
+      await request("/api/admin/linux-worker-installations", {method:"POST",body:JSON.stringify({name})});
+      document.getElementById("linuxWorkerName").value = "";
+      await load();
+    } finally {
+      createInstallBusy = false;
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+  });
   document.getElementById("refreshLinuxWorkers").onclick = load;
   document.getElementById("closeLinuxProxy").onclick = closeProxyDialog;
   proxyDialog.addEventListener("cancel", event => { event.preventDefault(); closeProxyDialog(); });

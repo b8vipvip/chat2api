@@ -303,7 +303,7 @@ await incremental.capture(progressActive,false);
 assert.equal(progressActive.nativeRevision,2);
 assert.equal(incrementalSends.length,2);
 assert.equal(incrementalSends[1].event.snapshot.revision,2);
-assert.equal(progressActive.nativeFinalCaptureCommitted,true===false);
+assert.equal(progressActive.nativeFinalCaptureCommitted, false);
 progressActive.nativeLastAt=0;
 await incremental.capture(progressActive,true);
 assert.equal(progressActive.nativeRevision,3);

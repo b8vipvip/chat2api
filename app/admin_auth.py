@@ -5,10 +5,126 @@ import json
 import logging
 import os
 import secrets
+import threading
 import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
+
+
+def same_origin_admin_request(request) -> bool:
+    """Require a browser mutation to originate from this exact admin origin.
+
+    X-Forwarded-Proto is consulted only for the scheme because deployments may
+    terminate TLS at a reverse proxy. The browser-supplied Origin host must still
+    match the request Host exactly; Fetch Metadata, when present, must say
+    same-origin. This helper does not make arbitrary forwarded hosts trusted.
+    """
+    origin = str(request.headers.get("origin") or "").strip()
+    try:
+        parsed = urlsplit(origin)
+    except ValueError:
+        return False
+    request_host = str(request.headers.get("host") or "").strip().lower()
+    forwarded_proto = (
+        str(request.headers.get("x-forwarded-proto") or "")
+        .split(",", 1)[0]
+        .strip()
+        .lower()
+    )
+    expected_scheme = (
+        forwarded_proto
+        if forwarded_proto in {"http", "https"}
+        else str(request.url.scheme or "").lower()
+    )
+    fetch_site = str(request.headers.get("sec-fetch-site") or "").strip().lower()
+    return bool(
+        parsed.scheme.lower() == expected_scheme
+        and parsed.scheme.lower() in {"http", "https"}
+        and parsed.netloc
+        and parsed.netloc.lower() == request_host
+        and parsed.path in {"", "/"}
+        and not parsed.query
+        and not parsed.fragment
+        and fetch_site in {"", "same-origin"}
+    )
+
+
+class AdminLoginRateLimiter:
+    """Bound repeated admin login failures per username/IP pair and per IP.
+
+    Process-local by design; multi-instance enforcement requires a shared
+    transactional limiter and is a production/D-P gate.
+    """
+
+    def __init__(
+        self,
+        *,
+        per_identity_limit: int = 5,
+        per_ip_limit: int = 20,
+        window_seconds: int = 900,
+    ) -> None:
+        self.per_identity_limit = max(1, int(per_identity_limit))
+        self.per_ip_limit = max(1, int(per_ip_limit))
+        self.window_seconds = max(1, int(window_seconds))
+        self.lock = threading.RLock()
+        self.failures: dict[str, list[float]] = {}
+
+    @staticmethod
+    def _digest(value: str) -> str:
+        return hashlib.sha256(value.encode("utf-8", errors="replace")).hexdigest()
+
+    def _keys(self, username: str, remote_addr: str) -> tuple[str, str]:
+        ip = str(remote_addr or "unknown").strip()[:128]
+        user = str(username or "").strip().casefold()[:128]
+        return (
+            "identity:" + self._digest(user),
+            "ip:" + self._digest(ip),
+        )
+
+    def retry_after(self, username: str, remote_addr: str) -> int:
+        now = time.monotonic()
+        identity_key, ip_key = self._keys(username, remote_addr)
+        with self.lock:
+            for key, limit in (
+                (identity_key, self.per_identity_limit),
+                (ip_key, self.per_ip_limit),
+            ):
+                values = [stamp for stamp in self.failures.get(key, []) if now - stamp < self.window_seconds]
+                if values:
+                    self.failures[key] = values
+                else:
+                    self.failures.pop(key, None)
+                if len(values) >= limit:
+                    return max(1, int(self.window_seconds - (now - values[0]) + 0.999))
+        return 0
+
+    def record_failure(self, username: str, remote_addr: str) -> None:
+        now = time.monotonic()
+        identity_key, ip_key = self._keys(username, remote_addr)
+        with self.lock:
+            for key in (identity_key, ip_key):
+                values = [stamp for stamp in self.failures.get(key, []) if now - stamp < self.window_seconds]
+                values.append(now)
+                self.failures[key] = values
+            if len(self.failures) > 10_000:
+                cutoff = now - self.window_seconds
+                for key, values in list(self.failures.items()):
+                    kept = [stamp for stamp in values if stamp > cutoff]
+                    if kept:
+                        self.failures[key] = kept
+                    else:
+                        self.failures.pop(key, None)
+                while len(self.failures) > 10_000:
+                    self.failures.pop(next(iter(self.failures)))
+
+    def record_success(self, username: str, remote_addr: str) -> None:
+        identity_key, _ip_key = self._keys(username, remote_addr)
+        with self.lock:
+            # A successful account login must not erase the source-IP budget
+            # for attempts against other administrator identities.
+            self.failures.pop(identity_key, None)
 
 
 SESSION_COOKIE = "chat2api_admin_session"
@@ -21,6 +137,7 @@ logger = logging.getLogger("chat2api.admin_auth")
 class AdminSession:
     token_hash: str
     expires_at: float
+    username: str = ""
 
 
 def _token_hash(token: str) -> str:
@@ -78,26 +195,41 @@ class AdminSessionStore:
             str(password or ""), self.password
         )
 
-    def create(self) -> str:
+    def create(self, username: str | None = None) -> str:
         self.cleanup()
         token = secrets.token_urlsafe(40)
         digest = _token_hash(token)
-        self.sessions[digest] = AdminSession(token_hash=digest, expires_at=time.time() + self.ttl_seconds)
+        self.sessions[digest] = AdminSession(token_hash=digest, expires_at=time.time() + self.ttl_seconds, username=str(username or self.username))
         self._save()
         return token
 
     def authenticate(self, token: str | None) -> bool:
+        return self.identity(token) is not None
+
+    def identity(self, token: str | None) -> str | None:
         if not token:
-            return False
+            return None
         digest = _token_hash(str(token))
         item = self.sessions.get(digest)
         if not item:
-            return False
+            return None
         if item.expires_at <= time.time():
             self.sessions.pop(digest, None)
             self._save()
-            return False
-        return True
+            return None
+        # Historical persisted v1 sessions lack username and belong to the
+        # configured root administrator only, never to delegated users.
+        return item.username or self.username
+
+    def revoke_username(self, username: str) -> int:
+        count = 0
+        for digest, item in list(self.sessions.items()):
+            if (item.username or self.username).casefold() == str(username).casefold():
+                del self.sessions[digest]
+                count += 1
+        if count:
+            self._save()
+        return count
 
     def revoke(self, token: str | None) -> None:
         if not token:
@@ -152,7 +284,7 @@ class AdminSessionStore:
                     continue
                 if expires_at <= time.time():
                     continue
-                loaded[digest] = AdminSession(token_hash=digest, expires_at=expires_at)
+                loaded[digest] = AdminSession(token_hash=digest, expires_at=expires_at, username=str(row.get("username") or self.username))
             self.sessions.update(loaded)
             self.last_persistence_error = ""
         except (OSError, json.JSONDecodeError) as exc:
@@ -166,7 +298,7 @@ class AdminSessionStore:
         payload = {
             "version": SESSION_STORE_VERSION,
             "sessions": [
-                {"token_hash": item.token_hash, "expires_at": item.expires_at}
+                {"token_hash": item.token_hash, "expires_at": item.expires_at, "username": item.username or self.username}
                 for item in sorted(self.sessions.values(), key=lambda value: value.expires_at)
             ],
         }

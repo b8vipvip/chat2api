@@ -33,7 +33,7 @@ def test_python_package_versions_are_aligned():
 def test_chrome_bridge_contract_matches_manifest_bundle():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     assert RELEASE_VERSION == SERVER_RUNTIME_VERSION == CHROME_BRIDGE_VERSION == CHROME_BRIDGE_BUNDLE_VERSION
-    assert RELEASE_VERSION == "0.22.291"
+    assert RELEASE_VERSION == "0.22.298"
     assert manifest["version"] == RELEASE_VERSION
 
 
@@ -68,7 +68,7 @@ def test_realtime_protocol_contract_matches_live_bridge():
 def test_v148_release_contract_keeps_broker_terminal_authority():
     from pathlib import Path
     from app.runtime_contract import RELEASE_VERSION, CHROME_BRIDGE_BUNDLE_VERSION
-    assert RELEASE_VERSION == "0.22.291"
+    assert RELEASE_VERSION == "0.22.298"
     assert CHROME_BRIDGE_BUNDLE_VERSION == RELEASE_VERSION
     root = Path(__file__).resolve().parents[1]
     watchdog = (root / "app/request_stall_patch.py").read_text(encoding="utf-8")
@@ -142,7 +142,7 @@ def test_runtime_contract_is_final_admin_version_owner():
     client = TestClient(runtime)
     html = client.get("/admin").text
     assert f'<script src="{ADMIN_VERSION_ASSET}"></script>' in html
-    assert f'<script src="{ADMIN_EXTENSION_COLUMNS_ASSET}?v=0.22.291"></script>' in html
+    assert f'<script src="{ADMIN_EXTENSION_COLUMNS_ASSET}?v=0.22.298"></script>' in html
     assert html.index('/assets/historical.js') < html.index(ADMIN_VERSION_ASSET) < html.index(ADMIN_EXTENSION_COLUMNS_ASSET)
 
     developers_html = client.get("/developers").text
@@ -205,6 +205,10 @@ def test_request_terminal_migration_owns_one_loaded_controller():
     request = (ROOT / "chrome_extension/content_request_v6.js").read_text(encoding="utf-8")
     assert "resolveBlockingInterruption({force:true,phase:\"before-request\"})" in request
     assert 'type: "chat.completed"' in request
+    assert 'source: "chat2api-model-authority-v144"' in request
+    assert "request_id: active.requestId" in request
+    assert "authority: null" in request
+    assert "terminal: true" in request
     assert "reconcileStrictTerminal" not in request
 
 
@@ -214,7 +218,7 @@ def test_v245_short_reply_is_owned_by_single_request_controller():
               "chrome_extension/content_request_v6.js").read_text(encoding="utf-8")
     assert 'reason:"fresh-roleless-short-answer-v245"' in source
     assert 'rendered.rolelessHeaderVerified ? 3 : 8' in source
-    assert 'abortedRenderedCandidateSince >= abortedReplyStableThreshold(rendered)' in source
+    assert 'abortedReplyStableSince(abortedRenderedCandidateSince, rendered)' in source
     assert source.count('type: "chat.completed", request_id: active.requestId') >= 1
     assert 'baselineRolelessHeadings' in source
 
@@ -226,7 +230,7 @@ def test_v246_roleless_rich_reply_preserves_one_terminal_controller():
     assert '"fresh-roleless-compact-div-v248"' in src
     assert "verifiedRolelessRichAbortCandidate(active, current)" in src
     assert "current.latest === current.rolelessHeading.nextElementSibling" in src
-    assert "abortedRenderedCandidateSince >= abortedReplyStableThreshold(rendered)" in src
+    assert "abortedReplyStableSince(abortedRenderedCandidateSince, rendered)" in src
     assert 'response_terminal_source: rendered.rolelessRichVerified' in src
 
 def test_v247_single_worker_terminal_and_file_archive_separation():
@@ -252,7 +256,7 @@ def test_v248_compact_div_uses_original_single_terminal_controller():
     assert "fresh-roleless-compact-div-v248" in source
     assert "shortRolelessSourceOverlap(raw, observed)" in source
     assert "verifiedRolelessRichAbortCandidate(active, current)" in source
-    assert "abortedRenderedCandidateSince >= abortedReplyStableThreshold(rendered)" in source
+    assert "abortedReplyStableSince(abortedRenderedCandidateSince, rendered)" in source
     assert 'type: "chat.completed", request_id: active.requestId' in source
 
 def test_v249_native_file_candidate_probe_is_bounded_and_not_a_terminal_owner():
@@ -287,7 +291,7 @@ def test_v251_terminal_recovery_migration_keeps_single_request_controller():
     assert scripts.count("content_request_v6.js") == 1
     source = (ROOT / "chrome_extension" / "content_request_v6.js").read_text("utf-8")
     assert "function abortedReplyStableThreshold(rendered)" in source
-    assert "return rendered?.shortTextVerified ? 4500 : 8000" in source
+    assert "shortReplyStabilityPolicy?.requiredStableMs(rendered) ?? 8000" in source
     # Externally visible terminal state must remain owned by request-v6,
     # not the native file observer, model inspector or read-only probes.
     for path in ("content_native_file_v210.js", "native_file_main_v210.js",
@@ -748,13 +752,7 @@ def test_v314_aborted_provisional_terminal_does_not_hold_browser_lease():
     # Real 20-table req_13338 stalled without native ID/boundary telemetry.
     # The same request-v6 binding decision is now audited during progress
     # without exporting any body/DOM or creating a second terminal.
-    # v346: the already-existing sidecar capture(false) is now wired to
-    # request-v6 only for a FRESH candidate in a verified same-request scope.
-    # This cannot replace the final capture ACK or create a second terminal.
-    assert "function shouldCaptureNativeProgress(active, current, now)" in worker
-    assert "scope===candidate || scope.contains?.(candidate)" in worker
-    assert "now-Number(active.nativeProgressCaptureAt||0)>=15000" in worker
-    assert "const pending=native.capture(active,false)" in worker
+    assert "captureNativeProgressIfDue(active, current, Date.now());" in worker
     assert "await native.capture(active, true);" in worker
     assert 'diagnostic(active,"native-reply-scope-checkpoint"' in worker
     assert 'native_boundary_message_identity_facts:' in worker
@@ -765,3 +763,44 @@ def test_v314_aborted_provisional_terminal_does_not_hold_browser_lease():
     result=subprocess.run(["node","tests/network_provisional_terminal_quiet_failure_v314.mjs"],
                           cwd=root,capture_output=True,text=True,timeout=20)
     assert result.returncode==0,result.stdout+result.stderr
+
+
+def test_windows_worker_server_origin_migration_and_socket_generation_guard():
+    background = (ROOT / "chrome_extension" / "background.js").read_text(encoding="utf-8")
+    popup = (ROOT / "chrome_extension" / "popup.js").read_text(encoding="utf-8")
+    popup_html = (ROOT / "chrome_extension" / "popup.html").read_text(encoding="utf-8")
+    server = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
+
+    assert 'const DEFAULT_SERVER_URL = "https://api.numbot.cn";' in background
+    assert 'const LEGACY_DEFAULT_SERVER_URL = "https://chat2api.mv3.cn";' in background
+    assert "isLegacyDefaultServer(settings.serverUrl)" in background
+    assert "settings.serverUrl = DEFAULTS.serverUrl" in background
+    assert "if (socket !== connection) return;" in background
+    assert 'server=${serverHost(settings.serverUrl)}' in background
+    assert 'id="serverTarget"' in popup_html
+    assert "new URL(settings.serverUrl || DEFAULT_SERVER_URL).host" in popup
+    assert "actionMessageUntil" in popup
+    assert "不要反复更换设备码来修复地址或连接问题" in popup
+    assert "Worker 会自动重连" in popup
+    assert "Extension WebSocket authentication rejected client_id=%s reason=%s" in server
+
+
+
+def test_linux_worker_public_worker_id_is_advertised_without_changing_internal_controller_keys():
+    from app.runtime_contract import RUNTIME_FEATURE_REVISION
+    linux_ui = (ROOT / "app" / "admin_linux_device_authority_v124.js").read_text(encoding="utf-8")
+    assert "linux-worker-public-ext-id-v1" in RUNTIME_FEATURE_REVISION
+    assert "linux-worker-public-ext-id-label-v1" in RUNTIME_FEATURE_REVISION
+    assert "worker-content-bundle-v71-version-sync-v295" in RUNTIME_FEATURE_REVISION
+    assert "linux-worker-public-ext-id-tooltip-v1" in RUNTIME_FEATURE_REVISION
+    assert 'String(worker?.extension_client_id||"").trim()' in linux_ui
+    assert 'const id=String(w.worker_id||"");' in linux_ui
+    assert 'data-linux-worker-id="${esc(id)}"' in linux_ui
+
+
+
+def test_windows_platform_os_normalization_is_advertised():
+    from app.runtime_contract import RUNTIME_FEATURE_REVISION, version_contract_payload
+    assert "windows-platform-os-win-normalization-v1" in RUNTIME_FEATURE_REVISION
+    payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
+    assert payload["features"]["windows_worker_platform_os_normalization_v1"] is True

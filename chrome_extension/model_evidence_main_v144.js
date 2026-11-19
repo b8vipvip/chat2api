@@ -238,14 +238,30 @@
 
   function observeResponse(response, streamId, requestInfo) {
     let clone;
-    try { clone = response.clone(); } catch (_) { return; }
-    const headerModel = ["x-openai-model", "openai-model", "x-gpt-model", "x-model"]
-      .map(name => normalizeModel(clone.headers?.get?.(name))).find(Boolean) || null;
+    try { clone = response.clone(); }
+    catch (_) {
+      // The page's native fetch still owns this response. Tell the isolated
+      // bridge that this stream cannot be observed so it can release the
+      // request-scoped model authority rather than leave it active forever.
+      post({ phase: "unavailable", stream_id: streamId });
+      return;
+    }
+    const responseOk = clone.ok === true
+      && Number(clone.status) >= 200 && Number(clone.status) < 300;
+    const headerModel = responseOk
+      ? ["x-openai-model", "openai-model", "x-gpt-model", "x-model"]
+          .map(name => normalizeModel(clone.headers?.get?.(name))).find(Boolean) || null
+      : null;
     post({ phase: "response", stream_id: streamId, status: Number(clone.status || 0), ok: Boolean(clone.ok),
       request_model: requestInfo.requestModel, request_wire_model: requestInfo.requestWireModel,
       request_rewritten: requestInfo.rewritten, authority_violation: requestInfo.authorityViolation, header_model: headerModel });
     const reader = clone.body?.getReader?.();
-    if (!reader) return;
+    if (!reader) {
+      // Header-only / non-streaming responses have no clone reader to emit
+      // native EOF. Complete the evidence lifecycle explicitly.
+      post({ phase: "done", stream_id: streamId, bytes: 0, observation_limit_hit: false });
+      return;
+    }
     const decoder = new TextDecoder("utf-8");
     let buffer = "", bytes = 0, lastFingerprint = "";
     // SSE replies can contain thousands of events. Rewalking the full
@@ -274,6 +290,14 @@
     }
     const emitEvidence = terminal => {
       const evidence = {...evidenceState};
+      // A resolved-model-looking field in an HTTP error body is not proof
+      // that the upstream served that model. Keep the request/response status
+      // explicit and suppress all served-model claims for non-2xx responses.
+      if (!responseOk) {
+        evidence.served_model = null;
+        evidence.model_field = null;
+        evidence.model_conflict = false;
+      }
       if (headerModel) {
         if (evidence.served_model && evidence.served_model !== headerModel) {
           evidence.served_model = null; evidence.model_conflict = true; evidence.model_field = null;
@@ -286,6 +310,7 @@
       lastFingerprint = fingerprint;
       state.evidence += 1;
       post({ phase: "evidence", stream_id: streamId, terminal: Boolean(terminal),
+        response_ok: responseOk, response_status: Number(clone.status || 0),
         request_model: requestInfo.requestModel, request_wire_model: requestInfo.requestWireModel,
         request_rewritten: requestInfo.rewritten, authority_violation: requestInfo.authorityViolation, ...evidence });
     };
@@ -350,7 +375,22 @@
     if (event.source !== globalThis) return;
     const detail = event.data;
     if (!detail || detail.source !== AUTHORITY_SOURCE) return;
-    state.authority = detail.authority && typeof detail.authority === "object" ? { ...detail.authority, request_id: detail.request_id || null } : null;
+    if (detail.authority && typeof detail.authority === "object") {
+      state.authority = { ...detail.authority, request_id: detail.request_id || null };
+      return;
+    }
+    if (detail.terminal === true) {
+      // A delayed terminal from an older request must not clear the authority
+      // installed by a newer request in the same ChatGPT page.
+      const activeRequestId = String(state.authority?.request_id || "");
+      if (activeRequestId && activeRequestId === String(detail.request_id || "")) {
+        state.authority = null;
+      }
+      return;
+    }
+    // A newly admitted request without a concrete model authority explicitly
+    // clears any previous rewrite rule.
+    state.authority = null;
   });
 
   globalThis.fetch = async function chat2apiModelEvidenceFetch(input, init) {

@@ -25,6 +25,9 @@ TARGET_COMMIT=""
 ROLLBACK_COMMIT=""
 ROLLBACK_SUCCEEDED="false"
 CODE_SWITCHED="false"
+LOCAL_COMPOSE_OVERRIDE="false"
+LOCAL_COMPOSE_BACKUP_FILE="${DATA_DIR}/.admin-update-docker-compose.backup"
+LOCAL_COMPOSE_MERGED_FILE="${DATA_DIR}/.admin-update-docker-compose.merged"
 ENV_BACKUP=""
 FETCH_TRANSPORT=""
 FETCH_ELAPSED_MS=""
@@ -337,6 +340,7 @@ rollback() {
     # a different image as a second rollback controller.
     git -C "$APP_DIR" reset --hard "$FROM_COMMIT" || true
     restore_env
+    restore_local_compose_backup || true
     log "hotfix helper attempted container rollback; inspect its evidence before retry"
     return 0
   fi
@@ -349,6 +353,7 @@ rollback() {
   local git_rc=$?
   restore_env
   if (( git_rc == 0 )); then
+    restore_local_compose_backup || true
     # Recovery prioritizes speed/availability; always reuse safe local cache.
     (cd "$APP_DIR" && DOCKER_BUILDKIT=1 docker compose build --build-arg "CHAT2API_BUILD_COMMIT=$FROM_COMMIT")
     local build_rc=$?
@@ -364,10 +369,63 @@ rollback() {
   set -e
 }
 
+restore_local_compose_backup() {
+  if [[ -f "$LOCAL_COMPOSE_BACKUP_FILE" ]]; then
+    cp -a "$LOCAL_COMPOSE_BACKUP_FILE" "$APP_DIR/docker-compose.yml"
+    log "restored preserved local docker-compose.yml"
+  fi
+}
+
+prepare_local_compose_override() {
+  local paths=()
+  mapfile -t paths < <({
+    git -C "$APP_DIR" diff --name-only
+    git -C "$APP_DIR" diff --cached --name-only
+  } | sort -u)
+  local path=""
+  for path in "${paths[@]}"; do
+    [[ -z "$path" ]] && continue
+    if [[ "$path" != "docker-compose.yml" ]]; then
+      return 1
+    fi
+  done
+  [[ -f "$APP_DIR/docker-compose.yml" ]] || return 1
+  cp -a "$APP_DIR/docker-compose.yml" "$LOCAL_COMPOSE_BACKUP_FILE"
+  LOCAL_COMPOSE_OVERRIDE="true"
+  log "detected local docker-compose.yml override; it will be three-way merged into the target release"
+  return 0
+}
+
+merge_local_compose_override() {
+  [[ "$LOCAL_COMPOSE_OVERRIDE" == "true" ]] || return 0
+  local base_file="${DATA_DIR}/.admin-update-docker-compose.base"
+  local remote_file="${DATA_DIR}/.admin-update-docker-compose.remote"
+  git -C "$APP_DIR" show "${FROM_COMMIT}:docker-compose.yml" >"$base_file"
+  git -C "$APP_DIR" show "${TARGET_COMMIT}:docker-compose.yml" >"$remote_file"
+  local merge_rc=0
+  set +e
+  git -C "$APP_DIR" merge-file -p -q \
+    -L "local docker-compose.yml" \
+    -L "base ${FROM_COMMIT:0:12}" \
+    -L "remote ${TARGET_COMMIT:0:12}" \
+    "$LOCAL_COMPOSE_BACKUP_FILE" "$base_file" "$remote_file" \
+    >"$LOCAL_COMPOSE_MERGED_FILE"
+  merge_rc=$?
+  set -e
+  rm -f "$base_file" "$remote_file"
+  if (( merge_rc != 0 )); then
+    log "local docker-compose.yml cannot be merged cleanly with target ${TARGET_COMMIT:0:12}; update remains non-destructive"
+    return 1
+  fi
+  return 0
+}
+
 cleanup() {
   [[ -n "$ENV_BACKUP" ]] && rm -f "$ENV_BACKUP" || true
   rm -f "$REQUEST_FILE" || true
   rm -f "$GITHUB_KNOWN_HOSTS_FILE" || true
+  rm -f "$LOCAL_COMPOSE_MERGED_FILE" "${DATA_DIR}/.admin-update-docker-compose.base" "${DATA_DIR}/.admin-update-docker-compose.remote" || true
+  rm -f "$LOCAL_COMPOSE_BACKUP_FILE" || true
 }
 
 on_exit() {
@@ -411,15 +469,16 @@ case "$remote_url" in
   *) log "unexpected origin remote: $remote_url"; exit 3 ;;
 esac
 
+FROM_COMMIT="$(git -C "$APP_DIR" rev-parse HEAD)"
 normalize_legacy_updater_mode
 tracked_dirty="$(git -C "$APP_DIR" status --porcelain --untracked-files=no)"
 if [[ -n "$tracked_dirty" ]]; then
-  log "tracked working tree is dirty; refusing destructive update"
-  printf '%s\n' "$tracked_dirty"
-  exit 4
+  if ! prepare_local_compose_override; then
+    log "tracked working tree is dirty outside the supported docker-compose.yml local override; refusing destructive update"
+    printf '%s\n' "$tracked_dirty"
+    exit 4
+  fi
 fi
-
-FROM_COMMIT="$(git -C "$APP_DIR" rev-parse HEAD)"
 write_status "running" "backup" "14" "正在备份 .env 并记录当前提交 ${FROM_COMMIT:0:12}"
 if [[ -f "$APP_DIR/.env" ]]; then
   ENV_BACKUP="$(mktemp /tmp/chat2api-env.XXXXXX)"
@@ -437,6 +496,12 @@ if ! fetch_main; then
 fi
 TARGET_COMMIT="$(git -C "$APP_DIR" rev-parse "origin/${BRANCH}")"
 write_status "running" "fetch" "32" "GitHub main=${TARGET_COMMIT:0:12}；通道=${FETCH_TRANSPORT}；耗时=${FETCH_ELAPSED_MS}ms；尝试=${FETCH_ATTEMPTS}"
+if [[ "$LOCAL_COMPOSE_OVERRIDE" == "true" ]]; then
+  write_status "running" "fetch" "34" "检测到本地 docker-compose.yml 修改，正在与目标提交做安全三方合并"
+  if ! merge_local_compose_override; then
+    exit 4
+  fi
+fi
 
 # Git checkout != Docker runtime. Verify the actual running source SHA first.
 RUNTIME_SHA=""
@@ -473,6 +538,10 @@ write_status "running" "checkout" "40" "正在切换到 GitHub main ${TARGET_COM
 git -C "$APP_DIR" checkout "$BRANCH"
 git -C "$APP_DIR" reset --hard "$TARGET_COMMIT"
 CODE_SWITCHED="true"
+if [[ "$LOCAL_COMPOSE_OVERRIDE" == "true" ]]; then
+  cp -a "$LOCAL_COMPOSE_MERGED_FILE" "$APP_DIR/docker-compose.yml"
+  log "reapplied merged local docker-compose.yml after source checkout"
+fi
 restore_env
 
 # GPTAuto is the only change classifier. The existing host updater retains

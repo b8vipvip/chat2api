@@ -37,8 +37,9 @@ class Registry:
     def model_catalog(self, online_only=True):
         return []
 
-    async def touch(self, client_id, metadata=None):
+    async def touch(self, client_id, metadata=None, *, websocket=None):
         self.clients[client_id].metadata.update(metadata or {})
+        return True
 
     async def send(self, client_id, payload):
         self.sent.append((client_id, payload))

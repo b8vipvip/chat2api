@@ -136,11 +136,18 @@ def install_worker_text_model_management_v146_patch(app: FastAPI) -> FastAPI:
             _persist(path, {"disabled": sorted(disabled), "history": history,
                             "legacy_minimum_model": minimum_model})
 
-    async def touch_with_history(client_id: str, metadata: dict[str, Any] | None = None):
+    async def touch_with_history(
+        client_id: str,
+        metadata: dict[str, Any] | None = None,
+        *,
+        websocket: Any | None = None,
+    ) -> bool:
         before = _worker_snapshot(getattr(registry.clients.get(client_id), "metadata", {}))
-        await base_touch(client_id, metadata)
+        accepted = await base_touch(client_id, metadata, websocket=websocket)
+        if not accepted:
+            return False
         if not isinstance(metadata, dict) or not MODEL_KEYS.intersection(metadata):
-            return
+            return True
         after = _worker_snapshot(getattr(registry.clients.get(client_id), "metadata", {}))
         if before != after:
             try:
@@ -154,6 +161,7 @@ def install_worker_text_model_management_v146_patch(app: FastAPI) -> FastAPI:
                 # An unavailable audit volume must not prevent the Worker heartbeat.
                 import logging
                 logging.getLogger(__name__).exception("Failed to persist Worker model audit")
+        return True
 
     def supports_with_management(client_id: str, model_id: str) -> bool:
         normalized = normalize_concrete_model_id(model_id)

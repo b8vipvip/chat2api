@@ -54,7 +54,7 @@ def test_non_stream_bridge_round_trip(tmp_path: Path) -> None:
                 )
                 request = websocket.receive_json()
                 assert request["type"] == "chat.request"
-                assert request["prompt"] == "hello"
+                assert request["prompt"] == "[User]\nhello"
                 websocket.send_json({"type": "chat.delta", "request_id": request["request_id"], "delta": "Hi"})
                 websocket.send_json({"type": "chat.completed", "request_id": request["request_id"], "text": "Hi there"})
                 response = future.result(timeout=5)
