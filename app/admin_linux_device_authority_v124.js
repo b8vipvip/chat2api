@@ -179,11 +179,11 @@
     if(summary)summary.textContent=`设备：${state.devices.length} · Linux Worker：${state.devices.reduce((n,d)=>n+(d.workers||[]).length,0)}`;
   }
 
-  // UI identity only: the internal wrk_ key remains unchanged for commands,
-  // data attributes and Linux Controller ownership.
+  // Public UI identity is always the canonical Chrome extension ID.
+  // Keep the internal wrk_ controller key only in data attributes/API actions.
   const visibleWorkerId = worker => {
-    const id=String(worker?.worker_id||"").trim();
-    return /^wrk_[A-Za-z0-9]{8,120}$/.test(id)?id:"wrk_ 待分配";
+    const id=String(worker?.extension_client_id||"").trim();
+    return /^ext_[A-Za-z0-9_-]{5,120}$/.test(id)?id:"ext_ 待绑定";
   };
 
   function renderWorkers(){

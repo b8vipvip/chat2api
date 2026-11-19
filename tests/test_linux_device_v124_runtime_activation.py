@@ -88,7 +88,13 @@ def test_v124_device_creation_is_idempotent_and_serialized():
     assert "reveal_or_rotate(pairing_id)" in source
 
 
-def test_v124_worker_console_uses_server_worker_id_not_extension_client_id():
+def test_v124_worker_console_displays_public_extension_id_but_keeps_internal_controller_key():
     source = (ROOT / "app" / "admin_linux_device_authority_v124.js").read_text(encoding="utf-8")
-    assert 'String(worker?.worker_id||"").trim()' in source
-    assert 'return /^wrk_[A-Za-z0-9]{8,120}$/.test(id)?id:"wrk_ 待分配";' in source
+    assert 'String(worker?.extension_client_id||"").trim()' in source
+    assert 'return /^ext_[A-Za-z0-9_-]{5,120}$/.test(id)?id:"ext_ 待绑定";' in source
+    # The visible label is ext_; the internal wrk_ key remains the command,
+    # row-identity and Linux Controller routing key.
+    assert 'const id=String(w.worker_id||"");' in source
+    assert 'data-linux-worker-id="${esc(id)}"' in source
+    assert 'data-worker-action="initialize" data-worker="${esc(id)}"' in source
+    assert 'data-login-worker="${esc(id)}"' in source
