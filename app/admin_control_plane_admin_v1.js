@@ -204,6 +204,12 @@
       if (generation !== sessionRefreshGeneration) return adminSession;
       adminSession = nextSession;
       renderSessionControls();
+      if (typeof status === "function") {
+        status(
+          adminSession.authenticated ? "管理员会话已连接" : "请登录管理员账号",
+          adminSession.authenticated ? "ok" : "muted"
+        );
+      }
       if (adminSession.authenticated && adminSession.role !== "super_admin") {
         // Prevent a stale root API key from a previous administrator session
         // from being reused by the legacy inline admin API helper.
@@ -241,8 +247,8 @@
     }
   }
 
-  // admin_v17.js owns the visible login gate; refresh the authoritative RBAC
-  // session whenever that gate logs in or out, without requiring a page reload.
+  // Keep the authoritative RBAC session synchronized with v17 authentication
+  // events without requiring a page reload.
   window.addEventListener("chat2api-admin-auth-state-changed", () => {
     void refreshSession();
   });

@@ -179,6 +179,7 @@ def test_web_user_navigation_is_grouped_and_duplicate_api_key_entry_is_removed()
 def test_admin_header_uses_one_modal_login_and_one_session_identity():
     root = Path(__file__).resolve().parents[1]
     html = (root / "app" / "admin.py").read_text(encoding="utf-8")
+    assert 'id="status" class="muted">请登录管理员账号</div>' in html
     assert 'id="sessionAuthControls"' in html
     assert 'id="adminSessionOpenLogin"' in html
     assert 'id="adminSessionLogout"' in html
