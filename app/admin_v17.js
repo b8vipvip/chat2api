@@ -46,6 +46,10 @@
     return data;
   };
 
+  // The C-track session dialog is the single login owner in production. When
+  // present, the legacy full-screen gate must not cover its login button.
+  const hasSessionLogin = Boolean(document.getElementById("adminSessionLoginDialog"));
+
   const auth = document.querySelector(".auth");
   if (auth) auth.remove();
 
