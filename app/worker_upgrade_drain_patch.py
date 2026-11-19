@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 import time
 from collections import defaultdict
@@ -237,7 +236,7 @@ def install_worker_upgrade_drain_patch(app: FastAPI) -> FastAPI:
         arguments: dict[str, Any],
         *,
         wait: bool,
-        timeout: float,
+        timeout: float = 75.0,
     ):
         if str(command) != "upgrade_worker":
             return await base_send(worker_id, command, arguments, wait=wait, timeout=timeout)
@@ -261,6 +260,16 @@ def install_worker_upgrade_drain_patch(app: FastAPI) -> FastAPI:
             }
 
         drain = await begin_worker_upgrade_drain(str(worker_id))
+        if str(drain.get("error") or "") == "worker_upgrade_already_draining":
+            return {
+                "accepted": True,
+                "result": {
+                    "ok": True,
+                    "scheduled": True,
+                    "already_scheduled": True,
+                    "unit": "existing",
+                },
+            }
         if not drain.get("ok"):
             error = str(drain.get("error") or "worker_upgrade_drain_failed")
             detail = (
@@ -296,23 +305,16 @@ def install_worker_upgrade_drain_patch(app: FastAPI) -> FastAPI:
     @app.middleware("http")
     async def clear_worker_upgrade_drain_after_terminal_progress(request, call_next):
         match = _PROGRESS_PATH.fullmatch(request.url.path) if request.method == "POST" else None
-        payload: dict[str, Any] = {}
-        if match:
-            try:
-                raw = await request.body()
-                value = json.loads(raw.decode("utf-8")) if raw else {}
-                if isinstance(value, dict):
-                    payload = value
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                payload = {}
-
         response = await call_next(request)
-        if (
-            match
-            and response.status_code < 400
-            and str(payload.get("state") or "") in TERMINAL_UPGRADE_STATES
-        ):
-            clear_worker_upgrade_drain(match.group(1))
+        if match and response.status_code < 400:
+            worker_id = match.group(1)
+            with store._lock:
+                worker = store.data.get("workers", {}).get(worker_id)
+                metadata = worker.get("metadata") if isinstance(worker, dict) else {}
+                upgrade = metadata.get("worker_upgrade") if isinstance(metadata, dict) else {}
+                state = str(upgrade.get("state") or "") if isinstance(upgrade, dict) else ""
+            if state in TERMINAL_UPGRADE_STATES:
+                clear_worker_upgrade_drain(worker_id)
         return response
 
     app.state.worker_upgrade_drain_patch_installed = True
