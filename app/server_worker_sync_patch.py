@@ -471,6 +471,14 @@ class ServerWorkerSyncCoordinator:
                     state="busy",
                     last_error=message,
                 )
+                self._write_upgrade_state(
+                    worker_id,
+                    state="queued",
+                    stage="drain-deferred",
+                    message=message,
+                    percent=1,
+                    reset=False,
+                )
                 return
             if error in _UNSUPPORTED_UPGRADE_ERRORS:
                 state = "manual-repair-required"
@@ -601,7 +609,11 @@ class ServerWorkerSyncCoordinator:
                     continue
 
                 upgrade = self._upgrade_meta(worker)
-                if str(upgrade.get("state") or "") in {"queued", "running"}:
+                upgrade_state = str(upgrade.get("state") or "")
+                upgrade_stage = str(upgrade.get("stage") or "")
+                if upgrade_state in {"queued", "running"} and not (
+                    upgrade_state == "queued" and upgrade_stage == "drain-deferred"
+                ):
                     self._update_worker_meta(
                         worker_id,
                         target_commit=target_commit,

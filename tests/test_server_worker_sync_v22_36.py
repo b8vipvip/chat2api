@@ -145,3 +145,42 @@ def test_runtime_and_entry_expose_auto_sync_contract() -> None:
     assert entry.index("install_linux_worker_upgrade_patch(app)") < entry.index("install_server_worker_sync_patch(app)")
     assert entry.index("install_server_update_patch(app)") < entry.index("install_server_worker_sync_patch(app)")
     assert '"server_update_worker_auto_sync": True' in runtime
+
+def test_worker_drain_timeout_is_deferred_and_retried_without_stuck_queued_state(tmp_path: Path) -> None:
+    coordinator, store, calls = _coordinator(tmp_path, worker=_worker(bundle="0.8.7"), online=True)
+    coordinator._compare_decision = _decision(False)
+
+    async def send(worker_id: str, command: str, arguments: dict, *, wait: bool, timeout: float):
+        calls.append((worker_id, command))
+        if len(calls) == 1:
+            return {
+                "accepted": False,
+                "result": {
+                    "ok": False,
+                    "error": "worker_active_requests_drain_timeout",
+                    "detail": "still active",
+                    "retryable": True,
+                },
+            }
+        return {"accepted": True, "result": {"ok": True, "scheduled": True, "unit": "chat2api-upgrade"}}
+
+    coordinator.app.state.send_linux_worker_command = send
+    first = asyncio.run(coordinator.run_once())
+    assert first["busy"] == 1
+    assert calls == [("wrk_test", "upgrade_worker")]
+    upgrade = store.data["workers"]["wrk_test"]["metadata"]["worker_upgrade"]
+    assert upgrade["state"] == "queued"
+    assert upgrade["stage"] == "drain-deferred"
+
+    with store._lock:
+        sync = store.data["workers"]["wrk_test"]["metadata"]["server_update_sync"]
+        sync["last_attempt_epoch"] = 0
+        store._save()
+
+    second = asyncio.run(coordinator.run_once())
+    assert calls == [("wrk_test", "upgrade_worker"), ("wrk_test", "upgrade_worker")]
+    assert second["scheduled"] == 1
+    sync = store.data["workers"]["wrk_test"]["metadata"]["server_update_sync"]
+    assert sync["state"] == "scheduled"
+    assert store.data["workers"]["wrk_test"]["metadata"]["worker_upgrade"]["stage"] == "scheduled"
+
