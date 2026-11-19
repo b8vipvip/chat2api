@@ -16,6 +16,9 @@ class Sessions:
     def authenticate(self, token: str | None) -> bool:
         return token == "admin-ok"
 
+    def identity(self, token: str | None) -> str | None:
+        return "root" if token == "admin-ok" else None
+
 
 class Workers:
     def __init__(self) -> None:
@@ -96,6 +99,10 @@ class Registry:
 def make_app(monkeypatch):
     app = FastAPI()
     app.state.admin_sessions = Sessions()
+    # The interception middleware now applies the production RBAC gate too.
+    app.state.control_plane = SimpleNamespace(
+        permitted=lambda username, path, method: username == "root"
+    )
     app.state.linux_workers = Workers()
     app.state.registry = Registry()
     control_calls: list[tuple[str, str, dict]] = []
@@ -149,7 +156,10 @@ def test_worker_management_disable_and_enable_share_linux_worker_authority(monke
     assert rows["ext_linux"]["online"] is False
     assert rows["ext_linux"]["busy"] is False
 
-    enabled = client.post("/api/admin/extensions/ext_linux/enable")
+    enabled = client.post(
+        "/api/admin/extensions/ext_linux/enable",
+        headers={"Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"},
+    )
     assert enabled.status_code == 200, enabled.text
     enabled_payload = enabled.json()
     assert enabled_payload["enabled"] is True
