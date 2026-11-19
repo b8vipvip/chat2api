@@ -374,6 +374,11 @@ class QuotaReservationStore:
             return "released_zero_text_estimate"
         if reservation and reservation["key_id"] != key_id:
             raise QuotaReservationError("Completion API key does not match the request reservation")
+        if reservation and reservation["state"] == "released":
+            # A terminal failure/cancellation or pre-dispatch rollback already
+            # released this request. A late/conflicting completed projection
+            # must not fall through to legacy charging after the hold is gone.
+            return "ignored_released_reservation"
         if reservation and reservation["state"] not in {"released", "expired"}:
             if actual <= 0:
                 # Fail closed: a completed request with absent/zero usage must

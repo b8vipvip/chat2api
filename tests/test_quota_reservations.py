@@ -112,6 +112,32 @@ def test_concurrent_reservations_cannot_oversubscribe_a_shared_sqlite_quota(tmp_
     right.close()
 
 
+def test_late_completed_projection_cannot_charge_explicitly_released_request(tmp_path: Path):
+    store = QuotaReservationStore(tmp_path)
+    api_keys = FakeApiKeys()
+    store.reserve("req_cancelled_late", "key_1", 25, quota_limit=100, completed_tokens=0)
+
+    cancelled = {
+        "request_id": "req_cancelled_late",
+        "api_key_id": "key_1",
+        "status": "cancelled",
+        "usage": {"total_tokens": 25},
+    }
+    assert asyncio.run(store.commit_completed_usage(cancelled, api_keys)) == "released"
+    assert store.get("req_cancelled_late")["state"] == "released"
+
+    # The request-v6 terminal owner must not let a contradictory late completed
+    # projection resurrect a released hold or create a second accounting path.
+    result = asyncio.run(store.commit_completed_usage(
+        completed(request_id="req_cancelled_late", tokens=25), api_keys,
+    ))
+    assert result == "ignored_released_reservation"
+    assert store.get("req_cancelled_late")["state"] == "released"
+    assert api_keys.keys["key_1"].tokens_used == 0
+    assert api_keys.keys["key_1"].charged_requests == {}
+    store.close()
+
+
 def test_failed_requests_release_and_committing_requests_are_not_released_or_expired(tmp_path: Path):
     store = QuotaReservationStore(tmp_path, reservation_ttl_seconds=60)
     store.reserve("req_fail", "key_1", 25, quota_limit=100, completed_tokens=0)
