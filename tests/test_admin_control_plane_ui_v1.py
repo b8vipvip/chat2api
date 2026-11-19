@@ -189,6 +189,9 @@ def test_admin_header_uses_one_modal_login_and_one_session_identity():
     assert 'id="adminSessionLogout"' in html
     assert 'id="adminSessionLoginDialog"' in html
     assert '<div class="sessionAuth"><input id="adminSessionUser"' not in html
+    assert "$('adminKey').value=key()" not in html
+    assert "$('connect').onclick" not in html
+    assert "$('refresh').onclick" not in html
 
     v17 = (root / "app" / "admin_v17.js").read_text(encoding="utf-8")
     assert 'auth.remove()' in v17

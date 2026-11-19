@@ -183,9 +183,6 @@ function headers(k=key()){return{Authorization:'Bearer '+k}}
 async function api(path,opt={}){const h={...headers(opt.key||key()),...(opt.headers||{})};if(opt.body!==undefined)h['Content-Type']='application/json';const r=await fetch(path,{method:opt.method||'GET',headers:h,body:opt.body===undefined?undefined:JSON.stringify(opt.body),cache:'no-store',keepalive:opt.keepalive===true,signal:opt.signal});const t=await r.text();let d={};try{d=t?JSON.parse(t):{}}catch(_){d={detail:t}}if(!r.ok)throw new Error(d.detail||`${r.status} ${t}`);return d}
 function pill(v){const c=v==='completed'||v==='passed'||v==='online'?'ok':v==='warning'||v==='skipped'||v==='busy'?'warn':'bad';return`<span class="pill ${c}">${esc(v)}</span>`}
 function status(t,c='muted'){$('status').className=c;$('status').textContent=t}
-$('adminKey').value=key();
-$('connect').onclick=()=>{sessionStorage.setItem('chat2api_admin_key',$('adminKey').value.trim());loadOverview()};
-$('refresh').onclick=()=>show((location.hash||'#overview').slice(1));
 const titles={overview:'概览',modes:'模式管理',keys:'API Key',requests:'请求记录','media-storage':'转存管理',docs:'开发文档',playground:'测试场','control-admins':'管理员 RBAC','client-policy':'客户端配置','registration-invitations':'邀请注册',tenants:'租户管理','user-roles':'用户角色',subscriptions:'订阅套餐','model-entitlements':'模型权限',plugins:'插件目录','quota-ledger':'额度预留','api-keys':'API Key 管理'};
 function show(v){document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.nav button').forEach(x=>x.classList.toggle('active',x.dataset.view===v));$('view-'+v)?.classList.add('active');$('pageTitle').textContent=titles[v]||v;location.hash=v;if(v==='overview')loadOverview();if(v==='modes')loadModes();if(v==='keys')loadKeys();if(v==='requests')loadRequests();if(v==='media-storage')loadMediaStorage();if(v==='docs')renderDocs();if(v==='playground'){loadOverview().then(loadTests)}}
 document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>show(b.dataset.view));
@@ -384,9 +381,6 @@ $('mediaSaveSettings').onclick=async()=>{
     $('mediaStorageStatus').textContent='已保存配置';await loadMediaStorage();
   }catch(e){$('mediaStorageStatus').textContent='保存失败：'+e.message;}
 };
-const connectButton=$('connect'),refreshButton=$('refresh'),adminKeyInput=$('adminKey');
-if(connectButton)connectButton.disabled=true;
-if(refreshButton)refreshButton.disabled=true;
 document.querySelectorAll('.nav button').forEach(button=>button.disabled=true);
 (async()=>{
   let session=null,sessionCheckSucceeded=false;
@@ -397,24 +391,16 @@ document.querySelectorAll('.nav button').forEach(button=>button.disabled=true);
   }catch(_){}
   if(sessionCheckSucceeded&&session&&session.authenticated&&session.role!=='super_admin'){
     try{sessionStorage.removeItem('chat2api_admin_key')}catch(_){}
-    if(adminKeyInput){adminKeyInput.value='';adminKeyInput.disabled=true;}
-    if(connectButton)connectButton.hidden=true;
-    if(refreshButton)refreshButton.hidden=true;
     document.querySelectorAll('.nav button:not([data-cview])').forEach(button=>{button.hidden=true;button.disabled=true});
     document.querySelectorAll('.nav button[data-cview]').forEach(button=>{button.disabled=false});
     const defaults={system_admin:'client-policy',api_key_admin:'api-keys',plugin_admin:'plugins',support:'model-entitlements',billing_admin:'subscriptions',user_admin:'user-roles'};
     if(defaults[session.role])location.hash=defaults[session.role];
     status('已识别委派管理员 Session：'+session.username+' · '+session.role,'ok');
   }else if(sessionCheckSucceeded){
-    if(connectButton)connectButton.disabled=false;
-    if(refreshButton)refreshButton.disabled=false;
     document.querySelectorAll('.nav button').forEach(button=>button.disabled=false);
     const start=(location.hash||'#'+INITIAL_VIEW).slice(1);show(titles[start]?start:'overview');
   }else{
     try{sessionStorage.removeItem('chat2api_admin_key')}catch(_){}
-    if(adminKeyInput)adminKeyInput.value='';
-    if(connectButton)connectButton.disabled=false;
-    if(refreshButton)refreshButton.disabled=true;
     document.querySelectorAll('.nav button:not([data-cview])').forEach(button=>button.disabled=true);
     document.querySelectorAll('.nav button[data-cview]').forEach(button=>{button.disabled=false});
     $('view-overview').classList.add('active');
