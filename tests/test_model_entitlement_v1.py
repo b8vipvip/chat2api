@@ -1011,8 +1011,8 @@ def test_revoked_tenant_member_loses_workspace_model_entitlements(tmp_path: Path
     user_id = "usr_abcdef123"
     tenant = tenants.create("revocation-workspace", "Revocation Workspace")
     tenant_id = tenant["tenant_id"]
-    tenants.upsert_member(tenant_id, user_id, "owner")
-    tenants.upsert_member(tenant_id, "usr_ghijkl789", "owner")
+    tenants.upsert_member(tenant_id, user_id, "owner", allow_owner_change=True)
+    tenants.upsert_member(tenant_id, "usr_ghijkl789", "owner", allow_owner_change=True)
     tenants.bind_key(tenant_id, user_id, "key_1")
 
     policies = app.state.model_entitlements
@@ -1023,10 +1023,10 @@ def test_revoked_tenant_member_loses_workspace_model_entitlements(tmp_path: Path
     app.state.registry.routing_key_context.set("key_1")
     assert [row["id"] for row in app.state.registry.model_catalog()] == ["gpt-5.5"]
     with pytest.raises(TenantMembershipError, match="Unbind"):
-        tenants.remove_member(tenant_id, user_id)
+        tenants.remove_member(tenant_id, user_id, allow_owner_change=True)
 
     tenants.unbind_key(tenant_id, "key_1")
-    tenants.remove_member(tenant_id, user_id)
+    tenants.remove_member(tenant_id, user_id, allow_owner_change=True)
     assert tenants.role_for(tenant_id, user_id) is None
     assert tenants.tenant_for_key("key_1") is None
     # Once the binding and membership are revoked, the old workspace and role
