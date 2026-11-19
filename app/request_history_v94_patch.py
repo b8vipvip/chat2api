@@ -39,7 +39,8 @@ _BASE_REQUEST_DETAIL_PANEL = (
     '<div id="rqDetail" class="muted">点击记录查看诊断。</div></div>'
 )
 _BASE_REQUEST_DETAIL_RE = re.compile(
-    r"async function requestDetail\(id\)\{.*?\}\s*window\.requestDetail=requestDetail;",
+    r"async function requestDetail\(id\)\{.*?\}\s*window\.requestDetail=requestDetail;"
+    r"\s*\$\('rqBody'\)\?\.addEventListener\('click',event=>\{.*?\}\);",
     re.DOTALL,
 )
 
