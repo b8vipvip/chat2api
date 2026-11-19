@@ -370,10 +370,13 @@ class WorkerProbeStore:
         }
         if request_summary:
             allowed = ("request_id", "status", "request_type", "requested_model",
-                       "client_id", "device_name", "recorded_at", "updated_at", "error")
+                       "client_id", "device_name", "recorded_at", "updated_at")
+            safe_summary = {key: request_summary.get(key) for key in allowed}
+            # Raw telemetry errors may echo upstream Authorization headers,
+            # provider tokens or signed URLs. Export presence, not the message.
+            safe_summary["error_present"] = bool(request_summary.get("error"))
             artifacts["request-summary.json"] = json.dumps(
-                {key: request_summary.get(key) for key in allowed},
-                ensure_ascii=False, indent=2,
+                safe_summary, ensure_ascii=False, indent=2,
             ).encode()
         if native_snapshot:
             # Admin-export-only, validated v1 presentation. Keep the entire

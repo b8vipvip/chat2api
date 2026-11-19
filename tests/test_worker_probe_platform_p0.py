@@ -91,7 +91,7 @@ def test_request_scoped_evidence_zip_and_no_terminal_mutation(tmp_path: Path) ->
             await app.state.telemetry.upsert({
                 "request_id": request_id, "status": "error",
                 "requested_model": "gpt-6", "request_type": "text",
-                "error": "Timed out waiting for ChatGPT",
+                "error": "provider failed Authorization: Bearer probe-access-token-secret; refresh_token=probe-refresh-token-secret",
             })
             await store.ingest(
                 request_id=request_id, worker_id="wrk_12345678",
@@ -126,6 +126,12 @@ def test_request_scoped_evidence_zip_and_no_terminal_mutation(tmp_path: Path) ->
             assert "probes/conversation-dom.json" in files
             assert "checksums.sha256" in files
             assert "secret.example" not in output.read("events/probe-timeline.jsonl").decode()
+            request_summary = json.loads(output.read("request-summary.json"))
+            assert request_summary["error_present"] is True
+            assert "error" not in request_summary
+            exported = b"".join(output.read(name) for name in files)
+            assert b"probe-access-token-secret" not in exported
+            assert b"probe-refresh-token-secret" not in exported
             assert json.loads(output.read("manifest.json"))["capture_status"] == "ok"
         assert app.state.telemetry.get(request_id)["status"] == "error"
         assert "private_url" not in (tmp_path / "worker_probes" / "events" /

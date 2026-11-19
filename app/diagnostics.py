@@ -3,32 +3,88 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
+import traceback
 import uuid
 from collections import deque
 from contextvars import ContextVar
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qsl, urlencode
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
 from .jsonl_tail import iter_recent_jsonl
 
 
 current_trace_id: ContextVar[str | None] = ContextVar("chat2api_trace_id", default=None)
 
+# Compare normalized names so snake_case, kebab-case and camelCase
+# credentials are treated identically without redacting safe identifiers such
+# as tokenID, tokenCount or apiKeyID.
 _SENSITIVE = {
-    "authorization",
-    "x-api-key",
-    "api_key",
-    "apikey",
-    "token",
-    "access_token",
-    "pairing_code",
-    "x-pairing-code",
-    "data_base64",
-    "b64_json",
+    "authorization", "proxyauthorization", "xapikey", "apikey",
+    "token", "accesstoken", "refreshtoken", "idtoken", "sessiontoken",
+    "csrftoken", "xsrftoken", "password", "passwd", "passphrase",
+    "secret", "clientsecret", "clientassertion", "clientcredential",
+    "credential", "credentials", "cookie", "setcookie", "pairingcode",
+    "invitecode", "invitationcode", "database64", "b64json",
+    "signature", "signedurl", "privatekey", "jwt", "bearertoken",
+    "authtoken", "oauthcode", "authorizationcode", "codeverifier",
+    "verificationcode", "resetcode", "resettoken",
 }
+_SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b(authorization|proxy[-_]?authorization|x[-_]?api[-_]?key|api[-_]?key|"
+    r"access[-_]?token|refresh[-_]?token|id[-_]?token|session[-_]?token|"
+    r"csrf[-_]?token|client[-_]?secret|password|passwd|passphrase|secret|"
+    r"invite[-_]?code|invitation[-_]?code|pairing[-_]?code|signature|"
+    r"signed[-_]?url|jwt)\b(\s*[:=]\s*)(?:\"[^\"]*\"|'[^']*'|[^\s,;&]+)"
+)
+_BEARER_RE = re.compile(r"(?i)\b(Bearer|Basic)\s+[A-Za-z0-9._~+/-]{8,}={0,2}")
+_JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b")
+
+
+def _is_sensitive_key(key: Any) -> bool:
+    normalized = re.sub(r"[^a-z0-9]", "", str(key or "").casefold())
+    return normalized in _SENSITIVE
+
+
+def _redact_text(value: str) -> str:
+    text = str(value or "")
+    text = _BEARER_RE.sub(r"\1 [REDACTED]", text)
+    text = _JWT_RE.sub("[REDACTED]", text)
+    return _SECRET_ASSIGNMENT_RE.sub(r"\1\2[REDACTED]", text)
+
+
+def _redact_value(value: Any, depth: int = 0) -> Any:
+    if depth > 12:
+        return "[TRUNCATED]"
+    if isinstance(value, dict):
+        return {
+            str(key): "[REDACTED]" if _is_sensitive_key(key) else _redact_value(item, depth + 1)
+            for key, item in list(value.items())[:200]
+        }
+    if isinstance(value, (list, tuple)):
+        return [_redact_value(item, depth + 1) for item in list(value)[:200]]
+    if isinstance(value, str):
+        return _redact_text(value)
+    return value
+
+
+def _safe_path(value: Any) -> str:
+    path = str(value or "")[:2000]
+    # These endpoints carry bearer-capability tokens in path segments. Keep
+    # resource IDs and route shape, but never persist the capability itself.
+    path = re.sub(r"(?i)(/api/media/[^/]+/)[^/]+", r"\1[REDACTED]", path)
+    path = re.sub(
+        r"(?i)(/api/generated-files/pending/[^/]+/)[^/]+",
+        r"\1[REDACTED]", path,
+    )
+    path = re.sub(
+        r"(?i)(/api/generated-files/(?!pending/)[^/]+/)[^/]+",
+        r"\1[REDACTED]", path,
+    )
+    return _redact_text(path)
 
 
 def utc_stamp() -> str:
@@ -37,12 +93,29 @@ def utc_stamp() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _safe_referer(value: str) -> str:
+    try:
+        parsed = urlsplit(value)
+        host = parsed.hostname or ""
+        if not parsed.scheme or not host:
+            return "[REDACTED]"
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        if parsed.port:
+            host += f":{parsed.port}"
+        return f"{parsed.scheme.lower()}://{host}"[:1000]
+    except ValueError:
+        return "[REDACTED]"
+
+
 def _decode_headers(raw: list[tuple[bytes, bytes]]) -> dict[str, str]:
     result: dict[str, str] = {}
     for key, value in raw:
         name = key.decode("latin-1", errors="replace").lower()
-        if name in {"content-type", "user-agent", "origin", "referer", "accept", "x-chat2api-client"}:
-            result[name] = value.decode("latin-1", errors="replace")[:1000]
+        if name not in {"content-type", "user-agent", "origin", "referer", "accept", "x-chat2api-client"}:
+            continue
+        decoded = value.decode("latin-1", errors="replace")
+        result[name] = _safe_referer(decoded) if name == "referer" else _redact_text(decoded[:1000])
     return result
 
 
@@ -51,7 +124,8 @@ def _safe_query(raw: bytes) -> str:
         return ""
     pairs = []
     for key, value in parse_qsl(raw.decode("utf-8", errors="replace"), keep_blank_values=True):
-        pairs.append((key, "[REDACTED]" if key.lower() in _SENSITIVE else value[:300]))
+        safe_value = "[REDACTED]" if _is_sensitive_key(key) else _redact_text(value[:300])
+        pairs.append((key, safe_value))
     return urlencode(pairs)
 
 
@@ -83,7 +157,7 @@ def summarize_request_body(raw: bytes, content_type: str) -> dict[str, Any]:
         return result
 
     for key in ("model", "stream", "prompt_mode", "response_format", "n", "timeout", "language"):
-        if key in payload and key not in _SENSITIVE:
+        if key in payload and not _is_sensitive_key(key):
             result[key] = payload.get(key)
 
     messages = payload.get("messages")
@@ -135,14 +209,15 @@ def safe_error_response(raw: bytes, content_type: str) -> Any:
             if isinstance(payload, dict):
                 clean: dict[str, Any] = {}
                 for key, value in payload.items():
-                    if key.lower() in _SENSITIVE:
+                    if _is_sensitive_key(key):
                         clean[key] = "[REDACTED]"
                     elif key in {"detail", "error", "message", "type"}:
-                        clean[key] = value
+                        clean[key] = _redact_value(value)
                 return clean or {"json_keys": sorted(payload)[:30]}
+            return _redact_value(payload)
         except Exception:
             pass
-    return raw.decode("utf-8", errors="replace")[:2000]
+    return _redact_text(raw.decode("utf-8", errors="replace")[:2000])
 
 
 class DiagnosticStore:
@@ -161,7 +236,7 @@ class DiagnosticStore:
                 self.items.clear()
 
     async def append(self, item: dict[str, Any]) -> None:
-        record = dict(item)
+        record = _redact_value(dict(item))
         record.setdefault("recorded_at", utc_stamp())
         async with self.lock:
             self.items.append(record)
@@ -170,10 +245,13 @@ class DiagnosticStore:
 
     def recent(self, limit: int = 200) -> list[dict[str, Any]]:
         size = max(1, min(int(limit), self.items.maxlen or 2000))
-        return list(self.items)[-size:][::-1]
+        return [_redact_value(item) for item in list(self.items)[-size:][::-1]]
 
     def by_trace(self, trace_id: str) -> list[dict[str, Any]]:
-        return [dict(item) for item in self.items if str(item.get("trace_id") or "") == trace_id]
+        return [
+            _redact_value(item) for item in self.items
+            if str(item.get("trace_id") or "") == trace_id
+        ]
 
 
 def configure_file_logging(data_dir: Path) -> Path:
@@ -243,8 +321,17 @@ class DiagnosticMiddleware:
         try:
             await self.app(scope, receive_wrapper, send_wrapper)
         except Exception as error:
-            exception_text = f"{type(error).__name__}: {error}"
-            self.logger.exception("Unhandled HTTP error trace_id=%s path=%s", trace_id, scope.get("path"))
+            exception_text = _redact_text(f"{type(error).__name__}: {error}")
+            frames = " <- ".join(
+                f"{frame.filename}:{frame.lineno}:{frame.name}"
+                for frame in traceback.extract_tb(error.__traceback__)[-12:]
+            )
+            # Do not log exception messages: upstream errors may contain bearer
+            # credentials. Keep type and stack locations for operator triage.
+            self.logger.error(
+                "Unhandled HTTP error trace_id=%s path=%s error_type=%s frames=%s",
+                trace_id, _safe_path(scope.get("path")), type(error).__name__, frames,
+            )
             raise
         finally:
             try:
@@ -254,7 +341,7 @@ class DiagnosticMiddleware:
                 event: dict[str, Any] = {
                     "trace_id": trace_id,
                     "method": str(scope.get("method") or ""),
-                    "path": str(scope.get("path") or ""),
+                    "path": _safe_path(scope.get("path")),
                     "query": _safe_query(scope.get("query_string") or b""),
                     "status_code": response_status,
                     "duration_ms": round((time.perf_counter() - started) * 1000, 1),
