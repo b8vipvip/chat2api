@@ -319,6 +319,10 @@ def install_worker_model_library_v145_patch(app: FastAPI) -> FastAPI:
         return _validated_model_rows(registry, client_id)
 
     def supports_model_strict(client_id: str, model_id: str) -> bool:
+        # The explicit page-default route requires no model selection. Worker
+        # readiness and transport health are checked by the scheduler.
+        if str(model_id).strip().lower() == "default":
+            return True
         model = normalize_concrete_model_id(model_id)
         if not model:
             return False
