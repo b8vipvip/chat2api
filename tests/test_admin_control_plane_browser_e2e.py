@@ -618,6 +618,9 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                       };
                     }"""
                 )
+                # Web-user views intentionally live in a collapsed second-level menu.
+                page.locator("#web-user-nav-group > summary").click()
+                page.locator('[data-view="tenants"]').wait_for(state="visible")
                 page.locator('[data-view="tenants"]').click()
                 page.wait_for_function(
                     "() => document.getElementById('cTenantRows')?.textContent.includes('<img src=x')",

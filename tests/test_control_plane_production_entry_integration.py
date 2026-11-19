@@ -4,10 +4,21 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+import re
 
 
 def test_production_entry_installs_c_track_services_and_protects_admin_routes(tmp_path: Path) -> None:
     repository_root = Path(__file__).resolve().parents[1]
+    # API identifiers must never be interpolated into executable HTML handlers.
+    for relative_path in ("app/admin.py", "app/admin_v17.js"):
+        source = (repository_root / relative_path).read_text(encoding="utf-8")
+        assert re.search(r'onclick\s*=\s*"[^"]*\$\{', source) is None, relative_path
+    admin_source = (repository_root / "app/admin.py").read_text(encoding="utf-8")
+    extension_source = (repository_root / "app/admin_v17.js").read_text(encoding="utf-8")
+    assert 'data-key-action="copy"' in admin_source
+    assert 'data-request-id="${esc(r.request_id)}"' in admin_source
+    assert 'data-pairing-action=' in extension_source
+    assert 'data-extension-action=' in extension_source
     script = r"""
 from app.entry import app
 from app.control_plane import ROLES, permission_for_admin_route

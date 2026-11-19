@@ -229,7 +229,7 @@
           <td><code>${esc(row.bound_device_id || "未绑定")}</code></td>
           <td><code>${esc(row.bound_client_id || "-")}</code></td>
           <td>${pill(state)}</td><td>${fmtTime(client.last_seen_at)}</td>
-          <td><button class="action" onclick="togglePairing('${esc(row.pairing_id)}',${!row.enabled})">${row.enabled ? "停用配对码" : "启用配对码"}</button></td>
+          <td><button class="action" data-pairing-action="${row.enabled ? "disable" : "enable"}" data-pairing-id="${esc(row.pairing_id)}">${row.enabled ? "停用配对码" : "启用配对码"}</button></td>
         </tr>`;
       }).join("") || '<tr><td colspan="7">暂无配对码，请先创建。</td></tr>';
 
@@ -240,8 +240,8 @@
         <td>${esc(row.version || "-")}</td><td>${connectionPill(row)}</td>
         <td>${esc(row.bound_api_keys ?? 0)}</td><td>${fmtTime(row.last_seen_at)}</td>
         <td>${row.connection_enabled
-          ? `<button class="action danger" onclick="disconnectExtension('${esc(row.client_id)}')">断开连接</button>`
-          : `<button class="action good" onclick="enableExtension('${esc(row.client_id)}')">允许连接</button>`}</td>
+          ? `<button class="action danger" data-extension-action="disconnect" data-client-id="${esc(row.client_id)}">断开连接</button>`
+          : `<button class="action good" data-extension-action="enable" data-client-id="${esc(row.client_id)}">允许连接</button>`}</td>
       </tr>`).join("") || '<tr><td colspan="7">暂无绑定扩展。</td></tr>';
     } catch (error) {
       status("扩展管理加载失败：" + error.message, "bad");
@@ -278,6 +278,23 @@
       await loadExtensions();
     } catch (error) { status(error.message, "bad"); }
   };
+  // Untrusted API identifiers stay in escaped data attributes, never in
+  // executable inline JavaScript attributes.
+  document.getElementById("pairingBody")?.addEventListener("click", event => {
+    const button = event.target?.closest?.("[data-pairing-action]");
+    if (!button || !event.currentTarget.contains(button)) return;
+    window.togglePairing(
+      button.dataset.pairingId || "",
+      button.dataset.pairingAction === "enable",
+    );
+  });
+  document.getElementById("extensionDeviceBody")?.addEventListener("click", event => {
+    const button = event.target?.closest?.("[data-extension-action]");
+    if (!button || !event.currentTarget.contains(button)) return;
+    const clientId = button.dataset.clientId || "";
+    if (button.dataset.extensionAction === "disconnect") window.disconnectExtension(clientId);
+    else if (button.dataset.extensionAction === "enable") window.enableExtension(clientId);
+  });
 
   const baseShow = show;
   show = async v => {
