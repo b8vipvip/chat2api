@@ -1424,16 +1424,27 @@ class BillingStore:
                     or type(raw_total) is not int or raw_total <= 0
                     or raw_total != raw_input + raw_output
                     or type(raw_cached) is not int or raw_cached < 0 or raw_cached > raw_input
+                    # If both protocol aliases are present, they must describe
+                    # the same usage. A zero in the canonical field is valid
+                    # and must never be replaced by a truthy fallback alias.
+                    or (
+                        "prompt_tokens" in usage and "input_tokens" in usage
+                        and usage["prompt_tokens"] != usage["input_tokens"]
+                    )
+                    or (
+                        "completion_tokens" in usage and "output_tokens" in usage
+                        and usage["completion_tokens"] != usage["output_tokens"]
+                    )
                 ):
                     # Keep the original admission hold. A later terminal
                     # replay with valid usage can settle the same request.
                     return None
-            input_tokens = max(0, int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0))
-            # Cached tokens are a subset of input tokens. A malformed or
-            # inconsistent upstream usage payload must not charge more cached
-            # input than the entire request contained.
-            cached_tokens = min(input_tokens, max(0, int(usage.get("cached_input_tokens") or 0)))
-            output_tokens = max(0, int(usage.get("completion_tokens") or usage.get("output_tokens") or 0))
+            # These values were selected by field presence and strictly
+            # validated above. Do not use truthiness fallback here: zero is a
+            # legitimate usage value, not a signal to read another alias.
+            input_tokens = raw_input
+            cached_tokens = raw_cached
+            output_tokens = raw_output
             uncached_tokens = input_tokens - cached_tokens
             usd = (
                 uncached_tokens * float(price.get("input_usd_per_million") or 0)

@@ -941,6 +941,63 @@ def test_wallet_accounting_rejects_inconsistent_cached_input_for_reserved_reques
     assert billing.balance_cents("usr_cache_guard") == 10_000
 
 
+@pytest.mark.parametrize(
+    ("request_id", "usage"),
+    [
+        (
+            "req_conflicting_input_alias",
+            {
+                "prompt_tokens": 0,
+                "input_tokens": 5,
+                "completion_tokens": 10,
+                "total_tokens": 10,
+                "estimated": True,
+            },
+        ),
+        (
+            "req_conflicting_output_alias",
+            {
+                "prompt_tokens": 10,
+                "completion_tokens": 0,
+                "output_tokens": 5,
+                "total_tokens": 10,
+                "estimated": True,
+            },
+        ),
+    ],
+)
+def test_wallet_accounting_rejects_conflicting_token_usage_aliases(
+    tmp_path: Path, request_id: str, usage: dict[str, object],
+) -> None:
+    pricing = PricingStore(tmp_path)
+    config = pricing.public()
+    pricing.update(billing_enabled=True, usd_cny_rate=7.0, models=config["models"])
+    price = pricing.model("gpt-5.6-sol") or {}
+    billing = BillingStore(tmp_path)
+    billing.credit("usr_alias_conflict", 10_000)
+    billing.reserve_for_request(
+        "usr_alias_conflict", request_id,
+        model_id="gpt-5.6-sol", estimated_cny_cents=1_000,
+        input_tokens=100, output_tokens=100,
+        price_snapshot=price, usd_cny_rate=7.0,
+    )
+
+    result = billing.record_charge("usr_alias_conflict", {
+        "request_id": request_id,
+        "status": "completed",
+        "requested_model": "gpt-5.6-sol",
+        "usage": usage,
+    }, pricing)
+
+    # Ambiguous usage must retain the admission hold for reconciliation;
+    # neither an inflated alias fallback nor a partial charge is acceptable.
+    assert result is None
+    assert billing.charge_for_request(request_id) is None
+    assert billing.reservations[request_id]["state"] == "reserved"
+    assert billing.reserved_cents("usr_alias_conflict") == 1_000
+    assert billing.balance_cents("usr_alias_conflict") == 10_000
+
+
 @pytest.mark.parametrize("invalid_amount", [True, 1.5, "10", 0, -1, None])
 def test_wallet_credit_requires_exact_positive_integer_cents(
     tmp_path: Path, invalid_amount: object,
