@@ -180,6 +180,7 @@ def version_contract_payload(app: FastAPI) -> dict[str, Any]:
             "linux_worker_device_authority_v124": True,
             "linux_worker_extension_autopair_v124": True,
             "linux_worker_public_https_origin_v125": True,
+            "windows_worker_platform_os_normalization_v1": True,
             "linux_worker_isolated_management_v126": False,
             "linux_worker_slot_isolated_ops_v126": False,
             "linux_worker_device_controller_agent_v127": True,

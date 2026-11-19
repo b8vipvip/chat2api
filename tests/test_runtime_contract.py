@@ -798,5 +798,7 @@ def test_linux_worker_public_worker_id_is_advertised_without_changing_internal_c
 
 
 def test_windows_platform_os_normalization_is_advertised():
-    from app.runtime_contract import RUNTIME_FEATURE_REVISION
+    from app.runtime_contract import RUNTIME_FEATURE_REVISION, version_contract_payload
     assert "windows-platform-os-win-normalization-v1" in RUNTIME_FEATURE_REVISION
+    payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
+    assert payload["features"]["windows_worker_platform_os_normalization_v1"] is True
