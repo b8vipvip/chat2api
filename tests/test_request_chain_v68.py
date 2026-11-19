@@ -178,7 +178,10 @@ def test_v639_native_sidecar_requires_committed_server_ack_without_terminal_auth
     assert 'message_type in {"chat.native.chunk", "chat.native.snapshot"}' in backend
     assert 'type:"chat2api.native.ack"' in observer
     assert "reply?.committed === true" in observer
-    assert "reply?.committed !== true" in observer
+    # Every chunk must be accepted; only the final ACK can prove commit.
+    assert "if (reply?.ok !== true) return reply;" in observer
+    assert "reply?.committed === true" in observer
+    assert "active.nativeTransferInFlight !== transfer" in observer
     assert "native_snapshot_server_committed" in backend
     assert "native_transport_ack_error" in controller
     assert 'response_terminal_source: "verified-request-media-dom-v176"' in controller
@@ -224,7 +227,10 @@ def test_v641_native_final_sidecar_has_revision_truth_not_second_terminal_owner(
     broker = read("app/broker.py")
     assert "native_final_capture_committed:active.nativeFinalCaptureCommitted === true" in controller
     assert "active.nativeFinalCaptureCommitted = false;" in observer
-    assert "if (final) active.nativeFinalCaptureCommitted = true;" in observer
+    # Finality is recorded only inside the server-committed ACK branch.
+    assert "if (reply?.ok === true && reply?.committed === true)" in observer
+    assert "active.nativeFinalCaptureCommitted = final;" in observer
+    assert observer.index("if (reply?.ok === true && reply?.committed === true)") < observer.index("active.nativeFinalCaptureCommitted = final;")
     assert 'state.diagnostics["native_snapshot_terminal_complete"] = bool(' in backend
     assert 'native.get("revision") == state.diagnostics.get("native_capture_revision")' in backend
     assert '"native_final_capture_committed"' in broker
