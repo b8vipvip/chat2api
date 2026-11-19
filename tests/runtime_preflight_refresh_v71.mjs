@@ -13,7 +13,7 @@ function currentContract(nativeGate = true, nativeIdentity = true) {
     terminal_prompt_revision: 88,
     conversation_quota_failover_revision: 95,
     ui_hygiene_revision: 101,
-    marker: { bundle: "0.22.294", revision: 71 },
+    marker: { bundle: "0.22.295", revision: 71 },
     modules: {
       request_v6: true,
       native_scope_gate_v287: nativeGate,

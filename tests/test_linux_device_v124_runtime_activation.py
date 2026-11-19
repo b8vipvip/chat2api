@@ -92,6 +92,7 @@ def test_v124_worker_console_displays_public_extension_id_but_keeps_internal_con
     source = (ROOT / "app" / "admin_linux_device_authority_v124.js").read_text(encoding="utf-8")
     assert 'String(worker?.extension_client_id||"").trim()' in source
     assert 'return /^ext_[A-Za-z0-9_-]{5,120}$/.test(id)?id:"ext_ 待绑定";' in source
+    assert 'title="公开扩展身份；内部 Controller ID 仅用于服务端路由"' in source
     # The visible label is ext_; the internal wrk_ key remains the command,
     # row-identity and Linux Controller routing key.
     assert 'const id=String(w.worker_id||"");' in source
