@@ -53,8 +53,8 @@ assert.ok(service.includes('if platform=="windows" and not url:'),
 assert.ok(service.includes('"visual_verified":False'),
   "Windows DOM-only evidence cannot claim 1:1 verification");
 assert.ok(linuxManager.includes("const publicId=visibleWorkerId(w);"));
-assert.ok(linuxManager.includes('<td><code>${esc(publicId)}</code>'));
-assert.ok(linuxManager.includes('<code>${esc(visibleWorkerId(w))}</code>'));
+assert.ok(linuxManager.includes('<td><code title="公开扩展身份；内部 Controller ID 仅用于服务端路由">${esc(publicId)}</code>'));
+assert.ok(linuxManager.includes('<code title="公开扩展身份；内部 Controller ID 仅用于服务端路由">${esc(visibleWorkerId(w))}</code>'));
 assert.ok(!linuxManager.includes('<td><code>${esc(id)}</code>'));
 assert.ok(!linuxManager.includes('<code>${esc(w.worker_id)}</code>'));
 assert.ok(!linuxPairing.includes('workerName || workerId'),

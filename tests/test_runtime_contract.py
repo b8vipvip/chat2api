@@ -790,6 +790,7 @@ def test_linux_worker_public_worker_id_is_advertised_without_changing_internal_c
     assert "linux-worker-public-ext-id-v1" in RUNTIME_FEATURE_REVISION
     assert "linux-worker-public-ext-id-label-v1" in RUNTIME_FEATURE_REVISION
     assert "worker-content-bundle-v71-version-sync-v295" in RUNTIME_FEATURE_REVISION
+    assert "linux-worker-public-ext-id-tooltip-v1" in RUNTIME_FEATURE_REVISION
     assert 'String(worker?.extension_client_id||"").trim()' in linux_ui
     assert 'const id=String(w.worker_id||"");' in linux_ui
     assert 'data-linux-worker-id="${esc(id)}"' in linux_ui
