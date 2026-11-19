@@ -129,7 +129,10 @@ def test_worker_management_disable_and_enable_share_linux_worker_authority(monke
     client = TestClient(app)
     client.cookies.set(SESSION_COOKIE, "admin-ok")
 
-    disabled = client.post("/api/admin/extensions/ext_linux/disconnect")
+    disabled = client.post(
+        "/api/admin/extensions/ext_linux/disconnect",
+        headers={"Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"},
+    )
     assert disabled.status_code == 200, disabled.text
     payload = disabled.json()
     assert payload["enabled"] is False
@@ -210,7 +213,10 @@ def test_offline_worker_can_still_be_disabled_persistently(monkeypatch) -> None:
     client = TestClient(app)
     client.cookies.set(SESSION_COOKIE, "admin-ok")
 
-    response = client.post("/api/admin/extensions/ext_linux/disconnect")
+    response = client.post(
+        "/api/admin/extensions/ext_linux/disconnect",
+        headers={"Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"},
+    )
     assert response.status_code == 200, response.text
     payload = response.json()
     assert payload["enabled"] is False

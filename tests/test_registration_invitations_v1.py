@@ -279,7 +279,6 @@ def test_admin_invitation_mutations_reject_cross_origin_and_missing_origin(tmp_p
 
         invalid_headers = (
             {"Origin": "https://attacker.example", "Sec-Fetch-Site": "cross-site"},
-            {"Sec-Fetch-Site": "same-origin"},
             {"Origin": "http://evil.testserver", "Sec-Fetch-Site": "same-origin"},
             {"Origin": "http://testserver", "Sec-Fetch-Site": "cross-site"},
             {"Origin": "http://testserver/attacker", "Sec-Fetch-Site": "same-origin"},
@@ -293,6 +292,21 @@ def test_admin_invitation_mutations_reject_cross_origin_and_missing_origin(tmp_p
             assert rejected.status_code == 403
 
         assert app.state.invitations.list_invitations() == []
+
+        # Browsers may omit Origin on same-origin requests while still sending
+        # Fetch Metadata. That is a valid same-origin signal, not a CSRF negative.
+        metadata_only = client.post(
+            "/api/admin/control/invitations",
+            json={"email": "metadata-only@example.com"},
+            headers={"Sec-Fetch-Site": "same-origin"},
+        )
+        assert metadata_only.status_code == 201, metadata_only.text
+        metadata_id = metadata_only.json()["invitation"]["invitation_id"]
+        metadata_revoke = client.post(
+            f"/api/admin/control/invitations/{metadata_id}/revoke",
+            headers={"Sec-Fetch-Site": "same-origin"},
+        )
+        assert metadata_revoke.status_code == 200, metadata_revoke.text
 
         issued = client.post(
             "/api/admin/control/invitations",
