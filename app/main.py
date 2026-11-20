@@ -317,6 +317,42 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     expired_reservations, replayed_reservations, reconciled_reservations,
                 )
         await file_store.load()
+        conversation_files = getattr(app.state, "web_chat_conversations", None)
+
+        async def cleanup_web_chat_orphan_files() -> int:
+            if conversation_files is None:
+                return 0
+            referenced = await asyncio.to_thread(conversation_files.referenced_file_ids)
+            return await asyncio.to_thread(
+                file_store.delete_expired_web_chat_files,
+                referenced,
+                older_than_seconds=90 * 86400,
+                limit=500,
+            )
+
+        try:
+            removed_web_chat_files = await cleanup_web_chat_orphan_files()
+            if removed_web_chat_files:
+                logger.info(
+                    "Expired %s unreferenced Web Chat attachment(s)",
+                    removed_web_chat_files,
+                )
+        except Exception:
+            # Retention is best-effort maintenance. A failed scan must not
+            # affect chat startup or delete files with uncertain references.
+            logger.exception("Web Chat attachment retention scan failed")
+
+        async def expire_web_chat_orphan_files() -> None:
+            while True:
+                await asyncio.sleep(24 * 60 * 60)
+                try:
+                    removed = await cleanup_web_chat_orphan_files()
+                    if removed:
+                        logger.info("Expired %s unreferenced Web Chat attachment(s)", removed)
+                except Exception:
+                    logger.exception("Web Chat attachment retention scan failed")
+
+        file_retention_task = asyncio.create_task(expire_web_chat_orphan_files())
         await test_runs.load()
         recovered_runs = await test_runs.recover_interrupted()
         if recovered_runs:
@@ -346,8 +382,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             recovery_watchdog.cancel()
+            file_retention_task.cancel()
             try:
                 await recovery_watchdog
+            except asyncio.CancelledError:
+                pass
+            try:
+                await file_retention_task
             except asyncio.CancelledError:
                 pass
 
