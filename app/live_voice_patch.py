@@ -681,10 +681,10 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
             with suppress(Exception):
                 await send_json({"type": "error", "code": "GPT_LIVE_BRIDGE_ERROR", "message": str(error), "retryable": True})
         finally:
-            if (
-                session_ready and not error_message
-                and not observed_audio_bytes and not observed_response_count
-            ):
+            if session_ready and not error_message and not observed_response_count:
+                # Audio bytes prove transport, not a completed assistant turn.
+                # Require the browser's response.done signal before marking
+                # the live session successful, even if partial PCM was heard.
                 error_message = "GPT-Live session ended without a completed response"
             finished = True
             if started and selected_client:
@@ -715,7 +715,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         "stream": True, "prompt_mode": "voice-call",
                         "status": "cancelled" if error_message == "client-disconnected" else
                                   "error" if error_message else
-                                  "completed" if session_ready and (observed_audio_bytes or observed_response_count) else "error",
+                                  "completed" if session_ready and observed_response_count else "error",
                         "attachments_count": observed_media_count,
                         "audio_bytes": observed_audio_bytes,
                         "diagnostics": {
