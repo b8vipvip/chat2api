@@ -204,7 +204,10 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                 _http_error(400, "invalid Last-Event-ID")
             cursor = max(cursor, header_cursor)
 
+        start_cursor = cursor
+
         async def replay():
+            cursor = start_cursor
             last_heartbeat = time.monotonic()
             while True:
                 page = await journal.events_after(request_id, key_id, cursor, limit=128)
@@ -235,9 +238,9 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                         + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
                         + "\n\n"
                     )
-                    cursor = last_id
                     if payload.get("terminal") is True:
                         return
+                    cursor = int(first_id) - 1
 
                 events = page.get("events") if isinstance(page.get("events"), list) else []
                 for item in events:
