@@ -113,7 +113,7 @@
       if (Object.entries(value.style).some(([key,item]) => !validStyle(key,item,tag))) return false;
     }
     if (value.col_span !== undefined && (!["td","th"].includes(tag) || !Number.isInteger(value.col_span) || value.col_span < 2 || value.col_span > 256)) return false;
-    if (value.row_span !== undefined && (!["td","th"].includes(tag) || !Number.isInteger(value.row_span) || value.row_span < 2 || value.row_span > 256)) return false;
+    if (value.row_span !== undefined && (!["td","th"].includes(tag) || !Number.isInteger(value.row_span) || (value.row_span !== 0 && value.row_span < 2) || value.row_span > 256)) return false;
     if (value.children !== undefined) {
       if (["img","hr","br"].includes(tag) || !Array.isArray(value.children) || value.children.length > 8192) return false;
       for (const child of value.children) if (!validateNode(child,depth+1,tag,counts)) return false;
@@ -138,8 +138,8 @@
     else element = document.createElement(tag);
     if (value.style) Object.entries(value.style).forEach(([key,item]) => { if (validStyle(key,item,tag)) element.style[key] = item; });
     if (value.attrs) Object.entries(value.attrs).forEach(([key,item]) => { if (validSvgAttribute(key,item)) element.setAttribute(key,item); });
-    if (value.col_span) element.colSpan = value.col_span;
-    if (value.row_span) element.rowSpan = value.row_span;
+    if (value.col_span !== undefined) element.colSpan = value.col_span;
+    if (value.row_span !== undefined) element.rowSpan = value.row_span;
     if (tag === "img") {
       const src = safeMediaUrl(snapshot.assets[value.media_index]);
       if (!src) {

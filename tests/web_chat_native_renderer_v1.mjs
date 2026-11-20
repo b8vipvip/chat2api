@@ -22,6 +22,12 @@ const good = {
   ]}
 };
 assert.equal(renderer.validateSnapshot(good),true);
+const validZeroRowSpan = structuredClone(good);
+validZeroRowSpan.root.children.push({tag:"table",children:[{tag:"tbody",children:[{tag:"tr",children:[{tag:"td",row_span:0,text:"span"}]}]}]});
+assert.equal(renderer.validateSnapshot(validZeroRowSpan),true);
+const invalidOneRowSpan = structuredClone(good);
+invalidOneRowSpan.root.children.push({tag:"table",children:[{tag:"tbody",children:[{tag:"tr",children:[{tag:"td",row_span:1,text:"span"}]}]}]});
+assert.equal(renderer.validateSnapshot(invalidOneRowSpan),false);
 assert.equal(renderer.safeMediaUrl(good.assets[0]),good.assets[0]);
 assert.equal(renderer.safeMediaUrl("https://evil.example/api/media/media_123456/token_12345678"),"");
 assert.equal(renderer.safeMediaUrl("https://chat.example/evil.svg"),"");
