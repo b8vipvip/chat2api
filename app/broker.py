@@ -694,7 +694,7 @@ class RequestBroker:
                 if event_id:
                     event = {**event, "event_id": event_id}
                     state.last_event_id = max(state.last_event_id, int(event_id))
-                    if event_type in {"chat.completed", "chat.error", "chat.cancelled"}:
+                    if event_type in {"chat.completed", "chat.error", "chat.cancelled", "image.completed", "image.error", "image.cancelled"}:
                         state.diagnostics["web_chat_worker_terminal_journaled_type"] = str(event_type)
                         state.diagnostics["web_chat_worker_terminal_journaled_event_id"] = int(event_id)
             except Exception as error:
