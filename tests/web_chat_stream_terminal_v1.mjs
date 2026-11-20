@@ -126,12 +126,16 @@ test("preserves request-scoped tool calls and results as safe presentation state
       };
     },
   };
+  const referenceStart = source.indexOf("  function cleanToolReferenceText(");
+  const referenceEnd = source.indexOf("  function normalizeToolEvents(", referenceStart);
+  assert.ok(referenceStart >= 0 && referenceEnd > referenceStart);
   const context = vm.createContext({
-    saveHistory() { saved += 1; }, document,
+    saveHistory() { saved += 1; }, document, URL,
     safeToolName(value) { return String(value || "tool").slice(0,80); },
   });
   const api = vm.runInContext(
-    source.slice(start, end) + "\n({applyToolEvent,consumeSseFrame,renderToolActivity})",
+    source.slice(referenceStart, referenceEnd) + "\n" + source.slice(start, end)
+      + "\n({applyToolEvent,consumeSseFrame,renderToolActivity})",
     context,
   );
   const assistant = {content: "", toolEvents: []};
@@ -142,9 +146,17 @@ test("preserves request-scoped tool calls and results as safe presentation state
   assert.equal(api.consumeSseFrame(frame({
     phase: "call", tool_name: "browser.search", call_id: "call-123",
     status: "running", arguments: '{"query":"test"}',
+    references: [
+      {url:"https://docs.python.org/3/library/",title:"Python docs",snippet:"Official reference"},
+      {url:"javascript:alert(1)",title:"Unsafe"},
+      {url:"https://127.0.0.1/private",title:"Private"},
+    ],
   }), assistant), false);
   assert.equal(assistant.toolEvents.length, 1);
   assert.equal(assistant.toolEvents[0].status, "running");
+  assert.deepEqual(JSON.parse(JSON.stringify(assistant.toolEvents[0].references)), [{
+    url:"https://docs.python.org/3/library/",title:"Python docs",snippet:"Official reference",
+  }]);
 
   api.consumeSseFrame(frame({
     phase: "call", tool_name: "browser.search", call_id: "call-123",
@@ -170,6 +182,12 @@ test("preserves request-scoped tool calls and results as safe presentation state
   const output = details.children.find(node => node.tag === "pre"
     && node.textContent === "<img src=x onerror=alert(1)>");
   assert.equal(output.textContent, "<img src=x onerror=alert(1)>");
+  const referenceBox = details.children.find(node => node.className === "message-tool-references");
+  assert.ok(referenceBox);
+  const referenceLink = referenceBox.children.find(node => node.tag === "a");
+  assert.equal(referenceLink.href, "https://docs.python.org/3/library/");
+  assert.equal(referenceLink.rel, "noopener noreferrer nofollow");
+  assert.equal(referenceLink.referrerPolicy, "no-referrer");
 });
 
 
@@ -189,11 +207,17 @@ test("normalizes persisted tool events without accepting unsafe IDs or control c
     status: "completed",
     arguments: "x".repeat(3000),
     output: "ok",
+    references: [
+      {url:"https://docs.python.org/3/library/",title:"Python docs",snippet:"Reference"},
+      {url:"javascript:alert(1)",title:"Unsafe"},
+    ],
   }, {
     toolName: "forged", callId: "bad id", status: "completed",
   }], "assistant");
   assert.equal(rows.length, 1);
   assert.equal(rows[0].toolName.includes(String.fromCharCode(10)), false);
   assert.equal(rows[0].arguments.length, 1200);
+  assert.equal(rows[0].references.length, 1);
+  assert.equal(rows[0].references[0].url, "https://docs.python.org/3/library/");
   assert.deepEqual(JSON.parse(JSON.stringify(normalizeToolEvents(rows, "user"))), []);
 });
