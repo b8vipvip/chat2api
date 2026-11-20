@@ -50,6 +50,7 @@ def test_default_openai_chat_completions_stream_grammar_is_unchanged() -> None:
     source = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
     assert 'media_type="text/event-stream"' in source
     assert '"X-Accel-Buffering": "no"' in source
-    assert 'chunk_payload(response_id, model, {"content": delta})' in source
+    assert 'chunk_delta: dict[str, object] = {"content": delta}' in source
+    assert "chunk_payload(response_id, model, chunk_delta)" in source
     assert 'yield "data: [DONE]\\n\\n"' in source
     assert "chat.status" not in source
