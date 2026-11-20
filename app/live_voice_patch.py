@@ -669,6 +669,11 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
             with suppress(Exception):
                 await send_json({"type": "error", "code": "GPT_LIVE_BRIDGE_ERROR", "message": str(error), "retryable": True})
         finally:
+            if (
+                session_ready and not error_message
+                and not observed_audio_bytes and not observed_response_count
+            ):
+                error_message = "GPT-Live session ended without a completed response"
             finished = True
             if started and selected_client:
                 with suppress(Exception):
