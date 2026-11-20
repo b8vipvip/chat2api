@@ -179,7 +179,7 @@ test("normalizes persisted tool events without accepting unsafe IDs or control c
     context,
   );
   const rows = normalizeToolEvents([{
-    toolName: "browser.search\\n<script>",
+    toolName: "browser.search" + String.fromCharCode(10) + "<script>",
     callId: "call-123",
     resultId: "result-123",
     status: "completed",
@@ -189,7 +189,7 @@ test("normalizes persisted tool events without accepting unsafe IDs or control c
     toolName: "forged", callId: "bad id", status: "completed",
   }], "assistant");
   assert.equal(rows.length, 1);
-  assert.equal(rows[0].toolName.includes("\\n"), false);
+  assert.equal(rows[0].toolName.includes(String.fromCharCode(10)), false);
   assert.equal(rows[0].arguments.length, 2000);
   assert.deepEqual(JSON.parse(JSON.stringify(normalizeToolEvents(rows, "user"))), []);
 });
