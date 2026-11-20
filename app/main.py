@@ -26,6 +26,7 @@ from .api_keys import ApiKeyStore, ApiPrincipal, UNSET
 from .broker import RequestBroker, RequestState
 from .web_chat_event_journal_v1 import WebChatEventJournal
 from .web_chat_terminal_replay_v1 import (
+    is_already_finalized_worker_terminal,
     is_replayed_mode1_terminal, replayed_terminal_projection,
 )
 from .chat_request_service import ChatRequestService
@@ -3712,13 +3713,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         and replay_diagnostics.get("worker_transport_replayed") is True
                         and replay_diagnostics.get("worker_transport_recovery") == "transport-outbox-v47"
                     ):
-                        await websocket.send_json({
-                            "type": "chat.terminal.ack",
-                            "request_id": request_id,
-                            "terminal_type": message_type,
-                            "accepted": False,
-                            "reason": "request_not_recoverable",
-                        })
+                        if is_already_finalized_worker_terminal(recovered_row, client_id):
+                            await websocket.send_json({
+                                "type": "chat.terminal.ack",
+                                "request_id": request_id,
+                                "terminal_type": message_type,
+                                "accepted": True,
+                                "already_finalized": True,
+                            })
+                        else:
+                            await websocket.send_json({
+                                "type": "chat.terminal.ack",
+                                "request_id": request_id,
+                                "terminal_type": message_type,
+                                "accepted": False,
+                                "reason": "request_not_recoverable",
+                            })
                         continue
                     if not active_state or not active_state.owns_dispatch_socket(
                         client_id, websocket, registry.sockets.get(client_id)
@@ -3798,10 +3808,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             "request_id": request_id,
                             "terminal_type": message_type,
                             "accepted": bool(
-                                terminal_journaled
-                                and active_state
-                                and active_state.mode1_web_chat
+                                active_state
                                 and active_state.terminal_event_type == message_type
+                                and (
+                                    (active_state.mode1_web_chat and terminal_journaled)
+                                    or (not active_state.mode1_web_chat and accepted)
+                                )
                             ),
                             "recovered": False,
                         })
