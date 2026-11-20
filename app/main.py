@@ -2134,6 +2134,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 chunk_payload(response_id, model, delta), ensure_ascii=False
                             ) + "\n\n"
                     continue
+                if event_type in {"chat.tool.call", "chat.tool.result"}:
+                    # Tool activity is an auxiliary Mode 1 presentation lane.
+                    # Do not leak it into ordinary Mode 2 SDK streams, and do
+                    # not mix tool arguments/results into assistant text.
+                    if request.scope.get("chat2api_mode1_web_chat") is True:
+                        tool_delta = {
+                            "phase": "call" if event_type == "chat.tool.call" else "result",
+                            "tool_name": event.get("tool_name") or "tool",
+                            "call_id": event.get("call_id") or "",
+                            "result_id": event.get("result_id") or "",
+                            "status": event.get("status") or "completed",
+                            "arguments": event.get("arguments") or "",
+                            "output": event.get("output") or "",
+                        }
+                        yield "data: " + json.dumps(
+                            chunk_payload(response_id, model, {"chat2api_tool": tool_delta}),
+                            ensure_ascii=False,
+                        ) + "\n\n"
+                    continue
                 if event_type in {"chat.delta", "chat.snapshot"}:
                     if event_type == "chat.delta":
                         delta = str(event.get("delta") or "")
@@ -3513,7 +3532,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                         request_id, type(error).__name__)
                     continue
                 if request_id and message_type in {
-                    "chat.diagnostics", "chat.started", "chat.delta", "chat.snapshot", "chat.completed",
+                    "chat.diagnostics", "chat.started", "chat.delta", "chat.snapshot",
+                    "chat.tool.call", "chat.tool.result", "chat.completed",
                     "chat.error", "chat.cancelled", "image.diagnostics", "image.started", "image.progress",
                     "image.completed", "image.error", "image.cancelled",
                 }:

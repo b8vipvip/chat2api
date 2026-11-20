@@ -135,3 +135,74 @@ def test_extension_websocket_routes_all_request_events_through_worker_binding() 
     disconnect_handler = source.split("except WebSocketDisconnect:", 1)[1]
     assert "state.client_id == client_id" in disconnect_handler
     assert 'getattr(state, "dispatch_socket", None) is websocket' in disconnect_handler
+
+
+def test_tool_activity_is_bounded_nonterminal_and_original_socket_scoped() -> None:
+    async def scenario() -> None:
+        broker = RequestBroker()
+        state = await broker.create("req_tool_activity_123", "worker-tool")
+        socket = object()
+        state.dispatch_socket = socket
+
+        call = {
+            "type": "chat.tool.call", "request_id": state.request_id,
+            "tool_name": "browser.search", "call_id": "call-123",
+            "status": "in_progress", "arguments": "x" * 10000,
+        }
+        assert not await broker.publish_worker_event(
+            state.request_id, call, client_id="other-worker",
+            websocket=socket, current_socket=socket,
+        )
+        assert await broker.publish_worker_event(
+            state.request_id, call, client_id="worker-tool",
+            websocket=socket, current_socket=socket,
+        )
+        observed = await state.queue.get()
+        assert observed["type"] == "chat.tool.call"
+        assert observed["status"] == "running"
+        assert len(observed["arguments"]) == 8000
+        assert state.text == ""
+        assert state.terminal_event_type is None
+        assert state.completed_mono is None
+
+        result = {
+            "type": "chat.tool.result", "request_id": state.request_id,
+            "tool_name": "browser.search", "call_id": "call-123",
+            "result_id": "result-123", "status": "finished_successfully",
+            "output": "found two useful pages",
+            "metadata": {"unbounded": "must not be forwarded"},
+        }
+        assert await broker.publish_worker_event(
+            state.request_id, result, client_id="worker-tool",
+            websocket=socket, current_socket=socket,
+        )
+        observed_result = await state.queue.get()
+        assert observed_result == {
+            "type": "chat.tool.result", "tool_name": "browser.search",
+            "call_id": "call-123", "status": "completed",
+            "output": "found two useful pages", "result_id": "result-123",
+        }
+        assert state.text == "" and state.terminal_event_type is None
+
+        assert await broker.publish_worker_event(
+            state.request_id,
+            {"type": "chat.completed", "request_id": state.request_id, "text": "done"},
+            client_id="worker-tool", websocket=socket, current_socket=socket,
+        )
+        assert not await broker.publish_worker_event(
+            state.request_id, result, client_id="worker-tool",
+            websocket=socket, current_socket=socket,
+        )
+        await broker.release(state.request_id)
+
+    asyncio.run(scenario())
+
+
+def test_mode1_tool_events_use_the_existing_worker_and_web_chat_stream_only() -> None:
+    source = (ROOT / "app/main.py").read_text(encoding="utf-8")
+    event_handler = source.split('if request_id and message_type in {', 1)[1].split(
+        "except WebSocketDisconnect:", 1
+    )[0]
+    assert '"chat.tool.call", "chat.tool.result"' in event_handler
+    assert 'request.scope.get("chat2api_mode1_web_chat") is True' in source
+    assert '"chat2api_tool": tool_delta' in source

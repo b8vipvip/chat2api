@@ -21,6 +21,10 @@ _PRIVATE_HEADERS = {"Cache-Control": "private, no-store", "Vary": "Cookie"}
 _CONVERSATION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 _MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 _REQUEST_ID_RE = re.compile(r"^req_[A-Za-z0-9_-]{8,120}$")
+_TOOL_EVENT_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+_TOOL_EVENT_STATUSES = frozenset({"running", "completed", "failed", "cancelled"})
+_MAX_TOOL_EVENTS_PER_MESSAGE = 6
+_MAX_TOOL_EVENT_TEXT = 2000
 _FILE_ID_RE = re.compile(r"^file_[A-Za-z0-9]{8,64}$")
 _ALLOWED_DOCUMENT_MIME_TYPES = frozenset({
     "application/pdf",
@@ -107,6 +111,33 @@ def _normalize_content(value: Any, role: str) -> tuple[str | list[dict[str, Any]
     return parts, attachments > 0
 
 
+def _normalize_tool_events(value: Any, role: str) -> list[dict[str, str]]:
+    if value is None:
+        return []
+    if role != "assistant" or not isinstance(value, list) or len(value) > _MAX_TOOL_EVENTS_PER_MESSAGE:
+        raise ValueError("message tool activity is invalid")
+    rows: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            raise ValueError("message tool activity item is invalid")
+        tool_name = _bounded_string(item.get("toolName", "tool"), "tool name", 80, default="tool")
+        call_id = _bounded_string(item.get("callId", ""), "tool call ID", 128)
+        result_id = _bounded_string(item.get("resultId", ""), "tool result ID", 128)
+        status = _bounded_string(item.get("status", "completed"), "tool status", 20, default="completed")
+        arguments = _bounded_string(item.get("arguments", ""), "tool arguments", _MAX_TOOL_EVENT_TEXT)
+        output = _bounded_string(item.get("output", ""), "tool output", _MAX_TOOL_EVENT_TEXT)
+        if (not tool_name or not (call_id or result_id)
+            or (call_id and not _TOOL_EVENT_ID_RE.fullmatch(call_id))
+            or (result_id and not _TOOL_EVENT_ID_RE.fullmatch(result_id))
+            or status not in _TOOL_EVENT_STATUSES):
+            raise ValueError("message tool activity fields are invalid")
+        rows.append({
+            "toolName": tool_name, "callId": call_id, "resultId": result_id,
+            "status": status, "arguments": arguments, "output": output,
+        })
+    return rows
+
+
 def normalize_conversation(
     conversation_id: str,
     raw: Any,
@@ -163,7 +194,8 @@ def normalize_conversation(
                 if not owner_key_id or not accounts.owns_key(user_id, owner_key_id):
                     raise LookupError("message request does not belong to this user")
         recovery_status = _bounded_string(message.get("recoveryStatus", ""), "message recovery status", 40)
-        messages.append({
+        tool_events = _normalize_tool_events(message.get("toolEvents"), role)
+        normalized_message = {
             "id": message_id,
             "role": role,
             "content": content,
@@ -171,7 +203,10 @@ def normalize_conversation(
             "requestId": request_id,
             "pending": pending,
             "recoveryStatus": recovery_status,
-        })
+        }
+        if tool_events:
+            normalized_message["toolEvents"] = tool_events
+        messages.append(normalized_message)
     if has_attachments and not api_key_id:
         raise ValueError("conversations with attachments must retain their owning API Key")
     created_at = _bounded_string(raw.get("createdAt", ""), "conversation createdAt", 80, default="") or _now()

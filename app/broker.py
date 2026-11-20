@@ -623,6 +623,32 @@ class RequestBroker:
             state.text, snapshot_source = _monotonic_text(state.text, str(event.get("text") or ""))
             state.diagnostics["snapshot_text_source"] = snapshot_source
             state.diagnostics["snapshot_text_chars"] = len(state.text)
+        elif event_type in {"chat.tool.call", "chat.tool.result"}:
+            # Tool activity is presentation progress only. Normalize it before
+            # queueing so page-originated metadata cannot inflate or poison the
+            # request stream, and never let it mutate answer text or finality.
+            tool_name = re.sub(r"[^A-Za-z0-9_.:-]", "_",
+                               str(event.get("tool_name") or "tool").strip())[:80] or "tool"
+            call_id = re.sub(r"[^A-Za-z0-9_.:-]", "",
+                             str(event.get("call_id") or ""))[:128]
+            result_id = re.sub(r"[^A-Za-z0-9_.:-]", "",
+                               str(event.get("result_id") or ""))[:128]
+            raw_status = str(event.get("status") or "").lower()
+            status = {
+                "in_progress": "running", "pending": "running", "running": "running",
+                "streaming": "running", "finished_successfully": "completed",
+                "completed": "completed", "failed": "failed", "error": "failed",
+                "cancelled": "cancelled",
+            }.get(raw_status, "running" if event_type == "chat.tool.call" else "completed")
+            field_name = "arguments" if event_type == "chat.tool.call" else "output"
+            content = event.get(field_name)
+            normalized = {
+                "type": event_type, "tool_name": tool_name, "call_id": call_id,
+                "status": status, field_name: content[:8000] if isinstance(content, str) else "",
+            }
+            if result_id:
+                normalized["result_id"] = result_id
+            event = normalized
         elif event_type == "chat.completed":
             state.terminal_event_type = str(event_type)
             state.completed_mono = now

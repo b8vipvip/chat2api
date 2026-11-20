@@ -138,4 +138,10 @@ The MathML allowlist has also been expanded for matrices, fences, phantom/space/
 
 The existing request-scoped native-file handoff, authenticated Worker WebSocket chunk transport, staged-file verifier and durable GeneratedFileArchive now accept MP3, WAV, M4A, OGG/Opus, FLAC, MP4 and WebM files (12 MiB per file, 24 MiB per response). Both the isolated content script and page-world observer validate container signatures before bytes are staged; the server independently validates filename/MIME/signature before archive publication. The Web Chat native renderer creates controls-only audio/video players from same-origin archived file descriptors. The download endpoint supports single byte ranges for playback/seek and keeps documents/code as forced downloads. No player autostarts.
 
-This slice covers downloadable generated media cards only. It does not claim arbitrary live audio/video elements, real-time voice streams or every embedded ChatGPT media component are captured. Full citation/reference cards, tool/function-call state UI, KaTeX typesetting and complete ChatGPT component parity remain open acceptance items. Durable token-level SSE replay and real-browser multi-device/concurrent-update E2E also remain open before the issue is complete.
+This slice covers downloadable generated media cards only. It does not claim arbitrary live audio/video elements, real-time voice streams or every embedded ChatGPT media component are captured.
+
+### W-03 — tool/function-call activity in Web Chat
+
+The authenticated Worker socket now forwards bounded chat.tool.call and chat.tool.result observations through the existing Broker queue. The API emits them only as a Mode 1 chat2api_tool SSE extension; Mode 2 SDK streams and the authoritative assistant text lane remain unchanged. The Web Chat correlates call/result IDs, displays running/completed/failed/cancelled state, escapes arguments and results as text, and persists the bounded activity with the owner-scoped conversation. Tool activity is presentation-only and cannot change request completion or final answer text.
+
+Full citation/reference cards, KaTeX typesetting, arbitrary live audio/video capture and complete ChatGPT component parity remain open acceptance items. Durable token-level SSE replay and real-browser multi-device/concurrent-update E2E also remain open before the issue is complete.

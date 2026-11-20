@@ -176,3 +176,10 @@ a{color:inherit}
 .native-generated-file video{display:block;width:min(100%,720px);max-width:100%;height:auto;margin-top:6px;border-radius:6px}
 .native-generated-file span{display:block}
 .native-image-unverified{display:inline-block;padding:9px 12px;border:1px dashed var(--line);border-radius:8px;color:var(--muted);font-size:11px}
+
+.message-tool-events{display:grid;gap:7px;margin:10px 0;max-width:100%}
+.message-tool-event{border:1px solid var(--line);border-radius:9px;background:var(--panel);overflow:hidden}
+.message-tool-event summary{padding:8px 11px;color:var(--muted);font-size:11px;cursor:pointer;user-select:none}
+.message-tool-event[open] summary{border-bottom:1px solid var(--line);color:var(--text)}
+.message-tool-event-label{padding:7px 11px 2px;color:var(--muted);font-size:10px}
+.message-tool-event-data{max-width:100%;margin:3px 10px 9px;padding:8px;border-radius:6px;background:var(--code);font-size:11px;white-space:pre-wrap;overflow-wrap:anywhere;overflow:auto}

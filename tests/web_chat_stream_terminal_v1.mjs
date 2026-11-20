@@ -110,3 +110,60 @@ test("reports truncation even without content or with an unframed DONE marker", 
   assert.deepEqual(await send([terminal + "\n\n"]),
     {messages: ["模型没有返回文本内容。"], replies: [], locked: false});
 });
+
+
+test("preserves request-scoped tool calls and results as safe presentation state", () => {
+  const start = source.indexOf("  function appendDelta(");
+  const end = source.indexOf("  function recoveryStatusLabel(", start);
+  assert.ok(start >= 0 && end > start);
+  let saved = 0;
+  const document = {
+    createElement(tag) {
+      return {
+        tag, className: "", textContent: "", open: false, children: [],
+        appendChild(child) { this.children.push(child); },
+        append(...children) { this.children.push(...children); },
+      };
+    },
+  };
+  const context = vm.createContext({saveHistory() { saved += 1; }, document});
+  const api = vm.runInContext(
+    source.slice(start, end) + "\n({applyToolEvent,consumeSseFrame,renderToolActivity})",
+    context,
+  );
+  const assistant = {content: "", toolEvents: []};
+  const frame = (tool) => "data: " + JSON.stringify({
+    choices: [{delta: {chat2api_tool: tool}}],
+  }) + "\n\n";
+
+  assert.equal(api.consumeSseFrame(frame({
+    phase: "call", tool_name: "browser.search", call_id: "call-123",
+    status: "running", arguments: '{"query":"test"}',
+  }), assistant), false);
+  assert.equal(assistant.toolEvents.length, 1);
+  assert.equal(assistant.toolEvents[0].status, "running");
+
+  api.consumeSseFrame(frame({
+    phase: "call", tool_name: "browser.search", call_id: "call-123",
+    status: "completed", arguments: '{"query":"test"}',
+  }), assistant);
+  api.consumeSseFrame(frame({
+    phase: "result", tool_name: "browser.search", call_id: "call-123",
+    result_id: "result-123", status: "completed",
+    output: "<img src=x onerror=alert(1)>",
+  }), assistant);
+
+  assert.equal(assistant.toolEvents.length, 1);
+  assert.equal(assistant.toolEvents[0].status, "completed");
+  assert.equal(assistant.toolEvents[0].output, "<img src=x onerror=alert(1)>");
+  assert.ok(saved >= 3);
+
+  const body = {children: [], appendChild(child) { this.children.push(child); }};
+  api.renderToolActivity(body, assistant);
+  assert.equal(body.children.length, 1);
+  const details = body.children[0].children[0];
+  assert.equal(details.tag, "details");
+  assert.equal(details.children[0].textContent, "browser.search · 已完成");
+  const output = details.children.find(node => node.tag === "pre");
+  assert.equal(output.textContent, "<img src=x onerror=alert(1)>");
+});

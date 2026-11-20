@@ -871,6 +871,7 @@
           else body.textContent = message.content;
         }
       }
+      if (message.role === "assistant") renderToolActivity(body,message);
       if (state.streaming && message.id === state.streamingMessageId) {
         const caret = document.createElement("span");
         caret.className = "streaming-caret";
@@ -1218,6 +1219,70 @@
 
   class StreamResponseError extends Error {}
 
+  function normalizeToolStatus(value) {
+    const status = String(value || "").toLowerCase();
+    if (["running","in_progress","pending","streaming"].includes(status)) return "running";
+    if (["failed","error"].includes(status)) return "failed";
+    if (status === "cancelled") return "cancelled";
+    return "completed";
+  }
+
+  function applyToolEvent(assistant, event) {
+    if (!assistant || !event || !["call","result"].includes(event.phase)) return false;
+    const toolName = String(event.tool_name || "tool").replace(/[\\r\\n\\0-\\x1f]/g," ").slice(0,80) || "tool";
+    const callId = String(event.call_id || "").slice(0,128);
+    const resultId = String(event.result_id || "").slice(0,128);
+    if (!callId && !resultId) return false;
+    const rows = Array.isArray(assistant.toolEvents) ? assistant.toolEvents : [];
+    let row = rows.find(item => (callId && item.callId === callId)
+      || (resultId && item.resultId === resultId));
+    if (!row) {
+      row = {toolName,callId,resultId:"",status:"running",arguments:"",output:""};
+      rows.push(row);
+    }
+    row.toolName = toolName;
+    if (callId) row.callId = callId;
+    if (resultId) row.resultId = resultId;
+    row.status = normalizeToolStatus(event.status);
+    if (typeof event.arguments === "string" && event.arguments) row.arguments = event.arguments.slice(0,2000);
+    if (typeof event.output === "string" && event.output) row.output = event.output.slice(0,2000);
+    while (rows.length > 6) rows.shift();
+    assistant.toolEvents = rows;
+    saveHistory();
+    return true;
+  }
+
+  function toolStatusLabel(status) {
+    return ({running:"执行中",completed:"已完成",failed:"失败",cancelled:"已取消"})[status] || "状态未知";
+  }
+
+  function renderToolActivity(body, message) {
+    const events = Array.isArray(message?.toolEvents) ? message.toolEvents.slice(-6) : [];
+    if (!events.length) return;
+    const section = document.createElement("section");
+    section.className = "message-tool-events";
+    events.forEach(item => {
+      const details = document.createElement("details");
+      details.className = "message-tool-event";
+      details.open = item.status === "running";
+      const summary = document.createElement("summary");
+      summary.textContent = String(item.toolName || "tool").slice(0,80) + " · " + toolStatusLabel(item.status);
+      details.appendChild(summary);
+      for (const [label,value] of [["调用参数",item.arguments],["执行结果",item.output]]) {
+        if (typeof value !== "string" || !value) continue;
+        const heading = document.createElement("div");
+        heading.className = "message-tool-event-label";
+        heading.textContent = label;
+        const pre = document.createElement("pre");
+        pre.className = "message-tool-event-data";
+        pre.textContent = value;
+        details.append(heading,pre);
+      }
+      section.appendChild(details);
+    });
+    body.appendChild(section);
+  }
+
   function consumeSseFrame(frame, assistant) {
     const data = frame.split(/\r?\n/)
       .filter((line) => line.startsWith("data:"))
@@ -1234,6 +1299,7 @@
     if (choice?.delta && Object.prototype.hasOwnProperty.call(choice.delta, "content")) {
       appendDelta(assistant, choice.delta.content);
     }
+    if (choice?.delta?.chat2api_tool) applyToolEvent(assistant,choice.delta.chat2api_tool);
     return false;
   }
 
@@ -1501,7 +1567,7 @@
       userMessage = {id:id(),role:"user",content:userContent,createdAt:new Date().toISOString()};
       conversation.messages.push(userMessage);
       autoTitle(conversation);
-      assistant = {id:id(),role:"assistant",content:"",createdAt:new Date().toISOString(),requestId,pending:true,recoveryStatus:"streaming"};
+      assistant = {id:id(),role:"assistant",content:"",createdAt:new Date().toISOString(),requestId,pending:true,recoveryStatus:"streaming",toolEvents:[]};
       conversation.messages.push(assistant);
       state.recoveryController = makeRecoveryController(conversation, assistant);
       state.activeRequestRecord = {request_id:requestId, assistant_message_id:assistant.id};
@@ -1577,7 +1643,7 @@
               break;
             }
           }
-          if (assistant.content) {
+          if (assistant.content || assistant.toolEvents?.length) {
             conversation.updatedAt = new Date().toISOString();
             if (assistant.content.length - lastSavedLength >= 1000) {
               saveHistory();
@@ -1595,7 +1661,7 @@
       if (done) {
         assistant.pending = false;
         assistant.recoveryStatus = "completed";
-        if (!assistant.content.trim()) {
+        if (!assistant.content.trim() && !assistant.toolEvents?.length) {
           conversation.messages = conversation.messages.filter((message) => message.id !== assistant.id);
           toast("模型没有返回文本内容。");
         }
@@ -1616,7 +1682,7 @@
         // Do not leave an empty assistant placeholder when the server failed
         // before delivering any content; preserve the message when partial
         // content was already streamed.
-        if (!assistant.content) {
+        if (!assistant.content && !assistant.toolEvents?.length) {
           conversation.messages = conversation.messages.filter((message) => message.id !== assistant.id);
         }
         toast("请求失败：" + error.message);
@@ -1634,7 +1700,7 @@
           else toast((error.name === "AbortError" ? "停止状态：" : "请求失败，恢复状态：") + recoveryStatusLabel(result?.status));
         });
       } else {
-        if (assistant && !assistant.content.trim()) conversation.messages = conversation.messages.filter((message) => message.id !== assistant.id);
+        if (assistant && !assistant.content.trim() && !assistant.toolEvents?.length) conversation.messages = conversation.messages.filter((message) => message.id !== assistant.id);
         toast("请求失败：" + error.message);
       }
     } finally {

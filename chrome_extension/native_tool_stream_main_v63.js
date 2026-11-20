@@ -150,24 +150,30 @@
     const metadata = safeToolMetadata(message.metadata);
 
     if (role === "assistant") {
-      if (!text || !["finished_successfully", "completed"].includes(status)) return;
-      const key = signature(message, "call");
-      if (emitted.get(message.id) === key) return;
-      emitted.set(message.id, key);
+      const running = ["in_progress", "pending", "running", "streaming"].includes(status);
+      const completed = ["finished_successfully", "completed"].includes(status);
+      const failed = ["failed", "error", "cancelled"].includes(status);
+      if ((!text && !running) || (!running && !completed && !failed)) return;
+      const normalizedStatus = running ? "running" : failed ? "failed" : "completed";
+      // Emit once per state transition, not once per streamed argument patch.
+      const key = normalizedStatus;
+      const eventKey = "tool:" + String(message.id || "");
+      if (emitted.get(eventKey) === key) return;
+      emitted.set(eventKey, key);
       state.tool_calls += 1;
       post({
         phase: "tool-call",
         tool_name: name,
         call_id: String(message.id || ""),
         arguments: text,
-        status: status || "completed",
+        status: normalizedStatus,
         metadata,
       });
       return;
     }
 
     if (role === "tool") {
-      if (!["finished_successfully", "completed"].includes(status)) return;
+      if (!["finished_successfully", "completed", "failed", "error"].includes(status)) return;
       const key = signature(message, "result") + JSON.stringify(metadata).length;
       if (emitted.get(message.id) === key) return;
       emitted.set(message.id, key);
@@ -178,7 +184,7 @@
         call_id: String(message?.metadata?.parent_id || message?.parent_id || ""),
         result_id: String(message.id || ""),
         output: text,
-        status: status || "completed",
+        status: ["failed", "error"].includes(status) ? "failed" : "completed",
         metadata,
       });
     }
