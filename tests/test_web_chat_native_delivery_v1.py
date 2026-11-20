@@ -109,7 +109,7 @@ def test_user_native_content_adapter_enforces_key_owner_and_preserves_validated_
         assert body["root"]["attrs"]["viewBox"] == "0 0 10 10"
         assert body["root"]["children"][0]["attrs"]["d"] == "M0 0 L10 10"
         assert response.headers["cache-control"] == "private, no-store"
-        assert response.headers["vary"] == "Cookie"
+        assert "cookie" in {value.strip().lower() for value in response.headers["vary"].split(",")}
 
         events = client.get("/api/user/chat/requests/req_nativeproof1234/native-content/events")
         assert events.status_code == 200, events.text
@@ -117,7 +117,7 @@ def test_user_native_content_adapter_enforces_key_owner_and_preserves_validated_
         assert '"finality":"verified-final"' in events.text
         assert "event: native.end" in events.text
         assert events.headers["cache-control"] == "private, no-store"
-        assert events.headers["vary"] == "Cookie"
+        assert "cookie" in {value.strip().lower() for value in events.headers["vary"].split(",")}
 
 
 def test_mode1_chat_ingress_requires_session_and_selected_key_ownership(tmp_path: Path) -> None:
@@ -183,7 +183,7 @@ def test_mode1_chat_ingress_requires_session_and_selected_key_ownership(tmp_path
             "mode": "mode1", "request_id": "req_mode1test0003", "api_key_id": key_id,
         }
         assert response.headers["cache-control"] == "private, no-store"
-        assert response.headers["vary"] == "Cookie"
+        assert "cookie" in {value.strip().lower() for value in response.headers["vary"].split(",")}
         assert calls == [{
             "request_id": "req_mode1test0003",
             "api_key_id": key_id,

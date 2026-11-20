@@ -44,6 +44,9 @@ async function send(chunks, close = true, onCancel = () => {}) {
     id: () => String(conversation.messages.length),
     apiJson: async () => ({user: {user_id: "user-a"}}),
     fetch: async () => ({ok: true, body}),
+    // The unit harness extracts sendMessage without the separate native SSE
+    // helper; keep this test focused on the generation stream terminal.
+    streamNativeContent: () => Promise.resolve(),
     toast: (message) => messages.push(message),
     $: () => node,
     autoTitle() {},

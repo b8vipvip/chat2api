@@ -42,6 +42,8 @@ const context = {
   window: {Chat2APIStreamRecoveryV1: {createRequestId: () => 'req_webchat_error'}},
   apiJson: async () => ({user: {user_id: 'user-a'}}),
   fetch: async () => ({ok: true, body}),
+  // The test extracts sendMessage independently of the native sidecar module.
+  streamNativeContent: () => Promise.resolve(),
   makeRecoveryController: () => null,
   selectedKeyId: () => 'key-a',
   selectedKeyHasScope: () => true,

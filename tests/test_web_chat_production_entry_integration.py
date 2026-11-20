@@ -57,6 +57,7 @@ with TestClient(app) as client:
     mode1 = client.post("/api/user/chat/completions", json={"model":"gpt-5.6-sol","messages":[{"role":"user","content":"hello"}],"stream":True})
     assert mode1.status_code == 401
     assert mode1.headers["cache-control"] == "private, no-store"
+    assert "cookie" in {value.strip().lower() for value in mode1.headers["vary"].split(",")}
     native = client.get("/api/user/chat/requests/req_12345678/native-content")
     assert native.status_code == 401
     assert native.headers["cache-control"] == "private, no-store"

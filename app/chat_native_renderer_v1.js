@@ -46,8 +46,10 @@
     try {
       const url = new URL(value,window.location.origin);
       if (url.username || url.password || !pattern.test(url.pathname)) return "";
-      if (url.origin !== window.location.origin && url.protocol !== "https:") return "";
-      if (url.protocol !== "https:" && url.origin !== window.location.origin) return "";
+      // Archived media and generated files are served by this Chat2API origin.
+      // An HTTPS URL on another host is still untrusted and must never be loaded.
+      if (url.origin !== window.location.origin) return "";
+      if (url.search || url.hash) return "";
       return url.href;
     } catch (_) { return ""; }
   }
