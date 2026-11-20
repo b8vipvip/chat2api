@@ -167,7 +167,8 @@ test("preserves request-scoped tool calls and results as safe presentation state
   const details = body.children[0].children[0];
   assert.equal(details.tag, "details");
   assert.equal(details.children[0].textContent, "browser.search · 已完成");
-  const output = details.children.find(node => node.tag === "pre");
+  const output = details.children.find(node => node.tag === "pre"
+    && node.textContent === "<img src=x onerror=alert(1)>");
   assert.equal(output.textContent, "<img src=x onerror=alert(1)>");
 });
 
