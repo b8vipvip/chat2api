@@ -614,20 +614,27 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=404, detail="附件不存在")
         conversations = getattr(app.state, "web_chat_conversations", None)
         with file_store.lock:
-            if conversations is not None and conversations.file_reference_count(
-                file_id, str(user["user_id"]),
-            ) > 0:
-                raise HTTPException(
-                    status_code=409,
-                    detail="附件仍被已保存的会话引用，请先删除相关会话或移除附件",
-                    headers={"Cache-Control": "private, no-store", "Vary": "Cookie"},
-                )
-            try:
-                await file_store.delete(file_id, str(item.owner_key_id))
-            except (KeyError, PermissionError) as error:
-                raise HTTPException(status_code=404, detail="附件不存在") from error
-            except OSError as error:
-                raise HTTPException(status_code=503, detail="附件暂时不可用") from error
+            if conversations is not None:
+                with conversations.file_deletion_guard(file_id) as can_delete:
+                    if not can_delete:
+                        raise HTTPException(
+                            status_code=409,
+                            detail="附件仍被已保存的会话引用，请先删除相关会话或移除附件",
+                            headers={"Cache-Control": "private, no-store", "Vary": "Cookie"},
+                        )
+                    try:
+                        await file_store.delete(file_id, str(item.owner_key_id))
+                    except (KeyError, PermissionError) as error:
+                        raise HTTPException(status_code=404, detail="附件不存在") from error
+                    except OSError as error:
+                        raise HTTPException(status_code=503, detail="附件暂时不可用") from error
+            else:
+                try:
+                    await file_store.delete(file_id, str(item.owner_key_id))
+                except (KeyError, PermissionError) as error:
+                    raise HTTPException(status_code=404, detail="附件不存在") from error
+                except OSError as error:
+                    raise HTTPException(status_code=503, detail="附件暂时不可用") from error
         return {"deleted": True}
     @app.patch("/api/user/keys/{key_id}/quota")
     async def user_update_key_quota(key_id: str, body: UserKeyQuotaBody, request: Request) -> dict[str, Any]:
