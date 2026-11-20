@@ -154,7 +154,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        await event_journal.open()
+        journal_ready = True
+        try:
+            await event_journal.open()
+        except Exception:
+            journal_ready = False
+            broker.event_journal = None
+            app.state.web_chat_event_journal = None
+            logger.exception("Mode 1 event journal unavailable; Mode 2 remains available")
         await registry.load()
         await telemetry.load()
         await api_keys.load()
@@ -165,11 +172,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 recovered_queued,
             )
         recovered_running = await telemetry.recover_running_after_restart(
-            set(broker.requests), event_journal,
+            set(broker.requests), event_journal if journal_ready else None,
         )
         if recovered_running:
             logger.warning(
-                "Recovered %s Mode 1 running request(s) without a surviving Broker lease as stalled",
+                "Recovered %s Mode 1 running request(s); waiting up to 120 seconds for durable Worker terminal replay",
                 recovered_running,
             )
         wallet_reconciler = getattr(app.state, "wallet_charge_reconciler", None)
@@ -314,7 +321,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             logger.warning("CHAT2API_API_KEY is using an unsafe default. Change it before remote exposure.")
         if config.pairing_code in {"", "change-me-pairing"}:
             logger.warning("CHAT2API_PAIRING_CODE is using an unsafe default. Change it before remote exposure.")
-        yield
+
+        async def expire_lost_web_chat_leases() -> None:
+            while True:
+                await asyncio.sleep(1.0)
+                try:
+                    expired = await telemetry.expire_recovering_after_restart(
+                        event_journal if journal_ready else None,
+                    )
+                    if expired:
+                        logger.warning(
+                            "Marked %s Mode 1 request(s) stalled after Worker terminal replay grace expired",
+                            expired,
+                        )
+                except Exception:
+                    logger.exception("Mode 1 restart recovery watchdog failed")
+
+        recovery_watchdog = asyncio.create_task(expire_lost_web_chat_leases())
+        try:
+            yield
+        finally:
+            recovery_watchdog.cancel()
+            try:
+                await recovery_watchdog
+            except asyncio.CancelledError:
+                pass
 
     app = FastAPI(
         title="chat2api",
