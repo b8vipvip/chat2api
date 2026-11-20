@@ -38,7 +38,11 @@ def test_event_journal_persists_ordered_delivery_and_owner_scope(tmp_path):
         assert worker_delta == 1
         assert tool_event == 2
         assert delivery["chunk_event_ids"] == [3, 4]
-        assert delivery["terminal_event_id"] == 5
+        assert delivery["terminal_event_id"] == 0
+        terminal_id = await journal.append_delivery_terminal(
+            "req_journal_123", "key-owner-a", delivery["text_chars"],
+        )
+        assert terminal_id == 5
 
         page = await journal.events_after("req_journal_123", "key-owner-a", 2)
         assert [event["id"] for event in page["events"]] == [3, 4, 5]
