@@ -153,15 +153,25 @@ class WebChatEventJournal:
             ("delivery.delta", {"delta": text[start:start + FINAL_CHUNK_CHARS]})
             for start in range(0, len(text), FINAL_CHUNK_CHARS)
         ]
-        records.append(("delivery.completed", {"text_chars": len(text)}))
         sequences = await asyncio.to_thread(
             self._append_records, request_id, owner_key_id, records,
-        )
+        ) if records else []
         return {
-            "chunk_event_ids": sequences[:-1],
-            "terminal_event_id": sequences[-1],
+            "chunk_event_ids": sequences,
+            "terminal_event_id": 0,
             "text_chars": len(text),
         }
+
+    async def append_delivery_terminal(
+        self, request_id: str, owner_key_id: str, text_chars: int,
+    ) -> int:
+        if not request_id or not owner_key_id:
+            raise ValueError("Web Chat event ownership is required")
+        rows = await asyncio.to_thread(
+            self._append_records, request_id, owner_key_id,
+            [("delivery.completed", {"text_chars": max(0, int(text_chars))})],
+        )
+        return rows[0]
 
     async def append_terminal(
         self, request_id: str, owner_key_id: str, status: str, message: str = "",
