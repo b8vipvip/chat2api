@@ -172,3 +172,24 @@ def test_running_mode1_request_is_marked_stalled_after_broker_restart(tmp_path):
         assert telemetry.get("req_done_123")["status"] == "completed"
 
     asyncio.run(scenario())
+
+
+
+def test_event_journal_first_terminal_outcome_is_absorbing(tmp_path):
+    async def scenario():
+        journal = WebChatEventJournal(tmp_path)
+        await journal.open()
+        await journal.append_delivery("req_absorb_123", "key-absorb", "verified response")
+        await journal.append_delivery_terminal("req_absorb_123", "key-absorb", 17)
+        await journal.append_terminal(
+            "req_absorb_123", "key-absorb", "stalled", "late watchdog",
+        )
+        await journal.append_terminal(
+            "req_absorb_123", "key-absorb", "error", "late Worker retry",
+        )
+        snapshot = await journal.snapshot("req_absorb_123", "key-absorb")
+        assert snapshot["terminal_status"] == "completed"
+        assert snapshot["terminal_message"] == ""
+        assert snapshot["delivered_text"] == "verified response"
+
+    asyncio.run(scenario())
