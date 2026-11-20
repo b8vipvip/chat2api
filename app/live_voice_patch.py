@@ -423,10 +423,24 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
             if not raw:
                 await send_json({"type": "error", "code": "SESSION_START_REQUIRED", "message": "First frame must be session.start"})
                 return
+            if len(raw) > MAX_LIVE_CONTROL_CHARS:
+                await send_json({
+                    "type": "error", "code": "LIVE_CONTROL_FRAME_TOO_LARGE",
+                    "message": "Live session.start frame exceeds 64 KiB",
+                    "retryable": False,
+                })
+                return
             try:
                 start = json.loads(raw)
             except Exception:
                 await send_json({"type": "error", "code": "INVALID_JSON", "message": "session.start must be JSON"})
+                return
+            if not isinstance(start, dict):
+                await send_json({
+                    "type": "error", "code": "INVALID_SESSION_START",
+                    "message": "session.start must be a JSON object",
+                    "retryable": False,
+                })
                 return
             if start.get("type") != "session.start":
                 await send_json({"type": "error", "code": "SESSION_START_REQUIRED", "message": "First frame must be session.start"})
