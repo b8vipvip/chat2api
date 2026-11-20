@@ -314,6 +314,14 @@ def test_live_voice_bounds_pcm16_frames_and_keeps_session_after_bad_input(tmp_pa
                     "pcm_base64": base64.b64encode(b"\x03\x04" * 480).decode("ascii"),
                 })
                 assert live.receive_bytes() == b"\x03\x04" * 480
+                extension.send_json({
+                    "type": "image.progress", "kind": "voice-live",
+                    "request_id": request_id, "live_event": "response.done",
+                    "response_id": response_id, "text": "你好",
+                })
+                assert live.receive_json() == {
+                    "type": "response.done", "response_id": response_id, "text": "你好",
+                }
                 live.send_json({"type": "session.finish"})
                 assert extension.receive_json()["type"] == "voice.live.stop"
 
@@ -378,6 +386,15 @@ def test_live_voice_ready_session_without_response_is_not_completed(tmp_path: Pa
                     "request_id": request_id, "live_event": "session.ready",
                 })
                 assert live.receive_json()["type"] == "session.ready"
+                extension.send_json({
+                    "type": "image.progress", "kind": "voice-live",
+                    "request_id": request_id, "live_event": "response.audio.delta",
+                    "response_id": "partial-audio-only",
+                    "sample_rate": 24000,
+                    "pcm_base64": base64.b64encode(b"\x05\x06" * 120).decode("ascii"),
+                })
+                assert live.receive_bytes() == b"\x05\x06" * 120
+                # Partial PCM delivery is not proof of a completed response.
                 live.send_json({"type": "session.finish"})
                 assert extension.receive_json()["type"] == "voice.live.stop"
 
