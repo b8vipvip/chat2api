@@ -116,4 +116,14 @@ The first W-01 vertical slice is now implemented:
 - Bootstrap merges the existing per-user localStorage history with server rows, uploads local-only legacy conversations, and then treats the server as the cross-device source of truth while keeping localStorage as a cache/offline fallback.
 - Preserve empty pending assistant placeholders so a refresh can retain the original request ID and allow the existing recovery path to reconcile the original request rather than dropping the placeholder.
 
-W-01 does not claim durable token-level SSE replay. Audio/voice, citation/reference cards, full tool/function-call state UI, KaTeX typesetting and complete ChatGPT component parity remain open acceptance items. Real-browser multi-device and concurrent-update E2E must still pass before the issue is complete.
+### W-02 — cancellation during Worker admission
+
+A second vertical slice closes the queued-request cancellation race:
+
+- Create an owner-scoped cancellation signal before a Mode 1 request is recorded as queued. The existing user-session cancel API can signal that request while Worker selection/reconnect grace is still pending.
+- Race Worker admission against the cancellation signal. If cancellation wins before a Broker lease exists, record a terminal cancelled admission result, release quota/wallet holds and do not dispatch to a Worker.
+- If the Broker lease exists but the initial Worker dispatch has not happened, serialize the transition to running + dispatch against the cancel endpoint with one application lock. A cancellation that wins first publishes the cancellation through RequestBroker, records the cancelled request and releases the lease; if dispatch wins first, the cancel endpoint sends chat.cancel only after the Worker request has been sent.
+- The cancel endpoint waits briefly for a queued cancellation to reach its terminal telemetry projection and returns whether it was queued. The browser preserves that result and waits for the cancel handshake before aborting the generation POST, avoiding a transport-abort race that could strand a queued request.
+- Add tests for queued cancellation idempotency, owner-scoped queued signal delivery, admission-task interruption and the browser recovery client's queued flag.
+
+The running Worker remains the terminal authority after dispatch; the Web Chat API never fabricates a Worker completion. W-02 does not claim durable token-level SSE replay. Audio/voice, citation/reference cards, full tool/function-call state UI, KaTeX typesetting and complete ChatGPT component parity remain open acceptance items. Real-browser multi-device and concurrent-update E2E must still pass before the issue is complete.

@@ -20,7 +20,8 @@ Status: first interactive browser client; not a complete ChatGPT 1:1 replacement
 7. The Mode 1 adapter invokes the same internal Chat Completions request handler used by Mode 2. That shared handler retains the existing model policy, quota/wallet admission, Worker selection, RequestBroker, ChatRequestService and terminal/billing owners; Mode 1 does not call the OpenAI-compatible `/v1/chat/completions` route.
 8. On bootstrap, the client reads owner-scoped server conversations through GET /api/user/chat/conversations, merges them with the account's legacy local cache, and uploads local-only conversations with revision 0. Conversation GET/PUT/DELETE requests are authorized only by the HttpOnly user session; a caller-supplied user ID is never accepted.
 9. Conversation PUT uses an expected server revision. Concurrent tabs/devices receive 409 with the latest row, merge message IDs and retry; DELETE writes an owner-scoped tombstone so a stale device cannot silently resurrect a deleted conversation.
-10. In parallel, the browser opens a user-session native-content sidecar for the same request ID. The sidecar checks that the signed-in user owns the API Key recorded in Telemetry, then reads the same validated NativeContentStore snapshot and archived media records. It never dispatches a second generation.
+10. Stop requests use the same user-session cancel endpoint. If the request is still queued, the server signals the pending admission task and waits for its terminal projection; if already running, it serializes the cancel message behind the initial Worker dispatch. The browser aborts the generation POST only after this cancellation handshake returns.
+11. In parallel, the browser opens a user-session native-content sidecar for the same request ID. The sidecar checks that the signed-in user owns the API Key recorded in Telemetry, then reads the same validated NativeContentStore snapshot and archived media records. It never dispatches a second generation.
 
 The page sends the full ordered conversation using the Chat2API Web Chat request schema (`model`, `messages`, `stream`). The server's default full-history behavior preserves multi-turn context; no private `prompt_mode` field is required.
 
@@ -46,6 +47,7 @@ The page sends the full ordered conversation using the Chat2API Web Chat request
 - Audio/voice, citation/reference cards, tool/function calling UI, KaTeX typesetting and complete ChatGPT component parity remain unimplemented. Native MathML is preserved as MathML markup, but a dedicated visual math typesetting engine is not bundled.
 - No durable token-level SSE replay. W-04 can reconcile the original request and restore final Telemetry text when available; the native sidecar can independently rehydrate the last available snapshot, but neither mechanism replays missing text deltas or recovers an active request after its Broker state has been lost.
 - Server-side conversation search, configurable message retention, export/import API and administrator retention controls are not yet implemented.
+- Queued Mode 1 requests can be cancelled before Worker selection. Once a Worker dispatch has completed, the existing Worker/Broker terminal path remains authoritative; the user-session API only sends the cancel signal and does not fabricate a Worker terminal.
 - The UI does not create API Keys; users create and manage them in `/console#keys`.
 - The Key is not persisted locally, but it is available to same-origin page JavaScript while the page is open; XSS prevention remains important.
 
