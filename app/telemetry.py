@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from collections import deque
 from pathlib import Path
@@ -207,8 +208,68 @@ class TelemetryStore:
             diagnostics = row.get("diagnostics")
             diagnostics = dict(diagnostics) if isinstance(diagnostics, dict) else {}
             diagnostics.update({
-                "web_chat_request_recovery": "broker-state-lost-after-server-restart",
+                "web_chat_request_recovery": "awaiting-worker-terminal-replay",
                 "web_chat_event_replay_available": bool(snapshot.get("last_event_id")),
+                "web_chat_last_event_id": int(snapshot.get("last_event_id") or 0),
+                "web_chat_partial_text_unverified": bool(partial),
+                "web_chat_recovery_deadline_at": time.time() + 120.0,
+            })
+            try:
+                await self.upsert({
+                    **row,
+                    "status": "recovering",
+                    "response_text": "",
+                    "response_text_available": False,
+                    "response_text_provisional": partial,
+                    "response_text_provisional_chars": len(partial),
+                    "error": "Server restarted; waiting briefly for the Worker's durable terminal outbox",
+                    "diagnostics": diagnostics,
+                })
+                recovered += 1
+            except Exception:
+                # Keep startup available; an unreconciled row remains visible
+                # for later inspection and must never be treated as active.
+                continue
+        return recovered
+
+    async def expire_recovering_after_restart(
+        self,
+        event_journal: Any | None = None,
+        *,
+        now: float | None = None,
+    ) -> int:
+        """Fail closed after the Worker terminal-outbox reconnect grace expires."""
+        current = float(now if now is not None else time.time())
+        expired = 0
+        for row in self.recent(self.items.maxlen or 500):
+            request_id = str(row.get("request_id") or "")
+            diagnostics = row.get("diagnostics")
+            diagnostics = diagnostics if isinstance(diagnostics, dict) else {}
+            deadline = diagnostics.get("web_chat_recovery_deadline_at")
+            if (
+                not request_id
+                or row.get("web_chat_mode") is not True
+                or str(row.get("status") or "").lower() != "recovering"
+                or not isinstance(deadline, (int, float))
+                or float(deadline) > current
+            ):
+                continue
+            key_id = str(row.get("api_key_id") or "")
+            snapshot: dict[str, Any] = {}
+            if event_journal is not None and key_id:
+                try:
+                    snapshot = await event_journal.snapshot(request_id, key_id)
+                except Exception:
+                    snapshot = {}
+            partial = str(
+                snapshot.get("delivered_text")
+                or snapshot.get("worker_partial_text")
+                or row.get("response_text_provisional")
+                or ""
+            )[:50_000]
+            next_diagnostics = dict(diagnostics)
+            next_diagnostics.update({
+                "web_chat_request_recovery": "broker-state-lost-after-restart-grace-expired",
                 "web_chat_last_event_id": int(snapshot.get("last_event_id") or 0),
                 "web_chat_partial_text_unverified": bool(partial),
             })
@@ -218,20 +279,18 @@ class TelemetryStore:
                     "status": "stalled",
                     "response_text": partial,
                     "response_text_available": False,
-                    "error": "Server restarted while the Web Chat Worker request was active; live Broker state is unavailable",
-                    "diagnostics": diagnostics,
+                    "error": "Worker did not replay a terminal event before the Broker restart recovery deadline",
+                    "diagnostics": next_diagnostics,
                 })
                 if event_journal is not None and key_id:
                     await event_journal.append_terminal(
                         request_id, key_id, "stalled",
-                        "Server restarted while the Worker request was active",
+                        "Worker terminal replay grace expired after server restart",
                     )
-                recovered += 1
+                expired += 1
             except Exception:
-                # Keep startup available; an unreconciled row remains visible
-                # for later inspection and must never be treated as active.
                 continue
-        return recovered
+        return expired
 
     async def append(self, item: dict[str, Any]) -> None:
         await self.upsert(item)
