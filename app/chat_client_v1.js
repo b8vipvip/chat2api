@@ -1438,6 +1438,7 @@
     const data = dataLines.join("\n");
     if (!data && eventName === "cursor") return false;
     if (!data) return false;
+    if (data.trim() === "[DONE]") return true;
     let event;
     try { event = JSON.parse(data); } catch { return false; }
 
@@ -1485,7 +1486,6 @@
       }
       return false;
     }
-    if (data.trim() === "[DONE]") return true;
     if (event?.error) {
       throw new StreamResponseError(event.error.message || "服务端返回流式错误");
     }
