@@ -16,12 +16,25 @@ def is_replayed_mode1_terminal(
     diagnostics = message.get("diagnostics")
     diagnostics = diagnostics if isinstance(diagnostics, dict) else {}
     message_type = str(message.get("type") or "")
+    row_diagnostics = telemetry_row.get("diagnostics")
+    row_diagnostics = row_diagnostics if isinstance(row_diagnostics, dict) else {}
+    row_status = str(telemetry_row.get("status") or "").lower()
+    recoverable_state = (
+        row_status == "recovering"
+        or (
+            row_status == "stalled"
+            and row_diagnostics.get("web_chat_request_recovery") in {
+                "broker-state-lost-after-restart-grace-expired",
+                "broker-state-lost-during-replay",
+            }
+        )
+    )
     return bool(
         message_type in _TERMINAL_TYPES
         and diagnostics.get("worker_transport_replayed") is True
         and diagnostics.get("worker_transport_recovery") == "transport-outbox-v47"
         and telemetry_row.get("web_chat_mode") is True
-        and str(telemetry_row.get("status") or "").lower() == "recovering"
+        and recoverable_state
         and str(telemetry_row.get("client_id") or "") == str(client_id or "")
         and str(telemetry_row.get("api_key_id") or "")
         and str(telemetry_row.get("api_key_id") or "") != "master"
