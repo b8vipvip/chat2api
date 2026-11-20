@@ -322,13 +322,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         async def cleanup_web_chat_orphan_files() -> int:
             if conversation_files is None:
                 return 0
-            referenced = await asyncio.to_thread(conversation_files.referenced_file_ids)
-            return await asyncio.to_thread(
-                file_store.delete_expired_web_chat_files,
-                referenced,
-                older_than_seconds=90 * 86400,
-                limit=500,
-            )
+
+            def cleanup_under_file_lock() -> int:
+                # Use the same lock order as conversation saves and user/API
+                # file deletion: FileStore -> conversation-reference database.
+                # This prevents a new reference being committed between the
+                # reference snapshot and orphan unlink in this process.
+                with file_store.lock:
+                    referenced = conversation_files.referenced_file_ids()
+                    return file_store.delete_expired_web_chat_files(
+                        referenced,
+                        older_than_seconds=90 * 86400,
+                        limit=500,
+                    )
+
+            return await asyncio.to_thread(cleanup_under_file_lock)
 
         try:
             removed_web_chat_files = await cleanup_web_chat_orphan_files()
