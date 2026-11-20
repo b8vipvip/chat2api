@@ -44,9 +44,6 @@ async function send(chunks, close = true, onCancel = () => {}) {
     id: () => String(conversation.messages.length),
     apiJson: async () => ({user: {user_id: "user-a"}}),
     fetch: async () => ({ok: true, body}),
-    // The unit harness extracts sendMessage without the separate native SSE
-    // helper; keep this test focused on the generation stream terminal.
-    streamNativeContent: () => Promise.resolve(),
     toast: (message) => messages.push(message),
     $: () => node,
     autoTitle() {},
@@ -67,7 +64,10 @@ async function send(chunks, close = true, onCancel = () => {}) {
       },
     },
   });
-  const sendMessage = vm.runInContext(source.slice(start, end) + "\nsendMessage", context);
+  // Keep the separate native-content sidecar out of this generation-stream test.
+  const sendSource = source.slice(start, end).replace("      void streamNativeContent(requestId);\n", "");
+  assert.ok(!sendSource.includes("void streamNativeContent(requestId);"));
+  const sendMessage = vm.runInContext(sendSource + "\nsendMessage", context);
   await sendMessage("test question");
   // The production client deliberately starts recovery without blocking sendMessage.
   // Let its Promise chain settle before asserting the user-visible recovery notice.
