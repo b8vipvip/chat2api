@@ -127,7 +127,7 @@ def test_web_chat_document_attachment_upload_send_and_download_in_chromium(tmp_p
                         ),
                     )
 
-                page.route("**/v1/chat/completions", complete_chat)
+                page.route("**/api/user/chat/completions", complete_chat)
                 page.locator("#sendButton").click()
                 cards = page.locator("#messages .message-file-card")
                 cards.nth(2).wait_for(state="visible", timeout=15000)
