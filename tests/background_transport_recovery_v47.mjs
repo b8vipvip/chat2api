@@ -65,6 +65,49 @@ assert.equal(context.__CHAT2API_BACKGROUND_TRANSPORT_RECOVERY_V47__.outbox.size,
   "successful WebSocket.send is not a server acknowledgement");
 assert.equal(storage.chat2apiWorkerTransportOutboxV47.length, 1);
 
+// A fresh service-worker context restores the unacknowledged terminal and
+// replays it again; only a positive server ACK clears persistent storage.
+const restoredSent = [];
+const restoredTimers = new Map();
+let restoredTimerId = 0;
+const restoredContext = {
+  trySendSocket: async payload => { restoredSent.push(payload); return true; },
+  socketReady: () => true,
+  handleServerMessage: async () => {},
+  chrome: {
+    storage: {
+      local: {
+        get: async defaults => ({...defaults, ...storage}),
+        set: async value => Object.assign(storage, value),
+      },
+    },
+  },
+  setTimeout: callback => {
+    const id = ++restoredTimerId;
+    restoredTimers.set(id, callback);
+    return id;
+  },
+  clearTimeout: id => restoredTimers.delete(id),
+  setInterval: () => 1,
+};
+vm.runInNewContext(source, restoredContext);
+await new Promise(resolve => setImmediate(resolve));
+for (let round = 0; round < 8 && restoredTimers.size; round += 1) {
+  const callbacks = [...restoredTimers.values()];
+  restoredTimers.clear();
+  for (const callback of callbacks) await callback();
+}
+assert.equal(restoredContext.__CHAT2API_BACKGROUND_TRANSPORT_RECOVERY_V47__.outbox.size, 1);
+assert.equal(restoredSent.length, 1);
+assert.equal(restoredSent[0].request_id, "req_durable_terminal_123");
+await restoredContext.handleServerMessage({
+  type: "chat.terminal.ack",
+  request_id: "req_durable_terminal_123",
+  terminal_type: "chat.completed",
+  accepted: true,
+});
+assert.equal(storage.chat2apiWorkerTransportOutboxV47.length, 0);
+
 await context.handleServerMessage({
   type: "chat.terminal.ack",
   request_id: "req_durable_terminal_123",
