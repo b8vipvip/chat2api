@@ -88,7 +88,7 @@ def replayed_terminal_projection(
     })
     error = (
         "Worker terminal was replayed after Broker restart; final media archival and usage reconciliation were not rerun"
-        if message_type == "chat.completed"
+        if message_type in {"chat.completed", "image.completed"}
         else str(message.get("error") or message.get("reason") or "Worker request failed")[:500]
     )
     return {
