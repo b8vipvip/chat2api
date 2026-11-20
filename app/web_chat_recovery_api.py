@@ -5,6 +5,7 @@ It never redispatches a generation and never infers completion from transport EO
 """
 from __future__ import annotations
 
+import asyncio
 import re
 
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -164,66 +165,114 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
         if not key_id or not accounts.owns_key(str(user["user_id"]), key_id):
             _http_error(404, "request not found")
 
-        status = str(row.get("status") or "unknown").lower()
-        if status in _TERMINAL:
-            return {
-                "request_id": request_id,
-                "status": status,
-                "terminal": True,
-                "active": False,
-                "cancel_requested": False,
-                "already_terminal": True,
-            }
-        if status != "running":
-            _http_error(409, "request is not currently dispatched to a Worker")
+        lock = getattr(request.app.state, "web_chat_cancel_lock", None)
+        if lock is None:
+            _http_error(503, "request cancellation unavailable")
+        queued_signal = None
+        async with lock:
+            row = telemetry.get(request_id)
+            if row is None:
+                _http_error(404, "request not found")
+            key_id = str(row.get("api_key_id") or "")
+            if not key_id or not accounts.owns_key(str(user["user_id"]), key_id):
+                _http_error(404, "request not found")
 
-        state = broker.requests.get(request_id)
-        if state is None:
-            _http_error(409, "active request state is unavailable")
-        if getattr(state, "terminal_event_type", None):
-            return {
-                "request_id": request_id,
-                "status": "finalizing",
-                "terminal": False,
-                "active": True,
-                "cancel_requested": False,
-                "already_terminal": True,
-            }
+            status = str(row.get("status") or "unknown").lower()
+            if status in _TERMINAL:
+                return {
+                    "request_id": request_id,
+                    "status": status,
+                    "terminal": True,
+                    "active": False,
+                    "cancel_requested": False,
+                    "already_terminal": True,
+                }
+            if status == "queued":
+                signal = getattr(request.app.state, "web_chat_cancel_events", {}).get(request_id)
+                if signal is None:
+                    _http_error(409, "request is not awaiting cancellable Web Chat admission")
+                already_requested = signal.requested.is_set()
+                signal.requested.set()
+                queued_signal = (signal, already_requested)
+            elif status != "running":
+                _http_error(409, "request is not currently dispatched to a Worker")
+            else:
+                state = broker.requests.get(request_id)
+                if state is None:
+                    _http_error(409, "active request state is unavailable")
+                if getattr(state, "terminal_event_type", None):
+                    return {
+                        "request_id": request_id,
+                        "status": "finalizing",
+                        "terminal": False,
+                        "active": True,
+                        "cancel_requested": False,
+                        "already_terminal": True,
+                    }
 
-        client_id = str(getattr(state, "client_id", "") or "")
-        if not client_id:
-            _http_error(409, "request Worker assignment is unavailable")
-        diagnostics = getattr(state, "diagnostics", None)
-        if not isinstance(diagnostics, dict):
-            diagnostics = {}
-            state.diagnostics = diagnostics
-        if diagnostics.get("web_chat_cancel_requested") is True:
+                client_id = str(getattr(state, "client_id", "") or "")
+                if not client_id:
+                    _http_error(409, "request Worker assignment is unavailable")
+                diagnostics = getattr(state, "diagnostics", None)
+                if not isinstance(diagnostics, dict):
+                    diagnostics = {}
+                    state.diagnostics = diagnostics
+                if diagnostics.get("web_chat_cancel_requested") is True:
+                    return {
+                        "request_id": request_id,
+                        "status": "cancellation_requested",
+                        "terminal": False,
+                        "active": True,
+                        "cancel_requested": True,
+                        "already_requested": True,
+                    }
+
+                # This is only a signal to the assigned Worker. The Worker emits
+                # the terminal event and RequestBroker remains the sole owner.
+                diagnostics["web_chat_cancel_requested"] = True
+                try:
+                    await registry.send(
+                        client_id, {"type": "chat.cancel", "request_id": request_id}
+                    )
+                except Exception:
+                    diagnostics.pop("web_chat_cancel_requested", None)
+                    _http_error(409, "request cancellation could not be delivered to its Worker")
+                return {
+                    "request_id": request_id,
+                    "status": "cancellation_requested",
+                    "terminal": False,
+                    "active": True,
+                    "cancel_requested": True,
+                    "already_requested": False,
+                }
+
+        if queued_signal is not None:
+            signal, already_requested = queued_signal
+            try:
+                await asyncio.wait_for(signal.finalized.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                pass
+            latest = telemetry.get(request_id) or {}
+            latest_status = str(latest.get("status") or "queued").lower()
+            if latest_status in _TERMINAL:
+                return {
+                    "request_id": request_id,
+                    "status": latest_status,
+                    "terminal": True,
+                    "active": False,
+                    "cancel_requested": False,
+                    "already_requested": already_requested,
+                    "queued": True,
+                }
             return {
                 "request_id": request_id,
                 "status": "cancellation_requested",
                 "terminal": False,
                 "active": True,
                 "cancel_requested": True,
-                "already_requested": True,
+                "already_requested": already_requested,
+                "queued": True,
             }
 
-        # This is only a signal to the assigned Worker. The Worker emits the
-        # terminal event and request-v6/Broker remain the sole terminal owner.
-        diagnostics["web_chat_cancel_requested"] = True
-        try:
-            await registry.send(
-                client_id, {"type": "chat.cancel", "request_id": request_id}
-            )
-        except Exception:
-            diagnostics.pop("web_chat_cancel_requested", None)
-            _http_error(409, "request cancellation could not be delivered to its Worker")
-        return {
-            "request_id": request_id,
-            "status": "cancellation_requested",
-            "terminal": False,
-            "active": True,
-            "cancel_requested": True,
-            "already_requested": False,
-        }
 
     return app

@@ -25,6 +25,10 @@ from .admin import admin_response
 from .api_keys import ApiKeyStore, ApiPrincipal, UNSET
 from .broker import RequestBroker, RequestState
 from .chat_request_service import ChatRequestService
+from .web_chat_cancellation_v1 import (
+    WebChatAdmissionCancelled, WebChatCancellationSignal,
+    await_worker_admission_or_cancel,
+)
 from .chat_media_deadline_v171 import chat_timeout_window, worker_chat_timeout, long_form_text_requested
 from .chat_progress_stream_v196 import status_from_diagnostics, progress_is_real
 from .chat_stream_delivery_v194 import StagedStreamText, final_text_chunks, sse_heartbeat_interval
@@ -323,6 +327,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.test_runs = test_runs
     # Keep detached-stream supervisors alive until their Broker terminal is persisted.
     app.state.detached_sse_tasks = set()
+    # Mode 1 cancellation signals cover the queued/admission window before a
+    # RequestBroker lease exists. The same lock serializes queued cancellation
+    # against the transition to running + the initial Worker dispatch.
+    app.state.web_chat_cancel_events = {}
+    app.state.web_chat_cancel_lock = asyncio.Lock()
 
     @app.exception_handler(HTTPException)
     async def mode2_http_exception_handler(request: Request, error: HTTPException):
@@ -1852,11 +1861,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         *, request_id: str, response_id: str, requested_model: str, prompt: str,
         principal: ApiPrincipal, stream: bool, prompt_mode: str, started_mono: float,
         error: str, request_type: str = "text", attachments_count: int = 0,
+        status_value: str = "error",
     ) -> None:
         usage, token_meta = standard_usage(prompt, "")
         existing = telemetry.get(request_id) or {}
         diagnostics = dict(existing.get("diagnostics") or {})
-        if diagnostics.get("request_admission_stage"):
+        if status_value == "cancelled":
+            diagnostics["request_admission_failure_stage"] = diagnostics.get(
+                "request_admission_stage", "selecting-worker",
+            )
+            diagnostics["request_admission_stage"] = "cancelled-before-worker-dispatch"
+            diagnostics["request_admission_failure_kind"] = "web_chat_user_cancelled"
+            diagnostics["request_admission_wait_ms"] = round(
+                (time.perf_counter() - started_mono) * 1000, 1
+            )
+        elif diagnostics.get("request_admission_stage"):
             diagnostics["request_admission_failure_stage"] = diagnostics["request_admission_stage"]
             diagnostics["request_admission_stage"] = "failed-before-worker-dispatch"
             diagnostics["request_admission_wait_ms"] = round(
@@ -1877,7 +1896,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "prompt_mode": prompt_mode,
                 "prompt_chars": len(prompt),
                 "completion_chars": 0,
-                "status": "error",
+                "status": status_value,
                 "usage": {**usage, **token_meta},
                 "timings": {"total_ms": round((time.perf_counter() - started_mono) * 1000, 1)},
                 "diagnostics": diagnostics,
@@ -2324,7 +2343,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Otherwise an old request ID outside TelemetryStore's 500-row cache
         # could overwrite its history before the persistent reservation journal
         # rejects the duplicate.
-        def release_admission_holds() -> None:
+        def release_admission_holds(reason: str = "request_admission_projection_conflict") -> None:
             if not quota_reservation:
                 return
             quota_store = getattr(app.state, "quota_reservations", None)
@@ -2342,13 +2361,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 owner = accounts.owner_for_key(principal.key_id) if accounts is not None else None
                 if owner and billing is not None:
                     billing.release_reservation(
-                        request_id, str(owner), reason="request_admission_projection_conflict",
+                        request_id, str(owner), reason=reason,
                     )
             except Exception as release_error:
                 logger.warning(
                     "Duplicate request wallet hold cleanup failed request_id=%s error_type=%s",
                     request_id, type(release_error).__name__,
                 )
+
+        web_chat_cancel_signal = None
+        if request.scope.get("chat2api_mode1_web_chat") is True:
+            cancel_events = app.state.web_chat_cancel_events
+            if request_id in cancel_events:
+                release_admission_holds()
+                raise HTTPException(status_code=409, detail="Request ID is already awaiting admission")
+            web_chat_cancel_signal = WebChatCancellationSignal()
+            cancel_events[request_id] = web_chat_cancel_signal
 
         try:
             await record_request_queued(
@@ -2359,12 +2387,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 input_file_ids=[str(item["file_id"]) for item in attachments],
             )
         except DuplicateRequestIdentity as error:
+            if web_chat_cancel_signal is not None:
+                web_chat_cancel_signal.finalized.set()
+                app.state.web_chat_cancel_events.pop(request_id, None)
             release_admission_holds()
             raise HTTPException(
                 status_code=409,
                 detail={"code": "request_id_conflict", "message": str(error)},
             ) from error
         except Exception:
+            if web_chat_cancel_signal is not None:
+                web_chat_cancel_signal.finalized.set()
+                app.state.web_chat_cancel_events.pop(request_id, None)
             release_admission_holds()
             raise
         if quota_reservation:
@@ -2407,11 +2441,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         request_id,
                     )
         try:
-            client_id = await resolve_client_with_reconnect_grace(requested_client)
+            client_id = await await_worker_admission_or_cancel(
+                lambda: resolve_client_with_reconnect_grace(requested_client),
+                web_chat_cancel_signal,
+            )
+            if web_chat_cancel_signal is not None and web_chat_cancel_signal.requested.is_set():
+                raise WebChatAdmissionCancelled()
             await telemetry.update(request_id, {
                 "client_id": client_id,
                 "diagnostics": {"request_admission_stage": "waiting-capacity"},
             })
+            if web_chat_cancel_signal is not None and web_chat_cancel_signal.requested.is_set():
+                raise WebChatAdmissionCancelled()
             logger.info(
                 "API request awaiting Broker capacity request_id=%s worker=%s",
                 request_id, client_id,
@@ -2419,31 +2460,61 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                        "admission_stage": "waiting-capacity"},
             )
             state = await chat_request_service.reserve(request_id, client_id)
+        except WebChatAdmissionCancelled:
+            await record_early_error(
+                request_id=request_id, response_id=response_id, requested_model=body.model,
+                prompt=prompt, principal=principal, stream=body.stream, prompt_mode=body.prompt_mode,
+                started_mono=request_started, error="Web Chat request cancelled before Worker dispatch",
+                request_type=request_type, attachments_count=len(attachments), status_value="cancelled",
+            )
+            release_admission_holds("web_chat_cancelled_before_worker_dispatch")
+            if web_chat_cancel_signal is not None:
+                web_chat_cancel_signal.finalized.set()
+                app.state.web_chat_cancel_events.pop(request_id, None)
+            raise HTTPException(status_code=409, detail="Request cancelled before Worker dispatch")
         except HTTPException as error:
             await record_early_error(request_id=request_id, response_id=response_id, requested_model=body.model,
                                      prompt=prompt, principal=principal, stream=body.stream, prompt_mode=body.prompt_mode,
                                      started_mono=request_started, error=str(error.detail), request_type=request_type,
                                      attachments_count=len(attachments))
+            if web_chat_cancel_signal is not None:
+                web_chat_cancel_signal.finalized.set()
+                app.state.web_chat_cancel_events.pop(request_id, None)
             raise
         except RuntimeError as error:
             await record_early_error(request_id=request_id, response_id=response_id, requested_model=body.model,
                                      prompt=prompt, principal=principal, stream=body.stream, prompt_mode=body.prompt_mode,
                                      started_mono=request_started, error=str(error), request_type=request_type,
                                      attachments_count=len(attachments))
+            if web_chat_cancel_signal is not None:
+                web_chat_cancel_signal.finalized.set()
+                app.state.web_chat_cancel_events.pop(request_id, None)
             raise HTTPException(status_code=409, detail=str(error)) from error
         except asyncio.CancelledError:
-            # No Broker allocation or browser dispatch completed. Preserve the
-            # admission failure separately from request-v6's Worker terminal.
-            await telemetry.update(request_id, {
-                "status": "error",
-                "diagnostics": {
-                    "request_admission_stage": "aborted-before-worker-dispatch",
-                    "request_admission_wait_ms": round(
-                        (time.perf_counter() - request_started) * 1000, 1
-                    ),
-                },
-                "error": "API transport ended before Worker admission",
-            })
+            if web_chat_cancel_signal is not None and web_chat_cancel_signal.requested.is_set():
+                await record_early_error(
+                    request_id=request_id, response_id=response_id, requested_model=body.model,
+                    prompt=prompt, principal=principal, stream=body.stream, prompt_mode=body.prompt_mode,
+                    started_mono=request_started, error="Web Chat request cancelled before Worker dispatch",
+                    request_type=request_type, attachments_count=len(attachments), status_value="cancelled",
+                )
+                release_admission_holds("web_chat_cancelled_before_worker_dispatch")
+            else:
+                # No Broker allocation or browser dispatch completed. Preserve the
+                # admission failure separately from request-v6's Worker terminal.
+                await telemetry.update(request_id, {
+                    "status": "error",
+                    "diagnostics": {
+                        "request_admission_stage": "aborted-before-worker-dispatch",
+                        "request_admission_wait_ms": round(
+                            (time.perf_counter() - request_started) * 1000, 1
+                        ),
+                    },
+                    "error": "API transport ended before Worker admission",
+                })
+            if web_chat_cancel_signal is not None:
+                web_chat_cancel_signal.finalized.set()
+                app.state.web_chat_cancel_events.pop(request_id, None)
             raise
         except Exception as admission_error:
             # A failure after the queued row was persisted but before any
@@ -2472,6 +2543,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "Failed to persist request admission failure request_id=%s",
                     request_id,
                 )
+            if web_chat_cancel_signal is not None:
+                web_chat_cancel_signal.finalized.set()
+                app.state.web_chat_cancel_events.pop(request_id, None)
             raise HTTPException(
                 status_code=500,
                 detail="Internal request admission failure; inspect request_id=" + request_id,
@@ -2490,37 +2564,93 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             timeout_seconds, automatic_extension=automatic_media_extension, stream=body.stream,
         )
         try:
-            await record_request_running(
-                state,
-                body.model,
-                prompt,
-                principal,
-                stream=body.stream,
-                prompt_mode=body.prompt_mode,
-                response_id=response_id,
-                request_type=request_type,
-                attachments_count=len(attachments),
-                input_file_ids=[str(item["file_id"]) for item in attachments],
-            )
-            await asyncio.to_thread(
-                authorize_wallet_dispatch, app, request_id, principal,
-            )
-            await chat_request_service.dispatch(
-                client_id,
-                request_id=request_id,
-                prompt=prompt,
-                attachments=attachments,
-                options={"auto_switch_text": True, "timeout_seconds": browser_timeout_seconds, "model": body.model,
-                         "probe_policy": state.probe_policy},
-            )
+            if web_chat_cancel_signal is not None:
+                async with app.state.web_chat_cancel_lock:
+                    if web_chat_cancel_signal.requested.is_set():
+                        raise WebChatAdmissionCancelled()
+                    await record_request_running(
+                        state,
+                        body.model,
+                        prompt,
+                        principal,
+                        stream=body.stream,
+                        prompt_mode=body.prompt_mode,
+                        response_id=response_id,
+                        request_type=request_type,
+                        attachments_count=len(attachments),
+                        input_file_ids=[str(item["file_id"]) for item in attachments],
+                    )
+                    await asyncio.to_thread(
+                        authorize_wallet_dispatch, app, request_id, principal,
+                    )
+                    await chat_request_service.dispatch(
+                        client_id,
+                        request_id=request_id,
+                        prompt=prompt,
+                        attachments=attachments,
+                        options={"auto_switch_text": True, "timeout_seconds": browser_timeout_seconds, "model": body.model,
+                                 "probe_policy": state.probe_policy},
+                    )
+                    state.diagnostics["request_admission_stage"] = "dispatched"
+                    web_chat_cancel_signal.finalized.set()
+                    app.state.web_chat_cancel_events.pop(request_id, None)
+            else:
+                await record_request_running(
+                    state,
+                    body.model,
+                    prompt,
+                    principal,
+                    stream=body.stream,
+                    prompt_mode=body.prompt_mode,
+                    response_id=response_id,
+                    request_type=request_type,
+                    attachments_count=len(attachments),
+                    input_file_ids=[str(item["file_id"]) for item in attachments],
+                )
+                await asyncio.to_thread(
+                    authorize_wallet_dispatch, app, request_id, principal,
+                )
+                await chat_request_service.dispatch(
+                    client_id,
+                    request_id=request_id,
+                    prompt=prompt,
+                    attachments=attachments,
+                    options={"auto_switch_text": True, "timeout_seconds": browser_timeout_seconds, "model": body.model,
+                             "probe_policy": state.probe_policy},
+                )
+        except WebChatAdmissionCancelled:
+            state.diagnostics["request_admission_stage"] = "cancelled-before-worker-dispatch"
+            try:
+                await broker.publish(request_id, {
+                    "type": "chat.cancelled",
+                    "request_id": request_id,
+                    "reason": "Web Chat cancelled before Worker dispatch",
+                })
+                await record_request(
+                    state, body.model, prompt, "cancelled", principal,
+                    stream=body.stream, prompt_mode=body.prompt_mode,
+                    response_id=response_id, error="Web Chat request cancelled before Worker dispatch",
+                    request_type=request_type, attachments_count=len(attachments),
+                )
+            finally:
+                registry.busy_clients.discard(client_id)
+                release_admission_holds("web_chat_cancelled_before_worker_dispatch")
+                web_chat_cancel_signal.finalized.set()
+                app.state.web_chat_cancel_events.pop(request_id, None)
+                await broker.release(request_id)
+            raise HTTPException(status_code=409, detail="Request cancelled before Worker dispatch")
         except Exception as error:
             state.completed_mono = time.perf_counter()
             await record_request(state, body.model, prompt, "error", principal, stream=body.stream,
                                  prompt_mode=body.prompt_mode, response_id=response_id, error=str(error),
                                  request_type=request_type, attachments_count=len(attachments))
             registry.busy_clients.discard(client_id)
+            if web_chat_cancel_signal is not None:
+                web_chat_cancel_signal.finalized.set()
+                app.state.web_chat_cancel_events.pop(request_id, None)
             await broker.release(request_id)
             raise HTTPException(status_code=503, detail=str(error)) from error
+
 
         if body.stream:
             # Only this request-owned state may be correlated by the ASGI

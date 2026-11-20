@@ -1849,14 +1849,27 @@
   $("stopButton").addEventListener("click", () => {
     const controller = state.recoveryController;
     const record = state.activeRequestRecord;
+    const abortGenerationTransport = () => {
+      if (state.abortController) state.abortController.abort();
+    };
     if (controller && record) {
+      // Complete the same-origin cancel handshake before aborting the SSE POST.
+      // This lets the server finalize a queued cancellation or deliver chat.cancel
+      // after the initial Worker dispatch, rather than racing the two requests.
       void controller.cancel(record).then((result) => {
-        if (result?.cancel_requested) toast("已向 Worker 发送停止请求。");
+        if (result?.queued && result?.terminal) toast("请求已在 Worker 分配前取消。");
+        else if (result?.queued && result?.cancel_requested) toast("已取消等待 Worker 分配的请求。");
+        else if (result?.cancel_requested) toast("已向 Worker 发送停止请求。");
         else if (result?.terminal) toast("请求已进入终态。");
         else toast("无法确认停止状态，将继续核对服务端请求。");
-      }).catch(() => toast("停止请求未确认；已保留请求恢复记录。"));
+        abortGenerationTransport();
+      }).catch(() => {
+        toast("停止请求未确认；已保留请求恢复记录。");
+        abortGenerationTransport();
+      });
+      return;
     }
-    if (state.abortController) state.abortController.abort();
+    abortGenerationTransport();
   });
   $("messageInput").addEventListener("input", resizeComposer);
   $("messageInput").addEventListener("paste", (event) => {

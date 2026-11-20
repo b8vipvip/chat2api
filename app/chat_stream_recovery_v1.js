@@ -254,6 +254,7 @@
           active:false,
           terminal:TERMINAL.has(String(payload.status || "")),
           cancel_requested:false,
+          queued:payload.queued === true,
         };
         emit(safeRecord, result);
         return result;
@@ -279,6 +280,7 @@
         terminal:false,
         cancel_requested:true,
         already_requested:payload.already_requested === true,
+        queued:payload.queued === true,
       };
       emit(safeRecord, result);
       return result;

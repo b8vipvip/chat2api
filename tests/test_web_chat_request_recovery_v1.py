@@ -378,7 +378,7 @@ assert(/^req_[A-Za-z0-9_-]{8,120}$/.test(api.createRequestId({randomUUID:()=>"12
       cancelCalls.push({url,method:options.method,credentials:options.credentials});
       return {status:200,ok:true,json:async()=>({
         request_id:"req_12345678", status:"cancellation_requested",
-        terminal:false, active:true, cancel_requested:true
+        terminal:false, active:true, cancel_requested:true, queued:true
       })};
     }
   });
@@ -387,6 +387,7 @@ assert(/^req_[A-Za-z0-9_-]{8,120}$/.test(api.createRequestId({randomUUID:()=>"12
   });
   assert.strictEqual(cancelResult.status, "cancellation_requested");
   assert.strictEqual(cancelResult.cancel_requested, true);
+  assert.strictEqual(cancelResult.queued, true);
   assert.strictEqual(cancelCalls.length, 1);
   assert.strictEqual(cancelCalls[0].method, "POST");
   assert.strictEqual(cancelCalls[0].credentials, "same-origin");
