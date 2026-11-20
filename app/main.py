@@ -3812,7 +3812,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 and active_state.terminal_event_type == message_type
                                 and (
                                     (active_state.mode1_web_chat and terminal_journaled)
-                                    or (not active_state.mode1_web_chat and accepted)
+                                    or not active_state.mode1_web_chat
                                 )
                             ),
                             "recovered": False,
