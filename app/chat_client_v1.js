@@ -524,14 +524,7 @@
       toast("请先移除待发送附件，再删除对话。");
       return;
     }
-    if (!window.confirm("删除这段对话？删除会同步到你的其他设备，且仅清理未被其他对话引用的附件。")) return;
-    const remainingFileIds = new Set(
-      state.conversations
-        .filter((row) => row.id !== conversationId)
-        .flatMap((row) => row.messages.flatMap(messageAttachmentIds))
-    );
-    const orphanedFileIds = [...new Set(conversation.messages.flatMap(messageAttachmentIds))]
-      .filter((fileId) => !remainingFileIds.has(fileId));
+    if (!window.confirm("删除这段对话？删除会同步到你的其他设备。附件文件暂时保留，避免误删其他对话仍在使用的文件。")) return;
     state.conversations = state.conversations.filter((row) => row.id !== conversationId);
     if (state.activeConversationId === conversationId) {
       state.activeConversationId = state.conversations[0]?.id || "";
@@ -539,14 +532,6 @@
     saveHistory();
     void deleteConversationFromServer(conversation);
     renderAll();
-    if (orphanedFileIds.length) {
-      Promise.allSettled(orphanedFileIds.map((fileId) =>
-        apiJson("/api/user/files/" + encodeURIComponent(fileId), {method:"DELETE"})
-      )).then((results) => {
-        const failed = results.filter((result) => result.status === "rejected").length;
-        if (failed) toast("本地对话已删除；" + failed + " 个附件文件未能自动清理。");
-      });
-    }
   }
 
   function renameConversation(conversationId) {
