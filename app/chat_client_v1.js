@@ -174,6 +174,49 @@
     }).join("").slice(0,80) || "tool";
   }
 
+  function cleanToolReferenceText(value, limit) {
+    if (typeof value !== "string") return "";
+    return value.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, limit);
+  }
+
+  function safeToolReference(value) {
+    if (!value || typeof value !== "object" || typeof value.url !== "string") return null;
+    const rawUrl = value.url;
+    if (!rawUrl || rawUrl.length > 2048 || rawUrl !== rawUrl.trim()
+        || /[\u0000-\u001f\u007f]/.test(rawUrl)) return null;
+    try {
+      const url = new URL(rawUrl);
+      const host = url.hostname.toLowerCase().replace(/\.$/, "");
+      if (url.protocol !== "https:" || url.username || url.password
+          || (url.port && url.port !== "443") || !host || host.includes(":")
+          || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)
+          || ["chatgpt.com","chat.openai.com","localhost"].includes(host)
+          || /(?:^|\.)(?:chatgpt\.com|localhost|local|internal|test|invalid|example|onion)$/.test(host)
+          || !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(host)) return null;
+      if (typeof window !== "undefined" && window.location
+          && url.origin === window.location.origin) return null;
+      return {
+        url: url.href,
+        title: cleanToolReferenceText(value.title, 180) || host,
+        snippet: cleanToolReferenceText(value.snippet, 420),
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function normalizeToolReferences(value) {
+    if (!Array.isArray(value)) return [];
+    const seen = new Set(), rows = [];
+    value.slice(0,32).forEach(item => {
+      const reference = safeToolReference(item);
+      if (!reference || seen.has(reference.url)) return;
+      seen.add(reference.url);
+      rows.push(reference);
+    });
+    return rows.slice(0,8);
+  }
+
   function normalizeToolEvents(value, role) {
     if (role !== "assistant" || !Array.isArray(value)) return [];
     return value.slice(-6).map(item => {
@@ -187,11 +230,14 @@
       if (!callId && !resultId) return null;
       const statuses = ["running","completed","failed","cancelled"];
       const status = statuses.includes(item.status) ? item.status : "completed";
-      return {
+      const normalized = {
         toolName, callId, resultId, status,
         arguments: typeof item.arguments === "string" ? item.arguments.slice(0,1200) : "",
         output: typeof item.output === "string" ? item.output.slice(0,1200) : "",
       };
+      const references = normalizeToolReferences(item.references);
+      if (references.length) normalized.references = references;
+      return normalized;
     }).filter(Boolean);
   }
 
@@ -1301,6 +1347,10 @@
     row.status = normalizeToolStatus(event.status);
     if (typeof event.arguments === "string" && event.arguments) row.arguments = event.arguments.slice(0,1200);
     if (typeof event.output === "string" && event.output) row.output = event.output.slice(0,1200);
+    const references = normalizeToolReferences(event.references);
+    if (references.length) {
+      row.references = normalizeToolReferences([...(Array.isArray(row.references) ? row.references : []), ...references]);
+    }
     while (rows.length > 6) rows.shift();
     assistant.toolEvents = rows;
     saveHistory();
@@ -1319,7 +1369,7 @@
     events.forEach(item => {
       const details = document.createElement("details");
       details.className = "message-tool-event";
-      details.open = item.status === "running";
+      details.open = item.status === "running" || normalizeToolReferences(item.references).length > 0;
       const summary = document.createElement("summary");
       summary.textContent = String(item.toolName || "tool").slice(0,80) + " · " + toolStatusLabel(item.status);
       details.appendChild(summary);
@@ -1332,6 +1382,33 @@
         pre.className = "message-tool-event-data";
         pre.textContent = value;
         details.append(heading,pre);
+      }
+      const references = normalizeToolReferences(item.references);
+      if (references.length) {
+        const referenceBox = document.createElement("div");
+        referenceBox.className = "message-tool-references";
+        const referenceLabel = document.createElement("div");
+        referenceLabel.className = "message-tool-event-label";
+        referenceLabel.textContent = "参考来源";
+        referenceBox.appendChild(referenceLabel);
+        references.forEach(reference => {
+          const link = document.createElement("a");
+          link.className = "message-tool-reference";
+          link.href = reference.url;
+          link.target = "_blank";
+          link.rel = "noopener noreferrer nofollow";
+          link.referrerPolicy = "no-referrer";
+          const title = document.createElement("strong");
+          title.textContent = reference.title;
+          link.appendChild(title);
+          if (reference.snippet) {
+            const snippet = document.createElement("span");
+            snippet.textContent = reference.snippet;
+            link.appendChild(snippet);
+          }
+          referenceBox.appendChild(link);
+        });
+        details.appendChild(referenceBox);
       }
       section.appendChild(details);
     });
