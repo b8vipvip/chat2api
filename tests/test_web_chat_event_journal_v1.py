@@ -278,6 +278,20 @@ def test_worker_terminal_outbox_replays_across_two_server_instances(tmp_path):
                 "terminal_type": "chat.completed",
                 "accepted": True,
             }
+            # Simulate the first ACK being lost on the network. The durable
+            # replay projection must recognize this exact same Worker event.
+            worker.send_json({
+                "type": "chat.completed",
+                "request_id": request_id,
+                "text": "full answer from durable Worker terminal outbox",
+                "diagnostics": {
+                    "worker_transport_replayed": True,
+                    "worker_transport_recovery": "transport-outbox-v47",
+                },
+            })
+            duplicate_ack = worker.receive_json()
+            assert duplicate_ack["accepted"] is True
+            assert duplicate_ack["terminal_type"] == "chat.completed"
 
         recovered = app_after_restart.state.telemetry.get(request_id)
         assert recovered["status"] == "stalled"
