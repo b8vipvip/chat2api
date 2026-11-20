@@ -5,7 +5,7 @@ from typing import Any
 import time
 
 
-_TERMINAL_TYPES = {"chat.completed", "chat.error", "chat.cancelled"}
+_TERMINAL_TYPES = {"chat.completed", "chat.error", "chat.cancelled", "image.completed", "image.error", "image.cancelled"}
 
 
 def is_replayed_mode1_terminal(
@@ -33,19 +33,24 @@ def replayed_terminal_projection(
 ) -> dict[str, Any]:
     message_type = str(message.get("type") or "")
     status = (
-        "stalled" if message_type == "chat.completed"
-        else "cancelled" if message_type == "chat.cancelled"
+        "stalled" if message_type in {"chat.completed", "image.completed"}
+        else "cancelled" if message_type in {"chat.cancelled", "image.cancelled"}
         else "error"
     )
     candidate = message.get("text")
-    candidate_text = candidate[:50_000] if isinstance(candidate, str) and status == "stalled" else ""
+    candidate_text = (
+        candidate[:50_000]
+        if isinstance(candidate, str) and message_type == "chat.completed" else ""
+    )
     diagnostics = telemetry_row.get("diagnostics")
     diagnostics = dict(diagnostics) if isinstance(diagnostics, dict) else {}
     diagnostics.update({
         "web_chat_request_recovery": "worker-terminal-replayed-after-broker-restart",
         "web_chat_terminal_replay_type": message_type,
         "web_chat_terminal_replay_reconciled": (
-            "provisional-only" if message_type == "chat.completed" else "terminal-status"
+            "provisional-only" if message_type == "chat.completed"
+            else "media-terminal-only" if message_type == "image.completed"
+            else "terminal-status"
         ),
         "web_chat_terminal_replay_received_at": time.time(),
         "worker_transport_replayed": True,
