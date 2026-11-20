@@ -385,13 +385,13 @@ def install_web_chat_conversations_v1(app: FastAPI) -> None:
         return accounts, user
 
     @app.get("/api/user/chat/conversations")
-    async def list_user_chat_conversations(request: Request) -> Response:
+    async def list_user_chat_conversations(request: Request):
         _, user = current_user(request)
         rows = store.list_for_user(str(user["user_id"]))
         return JSONResponse({"data": rows}, headers=_PRIVATE_HEADERS)
 
     @app.put("/api/user/chat/conversations/{conversation_id}")
-    async def save_user_chat_conversation(conversation_id: str, request: Request) -> Response:
+    async def save_user_chat_conversation(conversation_id: str, request: Request):
         accounts, user = current_user(request)
         try:
             body = await request.json()
@@ -421,7 +421,7 @@ def install_web_chat_conversations_v1(app: FastAPI) -> None:
         return JSONResponse({"conversation": row}, headers=_PRIVATE_HEADERS)
 
     @app.delete("/api/user/chat/conversations/{conversation_id}")
-    async def delete_user_chat_conversation(conversation_id: str, request: Request) -> Response:
+    async def delete_user_chat_conversation(conversation_id: str, request: Request):
         _, user = current_user(request)
         raw_revision = request.query_params.get("expected_revision")
         try:
