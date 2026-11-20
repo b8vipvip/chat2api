@@ -24,6 +24,7 @@ from pydantic import ValidationError
 from .admin import admin_response
 from .api_keys import ApiKeyStore, ApiPrincipal, UNSET
 from .broker import RequestBroker, RequestState
+from .web_chat_event_journal_v1 import WebChatEventJournal
 from .chat_request_service import ChatRequestService
 from .web_chat_cancellation_v1 import (
     WebChatAdmissionCancelled, WebChatCancellationSignal,
@@ -129,7 +130,9 @@ def _native_snapshot_persist_best_effort(
 def create_app(settings: Settings | None = None) -> FastAPI:
     config = settings or get_settings()
     registry = ClientRegistry(config.data_dir)
+    event_journal = WebChatEventJournal(config.data_dir)
     broker = RequestBroker()
+    broker.event_journal = event_journal
     chat_request_service = ChatRequestService(registry, broker)
     # The request origin is the actual dispatch socket; disconnection of an
     # old socket must not terminate requests already sent on its replacement.
@@ -151,6 +154,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        await event_journal.open()
         await registry.load()
         await telemetry.load()
         await api_keys.load()
@@ -159,6 +163,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             logger.warning(
                 "Recovered %s queued request(s) from the previous process as stalled",
                 recovered_queued,
+            )
+        recovered_running = await telemetry.recover_running_after_restart(
+            set(broker.requests), event_journal,
+        )
+        if recovered_running:
+            logger.warning(
+                "Recovered %s Mode 1 running request(s) without a surviving Broker lease as stalled",
+                recovered_running,
             )
         wallet_reconciler = getattr(app.state, "wallet_charge_reconciler", None)
         billing_store = getattr(app.state, "user_billing", None)
@@ -314,6 +326,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.registry = registry
     app.state.broker = broker
     app.state.chat_request_service = chat_request_service
+    app.state.web_chat_event_journal = event_journal
     app.state.telemetry = telemetry
     app.state.worker_probes = worker_probes
     app.state.native_dom_evidence = native_dom_evidence
@@ -1754,12 +1767,41 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
             state.diagnostics["native_identity_archived_count"] = len(items)
             state.diagnostics["native_identity_dom_image_count"] = summary["images"]
+        if state.mode1_web_chat and state.mode1_owner_key_id:
+            try:
+                if status_value == "completed":
+                    delivery = await event_journal.append_delivery(
+                        state.request_id, state.mode1_owner_key_id, final_text,
+                    )
+                    state.delivery_event_ids = [
+                        int(value) for value in delivery.get("chunk_event_ids", [])
+                    ]
+                    state.delivery_terminal_event_id = int(
+                        delivery.get("terminal_event_id") or 0
+                    )
+                    state.last_event_id = max(
+                        state.last_event_id, state.delivery_terminal_event_id,
+                    )
+                elif status_value in {"error", "cancelled", "stalled"}:
+                    terminal_id = await event_journal.append_terminal(
+                        state.request_id, state.mode1_owner_key_id,
+                        status_value, error or "",
+                    )
+                    state.delivery_terminal_event_id = int(terminal_id or 0)
+                    state.last_event_id = max(state.last_event_id, state.delivery_terminal_event_id)
+            except Exception as journal_error:
+                state.diagnostics["web_chat_event_journal_error"] = type(journal_error).__name__
+                logger.exception(
+                    "Mode 1 event journal finalization failed request_id=%s",
+                    state.request_id,
+                )
         await telemetry.upsert(
             {
                 "request_id": state.request_id,
                 "response_id": response_id,
                 "client_id": state.client_id,
                 "api_key_id": principal.key_id,
+                "web_chat_mode": bool(state.mode1_web_chat),
                 "api_key_name": principal.name,
                 "auth_kind": principal.kind,
                 "requested_model": requested_model,
@@ -1812,6 +1854,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         *, request_id: str, response_id: str, requested_model: str, prompt: str,
         principal: ApiPrincipal, stream: bool, prompt_mode: str,
         request_type: str, attachments_count: int, input_file_ids: list[str],
+        web_chat_mode: bool = False,
     ) -> None:
         """Persist request visibility before Worker selection/capacity admission.
 
@@ -1825,6 +1868,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "response_id": response_id,
             "client_id": None,
             "api_key_id": principal.key_id,
+            "web_chat_mode": bool(web_chat_mode),
             "api_key_name": principal.name,
             "auth_kind": principal.kind,
             "requested_model": requested_model,
@@ -1878,6 +1922,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "prompt_chars": len(prompt),
                 "completion_chars": 0,
                 "status": "running",
+                "web_chat_mode": bool(state.mode1_web_chat),
                 "usage": {**usage, **token_meta},
                 "timings": state.timings(),
                 "diagnostics": dict(state.diagnostics),
@@ -2149,6 +2194,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             "output": event.get("output") or "",
                             "references": event.get("references") if isinstance(event.get("references"), list) else [],
                         }
+                        if isinstance(event.get("event_id"), int):
+                            tool_delta["chat2api_event_id"] = event["event_id"]
                         yield "data: " + json.dumps(
                             chunk_payload(response_id, model, {"chat2api_tool": tool_delta}),
                             ensure_ascii=False,
@@ -2210,10 +2257,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     # of assistant content, regardless of provisional snapshots.
                     # Emit the *whole* authoritative text in bounded SSE chunks
                     # even if the preview is unrelated ("我会..." -> "# ...").
-                    for delta in final_text_chunks(final_text):
+                    final_chunks = list(final_text_chunks(final_text))
+                    for index, delta in enumerate(final_chunks):
                         sent_text += delta
+                        chunk_delta: dict[str, object] = {"content": delta}
+                        if (request.scope.get("chat2api_mode1_web_chat") is True
+                                and index < len(state.delivery_event_ids)):
+                            chunk_delta["chat2api_event_id"] = state.delivery_event_ids[index]
                         yield "data: " + json.dumps(
-                            chunk_payload(response_id, model, {"content": delta}),
+                            chunk_payload(response_id, model, chunk_delta),
                             ensure_ascii=False,
                         ) + "\n\n"
                     meta = chat2api_meta(state, token_meta, principal)
@@ -2234,8 +2286,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         meta["generated_files"] = archived_files
                     if archived_media or archived_files:
                         meta["content_blocks"] = rich_content_manifest(final_text, archived_media, archived_files)
+                    terminal_delta: dict[str, object] = {}
+                    if (request.scope.get("chat2api_mode1_web_chat") is True
+                            and state.delivery_terminal_event_id):
+                        terminal_delta["chat2api_event_id"] = state.delivery_terminal_event_id
                     yield "data: " + json.dumps(
-                        chunk_payload(response_id, model, {}, "stop", usage, meta),
+                        chunk_payload(response_id, model, terminal_delta, "stop", usage, meta),
                         ensure_ascii=False,
                     ) + "\n\n"
                     yield "data: [DONE]\n\n"
@@ -2450,6 +2506,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 request_id=request_id, response_id=response_id, requested_model=body.model,
                 prompt=prompt, principal=principal, stream=body.stream,
                 prompt_mode=body.prompt_mode, request_type=request_type,
+                web_chat_mode=request.scope.get("chat2api_mode1_web_chat") is True,
                 attachments_count=len(attachments),
                 input_file_ids=[str(item["file_id"]) for item in attachments],
             )
@@ -2528,6 +2585,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
             state = await chat_request_service.reserve(request_id, client_id)
             state.mode1_web_chat = request.scope.get("chat2api_mode1_web_chat") is True
+            state.mode1_owner_key_id = principal.key_id if state.mode1_web_chat else ""
         except WebChatAdmissionCancelled:
             await record_early_error(
                 request_id=request_id, response_id=response_id, requested_model=body.model,
