@@ -46,7 +46,12 @@
     const events = [...state.outbox.values()]
       .sort((a, b) => Number(a.queued_at_ms || 0) - Number(b.queued_at_ms || 0))
       .slice(-MAX_EVENTS);
-    await chrome.storage.local.set({[STORAGE_KEY]: events}).catch(() => {});
+    try {
+      await chrome.storage.local.set({[STORAGE_KEY]: events});
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async function restore() {
@@ -74,6 +79,7 @@
   async function queueTerminal(payload) {
     if (!recoverableTerminal(payload)) return false;
     const copy = JSON.parse(JSON.stringify(payload));
+    const previous = new Map(state.outbox);
     const key = eventKey(copy);
     const existing = state.outbox.get(key);
     state.outbox.set(key, {
@@ -82,10 +88,11 @@
       last_sent_at_ms: Number(existing?.last_sent_at_ms || 0),
       attempts: Math.max(0, Number(existing?.attempts || 0)),
     });
-    while (state.outbox.size > MAX_EVENTS) {
-      state.outbox.delete(state.outbox.keys().next().value);
+    if (state.outbox.size > MAX_EVENTS || !(await persist())) {
+      state.outbox.clear();
+      for (const [previousKey, item] of previous) state.outbox.set(previousKey, item);
+      return false;
     }
-    await persist();
     return true;
   }
 
@@ -140,8 +147,9 @@
   trySendSocket = async function trySendSocketWithWorkerRecovery(payload) {
     if (recoverableTerminal(payload)) {
       // Persist before the first send. A successful WebSocket.send() is not
-      // an application-level acknowledgement from the server.
-      await queueTerminal(payload);
+      // an application-level acknowledgement from the server. If storage
+      // fails, report failure instead of claiming the terminal is recoverable.
+      if (!(await queueTerminal(payload))) return false;
       scheduleFlush(0);
       return true;
     }
