@@ -1,4 +1,5 @@
-/* Non-Voice native rich reply observer. No script/HTML/CSS or source URLs leave the tab.
+/* Non-Voice native rich reply observer. No script/raw HTML/CSS or media URLs leave the tab.
+ * Only public HTTPS citation hrefs are retained as inert, user-clicked links.
  * Only the same request-v6 assistant candidate is eligible. This observer may
  * fail without changing chat.completed, delta, cancellation or window lifetime.
  */
@@ -6,7 +7,7 @@
   "use strict";
   const KEY = "__CHAT2API_NATIVE_CONTENT_V1__";
   if (globalThis[KEY]) return;
-  const tags = new Set("div p span strong em h1 h2 h3 h4 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br".split(" "));
+  const tags = new Set("div p span strong em h1 h2 h3 h4 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br a".split(" "));
   // Do not serialize MathML as HTML div/span descendants; its parent structure
   // and unit labels require the MathML namespace through the server and UI.
   const mathTags = new Set("math semantics mrow mi mo mn msub mfrac mtext mover munder munderover msup msubsup msqrt mroot".split(" "));
@@ -46,6 +47,22 @@
     }
     return result;
   }
+  function safeExternalLinkUrl(raw) {
+    if (typeof raw !== "string" || !raw || raw.length > 2048 || raw !== raw.trim()
+        || /[\u0000-\u001f\u007f]/.test(raw)) return "";
+    try {
+      const url = new URL(raw);
+      const host = url.hostname.toLowerCase().replace(/\.$/, "");
+      if (url.protocol !== "https:" || url.username || url.password ||
+          (url.port && url.port !== "443") || !host || host.includes(":") ||
+          /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)) return "";
+      if (["chatgpt.com","chat.openai.com","localhost"].includes(host) ||
+          /(?:^|\.)(?:chatgpt\.com|localhost|local|internal|test|invalid|example|onion)$/.test(host)) return "";
+      if (!/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(host)) return "";
+      return url.href;
+    } catch (_) { return ""; }
+  }
+
   function safeSvgAttr(key,raw){
     if(!svgAttrs.has(key)||typeof raw!=="string")return "";
     const v=raw.trim();
@@ -400,6 +417,10 @@
           !(svgElement && ["path","line","rect","circle","ellipse","polyline","polygon"].includes(mapped))) return null;
       nodes += 1;
       const result = {tag:mapped,style:safeStyle(element)};
+      if (mapped === "a") {
+        const href = safeExternalLinkUrl(element.href || element.getAttribute?.("href") || "");
+        if (href) result.href = href;
+      }
       if (mapped==="td" || mapped==="th") {
         // Preserve browser-normalized table spans, not arbitrary DOM attrs.
         // Only bounds that the server and safe renderer also understand.

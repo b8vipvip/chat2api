@@ -646,3 +646,42 @@ def test_3a882b_terminal_diagnostics_never_equate_prior_revision_with_final():
     assert observed["native_final_capture_committed"] is False
     assert observed["native_structural_max_children"] == 1800
     assert observed["native_capture_failure"] == "structural-max-children"
+
+
+
+def test_public_https_citation_links_are_validated_and_legacy_projection_stays_unchanged():
+    from app.native_content_v1 import native_public_v1_tree
+
+    citation = {"tag": "a", "href": "https://example.org/reports/2026", "children": [
+        {"tag": "span", "text": "来源：年度报告"},
+    ]}
+    safe = validate_native_snapshot({"version": 1, "revision": 1, "root": citation})
+    assert safe["root"]["href"] == citation["href"]
+    legacy = native_public_v1_tree(safe["root"])
+    assert legacy["tag"] == "span"
+    assert "href" not in legacy
+    assert legacy["children"][0]["text"] == "来源：年度报告"
+
+
+@pytest.mark.parametrize("href", [
+    "javascript:alert(1)",
+    "http://example.org/insecure",
+    "https://127.0.0.1/admin",
+    "https://localhost/admin",
+    "https://user:pass@example.org/private",
+    "https://example.org:8443/private",
+    "https://worker.internal/private",
+    "https://chatgpt.com/backend-api/session",
+    "https://example.test/private",
+    "https://example.org/\nheader",
+])
+def test_citation_links_reject_active_private_and_non_https_targets(href):
+    with pytest.raises(ValueError):
+        validate_native_snapshot({"version": 1, "revision": 1,
+            "root": {"tag": "a", "href": href, "text": "source"}})
+
+
+def test_non_anchor_nodes_cannot_smuggle_link_targets():
+    with pytest.raises(ValueError):
+        validate_native_snapshot({"version": 1, "revision": 1,
+            "root": {"tag": "div", "href": "https://example.org"}})

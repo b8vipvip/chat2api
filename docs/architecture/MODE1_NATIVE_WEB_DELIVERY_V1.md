@@ -126,4 +126,10 @@ A second vertical slice closes the queued-request cancellation race:
 - The cancel endpoint waits briefly for a queued cancellation to reach its terminal telemetry projection and returns whether it was queued. The browser preserves that result and waits for the cancel handshake before aborting the generation POST, avoiding a transport-abort race that could strand a queued request.
 - Add tests for queued cancellation idempotency, owner-scoped queued signal delivery, admission-task interruption and the browser recovery client's queued flag.
 
-The running Worker remains the terminal authority after dispatch; the Web Chat API never fabricates a Worker completion. W-02 does not claim durable token-level SSE replay. Audio/voice, citation/reference cards, full tool/function-call state UI, KaTeX typesetting and complete ChatGPT component parity remain open acceptance items. Real-browser multi-device and concurrent-update E2E must still pass before the issue is complete.
+The running Worker remains the terminal authority after dispatch; the Web Chat API never fabricates a Worker completion. W-02 does not claim durable token-level SSE replay.
+
+### W-03 — safe citation links in native content
+
+The native-content protocol now carries a bounded `href` only on anchor nodes. The Worker capture, server snapshot validator and browser renderer independently allow only public HTTPS DNS destinations; they reject active schemes, credentials, IP literals, local/private hostnames, non-standard ports and ChatGPT session URLs. Links open in a new tab with `noopener noreferrer nofollow` and `no-referrer`. The legacy `/v1/native-content` projection converts anchors to inert spans so its existing protocol remains unchanged.
+
+This adds clickable source links, not full citation/reference cards. Audio/voice, full citation-card UI, tool/function-call state UI, KaTeX typesetting and complete ChatGPT component parity remain open acceptance items. Durable token-level SSE replay and real-browser multi-device/concurrent-update E2E also remain open before the issue is complete.

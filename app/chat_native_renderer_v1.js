@@ -1,7 +1,7 @@
 /* Mode 1 native-content renderer. */
 (() => {
   "use strict";
-  const HTML_TAGS = new Set(["div","p","span","strong","em","h1","h2","h3","h4","ul","ol","li","blockquote","pre","code","table","thead","tbody","tr","td","th","figure","figcaption","img","hr","br"]);
+  const HTML_TAGS = new Set(["div","p","span","strong","em","h1","h2","h3","h4","ul","ol","li","blockquote","pre","code","table","thead","tbody","tr","td","th","figure","figcaption","img","hr","br","a"]);
   const MATH_TAGS = new Set(["math","semantics","mrow","mi","mo","mn","msub","mfrac","mtext","mover","munder","munderover","msup","msubsup","msqrt","mroot"]);
   const SVG_TAGS = new Set(["svg","g","path","line","rect","circle","ellipse","polyline","polygon","text","tspan","defs","clippath"]);
   const SAFE_TAGS = new Set([...HTML_TAGS,...MATH_TAGS,...SVG_TAGS]);
@@ -55,6 +55,23 @@
   }
   function safeMediaUrl(value) { return safeRouteUrl(value,MEDIA_PATH); }
   function safeGeneratedFileUrl(value) { return safeRouteUrl(value,GENERATED_PATH); }
+  function safeExternalLinkUrl(value) {
+    if (typeof value !== "string" || !value || value.length > 2048 || value !== value.trim() ||
+        /[\u0000-\u001f\u007f]/.test(value)) return "";
+    try {
+      const url = new URL(value);
+      const host = url.hostname.toLowerCase().replace(/\.$/, "");
+      if (url.protocol !== "https:" || url.origin === window.location.origin ||
+          url.username || url.password || (url.port && url.port !== "443") ||
+          !host || host.includes(":") ||
+          /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)) return "";
+      if (["chatgpt.com","chat.openai.com","localhost"].includes(host) ||
+          /(?:^|\.)(?:chatgpt\.com|localhost|local|internal|test|invalid|example|onion)$/.test(host)) return "";
+      if (!/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(host)) return "";
+      return url.href;
+    } catch (_) { return ""; }
+  }
+
   function validSvgAttribute(key,value) {
     if (!SVG_ATTRS.has(key) || typeof value !== "string" || !value || value !== value.trim() ||
         value.length > (key === "d" ? 16000 : key === "points" ? 4096 : 240)) return false;
@@ -90,8 +107,9 @@
     if (typeof tag !== "string" || !SAFE_TAGS.has(tag)) return false;
     if (SVG_TAGS.has(parentTag) && !SVG_TAGS.has(tag)) return false;
     if (SVG_TAGS.has(tag) && !SVG_TAGS.has(parentTag) && tag !== "svg") return false;
-    const allowed = new Set(["tag","text","children","style","media_index","intrinsic_width","intrinsic_height","source_sha256","attrs","col_span","row_span"]);
+    const allowed = new Set(["tag","text","children","style","media_index","intrinsic_width","intrinsic_height","source_sha256","attrs","col_span","row_span","href"]);
     if (Object.keys(value).some(key => !allowed.has(key))) return false;
+    if (value.href !== undefined && (tag !== "a" || !safeExternalLinkUrl(value.href))) return false;
     if (Object.prototype.hasOwnProperty.call(value,"attrs")) {
       if (!SVG_TAGS.has(tag) || !value.attrs || typeof value.attrs !== "object" || Array.isArray(value.attrs) || Object.keys(value.attrs).length > 24) return false;
       if (Object.entries(value.attrs).some(([key,item]) => !validSvgAttribute(key,item))) return false;
@@ -137,7 +155,16 @@
     let element;
     if (SVG_TAGS.has(tag)) element = document.createElementNS(SVG_NS,tag === "clippath" ? "clipPath" : tag);
     else if (MATH_TAGS.has(tag)) element = document.createElementNS(MATH_NS,tag);
-    else element = document.createElement(tag);
+    else if (tag === "a") {
+      const href = safeExternalLinkUrl(value.href);
+      element = document.createElement(href ? "a" : "span");
+      if (href) {
+        element.href = href;
+        element.target = "_blank";
+        element.rel = "noopener noreferrer nofollow";
+        element.referrerPolicy = "no-referrer";
+      }
+    } else element = document.createElement(tag);
     if (value.style) Object.entries(value.style).forEach(([key,item]) => { if (validStyle(key,item,tag)) element.style[key] = item; });
     if (value.attrs) Object.entries(value.attrs).forEach(([key,item]) => { if (validSvgAttribute(key,item)) element.setAttribute(key,item); });
     if (value.col_span !== undefined) element.colSpan = value.col_span;
@@ -186,5 +213,5 @@
       return true;
     } catch (_) { return false; }
   }
-  window.Chat2APINativeRendererV1 = Object.freeze({validateSnapshot,renderNativeSnapshot,safeMediaUrl,safeGeneratedFileUrl});
+  window.Chat2APINativeRendererV1 = Object.freeze({validateSnapshot,renderNativeSnapshot,safeMediaUrl,safeGeneratedFileUrl,safeExternalLinkUrl});
 })();

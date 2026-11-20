@@ -29,7 +29,7 @@ class Element {
 const text={nodeType:3,nodeValue:"Hello safe rich text"};
 const img=new Element("IMG");
 const node=new Element("DIV",[text,img]);
-const ctx={Element,Node:{TEXT_NODE:3},Date,setTimeout,clearTimeout,TextEncoder,
+const ctx={Element,Node:{TEXT_NODE:3},Date,setTimeout,clearTimeout,TextEncoder,URL,
  getComputedStyle:()=>({display:"flex",visibility:"visible",flexDirection:"row",
     gap:"8px",color:"rgb(0, 0, 0)",backgroundImage:"url(https://secret.example/token)"}),
  chrome:{runtime:{sendMessage:async m=>{sent.push(m);return {ok:true,committed:true}}}},
@@ -950,3 +950,33 @@ assert.equal(matchesSource(insertedText),false,
   "unrelated injected text block must fail structural parity");
 
 console.log("Phase 2 source DOM vs production native serializer: 8 images, 3 tables, order and image/text/table/code corruption negatives passed");
+
+
+
+// Public HTTPS citations are the only URL-bearing HTML node admitted by the
+// native capture sidecar. Session/local/private and active URL schemes fail closed.
+const citationSends=[];
+const citationCtx={...ctx,chrome:{runtime:{sendMessage:async m=>{citationSends.push(m);return {ok:true,committed:true};}}}};
+delete citationCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,citationCtx);
+const citationAnchor=new Element("A",[{nodeType:3,nodeValue:"Source report"}]);
+citationAnchor.href="https://example.org/reports/2026";
+const citationRoot=new Element("DIV",[citationAnchor]);
+await citationCtx.__CHAT2API_NATIVE_CONTENT_V1__.capture({
+  requestId:"req_nativecitation123",submitStartedAt:Date.now(),lastCandidateNode:citationRoot
+},true);
+assert.equal(citationSends.length,1);
+assert.equal(citationSends[0].event.snapshot.root.children[0].href,"https://example.org/reports/2026");
+
+const unsafeCitationSends=[];
+const unsafeCitationCtx={...ctx,chrome:{runtime:{sendMessage:async m=>{unsafeCitationSends.push(m);return {ok:true,committed:true};}}}};
+delete unsafeCitationCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,unsafeCitationCtx);
+const unsafeCitation=new Element("A",[{nodeType:3,nodeValue:"unsafe source"}]);
+unsafeCitation.href="https://127.0.0.1/admin";
+await unsafeCitationCtx.__CHAT2API_NATIVE_CONTENT_V1__.capture({
+  requestId:"req_nativecitationbad1",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[unsafeCitation])
+},true);
+assert.equal(unsafeCitationSends.length,1);
+assert.equal(unsafeCitationSends[0].event.snapshot.root.children[0].href,undefined);
