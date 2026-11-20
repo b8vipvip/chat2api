@@ -126,7 +126,10 @@ test("preserves request-scoped tool calls and results as safe presentation state
       };
     },
   };
-  const context = vm.createContext({saveHistory() { saved += 1; }, document});
+  const context = vm.createContext({
+    saveHistory() { saved += 1; }, document,
+    safeToolName(value) { return String(value || "tool").slice(0,80); },
+  });
   const api = vm.runInContext(
     source.slice(start, end) + "\n({applyToolEvent,consumeSseFrame,renderToolActivity})",
     context,
