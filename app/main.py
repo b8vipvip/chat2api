@@ -3669,15 +3669,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 "Cannot journal replayed Worker terminal request_id=%s",
                                 request_id,
                             )
+                        persisted = False
                         try:
                             await telemetry.upsert({
                                 **recovered_row,
                                 **projection,
                             })
-                            await event_journal.append_terminal(
-                                request_id, replay_owner, recovered_status,
-                                str(message.get("error") or message.get("reason") or ""),
-                            )
+                            persisted = True
+                            try:
+                                await event_journal.append_terminal(
+                                    request_id, replay_owner, recovered_status,
+                                    str(message.get("error") or message.get("reason") or ""),
+                                )
+                            except Exception:
+                                logger.exception(
+                                    "Cannot append replayed Worker terminal journal marker request_id=%s",
+                                    request_id,
+                                )
                             logger.warning(
                                 "Reconciled replayed Worker terminal as %s request_id=%s; no generation was redispatched",
                                 recovered_status, request_id,
@@ -3687,6 +3695,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 "Cannot reconcile replayed Worker terminal request_id=%s",
                                 request_id,
                             )
+                        if persisted:
+                            await websocket.send_json({
+                                "type": "chat.terminal.ack",
+                                "request_id": request_id,
+                                "terminal_type": message_type,
+                                "accepted": True,
+                                "recovered": True,
+                            })
+                        continue
+                    replay_diagnostics = message.get("diagnostics")
+                    replay_diagnostics = replay_diagnostics if isinstance(replay_diagnostics, dict) else {}
+                    if (
+                        active_state is None
+                        and terminal_message
+                        and replay_diagnostics.get("worker_transport_replayed") is True
+                        and replay_diagnostics.get("worker_transport_recovery") == "transport-outbox-v47"
+                    ):
+                        await websocket.send_json({
+                            "type": "chat.terminal.ack",
+                            "request_id": request_id,
+                            "terminal_type": message_type,
+                            "accepted": False,
+                            "reason": "request_not_recoverable",
+                        })
                         continue
                     if not active_state or not active_state.owns_dispatch_socket(
                         client_id, websocket, registry.sockets.get(client_id)
@@ -3717,6 +3749,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         websocket=websocket,
                         current_socket=registry.sockets.get(client_id),
                     )
+                    replay_diagnostics = message.get("diagnostics")
+                    replay_diagnostics = replay_diagnostics if isinstance(replay_diagnostics, dict) else {}
+                    if (
+                        terminal_message
+                        and replay_diagnostics.get("worker_transport_replayed") is True
+                        and replay_diagnostics.get("worker_transport_recovery") == "transport-outbox-v47"
+                    ):
+                        await websocket.send_json({
+                            "type": "chat.terminal.ack",
+                            "request_id": request_id,
+                            "terminal_type": message_type,
+                            "accepted": bool(accepted),
+                            "recovered": False,
+                        })
                     if accepted and message_type == "chat.completed" and active_state:
                         row = telemetry.get(request_id) or {}
                         owner = str(row.get("api_key_id") or "")
