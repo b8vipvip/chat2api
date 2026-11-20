@@ -233,8 +233,9 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                         }
                     else:
                         payload = {"status": "reset", "terminal": False}
+                    reset_event_id = last_id if payload.get("terminal") is True else int(first_id) - 1
                     yield (
-                        f"id: {last_id}\nevent: replay.reset\ndata: "
+                        f"id: {reset_event_id}\nevent: replay.reset\ndata: "
                         + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
                         + "\n\n"
                     )
@@ -298,13 +299,37 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                 state = broker.requests.get(request_id)
                 if latest_status == "running" and state is None:
                     snapshot = await journal.snapshot(request_id, key_id)
+                    partial_text = str(
+                        snapshot.get("delivered_text")
+                        or snapshot.get("worker_partial_text") or ""
+                    )[:50_000]
+                    diagnostics = latest.get("diagnostics")
+                    diagnostics = dict(diagnostics) if isinstance(diagnostics, dict) else {}
+                    diagnostics.update({
+                        "web_chat_request_recovery": "broker-state-lost-during-replay",
+                        "web_chat_event_replay_available": bool(snapshot.get("last_event_id")),
+                        "web_chat_partial_text_unverified": bool(partial_text),
+                    })
+                    try:
+                        await telemetry.upsert({
+                            **latest,
+                            "status": "stalled",
+                            "response_text": partial_text,
+                            "response_text_available": False,
+                            "error": "The active Web Chat Broker lease is unavailable; no generation was redispatched",
+                            "diagnostics": diagnostics,
+                        })
+                        await journal.append_terminal(
+                            request_id, key_id, "stalled",
+                            "The active Web Chat Broker lease is unavailable",
+                        )
+                    except Exception:
+                        pass
+                    snapshot = await journal.snapshot(request_id, key_id)
                     payload = {
                         "status": "stalled",
                         "terminal": True,
-                        "partial_text": str(
-                            snapshot.get("delivered_text")
-                            or snapshot.get("worker_partial_text") or ""
-                        )[:50_000],
+                        "partial_text": partial_text,
                     }
                     yield (
                         f"id: {int(snapshot.get('last_event_id') or cursor)}"
