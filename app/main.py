@@ -2147,6 +2147,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             "status": event.get("status") or "completed",
                             "arguments": event.get("arguments") or "",
                             "output": event.get("output") or "",
+                            "references": event.get("references") if isinstance(event.get("references"), list) else [],
                         }
                         yield "data: " + json.dumps(
                             chunk_payload(response_id, model, {"chat2api_tool": tool_delta}),
@@ -2526,6 +2527,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                        "admission_stage": "waiting-capacity"},
             )
             state = await chat_request_service.reserve(request_id, client_id)
+            state.mode1_web_chat = request.scope.get("chat2api_mode1_web_chat") is True
         except WebChatAdmissionCancelled:
             await record_early_error(
                 request_id=request_id, response_id=response_id, requested_model=body.model,
