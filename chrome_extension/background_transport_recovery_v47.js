@@ -25,7 +25,10 @@
       const requestId = String(message.request_id || "");
       const terminalType = String(message.terminal_type || "");
       const key = `${requestId}:${terminalType}`;
-      if (state.outbox.delete(key)) await persist();
+      // A negative acknowledgement is a rejection, not permission to forget
+      // the only durable copy of the Worker terminal.
+      if (message.accepted === true && state.outbox.delete(key)) await persist();
+      else if (state.outbox.has(key)) scheduleFlush(2500);
       return;
     }
     return baseHandleServerMessage(message);
