@@ -288,7 +288,10 @@ def test_conversation_attachment_references_protect_files_until_last_cross_devic
 
         image = client.post(
             "/v1/files",
-            headers={"Authorization": "Bearer " + token},
+            headers={
+                "Authorization": "Bearer " + token,
+                "X-Chat2API-Source": "web-chat",
+            },
             json={
                 "filename": "diagram.png", "mime_type": "image/png",
                 "data_base64": base64.b64encode(b"image bytes").decode("ascii"),
@@ -297,7 +300,10 @@ def test_conversation_attachment_references_protect_files_until_last_cross_devic
         )
         document = client.post(
             "/v1/files",
-            headers={"Authorization": "Bearer " + token},
+            headers={
+                "Authorization": "Bearer " + token,
+                "X-Chat2API-Source": "web-chat",
+            },
             json={
                 "filename": "notes.txt", "mime_type": "text/plain",
                 "data_base64": base64.b64encode(b"document bytes").decode("ascii"),
@@ -307,6 +313,8 @@ def test_conversation_attachment_references_protect_files_until_last_cross_devic
         assert image.status_code == 200, image.text
         assert document.status_code == 200, document.text
         image_id, document_id = image.json()["id"], document.json()["id"]
+        assert app.state.file_store.get(image_id).source == "web_chat"
+        assert app.state.file_store.get(document_id).source == "web_chat"
 
         first = _conversation("c2a_file_refs_0001")
         first["apiKeyId"] = key_id
