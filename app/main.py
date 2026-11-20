@@ -2677,7 +2677,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # The Mode 1 Web Chat adapter is a dedicated user-session + managed-Key
     # ingress. It reuses the exact shared Chat Completions admission/Worker
-    # handler below, but does not expose or call the OpenAI-compatible /v1 route.
+    # handler above, but does not expose or call the OpenAI-compatible /v1 route.
     app.state.chat_completions_adapter = chat_completions
 
     @app.post("/api/user/chat/completions")
