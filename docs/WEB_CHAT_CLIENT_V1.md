@@ -19,7 +19,7 @@ Status: first interactive browser client; not a complete ChatGPT 1:1 replacement
 6. The selected Key remains the Chat2API request principal. Web Chat sends generation through the existing Chat Completions route and Worker/ChatRequestService path; it does not create a second generation backend or Worker binding.
 7. In parallel, the browser opens a user-session native-content sidecar for the same request ID. The sidecar checks that the signed-in user owns the API Key recorded in Telemetry, then reads the same validated NativeContentStore snapshot and archived media records. It never dispatches a second generation.
 
-The page sends the full ordered conversation using only standard Chat Completions fields (`model`, `messages`, `stream`). The server's default full-history behavior preserves multi-turn context; no private `prompt_mode` field is required.
+The page sends the full ordered conversation using the Chat2API Web Chat request schema (`model`, `messages`, `stream`). The server's default full-history behavior preserves multi-turn context; no private `prompt_mode` field is required.
 
 ## Implemented in v1
 
@@ -52,6 +52,7 @@ The page sends the full ordered conversation using only standard Chat Completion
 - The page uses a same-origin CSP and does not render untrusted HTML.
 - API Key plaintext is not stored in localStorage, sessionStorage, conversation history or exported Markdown.
 - User session and Key ownership are enforced by existing server endpoints; the page is not an authorization boundary.
+- The Mode 1 generation ingress requires both the HttpOnly user session and the selected managed API Key; it rejects master-key use and cross-account Key ownership.
 - Native sidecar reads use the HttpOnly user session, resolve the request's API Key owner from Telemetry, conceal cross-user request IDs as 404, and are marked private/no-store with Cookie variation. The API Key itself is never returned by the native sidecar.
 - FileStore persists a SHA-256 digest with each new file. Every read verifies both stored byte length and SHA-256 before returning bytes; legacy index rows without a digest are backfilled on first successful read. A mismatch fails closed as an I/O integrity error.
 - Image preview uses `GET /api/user/files/{file_id}/content`, which requires the HttpOnly user session, checks that the file's owner API Key belongs to the current account, and serves only `vision` PNG/JPEG/WebP/GIF bytes with `nosniff`, sandbox CSP, same-origin resource policy and `private, no-store` caching. Successful previews expose the verified digest as an ETag and `X-Chat2API-Content-SHA256` so byte identity can be checked without changing the standard FileObject JSON shape.

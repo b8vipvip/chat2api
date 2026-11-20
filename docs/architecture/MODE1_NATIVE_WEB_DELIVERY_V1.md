@@ -99,9 +99,9 @@ Mode 1 is not a second generation backend, not a per-user browser product and no
 
 The first Mode 1 delivery slice is implemented on the corrected shared-Worker architecture:
 
-- The existing /chat user client continues to select a user-owned Chat2API API Key and submits the generation request once through the existing Chat Completions / Worker dispatch path.
+- The existing /chat user client continues to select a user-owned Chat2API API Key and submits generation once through the dedicated POST /api/user/chat/completions Mode 1 ingress. That adapter verifies the signed-in user owns the selected Key, then calls the same internal Chat Completions request handler used by Mode 2; it does not call the OpenAI-compatible /v1/chat/completions route.
 - A separate same-origin, user-session-authenticated native-content read/SSE adapter is available at /api/user/chat/requests/{request_id}/native-content and /events. It checks Telemetry ownership against the signed-in user's API Keys before returning content.
-- The adapter calls the exact app.state.native_response_snapshot authority already used by /v1/native-content; it does not create another store, dispatch, Broker lease or terminal owner.
+- The native-content adapter calls the exact app.state.native_response_snapshot authority already used by /v1/native-content; the generation adapter reuses the same internal request handler, quota/wallet admission, Worker selection, Broker and ChatRequestService. Neither adapter creates another store, dispatch, Broker lease or terminal owner.
 - The Web Chat renderer receives the full server-validated native tree (including safe SVG attributes and MathML), request-owned verified media assets and archived generated-file descriptors. It applies a second browser-side allowlist and creates DOM nodes rather than inserting captured HTML.
 - The client subscribes to native revisions for the same request ID, removes provisional content if finality cannot be verified, and rehydrates the last available snapshot after refresh without re-submitting generation.
 

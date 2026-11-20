@@ -39,8 +39,10 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         script = client.get("/assets/chat2api-chat-client-v1.js")
         assert script.status_code == 200
         assert "POST" in script.text
-        assert "/v1/chat/completions" in script.text
+        assert "/api/user/chat/completions" in script.text
+        assert "/v1/chat/completions" not in script.text
         assert "streamNativeContent" in script.text
+        assert "/api/user/chat/requests/" in script.text
         assert "/api/user/chat/requests/" in script.text
         assert "localStorage" in script.text
         assert "state.apiToken" in script.text

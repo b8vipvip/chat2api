@@ -31,6 +31,7 @@ for path in ("/v1/images/generations", "/v1/audio/speech", "/v1/audio/conversati
     ]) == 1
 expected = {
     ("GET", "/api/user/chat/requests/{request_id}/recovery"),
+    ("POST", "/api/user/chat/completions"),
     ("GET", "/api/user/chat/requests/{request_id}/native-content"),
     ("GET", "/api/user/chat/requests/{request_id}/native-content/events"),
     ("POST", "/api/user/chat/requests/{request_id}/cancel"),
@@ -53,6 +54,9 @@ for method, path in expected:
 with TestClient(app) as client:
     recovery = client.get("/api/user/chat/requests/req_12345678/recovery")
     assert recovery.status_code == 401
+    mode1 = client.post("/api/user/chat/completions", json={"model":"gpt-5.6-sol","messages":[{"role":"user","content":"hello"}],"stream":True})
+    assert mode1.status_code == 401
+    assert mode1.headers["cache-control"] == "private, no-store"
     native = client.get("/api/user/chat/requests/req_12345678/native-content")
     assert native.status_code == 401
     assert native.headers["cache-control"] == "private, no-store"

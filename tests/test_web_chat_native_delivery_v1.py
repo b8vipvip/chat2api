@@ -118,3 +118,75 @@ def test_user_native_content_adapter_enforces_key_owner_and_preserves_validated_
         assert "event: native.end" in events.text
         assert events.headers["cache-control"] == "private, no-store"
         assert events.headers["vary"] == "Cookie"
+
+
+def test_mode1_chat_ingress_requires_session_and_selected_key_ownership(tmp_path: Path) -> None:
+    settings = Settings(
+        CHAT2API_API_KEY="mode1-web-adapter-master-key",
+        CHAT2API_DATA_DIR=str(tmp_path),
+    )
+    app = create_app(settings)
+    install_user_console_v104_patch(app)
+    calls = []
+
+    async def shared_adapter(body, request, x_chat2api_client, request_id, principal):
+        calls.append({
+            "request_id": request_id,
+            "api_key_id": principal.key_id,
+            "mode1": request.scope.get("chat2api_mode1_web_chat") is True,
+            "model": body.model,
+        })
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"mode": "mode1", "request_id": request_id, "api_key_id": principal.key_id})
+
+    app.state.chat_completions_adapter = shared_adapter
+    with TestClient(app) as client:
+        registered = client.post(
+            "/api/user/register",
+            headers={"Origin": "http://testserver"},
+            json={"email": "mode1-owner@example.test", "password": "mode1-owner-password"},
+        )
+        assert registered.status_code == 200, registered.text
+        owner_cookie = client.cookies.get(USER_SESSION_COOKIE)
+        key = client.post(
+            "/api/user/keys",
+            headers={"Origin": "http://testserver"},
+            json={"name": "mode1 selected key"},
+        )
+        assert key.status_code == 200, key.text
+        token = key.json()["token"]
+        key_id = key.json()["key"]["key_id"]
+
+        client.cookies.clear()
+        missing_session = client.post(
+            "/api/user/chat/completions",
+            headers={"Authorization": "Bearer " + token, "X-Chat2API-Request-ID": "req_mode1test0001"},
+            json={"model": "gpt-5.6-sol", "messages": [{"role": "user", "content": "hello"}], "stream": True},
+        )
+        assert missing_session.status_code == 401
+
+        client.cookies.set(USER_SESSION_COOKIE, owner_cookie)
+        master_key = client.post(
+            "/api/user/chat/completions",
+            headers={"Authorization": "Bearer mode1-web-adapter-master-key", "X-Chat2API-Request-ID": "req_mode1test0002"},
+            json={"model": "gpt-5.6-sol", "messages": [{"role": "user", "content": "hello"}], "stream": True},
+        )
+        assert master_key.status_code == 404
+
+        response = client.post(
+            "/api/user/chat/completions",
+            headers={"Authorization": "Bearer " + token, "X-Chat2API-Request-ID": "req_mode1test0003"},
+            json={"model": "gpt-5.6-sol", "messages": [{"role": "user", "content": "hello"}], "stream": True},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json() == {
+            "mode": "mode1", "request_id": "req_mode1test0003", "api_key_id": key_id,
+        }
+        assert response.headers["cache-control"] == "private, no-store"
+        assert response.headers["vary"] == "Cookie"
+        assert calls == [{
+            "request_id": "req_mode1test0003",
+            "api_key_id": key_id,
+            "mode1": True,
+            "model": "gpt-5.6-sol",
+        }]
