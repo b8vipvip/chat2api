@@ -37,7 +37,9 @@ const good = {
     {tag:"math",children:[
       {tag:"mrow",children:[{tag:"mi",text:"x"},{tag:"mo",text:"="},{tag:"mn",text:"1"}]},
       {tag:"mtable",children:[{tag:"mtr",children:[{tag:"mtd",children:[{tag:"mrow",children:[{tag:"mi",text:"a"}]}]}]}]},
-      {tag:"mfenced",children:[{tag:"mphantom",children:[{tag:"mn",text:"0"}]}]}
+      {tag:"mfenced",children:[{tag:"mphantom",children:[{tag:"mn",text:"0"}]}]},
+      {tag:"semantics",children:[{tag:"mrow",children:[{tag:"mi",text:"x"}]},
+        {tag:"annotation",text:"\\\\frac{x}{y}"}]}
     ]},
     {tag:"a",href:"https://example.org/citation",children:[{tag:"span",text:"citation"}]}
   ]}
