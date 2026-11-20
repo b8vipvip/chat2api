@@ -68,7 +68,7 @@ await context.handleServerMessage({
   accepted: true,
 });
 assert.equal(context.__CHAT2API_BACKGROUND_TRANSPORT_RECOVERY_V47__.outbox.size, 0);
-assert.deepEqual(storage.chat2apiWorkerTransportOutboxV47, []);
+assert.equal(storage.chat2apiWorkerTransportOutboxV47.length, 0);
 
 await context.handleServerMessage({type: "heartbeat.ack"});
 assert.equal(handled.length, 1);
@@ -77,5 +77,7 @@ assert.equal(handled[0].type, "heartbeat.ack");
 await context.trySendSocket({
   type: "chat.delta", request_id: "req_durable_terminal_123", delta: "nonterminal",
 });
-assert.equal(sent.length, 1, "non-terminal events keep the original best-effort transport");
+assert.equal(sent.length, 2, "non-terminal events keep the original best-effort transport");
+assert.equal(sent[1].type, "chat.delta");
+assert.equal(context.__CHAT2API_BACKGROUND_TRANSPORT_RECOVERY_V47__.outbox.size, 0);
 console.log("Worker terminal outbox waits for server acknowledgement");
