@@ -17,6 +17,8 @@
     recoveryController: null,
     activeRequestRecord: null,
     recoveryInFlight: new Set(),
+    nativeSnapshots: new Map(),
+    nativeStreams: new Map(),
     pendingImages: [],
     pendingImagesConversationId: "",
     pendingFiles: [],
@@ -629,11 +631,14 @@
           body.appendChild(grid);
         }
       } else {
-        const renderer = window.Chat2APISafeRenderer;
-        if (renderer && typeof renderer.renderMarkdown === "function") {
-          renderer.renderMarkdown(body, message.content);
-        } else {
-          body.textContent = message.content;
+        const nativeRenderer = window.Chat2APINativeRendererV1;
+        const nativeSnapshot = message.requestId ? state.nativeSnapshots.get(message.requestId) : null;
+        const nativeRendered = Boolean(nativeRenderer && typeof nativeRenderer.renderNativeSnapshot === "function" &&
+          nativeSnapshot && nativeRenderer.renderNativeSnapshot(body,nativeSnapshot));
+        if (!nativeRendered) {
+          const renderer = window.Chat2APISafeRenderer;
+          if (renderer && typeof renderer.renderMarkdown === "function") renderer.renderMarkdown(body,message.content);
+          else body.textContent = message.content;
         }
       }
       if (state.streaming && message.id === state.streamingMessageId) {
@@ -1079,11 +1084,109 @@
     }
   }
 
+  function assistantMessageForRequest(requestId) {
+    for (const conversation of state.conversations) {
+      const message = (conversation.messages || []).find(item => item.role === "assistant" && item.requestId === requestId);
+      if (message) return {conversation,message};
+    }
+    return null;
+  }
+  function applyNativeSnapshot(requestId,snapshot) {
+    const renderer = window.Chat2APINativeRendererV1;
+    if (!renderer || typeof renderer.validateSnapshot !== "function" || !renderer.validateSnapshot(snapshot)) return false;
+    state.nativeSnapshots.set(requestId,snapshot);
+    while (state.nativeSnapshots.size > 24) state.nativeSnapshots.delete(state.nativeSnapshots.keys().next().value);
+    const found = assistantMessageForRequest(requestId);
+    if (found) found.message.nativeFinality = snapshot.finality;
+    if (found && currentConversation()?.id === found.conversation.id) renderMessages();
+    return true;
+  }
+  async function refreshNativeSnapshot(requestId) {
+    try {
+      const response = await fetch("/api/user/chat/requests/" + encodeURIComponent(requestId) + "/native-content",
+        {method:"GET",credentials:"same-origin",cache:"no-store",headers:{Accept:"application/json"}});
+      if (response.status === 404) {
+        const previous = state.nativeSnapshots.get(requestId);
+        if (previous && previous.finality !== "verified-final") {
+          state.nativeSnapshots.delete(requestId);
+          const found = assistantMessageForRequest(requestId);
+          if (found && currentConversation()?.id === found.conversation.id) renderMessages();
+        }
+        return false;
+      }
+      if (!response.ok) return false;
+      return applyNativeSnapshot(requestId,await response.json());
+    } catch (_) { return false; }
+  }
+  function consumeNativeSseFrame(frame,requestId) {
+    const lines = frame.split(/\r?\n/);
+    let eventName = "message";
+    const data = [];
+    for (const line of lines) {
+      if (line.startsWith("event:")) eventName = line.slice(6).trim();
+      else if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
+    }
+    if (eventName === "native.end") return true;
+    if (eventName !== "native.snapshot" || !data.length) return false;
+    try { applyNativeSnapshot(requestId,JSON.parse(data.join("\n"))); } catch (_) {}
+    return false;
+  }
+  async function streamNativeContent(requestId) {
+    if (!requestId || state.nativeStreams.has(requestId)) return;
+    const controller = new AbortController();
+    state.nativeStreams.set(requestId,controller);
+    let reader = null, ended = false;
+    try {
+      const response = await fetch("/api/user/chat/requests/" + encodeURIComponent(requestId) + "/native-content/events",
+        {method:"GET",credentials:"same-origin",cache:"no-store",headers:{Accept:"text/event-stream"},signal:controller.signal});
+      if (!response.ok || !response.body) return;
+      reader = response.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let buffer = "";
+      while (!ended) {
+        const part = await reader.read();
+        if (part.done) break;
+        buffer += decoder.decode(part.value,{stream:true});
+        let boundary;
+        while ((boundary = /\r?\n\r?\n/.exec(buffer))) {
+          const frame = buffer.slice(0,boundary.index);
+          buffer = buffer.slice(boundary.index + boundary[0].length);
+          if (consumeNativeSseFrame(frame,requestId)) { ended = true; break; }
+        }
+      }
+    } catch (_) {
+      // A presentation-sidecar failure never changes the authoritative chat terminal.
+    } finally {
+      if (reader) {
+        if (!ended) void reader.cancel().catch(() => {});
+        try { reader.releaseLock(); } catch (_) {}
+      }
+      state.nativeStreams.delete(requestId);
+      if (!controller.signal.aborted) await refreshNativeSnapshot(requestId);
+    }
+  }
+  async function hydrateNativeSnapshots() {
+    const candidates = [], seen = new Set();
+    for (const conversation of state.conversations) {
+      for (const message of conversation.messages || []) {
+        if (message.role !== "assistant" || !message.requestId || seen.has(message.requestId)) continue;
+        seen.add(message.requestId);
+        candidates.push({requestId:message.requestId,pending:message.pending === true});
+      }
+    }
+    await Promise.all(candidates.slice(-24).map(async item => {
+      if (item.pending) void streamNativeContent(item.requestId);
+      await refreshNativeSnapshot(item.requestId);
+    }));
+  }
   function resumePendingMessages() {
     const pending = [];
     state.conversations.forEach((conversation) => {
       (conversation.messages || []).forEach((message) => {
-        if (message.role === "assistant" && message.pending === true && message.requestId) pending.push({conversation,message});
+        if (message.role === "assistant" && message.pending === true && message.requestId) {
+          pending.push({conversation,message});
+          void streamNativeContent(message.requestId);
+        }
       });
     });
     pending.forEach(({conversation,message}) => { void recoverPendingMessage(conversation,message); });
@@ -1221,6 +1324,9 @@
         throw new Error(payload?.error?.message || payload.detail || "请求失败，HTTP " + response.status);
       }
       if (!response.body) throw new Error("当前浏览器不支持流式响应读取");
+
+      // Observe native rich content for this same request ID; never dispatch twice.
+      void streamNativeContent(requestId);
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder("utf-8");
@@ -1456,6 +1562,7 @@
     renderAll();
     const ready = await loadKeys();
     resumePendingMessages();
+    void hydrateNativeSnapshots();
     if (!ready) return;
     if (currentConversation()) state.selectedModel = currentConversation().model || state.selectedModel;
     renderAll();
@@ -1557,6 +1664,7 @@
     if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
   } catch {}
   window.addEventListener("beforeunload", () => {
+    state.nativeStreams.forEach(controller => controller.abort());
     if (typeof state.destroyImageDrop === "function") state.destroyImageDrop();
     state.pendingImages.forEach((image) => {
       if (image.previewUrl) URL.revokeObjectURL(image.previewUrl);

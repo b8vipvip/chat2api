@@ -634,7 +634,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return owner
 
     async def native_response_snapshot(request_id: str, owner: str,
-                                       *, watch_pending_archive: bool = False) -> dict | None:
+                                       *, watch_pending_archive: bool = False,
+                                       preserve_native_tree: bool = False) -> dict | None:
         snapshot = native_content.get(request_id, owner)
         if not snapshot:
             return None
@@ -750,14 +751,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # identity. Never inject a potentially wrong asset into the v1
             # layout; retain canonical Markdown until every raster is proven.
             visible_assets = []
-        result = {**snapshot, "root": native_public_v1_tree(snapshot["root"]),
+        result = {**snapshot,
+                  "root": snapshot["root"] if preserve_native_tree else native_public_v1_tree(snapshot["root"]),
                   "assets": visible_assets, "files": files,
                   "image_asset_candidates": candidates}
+        # The Web Chat renderer consumes the full, already validated native
+        # tree (including safe SVG attributes and MathML tags). The legacy
+        # public v1 endpoint keeps its compatibility projection unchanged.
+        if preserve_native_tree:
+            result["finality"] = finality_status
         # Internal loop-only flag; do not change strict public native v1
         # schema or expose file transport internals to external clients.
         if watch_pending_archive:
             result["_pending_archive_pollable"] = pending_archive_pollable
         return result
+
+    # The user-session Web Chat adapter reuses this exact read/finality and
+    # archived-media authority; it does not create a second native store.
+    app.state.native_response_snapshot = native_response_snapshot
 
     @app.get("/v1/native-content/{request_id}")
     async def read_native_content(
