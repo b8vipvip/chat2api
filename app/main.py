@@ -3775,7 +3775,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         and replay_diagnostics.get("worker_transport_replayed") is True
                         and replay_diagnostics.get("worker_transport_recovery") == "transport-outbox-v47"
                     ):
-                        if is_already_finalized_worker_terminal(recovered_row, client_id):
+                        if is_already_finalized_worker_terminal(recovered_row, client_id, message_type):
                             await websocket.send_json({
                                 "type": "chat.terminal.ack",
                                 "request_id": request_id,
