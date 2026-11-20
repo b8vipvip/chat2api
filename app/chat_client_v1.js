@@ -167,11 +167,18 @@
     return (bytes / (1024 * 1024)).toFixed(1) + " MiB";
   }
 
+  function safeToolName(value) {
+    return Array.from(String(value || "tool")).filter(character => {
+      const code = character.charCodeAt(0);
+      return code >= 32 && code !== 127;
+    }).join("").slice(0,80) || "tool";
+  }
+
   function normalizeToolEvents(value, role) {
     if (role !== "assistant" || !Array.isArray(value)) return [];
     return value.slice(-6).map(item => {
       if (!item || typeof item !== "object") return null;
-      const toolName = String(item.toolName || "tool").replace(/[\\r\\n\\0-\\x1f]/g," ").slice(0,80) || "tool";
+      const toolName = safeToolName(item.toolName);
       const callIdRaw = String(item.callId || "").slice(0,128);
       const resultIdRaw = String(item.resultId || "").slice(0,128);
       const validId = value => /^[A-Za-z0-9_.:-]{1,128}$/.test(value);
@@ -1263,7 +1270,7 @@
 
   function applyToolEvent(assistant, event) {
     if (!assistant || !event || !["call","result"].includes(event.phase)) return false;
-    const toolName = String(event.tool_name || "tool").replace(/[\r\n\0-\x1f]/g," ").slice(0,80) || "tool";
+    const toolName = safeToolName(event.tool_name);
     const callId = String(event.call_id || "").slice(0,128);
     const resultId = String(event.result_id || "").slice(0,128);
     if (!callId && !resultId) return false;

@@ -167,3 +167,29 @@ test("preserves request-scoped tool calls and results as safe presentation state
   const output = details.children.find(node => node.tag === "pre");
   assert.equal(output.textContent, "<img src=x onerror=alert(1)>");
 });
+
+
+test("normalizes persisted tool events without accepting unsafe IDs or control characters", () => {
+  const start = source.indexOf("  function safeToolName(");
+  const end = source.indexOf("  function normalizeConversationRow(", start);
+  assert.ok(start >= 0 && end > start);
+  const context = vm.createContext({});
+  const normalizeToolEvents = vm.runInContext(
+    source.slice(start, end) + "\nnormalizeToolEvents",
+    context,
+  );
+  const rows = normalizeToolEvents([{
+    toolName: "browser.search\\n<script>",
+    callId: "call-123",
+    resultId: "result-123",
+    status: "completed",
+    arguments: "x".repeat(3000),
+    output: "ok",
+  }, {
+    toolName: "forged", callId: "bad id", status: "completed",
+  }], "assistant");
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].toolName.includes("\\n"), false);
+  assert.equal(rows[0].arguments.length, 2000);
+  assert.deepEqual(JSON.parse(JSON.stringify(normalizeToolEvents(rows, "user"))), []);
+});

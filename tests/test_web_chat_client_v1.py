@@ -47,6 +47,8 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         assert "localStorage" in script.text
         assert "/api/user/chat/conversations" in script.text
         assert "syncServerConversations" in script.text
+        assert "normalizeToolEvents" in script.text
+        assert "const toolEvents = normalizeToolEvents(message.toolEvents,message.role)" in script.text
         assert "expected_revision" in script.text
         assert "orphanedFileIds" not in script.text
         assert "remainingFileIds" not in script.text

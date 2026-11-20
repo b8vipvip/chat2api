@@ -125,6 +125,19 @@ def test_web_chat_conversation_api_auth_ownership_sync_and_conflicts(tmp_path: P
         assert created.headers["cache-control"] == "private, no-store"
         assert "cookie" in {value.strip().lower() for value in created.headers["vary"].split(",")}
 
+        # A tool-only assistant message is still a valid persisted activity record.
+        tool_only_id = "c2a_toolonly_000001"
+        tool_only = _conversation(tool_only_id)
+        tool_only["apiKeyId"] = key_id
+        tool_only["messages"][1]["content"] = ""
+        tool_only["messages"][1]["toolEvents"] = conversation["messages"][1]["toolEvents"]
+        tool_only_saved = client.put(
+            f"/api/user/chat/conversations/{tool_only_id}",
+            json={"expected_revision": 0, "conversation": tool_only},
+        )
+        assert tool_only_saved.status_code == 200, tool_only_saved.text
+        assert tool_only_saved.json()["conversation"]["messages"][1]["toolEvents"][0]["status"] == "completed"
+
         # A stale browser tab cannot silently overwrite a newer server revision.
         stale = client.put(
             f"/api/user/chat/conversations/{conversation_id}",
