@@ -1776,19 +1776,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     state.delivery_event_ids = [
                         int(value) for value in delivery.get("chunk_event_ids", [])
                     ]
-                    state.delivery_terminal_event_id = int(
-                        delivery.get("terminal_event_id") or 0
-                    )
-                    state.last_event_id = max(
-                        state.last_event_id, state.delivery_terminal_event_id,
-                    )
-                elif status_value in {"error", "cancelled", "stalled"}:
-                    terminal_id = await event_journal.append_terminal(
-                        state.request_id, state.mode1_owner_key_id,
-                        status_value, error or "",
-                    )
-                    state.delivery_terminal_event_id = int(terminal_id or 0)
-                    state.last_event_id = max(state.last_event_id, state.delivery_terminal_event_id)
             except Exception as journal_error:
                 state.diagnostics["web_chat_event_journal_error"] = type(journal_error).__name__
                 logger.exception(
@@ -1828,6 +1815,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "error": error,
             }
         )
+        # The terminal cursor is appended only after the authoritative
+        # telemetry terminal has been written. A crash between the two leaves
+        # replayable content but cannot falsely turn a running row into success.
+        if state.mode1_web_chat and state.mode1_owner_key_id:
+            try:
+                if status_value == "completed":
+                    terminal_id = await event_journal.append_delivery_terminal(
+                        state.request_id, state.mode1_owner_key_id, len(final_text),
+                    )
+                elif status_value in {"error", "cancelled", "stalled"}:
+                    terminal_id = await event_journal.append_terminal(
+                        state.request_id, state.mode1_owner_key_id,
+                        status_value, error or "",
+                    )
+                else:
+                    terminal_id = None
+                state.delivery_terminal_event_id = int(terminal_id or 0)
+                state.last_event_id = max(state.last_event_id, state.delivery_terminal_event_id)
+            except Exception as journal_error:
+                state.diagnostics["web_chat_event_journal_error"] = type(journal_error).__name__
+                logger.exception(
+                    "Mode 1 event journal terminal marker failed request_id=%s",
+                    state.request_id,
+                )
         # A manual Playground run is created before the API dispatch. If its
         # browser disappeared (real req_b734ffd3 stalled after 915s), the
         # browser cannot call the terminal-only chat-records endpoint and
