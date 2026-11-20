@@ -123,7 +123,9 @@ def test_sse_event_replay_is_owner_scoped_and_honors_last_event_id(tmp_path):
             request_id, "key_replay_alice", "x" * 5000,
         ))
         first_id, second_id = delivery["chunk_event_ids"]
-        terminal_id = delivery["terminal_event_id"]
+        terminal_id = asyncio.run(app.state.web_chat_event_journal.append_delivery_terminal(
+            request_id, "key_replay_alice", delivery["text_chars"],
+        ))
 
         replay = alice.get(
             f"/api/user/chat/requests/{request_id}/events",
