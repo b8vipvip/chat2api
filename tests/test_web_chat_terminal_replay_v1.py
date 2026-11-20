@@ -1,3 +1,6 @@
+import asyncio
+
+from app.telemetry import TelemetryStore
 from app.web_chat_terminal_replay_v1 import (
     is_replayed_mode1_terminal,
     replayed_terminal_projection,
@@ -67,3 +70,31 @@ def test_replayed_worker_error_and_cancel_keep_their_terminal_semantics():
     assert cancelled["error"] == "user stopped"
     assert error["response_text"] == ""
     assert cancelled["response_text"] == ""
+
+
+def test_replayed_terminal_replaces_older_provisional_text_without_completing(tmp_path):
+    async def scenario():
+        telemetry = TelemetryStore(tmp_path)
+        telemetry._remember({
+            "request_id": "req_replay_update",
+            "api_key_id": "key-mode1",
+            "web_chat_mode": True,
+            "status": "recovering",
+            "response_text": "",
+            "response_text_provisional": "short preview",
+        })
+        await telemetry.upsert({
+            "request_id": "req_replay_update",
+            "status": "stalled",
+            "response_text": "full replayed Worker terminal",
+            "response_text_available": False,
+            "error": "archive and usage reconciliation not rerun",
+        })
+        row = telemetry.get("req_replay_update")
+        assert row["status"] == "stalled"
+        assert row["response_text"] == ""
+        assert row["response_text_available"] is False
+        assert row["response_text_provisional"] == "full replayed Worker terminal"
+        assert row["response_text_provisional_unverified"] is True
+
+    asyncio.run(scenario())
