@@ -310,7 +310,68 @@ class WebChatConversationStoreV1:
                     PRIMARY KEY (user_id, file_id)
                 )
             """)
-            connection.execute("PRAGMA user_version=2")
+            if version < 2:
+                # Backfill references from pre-v2 conversation rows before
+                # enabling deletion guards. Without this migration, existing
+                # saved attachments could be deleted as if they were orphans.
+                connection.execute("BEGIN IMMEDIATE")
+                try:
+                    counts: dict[tuple[str, str], int] = {}
+                    rows = connection.execute(
+                        "SELECT user_id, updated_at, deleted, payload FROM web_chat_conversations"
+                    ).fetchall()
+                    for stored in rows:
+                        if bool(stored["deleted"]):
+                            continue
+                        try:
+                            payload = json.loads(str(stored["payload"]))
+                        except (TypeError, ValueError, json.JSONDecodeError) as error:
+                            raise RuntimeError(
+                                "Stored Web Chat conversation cannot be migrated for attachment references"
+                            ) from error
+                        if not isinstance(payload, dict):
+                            raise RuntimeError(
+                                "Stored Web Chat conversation has an invalid attachment migration shape"
+                            )
+                        conversation_refs: set[str] = set()
+                        messages = payload.get("messages", [])
+                        if isinstance(messages, list):
+                            for message in messages:
+                                content = message.get("content") if isinstance(message, dict) else None
+                                if not isinstance(content, list):
+                                    continue
+                                for part in content:
+                                    if not isinstance(part, dict):
+                                        continue
+                                    if part.get("type") == "file":
+                                        file_id = part.get("file_id")
+                                    elif part.get("type") == "image_url":
+                                        image = part.get("image_url")
+                                        file_id = image.get("url") if isinstance(image, dict) else None
+                                    else:
+                                        file_id = None
+                                    if isinstance(file_id, str) and _FILE_ID_RE.fullmatch(file_id):
+                                        conversation_refs.add(file_id)
+                        user_id = str(stored["user_id"] or "")
+                        for file_id in conversation_refs:
+                            key = (user_id, file_id)
+                            counts[key] = counts.get(key, 0) + 1
+                    for (user_id, file_id), count in counts.items():
+                        connection.execute(
+                            """
+                            INSERT OR REPLACE INTO web_chat_file_references
+                                (user_id, file_id, ref_count, updated_at)
+                            VALUES (?, ?, ?, ?)
+                            """,
+                            (user_id, file_id, count, _now()),
+                        )
+                    connection.execute("PRAGMA user_version=2")
+                    connection.commit()
+                except Exception:
+                    connection.rollback()
+                    raise
+            else:
+                connection.execute("PRAGMA user_version=2")
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=10, isolation_level=None)
