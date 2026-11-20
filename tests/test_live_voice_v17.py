@@ -384,3 +384,31 @@ def test_live_voice_ready_session_without_response_is_not_completed(tmp_path: Pa
         row = app.state.telemetry.get(request_id)
         assert row["status"] == "error"
         assert "without a completed response" in row["error"]
+
+
+
+def test_live_voice_rejects_oversized_initial_control_frame(tmp_path: Path) -> None:
+    with TestClient(app_live(tmp_path)) as client:
+        managed_key = create_managed_key(client)
+        with client.websocket_connect(
+            "/v1/audio/realtime",
+            headers={"Authorization": f"Bearer {managed_key}"},
+        ) as live:
+            large = '{"type":"session.start","instructions":"' + ("x" * (64 * 1024)) + '"}'
+            live.send_text(large)
+            response = live.receive_json()
+            assert response["code"] == "LIVE_CONTROL_FRAME_TOO_LARGE"
+            assert response["retryable"] is False
+
+
+def test_live_voice_requires_session_start_json_object(tmp_path: Path) -> None:
+    with TestClient(app_live(tmp_path)) as client:
+        managed_key = create_managed_key(client)
+        with client.websocket_connect(
+            "/v1/audio/realtime",
+            headers={"Authorization": f"Bearer {managed_key}"},
+        ) as live:
+            live.send_text("[]")
+            response = live.receive_json()
+            assert response["code"] == "INVALID_SESSION_START"
+            assert response["retryable"] is False
