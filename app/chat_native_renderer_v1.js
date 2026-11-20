@@ -38,6 +38,8 @@
   const SVG_RATIO = /^(?:none|x(?:Min|Mid|Max)Y(?:Min|Mid|Max))(?:\s+(?:meet|slice))?$/;
   const MEDIA_PATH = /^\/api\/media\/[A-Za-z0-9_-]{6,100}\/[A-Za-z0-9_-]{8,150}$/;
   const GENERATED_PATH = /^\/api\/generated-files\/(?:pending\/pgen_[a-f0-9]{32}\/[A-Za-z0-9_-]{16,150}|[A-Za-z0-9_-]{6,100}\/[A-Za-z0-9_-]{8,150})$/;
+  const AUDIO_MIMES = new Set(["audio/mpeg","audio/wav","audio/mp4","audio/ogg","audio/flac"]);
+  const VIDEO_MIMES = new Set(["video/mp4","video/webm"]);
   const SVG_NS = "http://www.w3.org/2000/svg", MATH_NS = "http://www.w3.org/1998/Math/MathML";
   const MAX_NODES = 30000, MAX_TEXT = 300000;
 
@@ -198,7 +200,22 @@
         if (!item || typeof item !== "object" || typeof item.filename !== "string") continue;
         const url = item.status === "ready" ? safeGeneratedFileUrl(item.url) : "";
         const card = document.createElement("div"); card.className = "native-generated-file";
-        if (url) {
+        const mime = typeof item.mime_type === "string" ? item.mime_type.toLowerCase() : "";
+        if (url && AUDIO_MIMES.has(mime)) {
+          const label = document.createElement("span");
+          label.textContent = item.filename.slice(0,180);
+          const player = document.createElement("audio");
+          player.controls = true; player.preload = "metadata";
+          player.src = url; player.referrerPolicy = "no-referrer";
+          card.appendChild(label); card.appendChild(player);
+        } else if (url && VIDEO_MIMES.has(mime)) {
+          const label = document.createElement("span");
+          label.textContent = item.filename.slice(0,180);
+          const player = document.createElement("video");
+          player.controls = true; player.preload = "metadata"; player.playsInline = true;
+          player.src = url; player.referrerPolicy = "no-referrer";
+          card.appendChild(label); card.appendChild(player);
+        } else if (url) {
           const link = document.createElement("a"); link.href = url; link.rel = "noopener noreferrer";
           link.referrerPolicy = "no-referrer"; link.textContent = item.filename.slice(0,180); card.appendChild(link);
         } else {

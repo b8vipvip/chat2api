@@ -172,4 +172,7 @@ a{color:inherit}
 .native-generated-files{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
 .native-generated-file{padding:8px 11px;border:1px solid var(--line);border-radius:9px;background:var(--panel);font-size:12px}
 .native-generated-file a{color:var(--accent);text-decoration:underline;text-underline-offset:2px}
+.native-generated-file audio{display:block;max-width:min(100%,420px);margin-top:6px}
+.native-generated-file video{display:block;width:min(100%,720px);max-width:100%;height:auto;margin-top:6px;border-radius:6px}
+.native-generated-file span{display:block}
 .native-image-unverified{display:inline-block;padding:9px 12px;border:1px dashed var(--line);border-radius:8px;color:var(--muted);font-size:11px}

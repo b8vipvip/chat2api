@@ -33,6 +33,14 @@ def office_zip() -> bytes:
     ("run.py", "text/x-python", b"print('hello')\n"),
     ("data.json", "application/json", b'{"ok": true}'),
     ("package.zip", "application/zip", office_zip()),
+    ("voice.mp3", "audio/mpeg", b"ID3\x04\x00\x00\x00\x00\x00\x00audio"),
+    ("voice.wav", "audio/wav", b"RIFF\x10\x00\x00\x00WAVEfmt "),
+    ("voice.m4a", "audio/mp4", b"\x00\x00\x00\x18ftypM4A \x00\x00\x00\x00M4A "),
+    ("voice.ogg", "audio/ogg", b"OggS\x00\x02audio"),
+    ("voice.opus", "audio/ogg", b"OggS\x00\x02OpusHead"),
+    ("voice.flac", "audio/flac", b"fLaC\x00\x00\x00\x22audio"),
+    ("clip.mp4", "video/mp4", b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00"),
+    ("clip.webm", "video/webm", b"\x1a\x45\xdf\xa3webm"),
 ])
 def test_store_and_rewrite_supported_generated_files(tmp_path, filename, mime, payload):
     from app.media_archive_v173 import MediaArchive
@@ -262,3 +270,61 @@ def test_p1_same_bytes_different_declared_mime_never_reuses_wrong_manifest(tmp_p
     assert csv["id"] != plain["id"]
     assert files.read(csv["id"], csv["token"])[1] == "text/csv"
     assert len(files.list_items()) == 2
+
+
+
+def test_audio_video_generated_files_are_inline_playable_with_single_range_support(tmp_path):
+    app = create_app(Settings(
+        CHAT2API_API_KEY="test-key",
+        CHAT2API_PAIRING_CODE="pair-code",
+        CHAT2API_DATA_DIR=tmp_path,
+    ))
+    with TestClient(app) as client:
+        audio = app.state.generated_files.store(
+            b"ID3\x04\x00\x00\x00\x00\x00\x00sample-audio",
+            "voice.mp3", "audio/mpeg", "owner", "req-audio",
+        )
+        video_bytes = b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00sample-video"
+        video = app.state.generated_files.store(
+            video_bytes, "clip.mp4", "video/mp4", "owner", "req-video",
+        )
+        audio_response = client.get(
+            f"/api/generated-files/{audio['id']}/{audio['token']}"
+        )
+        assert audio_response.status_code == 200
+        assert audio_response.headers["content-type"] == "audio/mpeg"
+        assert audio_response.headers["content-disposition"].startswith("inline;")
+        assert audio_response.headers["accept-ranges"] == "bytes"
+        assert audio_response.content.startswith(b"ID3")
+
+        partial = client.get(
+            f"/api/generated-files/{video['id']}/{video['token']}",
+            headers={"Range": "bytes=4-11"},
+        )
+        assert partial.status_code == 206
+        assert partial.headers["content-type"] == "video/mp4"
+        assert partial.headers["content-range"] == f"bytes 4-11/{len(video_bytes)}"
+        assert partial.content == video_bytes[4:12]
+
+        invalid_range = client.get(
+            f"/api/generated-files/{video['id']}/{video['token']}",
+            headers={"Range": f"bytes={len(video_bytes)+10}-"},
+        )
+        assert invalid_range.status_code == 416
+        assert invalid_range.headers["content-range"] == f"bytes */{len(video_bytes)}"
+
+
+def test_generated_media_rejects_mismatched_container_signatures(tmp_path):
+    from app.media_archive_v173 import MediaArchive
+    files = GeneratedFileArchive(MediaArchive(tmp_path, "secret"))
+    invalid = [
+        handoff("fake.mp4", "video/mp4", b"not an mp4 container"),
+        handoff("fake.webm", "video/webm", b"not a webm container"),
+        handoff("fake.mp3", "audio/mpeg", b"not an mp3 stream"),
+        handoff("fake.wav", "audio/wav", b"RIFFxxxxNOPE"),
+        handoff("fake.opus", "audio/ogg", b"OggS without OpusHead"),
+    ]
+    for source in invalid:
+        with pytest.raises(ValueError, match="signature"):
+            files.rewrite_markdown(source, "owner", "req-invalid-media", "https://example.org")
+    assert files.list_items() == []

@@ -564,8 +564,62 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse({**record, "object": "chat2api.generated_file", "url": url},
                             headers={"Cache-Control": "no-store"})
 
+    inline_generated_media_mimes = frozenset({
+        "audio/mpeg", "audio/wav", "audio/mp4", "audio/ogg", "audio/flac",
+        "video/mp4", "video/webm",
+    })
+
+    def generated_file_response(data: bytes, mime: str, filename: str,
+                                request: Request) -> Response:
+        from urllib.parse import quote
+        if mime not in inline_generated_media_mimes:
+            return Response(data, media_type="application/octet-stream", headers={
+                "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename, safe='')}",
+                "X-Content-Type-Options": "nosniff",
+                "Referrer-Policy": "no-referrer",
+                "Content-Security-Policy": "sandbox",
+                "Cache-Control": "private, max-age=86400",
+                "X-Chat2API-File-MIME": mime,
+            })
+        total = len(data)
+        headers = {
+            "Content-Disposition": f"inline; filename*=UTF-8''{quote(filename, safe='')}",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
+            "Cross-Origin-Resource-Policy": "same-origin",
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "private, max-age=86400",
+            "X-Chat2API-File-MIME": mime,
+        }
+        range_header = str(request.headers.get("range") or "").strip()
+        if len(range_header) > 80:
+            return Response(status_code=416, headers={"Content-Range": f"bytes */{total}"})
+        if not range_header:
+            return Response(data, media_type=mime, headers=headers)
+        match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header, re.IGNORECASE)
+        if not match or not any(match.groups()) or total <= 0:
+            return Response(status_code=416, headers={"Content-Range": f"bytes */{total}"})
+        first, last = match.groups()
+        if first:
+            start = int(first)
+            end = int(last) if last else total - 1
+        else:
+            suffix = int(last)
+            if suffix <= 0:
+                return Response(status_code=416, headers={"Content-Range": f"bytes */{total}"})
+            start = max(0, total - suffix)
+            end = total - 1
+        if start >= total or end < start:
+            return Response(status_code=416, headers={"Content-Range": f"bytes */{total}"})
+        end = min(end, total - 1)
+        payload = data[start:end + 1]
+        headers["Content-Range"] = f"bytes {start}-{end}/{total}"
+        headers["Content-Length"] = str(len(payload))
+        return Response(payload, status_code=206, media_type=mime, headers=headers)
+
     @app.get("/api/generated-files/pending/{file_id}/{access_token}")
-    async def download_deferred_generated_file(file_id: str, access_token: str) -> Response:
+    async def download_deferred_generated_file(file_id: str, access_token: str,
+                                               request: Request) -> Response:
         try:
             data, mime, filename = await asyncio.to_thread(
                 deferred_generated_files.read, file_id, access_token)
@@ -587,16 +641,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Unknown generated file") from None
         except (ValueError, OSError):
             raise HTTPException(status_code=503, detail="Generated file storage integrity unavailable") from None
-        from urllib.parse import quote
-        return Response(data, media_type="application/octet-stream", headers={
-            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename, safe='')}",
-            "X-Content-Type-Options": "nosniff",
-            "Referrer-Policy": "no-referrer",
-            "Content-Security-Policy": "sandbox",
-            "Cache-Control": "private, max-age=300",
-            "X-Chat2API-File-Status": "ready",
-            "X-Chat2API-File-MIME": mime,
-        })
+        response = generated_file_response(data, mime, filename, request)
+        response.headers["X-Chat2API-File-Status"] = "ready"
+        response.headers["Cache-Control"] = "private, max-age=300"
+        return response
 
     @app.get("/api/generated-files/pending/{file_id}/{access_token}/status")
     async def status_deferred_generated_file(file_id: str, access_token: str) -> Response:
@@ -608,7 +656,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse(value, headers={"Cache-Control": "no-store"})
 
     @app.get("/api/generated-files/{file_id}/{access_token}")
-    async def download_generated_file(file_id: str, access_token: str) -> Response:
+    async def download_generated_file(file_id: str, access_token: str,
+                                      request: Request) -> Response:
         try:
             data, mime, filename = await asyncio.to_thread(generated_files.read, file_id, access_token)
         except (KeyError, FileNotFoundError):
@@ -617,17 +666,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # A missing/corrupt S3/local object must never be a successful
             # delivery; do not expose backend paths or credentials to clients.
             raise HTTPException(status_code=503, detail="Generated file storage integrity unavailable") from None
-        # Always force download, including HTML, code, SVG-like contents and PDF.
-        # Never interpret arbitrary model artifacts as same-origin active code.
-        from urllib.parse import quote
-        return Response(data, media_type="application/octet-stream", headers={
-            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename, safe='')}",
-            "X-Content-Type-Options": "nosniff",
-            "Referrer-Policy": "no-referrer",
-            "Content-Security-Policy": "sandbox",
-            "Cache-Control": "private, max-age=86400",
-            "X-Chat2API-File-MIME": mime,
-        })
+        # Documents/code remain forced downloads. Only verified media types
+        # are inline-playable by the native Web Chat renderer.
+        return generated_file_response(data, mime, filename, request)
 
     # Native rich content is an independent, authenticated presentation sidecar.
     # Standard /v1/chat/completions and Responses SSE events are never replaced.
@@ -740,7 +781,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     # turn a completed OpenAI request into an HTTP 500 or
                     # terminate native SSE. Never invent a ready file.
                     pass
+            mime_type = item.get("mime_type")
             files.append({"filename": name, "url": url, "bytes": size,
+                          "mime_type": mime_type if isinstance(mime_type, str) else "",
                           "status": status if status in {"ready", "failed"} else "processing"})
         # Legacy native v1 clients index assets directly by img.media_index.
         # A candidate report alone is insufficient: extra archived images

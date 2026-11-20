@@ -24,7 +24,12 @@ assert.doesNotMatch(source,/\.innerHTML\s*=/);
 const good = {
   version:1, revision:3, finality:"verified-final",
   assets:["https://chat.example/api/media/media_123456/token_12345678"],
-  files:[],
+  files:[
+    {filename:"voice.mp3",url:"https://chat.example/api/generated-files/abcdef/token_12345678",
+      bytes:120,mime_type:"audio/mpeg",status:"ready"},
+    {filename:"clip.mp4",url:"https://chat.example/api/generated-files/ghijkl/token_abcdefgh",
+      bytes:240,mime_type:"video/mp4",status:"ready"}
+  ],
   root:{tag:"div",children:[
     {tag:"svg",attrs:{viewBox:"0 0 10 10"},children:[
       {tag:"path",attrs:{d:"M0 0 L10 10",stroke:"#123456"}}
@@ -78,6 +83,19 @@ assert.equal(renderedLink.href,"https://example.org/citation");
 assert.equal(renderedLink.target,"_blank");
 assert.equal(renderedLink.rel,"noopener noreferrer nofollow");
 assert.equal(renderedLink.referrerPolicy,"no-referrer");
+const renderedAudio = findTag(renderedHost,"audio");
+const renderedVideo = findTag(renderedHost,"video");
+assert.ok(renderedAudio);
+assert.ok(renderedVideo);
+assert.equal(renderedAudio.controls,true);
+assert.equal(renderedAudio.preload,"metadata");
+assert.equal(renderedAudio.src,"https://chat.example/api/generated-files/abcdef/token_12345678");
+assert.equal(renderedAudio.autoplay,undefined);
+assert.equal(renderedVideo.controls,true);
+assert.equal(renderedVideo.playsInline,true);
+assert.equal(renderedVideo.preload,"metadata");
+assert.equal(renderedVideo.src,"https://chat.example/api/generated-files/ghijkl/token_abcdefgh");
+assert.equal(renderedVideo.autoplay,undefined);
 
 const unsafeTag = structuredClone(good);
 unsafeTag.root.children[0].tag = "script";
