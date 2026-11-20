@@ -150,6 +150,7 @@ def normalize_conversation(
     accounts: Any,
     telemetry: Any,
     user_id: str,
+    file_store: Any = None,
 ) -> dict[str, Any]:
     if not _CONVERSATION_ID_RE.fullmatch(conversation_id) or not isinstance(raw, dict):
         raise ValueError("conversation is invalid")
@@ -183,6 +184,33 @@ def normalize_conversation(
         if type(pending) is not bool:
             raise ValueError("conversation message pending flag is invalid")
         content, has_message_attachments = _normalize_content(message.get("content", ""), role)
+        if has_message_attachments:
+            if file_store is None or not isinstance(content, list):
+                raise LookupError("conversation attachment service is unavailable")
+            for part in content:
+                if part.get("type") == "image_url":
+                    image = part.get("image_url")
+                    file_id = str(image.get("url") or "") if isinstance(image, dict) else ""
+                    item = file_store.get(file_id)
+                    if (
+                        item is None or item.purpose != "vision"
+                        or item.mime_type not in {"image/png", "image/jpeg", "image/webp", "image/gif"}
+                        or not accounts.owns_key(user_id, str(item.owner_key_id or ""))
+                    ):
+                        raise LookupError("image attachment does not belong to this user")
+                elif part.get("type") == "file":
+                    item = file_store.get(str(part.get("file_id") or ""))
+                    if (
+                        item is None or item.purpose != "assistants"
+                        or item.mime_type not in _ALLOWED_DOCUMENT_MIME_TYPES
+                        or not accounts.owns_key(user_id, str(item.owner_key_id or ""))
+                    ):
+                        raise LookupError("document attachment does not belong to this user")
+                    # Stored metadata is authoritative; never persist a
+                    # browser-provided filename, MIME type or byte count.
+                    part["filename"] = str(item.filename or "document")[:180]
+                    part["mime_type"] = str(item.mime_type or "").lower()
+                    part["size"] = int(item.size)
         tool_events = _normalize_tool_events(message.get("toolEvents"), role)
         if not content and not (role == "assistant" and pending) and not tool_events:
             raise ValueError("conversation message content is empty")
@@ -256,7 +284,7 @@ class WebChatConversationStoreV1:
         with closing(self._connect()) as connection:
             connection.execute("PRAGMA journal_mode=WAL")
             version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-            if version > 1:
+            if version > 2:
                 raise RuntimeError("Web Chat conversation database version is newer than this application")
             connection.execute("""
                 CREATE TABLE IF NOT EXISTS web_chat_conversations (
@@ -273,7 +301,16 @@ class WebChatConversationStoreV1:
                 CREATE INDEX IF NOT EXISTS idx_web_chat_conversations_owner_updated
                 ON web_chat_conversations(user_id, updated_at DESC)
             """)
-            connection.execute("PRAGMA user_version=1")
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS web_chat_file_references (
+                    user_id TEXT NOT NULL,
+                    file_id TEXT NOT NULL,
+                    ref_count INTEGER NOT NULL CHECK (ref_count > 0),
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (user_id, file_id)
+                )
+            """)
+            connection.execute("PRAGMA user_version=2")
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=10, isolation_level=None)
@@ -313,6 +350,80 @@ class WebChatConversationStoreV1:
             ).fetchall()
             return [self._decode(row) for row in rows if row is not None]
 
+    @staticmethod
+    def _file_ids(conversation: dict[str, Any] | None) -> set[str]:
+        found: set[str] = set()
+        for message in (conversation or {}).get("messages", []):
+            content = message.get("content") if isinstance(message, dict) else None
+            if not isinstance(content, list):
+                continue
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") == "file":
+                    file_id = part.get("file_id")
+                elif part.get("type") == "image_url":
+                    image = part.get("image_url")
+                    file_id = image.get("url") if isinstance(image, dict) else None
+                else:
+                    file_id = None
+                if isinstance(file_id, str) and _FILE_ID_RE.fullmatch(file_id):
+                    found.add(file_id)
+        return found
+
+    @staticmethod
+    def _adjust_file_references(
+        connection: sqlite3.Connection, user_id: str,
+        old_ids: set[str], new_ids: set[str], updated_at: str,
+    ) -> None:
+        for file_id in old_ids - new_ids:
+            row = connection.execute(
+                "SELECT ref_count FROM web_chat_file_references WHERE user_id=? AND file_id=?",
+                (user_id, file_id),
+            ).fetchone()
+            if row is None or int(row["ref_count"]) <= 1:
+                connection.execute(
+                    "DELETE FROM web_chat_file_references WHERE user_id=? AND file_id=?",
+                    (user_id, file_id),
+                )
+            else:
+                connection.execute(
+                    "UPDATE web_chat_file_references SET ref_count=ref_count-1, updated_at=? WHERE user_id=? AND file_id=?",
+                    (updated_at, user_id, file_id),
+                )
+        for file_id in new_ids - old_ids:
+            connection.execute(
+                """
+                INSERT INTO web_chat_file_references(user_id, file_id, ref_count, updated_at)
+                VALUES (?, ?, 1, ?)
+                ON CONFLICT(user_id, file_id) DO UPDATE SET
+                    ref_count=web_chat_file_references.ref_count+1,
+                    updated_at=excluded.updated_at
+                """,
+                (user_id, file_id, updated_at),
+            )
+
+    def file_reference_count(self, file_id: str, user_id: str | None = None) -> int:
+        with self.lock, closing(self._connect()) as connection:
+            if user_id is None:
+                row = connection.execute(
+                    "SELECT COALESCE(SUM(ref_count), 0) AS count FROM web_chat_file_references WHERE file_id=?",
+                    (file_id,),
+                ).fetchone()
+            else:
+                row = connection.execute(
+                    "SELECT ref_count AS count FROM web_chat_file_references WHERE user_id=? AND file_id=?",
+                    (user_id, file_id),
+                ).fetchone()
+            return int(row["count"] or 0) if row else 0
+
+    def referenced_file_ids(self) -> set[str]:
+        with self.lock, closing(self._connect()) as connection:
+            rows = connection.execute(
+                "SELECT file_id FROM web_chat_file_references WHERE ref_count > 0"
+            ).fetchall()
+            return {str(row["file_id"]) for row in rows}
+
     def upsert(
         self, user_id: str, conversation: dict[str, Any], expected_revision: int,
     ) -> tuple[bool, dict[str, Any] | None]:
@@ -340,6 +451,12 @@ class WebChatConversationStoreV1:
                 saved["createdAt"] = str(current.get("createdAt") or saved["createdAt"])
             saved["updatedAt"] = _now()
             serialized = json.dumps(saved, ensure_ascii=False, separators=(",", ":"))
+            self._adjust_file_references(
+                connection, user_id,
+                self._file_ids(current if current and not current.get("deleted") else None),
+                self._file_ids(saved),
+                saved["updatedAt"],
+            )
             connection.execute(
                 """
                 INSERT INTO web_chat_conversations
@@ -378,6 +495,11 @@ class WebChatConversationStoreV1:
                 return False, current
             revision = current_revision + 1
             now = _now()
+            self._adjust_file_references(
+                connection, user_id,
+                self._file_ids(current if current and not current.get("deleted") else None),
+                set(), now,
+            )
             if current:
                 payload = {
                     "id": conversation_id,
@@ -451,6 +573,7 @@ def install_web_chat_conversations_v1(app: FastAPI) -> None:
                 conversation_id, body.get("conversation"),
                 accounts=accounts, telemetry=request.app.state.telemetry,
                 user_id=str(user["user_id"]),
+                file_store=getattr(request.app.state, "file_store", None),
             )
         except LookupError:
             raise HTTPException(status_code=404, detail="conversation resource not found", headers=_PRIVATE_HEADERS)
