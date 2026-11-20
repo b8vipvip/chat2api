@@ -273,7 +273,8 @@ def test_live_finish_before_browser_ready_never_reports_completed(tmp_path: Path
 
 
 def test_live_voice_bounds_pcm16_frames_and_keeps_session_after_bad_input(tmp_path: Path) -> None:
-    with TestClient(app_live(tmp_path)) as client:
+    app = app_live(tmp_path)
+    with TestClient(app) as client:
         managed_key = create_managed_key(client)
         client_id, extension_token = pair_extension(client)
         with client.websocket_connect(f"/ws/extensions/{client_id}?token={extension_token}") as extension:
@@ -323,7 +324,8 @@ def test_live_voice_bounds_pcm16_frames_and_keeps_session_after_bad_input(tmp_pa
 
 
 def test_live_voice_rejects_invalid_output_pcm_frame_and_reclaims_worker(tmp_path: Path) -> None:
-    with TestClient(app_live(tmp_path)) as client:
+    app = app_live(tmp_path)
+    with TestClient(app) as client:
         managed_key = create_managed_key(client)
         client_id, extension_token = pair_extension(client)
         with client.websocket_connect(f"/ws/extensions/{client_id}?token={extension_token}") as extension:
@@ -358,7 +360,8 @@ def test_live_voice_rejects_invalid_output_pcm_frame_and_reclaims_worker(tmp_pat
 
 
 def test_live_voice_ready_session_without_response_is_not_completed(tmp_path: Path) -> None:
-    with TestClient(app_live(tmp_path)) as client:
+    app = app_live(tmp_path)
+    with TestClient(app) as client:
         managed_key = create_managed_key(client)
         client_id, extension_token = pair_extension(client)
         with client.websocket_connect(f"/ws/extensions/{client_id}?token={extension_token}") as extension:
