@@ -277,6 +277,7 @@ def test_worker_terminal_outbox_replays_across_two_server_instances(tmp_path):
                 "request_id": request_id,
                 "terminal_type": "chat.completed",
                 "accepted": True,
+                "recovered": True,
             }
             # Simulate the first ACK being lost on the network. The durable
             # replay projection must recognize this exact same Worker event.
