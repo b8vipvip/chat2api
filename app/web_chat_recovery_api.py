@@ -121,6 +121,24 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                 "updated_at": updated_at,
             }
 
+        if status == "recovering":
+            # A prior server process lost its in-memory Broker lease. Keep the
+            # same request open briefly for the extension's durable terminal
+            # outbox; never POST or dispatch a replacement generation.
+            return {
+                "request_id": request_id,
+                "status": "recovering",
+                "terminal": False,
+                "recoverable": True,
+                "active": True,
+                "phase": "reconnecting",
+                "retry_after_ms": 500,
+                "last_event_id": last_event_id,
+                "partial_text": str(row.get("response_text_provisional") or "")[:50_000],
+                "partial_text_available": bool(row.get("response_text_provisional")),
+                "updated_at": updated_at,
+            }
+
         if status == "queued":
             # The request may be waiting for Worker admission before a Broker
             # state exists. Keep polling the same request; never POST it again.
