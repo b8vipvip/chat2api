@@ -124,11 +124,15 @@ class WebChatEventJournal:
             if references:
                 payload["references"] = references
             return event_type, payload
-        if event_type == "chat.completed":
-            return "worker.terminal", {"status": "completed"}
-        if event_type in {"chat.error", "chat.cancelled"}:
+        if event_type in {"chat.completed", "image.completed"}:
             return "worker.terminal", {
-                "status": "cancelled" if event_type == "chat.cancelled" else "error",
+                "status": "completed",
+                "kind": "image" if event_type == "image.completed" else "chat",
+            }
+        if event_type in {"chat.error", "chat.cancelled", "image.error", "image.cancelled"}:
+            return "worker.terminal", {
+                "status": "cancelled" if event_type in {"chat.cancelled", "image.cancelled"} else "error",
+                "kind": "image" if event_type.startswith("image.") else "chat",
                 "message": _text(event.get("error") or event.get("reason"), 500),
             }
         return None
