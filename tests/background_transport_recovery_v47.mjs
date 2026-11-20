@@ -70,7 +70,13 @@ assert.equal(storage.chat2apiWorkerTransportOutboxV47.length, 1);
 const restoredSent = [];
 const restoredTimers = new Map();
 let restoredTimerId = 0;
+const lastSentAt = Number(storage.chat2apiWorkerTransportOutboxV47[0]?.last_sent_at_ms || Date.now());
+const restoredNow = lastSentAt + 3000;
+const RestoredDate = class extends Date {
+  static now() { return restoredNow; }
+};
 const restoredContext = {
+  Date: RestoredDate,
   trySendSocket: async payload => { restoredSent.push(payload); return true; },
   socketReady: () => true,
   handleServerMessage: async () => {},
