@@ -387,6 +387,7 @@ def test_recovering_mode1_request_waits_for_worker_terminal_outbox_without_redis
         assert payload["phase"] == "reconnecting"
         assert payload["partial_text"] == "saved partial"
         assert payload["response_text"] == ""
+        assert payload["response_text_available"] is False
 
 
 def test_queued_admission_and_failed_partial_text_are_not_misreported(tmp_path):
