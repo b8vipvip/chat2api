@@ -11,7 +11,7 @@
   // Do not serialize MathML as HTML div/span descendants; its parent structure
   // and unit labels require the MathML namespace through the server and UI.
   const mathTags = new Set("math semantics mrow mi mo mn msub mfrac mtext annotation mover munder munderover msup msubsup msqrt mroot mspace mstyle mtable mtr mtd mmultiscripts mphantom menclose mpadded merror ms mfenced mprescripts none mstack mlongdiv msgroup msrow mscarries mscarry msline".split(" "));
-  const mathTokens = new Set("mi mo mn mtext".split(" "));
+  const mathTokens = new Set("mi mo mn mtext annotation".split(" "));
   const mathNamespace = "http://www.w3.org/1998/Math/MathML";
   // SVG is vector data, not raw HTML. Only inert geometry/axis labels and
   // internal clip references can leave the trusted assistant reply scope.
