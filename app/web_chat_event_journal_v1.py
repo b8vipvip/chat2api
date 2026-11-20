@@ -125,9 +125,12 @@ class WebChatEventJournal:
                 payload["references"] = references
             return event_type, payload
         if event_type in {"chat.completed", "image.completed"}:
+            terminal_text = event.get("text")
             return "worker.terminal", {
                 "status": "completed",
                 "kind": "image" if event_type == "image.completed" else "chat",
+                "text": _text(terminal_text, 50_000) if event_type == "chat.completed" else "",
+                "text_chars": len(terminal_text) if isinstance(terminal_text, str) else 0,
             }
         if event_type in {"chat.error", "chat.cancelled", "image.error", "image.cancelled"}:
             return "worker.terminal", {
@@ -268,6 +271,15 @@ class WebChatEventJournal:
                         # Conflicting snapshots are evidence only; do not
                         # regress or splice unrelated provisional text.
                         pass
+                elif event_type == "worker.terminal":
+                    if payload.get("status") == "completed" and payload.get("kind") == "chat":
+                        terminal_text = _text(payload.get("text"), 50_000)
+                        if terminal_text:
+                            # The terminal text is the Worker controller's final
+                            # body. Persist a bounded forensic copy before the
+                            # server ACK, but never promote it to delivered_text.
+                            worker_text = terminal_text
+                            worker_truncated = int(payload.get("text_chars") or 0) > len(terminal_text)
                 elif event_type == "delivery.delta":
                     addition = _text(payload.get("delta"), FINAL_CHUNK_CHARS)
                     remaining = max(0, _MAX_TEXT_CHARS - len(delivered_text))
