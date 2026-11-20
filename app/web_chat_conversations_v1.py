@@ -7,7 +7,7 @@ import re
 import sqlite3
 import stat
 import threading
-from contextlib import closing
+from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -485,8 +485,41 @@ class WebChatConversationStoreV1:
             ).fetchall()
             return {str(row["file_id"]) for row in rows}
 
+    @contextmanager
+    def file_reference_snapshot_guard(self):
+        """Hold the reference DB write lock while an orphan scan deletes files."""
+        with self.lock, closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                rows = connection.execute(
+                    "SELECT file_id FROM web_chat_file_references WHERE ref_count > 0"
+                ).fetchall()
+                yield {str(row["file_id"]) for row in rows}
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+
+    @contextmanager
+    def file_deletion_guard(self, file_id: str):
+        """Serialize a file unlink against conversation reference transactions."""
+        with self.lock, closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                row = connection.execute(
+                    "SELECT COALESCE(SUM(ref_count), 0) AS count "
+                    "FROM web_chat_file_references WHERE file_id=?",
+                    (file_id,),
+                ).fetchone()
+                yield not bool(row and int(row["count"] or 0) > 0)
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+
     def upsert(
         self, user_id: str, conversation: dict[str, Any], expected_revision: int,
+        file_store: Any = None,
     ) -> tuple[bool, dict[str, Any] | None]:
         conversation_id = str(conversation["id"])
         with self.lock, self._connect() as connection:
@@ -506,6 +539,31 @@ class WebChatConversationStoreV1:
             if current_revision != expected_revision:
                 connection.execute("ROLLBACK")
                 return False, current
+            # Re-check file existence after acquiring SQLite's write lock.
+            # A different server process may have deleted a file after the
+            # route's initial metadata validation but before this transaction.
+            new_file_ids = self._file_ids(conversation)
+            if new_file_ids:
+                if file_store is None:
+                    connection.execute("ROLLBACK")
+                    raise LookupError("conversation attachment service is unavailable")
+                for file_id in new_file_ids:
+                    item = file_store.get(file_id)
+                    if item is None:
+                        connection.execute("ROLLBACK")
+                        raise LookupError("conversation attachment no longer exists")
+                    try:
+                        metadata = (file_store.root / item.path).lstat()
+                    except OSError as error:
+                        connection.execute("ROLLBACK")
+                        raise LookupError("conversation attachment content is unavailable") from error
+                    if (
+                        not stat.S_ISREG(metadata.st_mode)
+                        or metadata.st_nlink != 1
+                        or metadata.st_size != item.size
+                    ):
+                        connection.execute("ROLLBACK")
+                        raise LookupError("conversation attachment content is unavailable")
             revision = current_revision + 1
             saved = dict(conversation)
             if current:
@@ -647,7 +705,9 @@ def install_web_chat_conversations_v1(app: FastAPI) -> None:
                 raise HTTPException(status_code=404, detail="conversation resource not found", headers=_PRIVATE_HEADERS)
             except ValueError as error:
                 raise HTTPException(status_code=422, detail=str(error), headers=_PRIVATE_HEADERS)
-            saved, row = store.upsert(str(user["user_id"]), conversation, expected_revision)
+            saved, row = store.upsert(
+                str(user["user_id"]), conversation, expected_revision, file_store,
+            )
         if not saved:
             return JSONResponse(
                 {"detail": "conversation revision conflict", "conversation": row},
