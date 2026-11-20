@@ -1156,6 +1156,7 @@
         headers: {
           "Authorization": "Bearer " + state.apiToken,
           "Content-Type": "application/json",
+          "X-Chat2API-Source": "web-chat",
         },
         body: JSON.stringify({
           filename: file.filename,
