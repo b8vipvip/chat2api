@@ -166,7 +166,11 @@ def test_web_chat_conversations_sync_between_two_browser_profiles(tmp_path: Path
                 )
                 tool_summary = page_b.get_by_text("browser.search · 已完成")
                 tool_summary.wait_for(state="visible", timeout=10000)
-                tool_summary.click()
+                # Citation-bearing tool details are intentionally expanded on
+                # first render; clicking the summary here would collapse them.
+                assert page_b.locator(".message-tool-event").first.evaluate(
+                    "(node) => node.open"
+                )
                 page_b.get_by_text("Found two search results.").wait_for(
                     state="visible", timeout=10000,
                 )
