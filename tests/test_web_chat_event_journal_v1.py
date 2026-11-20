@@ -1,7 +1,10 @@
 import asyncio
 
 import pytest
+from fastapi.testclient import TestClient
 
+from app.config import Settings
+from app.main import create_app
 from app.telemetry import TelemetryStore
 from app.web_chat_event_journal_v1 import WebChatEventJournal
 
@@ -193,3 +196,90 @@ def test_event_journal_first_terminal_outcome_is_absorbing(tmp_path):
         assert snapshot["delivered_text"] == "verified response"
 
     asyncio.run(scenario())
+
+
+
+def test_worker_terminal_outbox_replays_across_two_server_instances(tmp_path):
+    settings = Settings(
+        CHAT2API_API_KEY="restart-master-key",
+        CHAT2API_PAIRING_CODE="restart-pair-code",
+        CHAT2API_DATA_DIR=tmp_path,
+        CHAT2API_REQUEST_TIMEOUT_SECONDS=10,
+        CHAT2API_DESKTOP_WAKE_TIMEOUT_SECONDS=2,
+    )
+    request_id = "req_brokerrestart123"
+    app_before_restart = create_app(settings)
+
+    with TestClient(app_before_restart) as first_server:
+        paired = first_server.post(
+            "/api/extensions/register",
+            headers={"X-Pairing-Code": "restart-pair-code"},
+            json={
+                "name": "Chrome Worker",
+                "version": "0.22.181",
+                "metadata": {
+                    "chatgpt_login_state": "ready",
+                    "chatgpt_login_composer_ready": True,
+                },
+            },
+        )
+        assert paired.status_code == 200, paired.text
+        client_id, worker_token = paired.json()["client_id"], paired.json()["token"]
+        key, _secret = asyncio.run(app_before_restart.state.api_keys.create("restart-owner"))
+        key_id = key["key_id"]
+        asyncio.run(app_before_restart.state.telemetry.append({
+            "request_id": request_id,
+            "client_id": client_id,
+            "api_key_id": key_id,
+            "requested_model": "gpt-5.6",
+            "request_type": "web_chat",
+            "web_chat_mode": True,
+            "status": "running",
+            "stream": True,
+            "diagnostics": {"route": "web-chat"},
+        }))
+        asyncio.run(app_before_restart.state.web_chat_event_journal.append_worker_event(
+            request_id, key_id, {"type": "chat.delta", "delta": "partial before restart"},
+        ))
+        assert app_before_restart.state.telemetry.get(request_id)["status"] == "running"
+
+    # A second FastAPI application against the same data directory models a
+    # process restart: in-memory Broker state is gone, SQLite and Worker
+    # extension credentials/outbox identity remain durable.
+    app_after_restart = create_app(settings)
+    with TestClient(app_after_restart) as second_server:
+        recovering = app_after_restart.state.telemetry.get(request_id)
+        assert recovering["status"] == "recovering"
+        assert recovering["diagnostics"]["web_chat_request_recovery"] == "awaiting-worker-terminal-replay"
+        assert recovering["response_text_provisional"] == "partial before restart"
+
+        with second_server.websocket_connect(
+            f"/ws/extensions/{client_id}?token={worker_token}",
+        ) as worker:
+            assert worker.receive_json()["type"] == "server.hello"
+            worker.send_json({
+                "type": "chat.completed",
+                "request_id": request_id,
+                "text": "full answer from durable Worker terminal outbox",
+                "diagnostics": {
+                    "worker_transport_replayed": True,
+                    "worker_transport_recovery": "transport-outbox-v47",
+                },
+            })
+            ack = worker.receive_json()
+            assert ack == {
+                "type": "chat.terminal.ack",
+                "request_id": request_id,
+                "terminal_type": "chat.completed",
+                "accepted": True,
+            }
+
+        recovered = app_after_restart.state.telemetry.get(request_id)
+        assert recovered["status"] == "stalled"
+        assert recovered["response_text_available"] is False
+        assert recovered["diagnostics"]["web_chat_terminal_replay_reconciled"] == "provisional-only"
+        snapshot = asyncio.run(
+            app_after_restart.state.web_chat_event_journal.snapshot(request_id, key_id)
+        )
+        assert snapshot["terminal_status"] == "stalled"
+        assert snapshot["worker_partial_text"] == "full answer from durable Worker terminal outbox"
