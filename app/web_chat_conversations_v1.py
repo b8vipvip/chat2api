@@ -705,9 +705,12 @@ def install_web_chat_conversations_v1(app: FastAPI) -> None:
                 raise HTTPException(status_code=404, detail="conversation resource not found", headers=_PRIVATE_HEADERS)
             except ValueError as error:
                 raise HTTPException(status_code=422, detail=str(error), headers=_PRIVATE_HEADERS)
-            saved, row = store.upsert(
-                str(user["user_id"]), conversation, expected_revision, file_store,
-            )
+            try:
+                saved, row = store.upsert(
+                    str(user["user_id"]), conversation, expected_revision, file_store,
+                )
+            except LookupError:
+                raise HTTPException(status_code=404, detail="conversation attachment no longer exists", headers=_PRIVATE_HEADERS)
         if not saved:
             return JSONResponse(
                 {"detail": "conversation revision conflict", "conversation": row},
