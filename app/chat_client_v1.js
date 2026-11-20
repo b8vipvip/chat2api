@@ -1418,18 +1418,82 @@
   }
 
   function consumeSseFrame(frame, assistant) {
-    const data = frame.split(/\r?\n/)
-      .filter((line) => line.startsWith("data:"))
-      .map((line) => line.slice(5).trimStart())
-      .join("\n");
+    const lines = String(frame || "").split(/\r?\n/);
+    let eventName = "message";
+    let eventId = 0;
+    const dataLines = [];
+    for (const line of lines) {
+      if (line.startsWith("id:")) {
+        const parsed = Number(line.slice(3).trim());
+        if (Number.isSafeInteger(parsed) && parsed >= 0) eventId = parsed;
+      } else if (line.startsWith("event:")) {
+        eventName = line.slice(6).trim();
+      } else if (line.startsWith("data:")) {
+        dataLines.push(line.slice(5).trimStart());
+      }
+    }
+    if (eventId && eventId > Number(assistant.lastEventId || 0)) {
+      assistant.lastEventId = eventId;
+    }
+    const data = dataLines.join("\n");
+    if (!data && eventName === "cursor") return false;
     if (!data) return false;
-    if (data.trim() === "[DONE]") return true;
     let event;
     try { event = JSON.parse(data); } catch { return false; }
+
+    if (eventName === "delivery.delta") {
+      appendDelta(assistant, event.delta);
+      return false;
+    }
+    if (eventName === "chat.tool.call" || eventName === "chat.tool.result") {
+      applyToolEvent(assistant, {
+        ...event,
+        phase:eventName === "chat.tool.call" ? "call" : "result",
+      });
+      return false;
+    }
+    if (eventName === "delivery.completed") {
+      assistant.replayTerminalStatus = "completed";
+      return true;
+    }
+    if (eventName === "delivery.error" || eventName === "delivery.cancelled"
+        || eventName === "delivery.stalled" || eventName === "recovery.stalled"
+        || eventName === "recovery.terminal") {
+      const status = String(event.status || (
+        eventName === "delivery.cancelled" ? "cancelled" :
+        eventName === "delivery.error" ? "error" :
+        eventName === "recovery.stalled" ? "stalled" : "unknown"
+      ));
+      if (status === "completed" && typeof event.response_text === "string") {
+        assistant.content = event.response_text.slice(0, MAX_MESSAGE_CHARS);
+      } else if (typeof event.partial_text === "string" && event.partial_text) {
+        assistant.content = event.partial_text.slice(0, MAX_MESSAGE_CHARS);
+      }
+      assistant.replayTerminalStatus = status;
+      return true;
+    }
+    if (eventName === "replay.reset") {
+      if (event.status === "completed" && typeof event.response_text === "string") {
+        assistant.content = event.response_text.slice(0, MAX_MESSAGE_CHARS);
+        assistant.replayTerminalStatus = "completed";
+        return true;
+      }
+      if (event.status === "stalled" && typeof event.partial_text === "string") {
+        assistant.content = event.partial_text.slice(0, MAX_MESSAGE_CHARS);
+        assistant.replayTerminalStatus = "stalled";
+        return true;
+      }
+      return false;
+    }
+    if (data.trim() === "[DONE]") return true;
     if (event?.error) {
       throw new StreamResponseError(event.error.message || "服务端返回流式错误");
     }
     const choice = Array.isArray(event?.choices) ? event.choices[0] : null;
+    if (choice?.delta && Number.isSafeInteger(choice.delta.chat2api_event_id)
+        && choice.delta.chat2api_event_id > Number(assistant.lastEventId || 0)) {
+      assistant.lastEventId = choice.delta.chat2api_event_id;
+    }
     if (choice?.delta && Object.prototype.hasOwnProperty.call(choice.delta, "content")) {
       appendDelta(assistant, choice.delta.content);
     }
@@ -1461,7 +1525,27 @@
         assistant.recoveryStatus = String(update.status || "recovering").slice(0, 40);
         if (update.status === "completed" && update.terminal === true && typeof update.response_text === "string") {
           assistant.content = update.response_text.slice(0, MAX_MESSAGE_CHARS);
+        } else if (update.status === "stalled" && update.terminal === true
+            && typeof update.partial_text === "string" && update.partial_text) {
+          assistant.content = update.partial_text.slice(0, MAX_MESSAGE_CHARS);
         }
+        saveHistory();
+        if (currentConversation()?.id === conversation.id) renderMessages();
+      },
+      onEvent(item) {
+        if (!item || item.request_id !== assistant.requestId
+            || item.assistant_message_id !== assistant.id) return;
+        const idValue = Number(item.id || 0);
+        if (Number.isSafeInteger(idValue) && idValue > Number(assistant.lastEventId || 0)) {
+          assistant.lastEventId = idValue;
+        }
+        const frame = [
+          "id: " + String(item.id || 0),
+          "event: " + String(item.event || "message"),
+          "data: " + JSON.stringify(item.data || {}),
+        ].join("\n");
+        consumeSseFrame(frame, assistant);
+        conversation.updatedAt = new Date().toISOString();
         saveHistory();
         if (currentConversation()?.id === conversation.id) renderMessages();
       },
@@ -1486,12 +1570,18 @@
     saveHistory();
     if (currentConversation()?.id === conversation.id) renderMessages();
     try {
-      const result = await controller.resume(record);
+      let result = null;
+      if (typeof controller.replay === "function") {
+        const replay = await controller.replay(record, Number(assistant.lastEventId || 0));
+        if (replay?.terminal === true) result = replay;
+      }
+      if (!result) result = await controller.resume(record);
       const status = String(result?.status || "recovery_failed");
       if (result?.terminal === true) {
         assistant.pending = false;
         assistant.recoveryStatus = status;
         if (status === "completed" && typeof result.response_text === "string") assistant.content = result.response_text.slice(0, MAX_MESSAGE_CHARS);
+        else if (status === "stalled" && typeof result.partial_text === "string" && result.partial_text) assistant.content = result.partial_text.slice(0, MAX_MESSAGE_CHARS);
       } else if (["recovery_timeout", "polling_stopped", "auth_required"].includes(status)) {
         assistant.pending = true;
         assistant.recoveryStatus = status;
@@ -1701,7 +1791,7 @@
       userMessage = {id:id(),role:"user",content:userContent,createdAt:new Date().toISOString()};
       conversation.messages.push(userMessage);
       autoTitle(conversation);
-      assistant = {id:id(),role:"assistant",content:"",createdAt:new Date().toISOString(),requestId,pending:true,recoveryStatus:"streaming",toolEvents:[]};
+      assistant = {id:id(),role:"assistant",content:"",createdAt:new Date().toISOString(),requestId,pending:true,recoveryStatus:"streaming",toolEvents:[],lastEventId:0};
       conversation.messages.push(assistant);
       state.recoveryController = makeRecoveryController(conversation, assistant);
       state.activeRequestRecord = {request_id:requestId, assistant_message_id:assistant.id};
