@@ -130,7 +130,7 @@ test("preserves request-scoped tool calls and results as safe presentation state
   const referenceEnd = source.indexOf("  function normalizeToolEvents(", referenceStart);
   assert.ok(referenceStart >= 0 && referenceEnd > referenceStart);
   const context = vm.createContext({
-    saveHistory() { saved += 1; }, document, URL,
+    saveHistory() { saved += 1; }, document, URL, MAX_MESSAGE_CHARS:200000,
     safeToolName(value) { return String(value || "tool").slice(0,80); },
   });
   const api = vm.runInContext(
@@ -188,6 +188,20 @@ test("preserves request-scoped tool calls and results as safe presentation state
   assert.equal(referenceLink.href, "https://docs.python.org/3/library/");
   assert.equal(referenceLink.rel, "noopener noreferrer nofollow");
   assert.equal(referenceLink.referrerPolicy, "no-referrer");
+
+  const replayAssistant = {content:"",lastEventId:0,toolEvents:[]};
+  assert.equal(api.consumeSseFrame(
+    'id: 41\\nevent: delivery.delta\\ndata: {"delta":"replayed"}',
+    replayAssistant,
+  ), false);
+  assert.equal(replayAssistant.content, "replayed");
+  assert.equal(replayAssistant.lastEventId, 41);
+  assert.equal(api.consumeSseFrame(
+    'id: 42\\nevent: delivery.completed\\ndata: {"text_chars":8}',
+    replayAssistant,
+  ), true);
+  assert.equal(replayAssistant.replayTerminalStatus, "completed");
+  assert.equal(replayAssistant.lastEventId, 42);
 });
 
 
