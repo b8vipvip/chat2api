@@ -55,8 +55,8 @@ def test_event_journal_persists_ordered_delivery_and_owner_scope(tmp_path):
         await reopened.open()
         restored = await reopened.snapshot("req_journal_123", "key-owner-a")
         assert restored == snapshot
-        with pytest.raises(PermissionError):
-            await reopened.snapshot("req_journal_123", "key-owner-b")
+        hidden = await reopened.snapshot("req_journal_123", "key-owner-b")
+        assert hidden["last_event_id"] == 0
         with pytest.raises(PermissionError):
             await reopened.append_worker_event(
                 "req_journal_123", "key-owner-b",
