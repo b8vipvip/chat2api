@@ -16,6 +16,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from .user_commerce import USER_SESSION_COOKIE
+from .chat_tool_references_v1 import normalize_tool_references
 
 _PRIVATE_HEADERS = {"Cache-Control": "private, no-store", "Vary": "Cookie"}
 _CONVERSATION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
@@ -111,7 +112,7 @@ def _normalize_content(value: Any, role: str) -> tuple[str | list[dict[str, Any]
     return parts, attachments > 0
 
 
-def _normalize_tool_events(value: Any, role: str) -> list[dict[str, str]]:
+def _normalize_tool_events(value: Any, role: str) -> list[dict[str, Any]]:
     if value is None:
         return []
     if role != "assistant" or not isinstance(value, list) or len(value) > _MAX_TOOL_EVENTS_PER_MESSAGE:
@@ -131,10 +132,14 @@ def _normalize_tool_events(value: Any, role: str) -> list[dict[str, str]]:
             or (result_id and not _TOOL_EVENT_ID_RE.fullmatch(result_id))
             or status not in _TOOL_EVENT_STATUSES):
             raise ValueError("message tool activity fields are invalid")
-        rows.append({
+        normalized = {
             "toolName": tool_name, "callId": call_id, "resultId": result_id,
             "status": status, "arguments": arguments, "output": output,
-        })
+        }
+        references = normalize_tool_references(item.get("references"))
+        if references:
+            normalized["references"] = references
+        rows.append(normalized)
     return rows
 
 
