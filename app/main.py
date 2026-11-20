@@ -25,6 +25,9 @@ from .admin import admin_response
 from .api_keys import ApiKeyStore, ApiPrincipal, UNSET
 from .broker import RequestBroker, RequestState
 from .web_chat_event_journal_v1 import WebChatEventJournal
+from .web_chat_terminal_replay_v1 import (
+    is_replayed_mode1_terminal, replayed_terminal_projection,
+)
 from .chat_request_service import ChatRequestService
 from .web_chat_cancellation_v1 import (
     WebChatAdmissionCancelled, WebChatCancellationSignal,
@@ -3644,81 +3647,47 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "image.completed", "image.error", "image.cancelled",
                     }
                     active_state = broker.requests.get(request_id)
-                    if active_state is None and terminal_message:
-                        replay_diagnostics = message.get("diagnostics")
-                        replay_diagnostics = replay_diagnostics if isinstance(replay_diagnostics, dict) else {}
-                        recovered_row = telemetry.get(request_id) or {}
+                    recovered_row = telemetry.get(request_id) or {}
+                    if active_state is None and is_replayed_mode1_terminal(
+                        recovered_row, message, client_id,
+                    ):
                         replay_owner = str(recovered_row.get("api_key_id") or "")
-                        replay_eligible = (
-                            replay_diagnostics.get("worker_transport_replayed") is True
-                            and replay_diagnostics.get("worker_transport_recovery") == "transport-outbox-v47"
-                            and recovered_row.get("web_chat_mode") is True
-                            and str(recovered_row.get("status") or "").lower() == "recovering"
-                            and str(recovered_row.get("client_id") or "") == client_id
-                            and replay_owner
-                            and replay_owner != "master"
-                            and message_type in {"chat.completed", "chat.error", "chat.cancelled"}
-                        )
-                        if replay_eligible:
-                            recovered_status = (
-                                "stalled" if message_type == "chat.completed"
-                                else "cancelled" if message_type == "chat.cancelled"
-                                else "error"
-                            )
-                            candidate_text = str(message.get("text") or "")[:50_000]
-                            diagnostics = recovered_row.get("diagnostics")
-                            diagnostics = dict(diagnostics) if isinstance(diagnostics, dict) else {}
-                            diagnostics.update({
-                                "web_chat_request_recovery": "worker-terminal-replayed-after-broker-restart",
-                                "web_chat_terminal_replay_type": message_type,
-                                "web_chat_terminal_replay_reconciled": (
-                                    "provisional-only" if message_type == "chat.completed"
-                                    else "terminal-status"
-                                ),
-                                "web_chat_terminal_replay_received_at": time.time(),
-                                "worker_transport_replayed": True,
-                            })
-                            try:
-                                if message_type == "chat.completed":
-                                    await event_journal.append_worker_event(
-                                        request_id, replay_owner,
-                                        {"type": "chat.snapshot", "text": candidate_text},
-                                    )
+                        projection = replayed_terminal_projection(recovered_row, message)
+                        recovered_status = str(projection["status"])
+                        candidate_text = str(projection.get("response_text") or "")
+                        try:
+                            if message_type == "chat.completed":
                                 await event_journal.append_worker_event(
-                                    request_id, replay_owner, message,
+                                    request_id, replay_owner,
+                                    {"type": "chat.snapshot", "text": candidate_text},
                                 )
-                            except Exception:
-                                logger.exception(
-                                    "Cannot journal replayed Worker terminal request_id=%s",
-                                    request_id,
-                                )
-                            try:
-                                await telemetry.upsert({
-                                    **recovered_row,
-                                    "status": recovered_status,
-                                    "response_text": candidate_text if message_type == "chat.completed" else "",
-                                    "response_text_available": False,
-                                    "error": (
-                                        "Worker terminal was replayed after Broker restart; final media archival and usage reconciliation were not rerun"
-                                        if message_type == "chat.completed"
-                                        else str(message.get("error") or message.get("reason") or "Worker request failed")
-                                    ),
-                                    "diagnostics": diagnostics,
-                                })
-                                await event_journal.append_terminal(
-                                    request_id, replay_owner, recovered_status,
-                                    str(message.get("error") or message.get("reason") or ""),
-                                )
-                                logger.warning(
-                                    "Reconciled replayed Worker terminal as %s request_id=%s; no generation was redispatched",
-                                    recovered_status, request_id,
-                                )
-                            except Exception:
-                                logger.exception(
-                                    "Cannot reconcile replayed Worker terminal request_id=%s",
-                                    request_id,
-                                )
-                            continue
+                            await event_journal.append_worker_event(
+                                request_id, replay_owner, message,
+                            )
+                        except Exception:
+                            logger.exception(
+                                "Cannot journal replayed Worker terminal request_id=%s",
+                                request_id,
+                            )
+                        try:
+                            await telemetry.upsert({
+                                **recovered_row,
+                                **projection,
+                            })
+                            await event_journal.append_terminal(
+                                request_id, replay_owner, recovered_status,
+                                str(message.get("error") or message.get("reason") or ""),
+                            )
+                            logger.warning(
+                                "Reconciled replayed Worker terminal as %s request_id=%s; no generation was redispatched",
+                                recovered_status, request_id,
+                            )
+                        except Exception:
+                            logger.exception(
+                                "Cannot reconcile replayed Worker terminal request_id=%s",
+                                request_id,
+                            )
+                        continue
                     if not active_state or not active_state.owns_dispatch_socket(
                         client_id, websocket, registry.sockets.get(client_id)
                     ):
