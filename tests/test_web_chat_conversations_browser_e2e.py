@@ -128,7 +128,7 @@ def test_web_chat_conversations_sync_between_two_browser_profiles(tmp_path: Path
                     {"conversationId": conversation_id, "createdAt": created_at},
                 )
                 assert saved["status"] == 200, saved
-                assert saved["body"]["conversation"]["serverRevision"] == 1
+                assert saved["body"]["conversation"]["revision"] == 1
 
                 page_b.reload(wait_until="domcontentloaded")
                 synced_title = page_b.locator(".conversation-title").filter(
