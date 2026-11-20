@@ -272,6 +272,17 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                     if event_type in {"worker.delta", "worker.snapshot", "worker.terminal"}:
                         event_type = "cursor"
                         payload = {}
+                    elif event_type == "delivery.stalled" and not payload.get("partial_text"):
+                        snapshot = await journal.snapshot(request_id, key_id)
+                        latest_row = telemetry.get(request_id) or {}
+                        payload = {
+                            **payload,
+                            "partial_text": str(
+                                latest_row.get("response_text_provisional")
+                                or snapshot.get("delivered_text")
+                                or snapshot.get("worker_partial_text") or ""
+                            )[:50_000],
+                        }
                     yield (
                         f"id: {sequence}\nevent: {event_type}\ndata: "
                         + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
