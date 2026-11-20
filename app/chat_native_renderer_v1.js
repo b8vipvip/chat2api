@@ -2,7 +2,7 @@
 (() => {
   "use strict";
   const HTML_TAGS = new Set(["div","p","span","strong","em","h1","h2","h3","h4","ul","ol","li","blockquote","pre","code","table","thead","tbody","tr","td","th","figure","figcaption","img","hr","br","a"]);
-  const MATH_TAGS = new Set(["math","semantics","mrow","mi","mo","mn","msub","mfrac","mtext","mover","munder","munderover","msup","msubsup","msqrt","mroot"]);
+  const MATH_TAGS = new Set(["math","semantics","mrow","mi","mo","mn","msub","mfrac","mtext","mover","munder","munderover","msup","msubsup","msqrt","mroot","mspace","mstyle","mtable","mtr","mtd","mmultiscripts","mphantom","menclose","mpadded","merror","ms","mfenced","mprescripts","none","mstack","mlongdiv","msgroup","msrow","mscarries","mscarry","msline"]);
   const SVG_TAGS = new Set(["svg","g","path","line","rect","circle","ellipse","polyline","polygon","text","tspan","defs","clippath"]);
   const SAFE_TAGS = new Set([...HTML_TAGS,...MATH_TAGS,...SVG_TAGS]);
   const SVG_ATTRS = new Set(["viewBox","width","height","preserveAspectRatio","x","y","dx","dy","x1","x2","y1","y2","cx","cy","r","rx","ry","d","points","transform","fill","stroke","stroke-width","stroke-linecap","stroke-linejoin","stroke-dasharray","opacity","fill-opacity","stroke-opacity","text-anchor","dominant-baseline","font-size","font-weight","id","clip-path"]);

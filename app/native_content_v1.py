@@ -71,7 +71,10 @@ MAX_ACTIVE = 128
 MAX_AGE_SECONDS = 90 * 86400
 SNAPSHOT_FILENAME = re.compile(r"(?:req|resp|imgreq)_[a-zA-Z0-9_-]{6,100}\.json")
 MATH_TAGS = {"math", "semantics", "mrow", "mi", "mo", "mn", "msub", "mfrac",
-             "mtext", "mover", "munder", "munderover", "msup", "msubsup", "msqrt", "mroot"}
+             "mtext", "mover", "munder", "munderover", "msup", "msubsup", "msqrt", "mroot",
+             "mspace", "mstyle", "mtable", "mtr", "mtd", "mmultiscripts", "mphantom",
+             "menclose", "mpadded", "merror", "ms", "mfenced", "mprescripts", "none",
+             "mstack", "mlongdiv", "msgroup", "msrow", "mscarries", "mscarry", "msline"}
 SVG_TAGS = {"svg", "g", "path", "line", "rect", "circle", "ellipse",
             "polyline", "polygon", "text", "tspan", "defs", "clippath"}
 SVG_ATTRS = {"viewBox", "width", "height", "preserveAspectRatio", "x", "y",

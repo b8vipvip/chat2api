@@ -10,7 +10,7 @@
   const tags = new Set("div p span strong em h1 h2 h3 h4 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br a".split(" "));
   // Do not serialize MathML as HTML div/span descendants; its parent structure
   // and unit labels require the MathML namespace through the server and UI.
-  const mathTags = new Set("math semantics mrow mi mo mn msub mfrac mtext mover munder munderover msup msubsup msqrt mroot".split(" "));
+  const mathTags = new Set("math semantics mrow mi mo mn msub mfrac mtext mover munder munderover msup msubsup msqrt mroot mspace mstyle mtable mtr mtd mmultiscripts mphantom menclose mpadded merror ms mfenced mprescripts none mstack mlongdiv msgroup msrow mscarries mscarry msline".split(" "));
   const mathTokens = new Set("mi mo mn mtext".split(" "));
   const mathNamespace = "http://www.w3.org/1998/Math/MathML";
   // SVG is vector data, not raw HTML. Only inert geometry/axis labels and

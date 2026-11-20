@@ -29,7 +29,11 @@ const good = {
     {tag:"svg",attrs:{viewBox:"0 0 10 10"},children:[
       {tag:"path",attrs:{d:"M0 0 L10 10",stroke:"#123456"}}
     ]},
-    {tag:"math",children:[{tag:"mrow",children:[{tag:"mi",text:"x"},{tag:"mo",text:"="},{tag:"mn",text:"1"}]}]},
+    {tag:"math",children:[
+      {tag:"mrow",children:[{tag:"mi",text:"x"},{tag:"mo",text:"="},{tag:"mn",text:"1"}]},
+      {tag:"mtable",children:[{tag:"mtr",children:[{tag:"mtd",children:[{tag:"mrow",children:[{tag:"mi",text:"a"}]}]}]}]},
+      {tag:"mfenced",children:[{tag:"mphantom",children:[{tag:"mn",text:"0"}]}]}
+    ]},
     {tag:"a",href:"https://example.org/citation",children:[{tag:"span",text:"citation"}]}
   ]}
 };

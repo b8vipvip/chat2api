@@ -685,3 +685,29 @@ def test_non_anchor_nodes_cannot_smuggle_link_targets():
     with pytest.raises(ValueError):
         validate_native_snapshot({"version": 1, "revision": 1,
             "root": {"tag": "div", "href": "https://example.org"}})
+
+
+
+def test_extended_mathml_matrix_and_fenced_expression_nodes_are_preserved():
+    tree = {
+        "tag": "math",
+        "children": [
+            {"tag": "mtable", "children": [
+                {"tag": "mtr", "children": [
+                    {"tag": "mtd", "children": [
+                        {"tag": "mrow", "children": [
+                            {"tag": "mi", "text": "a"},
+                            {"tag": "mo", "text": "+"},
+                            {"tag": "mi", "text": "b"},
+                        ]},
+                    ]},
+                ]},
+            ]},
+            {"tag": "mfenced", "children": [
+                {"tag": "mphantom", "children": [{"tag": "mn", "text": "0"}]},
+            ]},
+        ],
+    }
+    safe = validate_native_snapshot({"version": 1, "revision": 9, "root": tree})
+    assert safe["root"]["children"][0]["tag"] == "mtable"
+    assert safe["root"]["children"][1]["tag"] == "mfenced"
