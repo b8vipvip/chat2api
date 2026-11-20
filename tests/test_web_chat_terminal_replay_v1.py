@@ -176,3 +176,25 @@ def test_replayed_terminal_replaces_older_provisional_text_without_completing(tm
         assert row["response_text_provisional_unverified"] is True
 
     asyncio.run(scenario())
+
+
+
+def test_duplicate_replayed_terminal_after_lost_ack_is_same_worker_and_same_type_only():
+    row = {
+        "api_key_id": "key-mode1",
+        "client_id": "worker-a",
+        "web_chat_mode": True,
+        "status": "stalled",
+        "diagnostics": {
+            "web_chat_request_recovery": "worker-terminal-replayed-after-broker-restart",
+            "web_chat_terminal_replay_type": "image.completed",
+        },
+    }
+    assert is_already_finalized_worker_terminal(row, "worker-a", "image.completed")
+    assert not is_already_finalized_worker_terminal(row, "worker-b", "image.completed")
+    assert not is_already_finalized_worker_terminal(row, "worker-a", "chat.completed")
+    assert not is_already_finalized_worker_terminal(
+        {**row, "diagnostics": {"web_chat_request_recovery": "server-timeout",
+                               "web_chat_terminal_replay_type": "image.completed"}},
+        "worker-a", "image.completed",
+    )
