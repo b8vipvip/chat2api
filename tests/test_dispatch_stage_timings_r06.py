@@ -586,10 +586,11 @@ def test_initial_dispatch_is_rejected_if_broker_lease_releases_while_waiting_for
 
 def test_every_request_scoped_worker_sidecar_uses_dispatch_socket_ownership() -> None:
     source = (ROOT / "app/main.py").read_text(encoding="utf-8")
-    # File chunks, native DOM evidence, native sidecars, probe events and the
-    # ordinary chat/image progress+terminal ingress must share the same
-    # request/client/original-socket/current-socket ownership predicate.
-    assert source.count("owns_dispatch_socket(") == 5
+    # File chunks, native DOM evidence, native sidecars, probe events,
+    # ordinary chat/image ingress and the terminal-journal retry must share the
+    # same request/client/original-socket/current-socket ownership predicate.
+    assert source.count("owns_dispatch_socket(") == 6
+    assert "active_state.owns_dispatch_socket(" in source
 
 
 def test_request_v6_reports_browser_readiness_stages_after_content_ack() -> None:
