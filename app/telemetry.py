@@ -169,6 +169,70 @@ class TelemetryStore:
                 continue
         return recovered
 
+    async def recover_running_after_restart(
+        self,
+        active_request_ids: set[str] | None = None,
+        event_journal: Any | None = None,
+    ) -> int:
+        """Mark Mode 1 requests without a surviving Broker lease as stalled.
+
+        A process restart destroys the in-memory Broker queue and its original
+        Worker WebSocket. Persisted event history remains replayable, but it is
+        not proof that the old browser generation is still executing.
+        """
+        active = {str(value) for value in (active_request_ids or set()) if value}
+        recovered = 0
+        for row in self.recent(self.items.maxlen or 500):
+            request_id = str(row.get("request_id") or "")
+            if (
+                not request_id
+                or request_id in active
+                or row.get("web_chat_mode") is not True
+                or str(row.get("status") or "").lower() != "running"
+            ):
+                continue
+            key_id = str(row.get("api_key_id") or "")
+            snapshot: dict[str, Any] = {}
+            if event_journal is not None and key_id:
+                try:
+                    snapshot = await event_journal.snapshot(request_id, key_id)
+                except Exception:
+                    snapshot = {}
+            partial = str(
+                snapshot.get("delivered_text")
+                or snapshot.get("worker_partial_text")
+                or row.get("response_text_provisional")
+                or ""
+            )[:50_000]
+            diagnostics = row.get("diagnostics")
+            diagnostics = dict(diagnostics) if isinstance(diagnostics, dict) else {}
+            diagnostics.update({
+                "web_chat_request_recovery": "broker-state-lost-after-server-restart",
+                "web_chat_event_replay_available": bool(snapshot.get("last_event_id")),
+                "web_chat_last_event_id": int(snapshot.get("last_event_id") or 0),
+                "web_chat_partial_text_unverified": bool(partial),
+            })
+            try:
+                await self.upsert({
+                    **row,
+                    "status": "stalled",
+                    "response_text": partial,
+                    "response_text_available": False,
+                    "error": "Server restarted while the Web Chat Worker request was active; live Broker state is unavailable",
+                    "diagnostics": diagnostics,
+                })
+                if event_journal is not None and key_id:
+                    await event_journal.append_terminal(
+                        request_id, key_id, "stalled",
+                        "Server restarted while the Worker request was active",
+                    )
+                recovered += 1
+            except Exception:
+                # Keep startup available; an unreconciled row remains visible
+                # for later inspection and must never be treated as active.
+                continue
+        return recovered
+
     async def append(self, item: dict[str, Any]) -> None:
         await self.upsert(item)
 
