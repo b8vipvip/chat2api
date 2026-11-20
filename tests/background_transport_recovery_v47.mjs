@@ -65,6 +65,16 @@ assert.equal(context.__CHAT2API_BACKGROUND_TRANSPORT_RECOVERY_V47__.outbox.size,
   "successful WebSocket.send is not a server acknowledgement");
 assert.equal(storage.chat2apiWorkerTransportOutboxV47.length, 1);
 
+await context.handleServerMessage({
+  type: "chat.terminal.ack",
+  request_id: "req_durable_terminal_123",
+  terminal_type: "chat.completed",
+  accepted: false,
+});
+assert.equal(context.__CHAT2API_BACKGROUND_TRANSPORT_RECOVERY_V47__.outbox.size, 1,
+  "negative acknowledgement must retain the terminal outbox");
+assert.equal(storage.chat2apiWorkerTransportOutboxV47.length, 1);
+
 // A fresh service-worker context restores the unacknowledged terminal and
 // replays it again; only a positive server ACK clears persistent storage.
 const restoredSent = [];
@@ -113,16 +123,6 @@ await restoredContext.handleServerMessage({
   accepted: true,
 });
 assert.equal(storage.chat2apiWorkerTransportOutboxV47.length, 0);
-
-await context.handleServerMessage({
-  type: "chat.terminal.ack",
-  request_id: "req_durable_terminal_123",
-  terminal_type: "chat.completed",
-  accepted: false,
-});
-assert.equal(context.__CHAT2API_BACKGROUND_TRANSPORT_RECOVERY_V47__.outbox.size, 1,
-  "negative acknowledgement must retain the terminal outbox");
-assert.equal(storage.chat2apiWorkerTransportOutboxV47.length, 1);
 
 await context.handleServerMessage({
   type: "chat.terminal.ack",
