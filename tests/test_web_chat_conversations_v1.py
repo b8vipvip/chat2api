@@ -31,6 +31,7 @@ def _conversation(conversation_id: str, *, title: str = "跨设备会话") -> di
                 "requestId": "",
                 "pending": False,
                 "recoveryStatus": "",
+                "lastEventId": 0,
             },
             {
                 "id": "message_assistant_01",
@@ -40,6 +41,7 @@ def _conversation(conversation_id: str, *, title: str = "跨设备会话") -> di
                 "requestId": "",
                 "pending": False,
                 "recoveryStatus": "completed",
+                "lastEventId": 0,
             },
         ],
     }
@@ -108,6 +110,7 @@ def test_web_chat_conversation_api_auth_ownership_sync_and_conflicts(tmp_path: P
         conversation_id = "c2a_sync_test_000001"
         conversation = _conversation(conversation_id)
         conversation["apiKeyId"] = key_id
+        conversation["messages"][1]["lastEventId"] = 42
         conversation["messages"][1]["toolEvents"] = [{
             "toolName": "browser.search", "callId": "call-123",
             "resultId": "result-123", "status": "completed",
@@ -122,6 +125,7 @@ def test_web_chat_conversation_api_auth_ownership_sync_and_conflicts(tmp_path: P
         assert created.json()["conversation"]["revision"] == 1
         assert created.json()["conversation"]["messages"][1]["toolEvents"][0]["toolName"] == "browser.search"
         assert created.json()["conversation"]["messages"][1]["toolEvents"][0]["output"] == "Found two relevant pages."
+        assert created.json()["conversation"]["messages"][1]["lastEventId"] == 42
         assert created.headers["cache-control"] == "private, no-store"
         assert "cookie" in {value.strip().lower() for value in created.headers["vary"].split(",")}
 
