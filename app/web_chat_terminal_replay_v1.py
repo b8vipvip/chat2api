@@ -5,7 +5,7 @@ from typing import Any
 import time
 
 
-_TERMINAL_TYPES = {"chat.completed", "chat.error", "chat.cancelled", "image.completed", "image.error", "image.cancelled"}
+_TERMINAL_TYPES = {"chat.completed", "chat.error", "chat.cancelled"}
 
 
 def is_replayed_mode1_terminal(
@@ -64,8 +64,8 @@ def replayed_terminal_projection(
 ) -> dict[str, Any]:
     message_type = str(message.get("type") or "")
     status = (
-        "stalled" if message_type in {"chat.completed", "image.completed"}
-        else "cancelled" if message_type in {"chat.cancelled", "image.cancelled"}
+        "stalled" if message_type == "chat.completed"
+        else "cancelled" if message_type == "chat.cancelled"
         else "error"
     )
     candidate = message.get("text")
@@ -80,7 +80,6 @@ def replayed_terminal_projection(
         "web_chat_terminal_replay_type": message_type,
         "web_chat_terminal_replay_reconciled": (
             "provisional-only" if message_type == "chat.completed"
-            else "media-terminal-only" if message_type == "image.completed"
             else "terminal-status"
         ),
         "web_chat_terminal_replay_received_at": time.time(),
@@ -88,7 +87,7 @@ def replayed_terminal_projection(
     })
     error = (
         "Worker terminal was replayed after Broker restart; final media archival and usage reconciliation were not rerun"
-        if message_type in {"chat.completed", "image.completed"}
+        if message_type == "chat.completed"
         else str(message.get("error") or message.get("reason") or "Worker request failed")[:500]
     )
     return {
