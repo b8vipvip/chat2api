@@ -61,6 +61,37 @@ def test_replayed_completion_is_preserved_as_provisional_not_false_success():
     assert projection["diagnostics"]["web_chat_terminal_replay_reconciled"] == "provisional-only"
 
 
+def test_late_replay_after_restart_grace_is_accepted_only_as_stalled_provisional():
+    message = {
+        "type": "chat.completed",
+        "text": "late terminal",
+        "diagnostics": {
+            "worker_transport_replayed": True,
+            "worker_transport_recovery": "transport-outbox-v47",
+        },
+    }
+    expired = {
+        "api_key_id": "key-mode1",
+        "client_id": "worker-a",
+        "web_chat_mode": True,
+        "status": "stalled",
+        "diagnostics": {
+            "web_chat_request_recovery": "broker-state-lost-after-restart-grace-expired",
+        },
+    }
+    assert is_replayed_mode1_terminal(expired, message, "worker-a")
+    projection = replayed_terminal_projection(expired, message)
+    assert projection["status"] == "stalled"
+    assert projection["response_text"] == "late terminal"
+    assert projection["response_text_available"] is False
+
+    unrelated_timeout = {
+        **expired,
+        "diagnostics": {"web_chat_request_recovery": "server-timeout"},
+    }
+    assert not is_replayed_mode1_terminal(unrelated_timeout, message, "worker-a")
+
+
 def test_already_finalized_terminal_ack_is_same_worker_and_terminal_only():
     row = {
         "client_id": "worker-a",
