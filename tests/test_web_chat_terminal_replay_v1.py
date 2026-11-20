@@ -60,6 +60,28 @@ def test_replayed_completion_is_preserved_as_provisional_not_false_success():
     assert projection["diagnostics"]["web_chat_terminal_replay_reconciled"] == "provisional-only"
 
 
+def test_replayed_image_completion_is_not_reported_as_a_verified_chat_answer():
+    row = {
+        "api_key_id": "key-mode1",
+        "client_id": "worker-a",
+        "web_chat_mode": True,
+        "status": "recovering",
+    }
+    message = {
+        "type": "image.completed",
+        "diagnostics": {
+            "worker_transport_replayed": True,
+            "worker_transport_recovery": "transport-outbox-v47",
+        },
+    }
+    assert is_replayed_mode1_terminal(row, message, "worker-a")
+    projection = replayed_terminal_projection(row, message)
+    assert projection["status"] == "stalled"
+    assert projection["response_text"] == ""
+    assert projection["response_text_available"] is False
+    assert projection["diagnostics"]["web_chat_terminal_replay_reconciled"] == "media-terminal-only"
+
+
 def test_replayed_worker_error_and_cancel_keep_their_terminal_semantics():
     row = {"diagnostics": {"existing": True}}
     error = replayed_terminal_projection(row, {"type": "chat.error", "error": "worker failed"})
