@@ -133,6 +133,7 @@ class FileStore:
                     or "/" in item.path or "\\" in item.path or ":" in item.path
                     or Path(item.path).name != item.path
                     or not isinstance(item.purpose, str) or not item.purpose
+                    or not isinstance(item.source, str) or item.source not in {"api", "web_chat"}
                     or not isinstance(item.sha256, str)
                     or (item.sha256 and not re.fullmatch(r"[0-9a-f]{64}", item.sha256))
                 ):
