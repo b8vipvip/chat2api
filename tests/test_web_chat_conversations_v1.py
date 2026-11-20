@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 import shutil
 import subprocess
@@ -261,3 +262,148 @@ def test_browser_conversation_merge_conflict_resolution() -> None:
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "conversation merge keeps remote messages" in result.stdout
+
+
+
+def test_conversation_attachment_references_protect_files_until_last_cross_device_tombstone(tmp_path: Path) -> None:
+    app = create_app(Settings(
+        CHAT2API_API_KEY="web-chat-conversation-files-master-key",
+        CHAT2API_DATA_DIR=str(tmp_path),
+    ))
+    install_user_console_v104_patch(app)
+    install_web_chat_features_v1(app)
+
+    with TestClient(app) as client:
+        registered = client.post(
+            "/api/user/register",
+            headers={"Origin": "http://testserver"},
+            json={"email": "conversation-file-owner@example.test", "password": "conversation-file-password"},
+        )
+        assert registered.status_code == 200, registered.text
+        owner_cookie = client.cookies.get(USER_SESSION_COOKIE)
+        key = client.post("/api/user/keys", json={"name": "conversation attachment key"})
+        assert key.status_code == 200, key.text
+        token = key.json()["token"]
+        key_id = key.json()["key"]["key_id"]
+
+        image = client.post(
+            "/v1/files",
+            headers={"Authorization": "Bearer " + token},
+            json={
+                "filename": "diagram.png", "mime_type": "image/png",
+                "data_base64": base64.b64encode(b"image bytes").decode("ascii"),
+                "purpose": "vision",
+            },
+        )
+        document = client.post(
+            "/v1/files",
+            headers={"Authorization": "Bearer " + token},
+            json={
+                "filename": "notes.txt", "mime_type": "text/plain",
+                "data_base64": base64.b64encode(b"document bytes").decode("ascii"),
+                "purpose": "assistants",
+            },
+        )
+        assert image.status_code == 200, image.text
+        assert document.status_code == 200, document.text
+        image_id, document_id = image.json()["id"], document.json()["id"]
+
+        first = _conversation("c2a_file_refs_0001")
+        first["apiKeyId"] = key_id
+        first["messages"][0]["content"] = [
+            {"type": "text", "text": "请查看附件"},
+            {"type": "image_url", "image_url": {"url": image_id}},
+            {
+                "type": "file", "file_id": document_id,
+                "filename": "spoofed.txt", "mime_type": "text/plain", "size": 1,
+            },
+        ]
+        saved_first = client.put(
+            f"/api/user/chat/conversations/{first['id']}",
+            json={"expected_revision": 0, "conversation": first},
+        )
+        assert saved_first.status_code == 200, saved_first.text
+        normalized_file = saved_first.json()["conversation"]["messages"][0]["content"][2]
+        assert normalized_file["filename"] == "notes.txt"
+        assert normalized_file["size"] == len(b"document bytes")
+
+        second = _conversation("c2a_file_refs_0002")
+        second["apiKeyId"] = key_id
+        second["messages"][0]["content"] = [
+            {"type": "text", "text": "复用同一个文件"},
+            {
+                "type": "file", "file_id": document_id,
+                "filename": "notes.txt", "mime_type": "text/plain",
+                "size": len(b"document bytes"),
+            },
+        ]
+        saved_second = client.put(
+            f"/api/user/chat/conversations/{second['id']}",
+            json={"expected_revision": 0, "conversation": second},
+        )
+        assert saved_second.status_code == 200, saved_second.text
+
+        store = app.state.web_chat_conversations
+        assert store.file_reference_count(image_id) == 1
+        assert store.file_reference_count(document_id) == 2
+        assert store.referenced_file_ids() >= {image_id, document_id}
+
+        # Another signed-in account cannot attach a file owned by the first.
+        client.cookies.clear()
+        other = client.post(
+            "/api/user/register",
+            headers={"Origin": "http://testserver"},
+            json={"email": "conversation-file-other@example.test", "password": "conversation-file-other-password"},
+        )
+        assert other.status_code == 200, other.text
+        foreign = _conversation("c2a_file_foreign_0001")
+        foreign["messages"][0]["content"] = [
+            {"type": "text", "text": "不能引用别人的文件"},
+            {
+                "type": "file", "file_id": document_id,
+                "filename": "notes.txt", "mime_type": "text/plain",
+                "size": len(b"document bytes"),
+            },
+        ]
+        denied = client.put(
+            f"/api/user/chat/conversations/{foreign['id']}",
+            json={"expected_revision": 0, "conversation": foreign},
+        )
+        assert denied.status_code == 404
+
+        client.cookies.set(USER_SESSION_COOKIE, owner_cookie)
+        blocked_api_delete = client.delete(
+            f"/v1/files/{document_id}",
+            headers={"Authorization": "Bearer " + token},
+        )
+        assert blocked_api_delete.status_code == 409
+        blocked_session_delete = client.delete(
+            f"/api/user/files/{document_id}",
+            headers={"Origin": "http://testserver"},
+        )
+        assert blocked_session_delete.status_code == 409
+
+        deleted_first = client.delete(
+            f"/api/user/chat/conversations/{first['id']}?expected_revision=1"
+        )
+        assert deleted_first.status_code == 200, deleted_first.text
+        assert deleted_first.json()["conversation"]["deleted"] is True
+        assert store.file_reference_count(image_id) == 0
+        assert store.file_reference_count(document_id) == 1
+        synced = client.get("/api/user/chat/conversations")
+        assert any(row["id"] == first["id"] and row["deleted"] for row in synced.json()["data"])
+        assert client.delete(
+            f"/api/user/files/{image_id}",
+            headers={"Origin": "http://testserver"},
+        ).status_code == 200
+
+        deleted_second = client.delete(
+            f"/api/user/chat/conversations/{second['id']}?expected_revision=1"
+        )
+        assert deleted_second.status_code == 200, deleted_second.text
+        assert store.file_reference_count(document_id) == 0
+        assert client.delete(
+            f"/api/user/files/{document_id}",
+            headers={"Origin": "http://testserver"},
+        ).status_code == 200
+        assert app.state.file_store.get(document_id) is None
