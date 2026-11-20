@@ -24,6 +24,12 @@
     pendingFiles: [],
     pendingFilesConversationId: "",
     toastTimer: null,
+    remoteSyncReady: false,
+    remoteSyncTimers: new Map(),
+    remoteSyncInFlight: new Map(),
+    remoteSyncAgain: new Set(),
+    remoteSyncFingerprints: new Map(),
+    remoteSyncWarned: false,
   };
   const MAX_CONVERSATIONS = 15;
   const MAX_MESSAGES = 30;
@@ -161,49 +167,53 @@
     return (bytes / (1024 * 1024)).toFixed(1) + " MiB";
   }
 
+  function normalizeConversationRow(row) {
+    if (!row || typeof row !== "object" || typeof row.id !== "string") return null;
+    const messages = Array.isArray(row.messages) ? row.messages.slice(-MAX_MESSAGES).map((message) => {
+      if (!message || (message.role !== "user" && message.role !== "assistant")) return null;
+      const content = normalizeMessageContent(message.content, message.role);
+      const pending = message.pending === true;
+      const emptyPendingAssistant = message.role === "assistant" && pending && content === "";
+      if ((!content && !emptyPendingAssistant) || (message.role === "assistant" && !String(content).trim() && !pending)) return null;
+      return {
+        id: String(message.id || id()),
+        role: message.role,
+        content,
+        createdAt: String(message.createdAt || ""),
+        requestId: typeof message.requestId === "string" ? message.requestId.slice(0, 140) : "",
+        pending,
+        recoveryStatus: typeof message.recoveryStatus === "string" ? message.recoveryStatus.slice(0, 40) : "",
+      };
+    }).filter(Boolean) : [];
+    const hasSavedAttachments = messages.some((message) => messageAttachmentIds(message).length);
+    return {
+      id: row.id.slice(0, 128),
+      title: String(row.title || "新对话").slice(0, 80),
+      model: String(row.model || state.selectedModel).slice(0, 120),
+      apiKeyId: hasSavedAttachments && typeof row.apiKeyId === "string" ? row.apiKeyId.slice(0, 128) : "",
+      createdAt: String(row.createdAt || new Date().toISOString()),
+      updatedAt: String(row.updatedAt || row.createdAt || new Date().toISOString()),
+      messages,
+      serverRevision: Number.isInteger(row.revision) ? row.revision :
+        (Number.isInteger(row.serverRevision) ? row.serverRevision : 0),
+    };
+  }
+
   function loadHistory() {
     try {
       const raw = localStorage.getItem(state.storageKey);
       const rows = raw ? JSON.parse(raw) : [];
       if (!Array.isArray(rows)) return [];
       return rows.filter((row) => row && typeof row === "object" && typeof row.id === "string")
-        .slice(0, MAX_CONVERSATIONS)
-        .map((row) => {
-          const messages = Array.isArray(row.messages) ? row.messages.slice(-MAX_MESSAGES).map((message) => {
-            if (!message || (message.role !== "user" && message.role !== "assistant")) return null;
-            const content = normalizeMessageContent(message.content, message.role);
-            if (!content || (message.role === "assistant" && !String(content).trim())) return null;
-            return {
-              id: String(message.id || id()),
-              role: message.role,
-              content,
-              createdAt: String(message.createdAt || ""),
-              requestId: typeof message.requestId === "string" ? message.requestId.slice(0, 140) : "",
-              pending: message.pending === true,
-              recoveryStatus: typeof message.recoveryStatus === "string" ? message.recoveryStatus.slice(0, 40) : "",
-            };
-          }).filter(Boolean) : [];
-          const hasSavedAttachments = messages.some((message) => messageAttachmentIds(message).length);
-          return {
-            id: row.id,
-            title: String(row.title || "新对话").slice(0, 80),
-            model: String(row.model || state.selectedModel).slice(0, 120),
-            apiKeyId: hasSavedAttachments && typeof row.apiKeyId === "string" ? row.apiKeyId.slice(0, 120) : "",
-            createdAt: String(row.createdAt || new Date().toISOString()),
-            updatedAt: String(row.updatedAt || row.createdAt || new Date().toISOString()),
-            messages,
-          };
-        });
+        .slice(0, MAX_CONVERSATIONS).map(normalizeConversationRow).filter(Boolean);
     } catch {
       toast("本地聊天历史无法读取，已使用空白历史。");
       return [];
     }
   }
 
-  function saveHistory() {
+  function persistHistorySnapshot() {
     if (!state.storageKey) return;
-    state.conversations.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
-    state.conversations = state.conversations.slice(0, MAX_CONVERSATIONS);
     const payload = state.conversations.map((conversation) => ({
       ...conversation,
       messages: (conversation.messages || []).slice(-MAX_MESSAGES).map((message) => ({
@@ -214,7 +224,238 @@
     try {
       localStorage.setItem(state.storageKey, JSON.stringify(payload));
     } catch {
-      toast("浏览器本地存储空间不足；请导出并删除部分旧对话。");
+      toast("本地缓存空间不足；服务端会话仍会继续同步。");
+    }
+  }
+
+  function serverConversationPayload(conversation) {
+    return {
+      id: conversation.id,
+      title: String(conversation.title || "新对话").slice(0, 80),
+      model: String(conversation.model || state.selectedModel).slice(0, 120),
+      apiKeyId: typeof conversation.apiKeyId === "string" ? conversation.apiKeyId : "",
+      createdAt: String(conversation.createdAt || new Date().toISOString()),
+      updatedAt: String(conversation.updatedAt || new Date().toISOString()),
+      messages: (conversation.messages || []).slice(-MAX_MESSAGES).map((message) => ({
+        id: String(message.id || id()),
+        role: message.role,
+        content: normalizeMessageContent(message.content, message.role),
+        createdAt: String(message.createdAt || ""),
+        requestId: typeof message.requestId === "string" ? message.requestId : "",
+        pending: message.pending === true,
+        recoveryStatus: typeof message.recoveryStatus === "string" ? message.recoveryStatus : "",
+      })),
+    };
+  }
+
+  function messageContentWeight(message) {
+    if (typeof message?.content === "string") return message.content.length;
+    try { return JSON.stringify(message?.content || "").length; } catch { return 0; }
+  }
+
+  function mergeConversation(serverRow, localRow) {
+    if (!localRow) return {...serverRow};
+    if (!serverRow) return {...localRow};
+    const messages = new Map();
+    (serverRow.messages || []).forEach((message) => messages.set(message.id, message));
+    (localRow.messages || []).forEach((message) => {
+      const existing = messages.get(message.id);
+      if (!existing) {
+        messages.set(message.id, message);
+        return;
+      }
+      const localCompleted = !message.pending && message.recoveryStatus === "completed";
+      const serverCompleted = !existing.pending && existing.recoveryStatus === "completed";
+      if ((localCompleted && !serverCompleted) ||
+          (messageContentWeight(message) > messageContentWeight(existing))) {
+        messages.set(message.id, message);
+      }
+    });
+    const localNewer = String(localRow.updatedAt || "") > String(serverRow.updatedAt || "");
+    const base = localNewer ? localRow : serverRow;
+    return {
+      ...serverRow,
+      ...base,
+      messages: [...messages.values()].sort((a, b) =>
+        String(a.createdAt || "").localeCompare(String(b.createdAt || ""))).slice(-MAX_MESSAGES),
+      serverRevision: Number(serverRow.serverRevision || 0),
+    };
+  }
+
+  async function syncServerConversations() {
+    const response = await fetch("/api/user/chat/conversations", {
+      credentials: "same-origin",
+      headers: {"Accept":"application/json"},
+    });
+    let payload = {};
+    try { payload = await response.json(); } catch {}
+    if (!response.ok) throw new Error(payload.detail || "HTTP " + response.status);
+    const serverRows = Array.isArray(payload.data) ? payload.data : [];
+    const serverActive = new Map();
+    const deletedIds = new Set();
+    state.remoteSyncFingerprints.clear();
+    serverRows.forEach((row) => {
+      if (!row || typeof row.id !== "string") return;
+      if (row.deleted === true) {
+        deletedIds.add(row.id);
+        return;
+      }
+      const normalized = normalizeConversationRow(row);
+      if (!normalized) return;
+      normalized.serverRevision = Number.isInteger(row.revision) ? row.revision : 0;
+      serverActive.set(normalized.id, normalized);
+      state.remoteSyncFingerprints.set(normalized.id, JSON.stringify(serverConversationPayload(normalized)));
+    });
+    const localById = new Map(state.conversations.map((row) => [row.id, row]));
+    const merged = [];
+    serverActive.forEach((serverRow, conversationId) => {
+      merged.push(mergeConversation(serverRow, localById.get(conversationId)));
+    });
+    localById.forEach((localRow, conversationId) => {
+      if (!serverActive.has(conversationId) && !deletedIds.has(conversationId)) {
+        merged.push({...localRow, serverRevision: 0});
+      }
+    });
+    state.conversations = merged.sort((a, b) =>
+      String(b.updatedAt || "").localeCompare(String(a.updatedAt || ""))).slice(0, MAX_CONVERSATIONS);
+    if (!state.conversations.some((row) => row.id === state.activeConversationId)) {
+      state.activeConversationId = state.conversations[0]?.id || "";
+    }
+    state.remoteSyncReady = true;
+    persistHistorySnapshot();
+    state.conversations.forEach((conversation) => scheduleConversationSync(conversation.id, 250));
+  }
+
+  function scheduleConversationSync(conversationId, delay = 450) {
+    if (!state.remoteSyncReady || !conversationId) return;
+    if (!state.conversations.some((row) => row.id === conversationId)) return;
+    const previous = state.remoteSyncTimers.get(conversationId);
+    if (previous) window.clearTimeout(previous);
+    const timer = window.setTimeout(() => {
+      state.remoteSyncTimers.delete(conversationId);
+      void syncConversationToServer(conversationId);
+    }, delay);
+    state.remoteSyncTimers.set(conversationId, timer);
+  }
+
+  async function syncConversationToServer(conversationId) {
+    if (!state.remoteSyncReady) return;
+    if (state.remoteSyncInFlight.has(conversationId)) {
+      state.remoteSyncAgain.add(conversationId);
+      return;
+    }
+    const task = (async () => {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const conversation = state.conversations.find((row) => row.id === conversationId);
+        if (!conversation) return;
+        const body = serverConversationPayload(conversation);
+        const fingerprint = JSON.stringify(body);
+        if (state.remoteSyncFingerprints.get(conversationId) === fingerprint) return;
+        const response = await fetch("/api/user/chat/conversations/" + encodeURIComponent(conversationId), {
+          method: "PUT",
+          credentials: "same-origin",
+          headers: {"Content-Type":"application/json", "Accept":"application/json"},
+          body: JSON.stringify({
+            expected_revision: Number(conversation.serverRevision || 0),
+            conversation: body,
+          }),
+        });
+        let result = {};
+        try { result = await response.json(); } catch {}
+        if (response.status === 409 && result.conversation) {
+          if (result.conversation.deleted === true) {
+            state.conversations = state.conversations.filter((row) => row.id !== conversationId);
+            state.remoteSyncFingerprints.delete(conversationId);
+            if (state.activeConversationId === conversationId) {
+              state.activeConversationId = state.conversations[0]?.id || "";
+            }
+            persistHistorySnapshot();
+            renderAll();
+            return;
+          }
+          const latest = normalizeConversationRow(result.conversation);
+          if (!latest) throw new Error("服务端返回了无效的会话冲突记录");
+          Object.assign(conversation, mergeConversation(latest, conversation));
+          conversation.serverRevision = latest.serverRevision;
+          persistHistorySnapshot();
+          continue;
+        }
+        if (!response.ok || !result.conversation) {
+          throw new Error(result.detail || "HTTP " + response.status);
+        }
+        conversation.serverRevision = Number(result.conversation.revision || 0);
+        conversation.updatedAt = String(result.conversation.updatedAt || conversation.updatedAt);
+        state.remoteSyncFingerprints.set(conversationId, fingerprint);
+        persistHistorySnapshot();
+        if (JSON.stringify(serverConversationPayload(conversation)) !== fingerprint) {
+          state.remoteSyncAgain.add(conversationId);
+        }
+        return;
+      }
+      throw new Error("会话在其他设备持续更新，请稍后重试同步");
+    })();
+    state.remoteSyncInFlight.set(conversationId, task);
+    try {
+      await task;
+    } catch (error) {
+      if (!state.remoteSyncWarned) {
+        state.remoteSyncWarned = true;
+        toast("服务端会话同步暂时失败，已保留本地记录：" + error.message);
+      }
+    } finally {
+      state.remoteSyncInFlight.delete(conversationId);
+      if (state.remoteSyncAgain.delete(conversationId)) scheduleConversationSync(conversationId, 150);
+    }
+  }
+
+  async function deleteConversationFromServer(conversation) {
+    const conversationId = conversation.id;
+    const timer = state.remoteSyncTimers.get(conversationId);
+    if (timer) window.clearTimeout(timer);
+    state.remoteSyncTimers.delete(conversationId);
+    const inFlight = state.remoteSyncInFlight.get(conversationId);
+    if (inFlight) {
+      try { await inFlight; } catch {}
+    }
+    const expectedRevision = Number(conversation.serverRevision || 0);
+    try {
+      const response = await fetch("/api/user/chat/conversations/" + encodeURIComponent(conversationId) +
+        "?expected_revision=" + encodeURIComponent(String(expectedRevision)), {
+        method: "DELETE",
+        credentials: "same-origin",
+        headers: {"Accept":"application/json"},
+      });
+      let result = {};
+      try { result = await response.json(); } catch {}
+      if (response.status === 409 && result.conversation && result.conversation.deleted !== true) {
+        const latest = normalizeConversationRow(result.conversation);
+        if (latest) {
+          const restored = mergeConversation(latest, conversation);
+          if (!state.conversations.some((row) => row.id === conversationId)) {
+            state.conversations.unshift(restored);
+            state.conversations.sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
+            state.conversations = state.conversations.slice(0, MAX_CONVERSATIONS);
+          }
+          saveHistory();
+          renderAll();
+          toast("该对话已在其他设备更新，已恢复最新版本；请再次确认删除。");
+        }
+        return;
+      }
+      if (!response.ok) throw new Error(result.detail || "HTTP " + response.status);
+      state.remoteSyncFingerprints.delete(conversationId);
+    } catch (error) {
+      toast("对话已从当前设备移除，但服务器删除同步失败：" + error.message);
+    }
+  }
+
+  function saveHistory() {
+    if (!state.storageKey) return;
+    state.conversations.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+    state.conversations = state.conversations.slice(0, MAX_CONVERSATIONS);
+    persistHistorySnapshot();
+    if (state.remoteSyncReady) {
+      state.conversations.forEach((conversation) => scheduleConversationSync(conversation.id));
     }
   }
 
@@ -280,7 +521,7 @@
       toast("请先移除待发送附件，再删除对话。");
       return;
     }
-    if (!window.confirm("删除这段本地对话？本地记录会删除，且仅清理未被其他本地对话引用的附件。")) return;
+    if (!window.confirm("删除这段对话？删除会同步到你的其他设备，且仅清理未被其他对话引用的附件。")) return;
     const remainingFileIds = new Set(
       state.conversations
         .filter((row) => row.id !== conversationId)
@@ -293,6 +534,7 @@
       state.activeConversationId = state.conversations[0]?.id || "";
     }
     saveHistory();
+    void deleteConversationFromServer(conversation);
     renderAll();
     if (orphanedFileIds.length) {
       Promise.allSettled(orphanedFileIds.map((fileId) =>
@@ -1559,6 +1801,12 @@
     state.storageKey = historyKey(state.user.user_id);
     state.conversations = loadHistory();
     if (state.conversations.length) state.activeConversationId = state.conversations[0].id;
+    try {
+      await syncServerConversations();
+    } catch (error) {
+      state.remoteSyncReady = false;
+      toast("暂时无法同步服务端会话，当前先显示本地历史：" + error.message);
+    }
     renderAll();
     const ready = await loadKeys();
     resumePendingMessages();
