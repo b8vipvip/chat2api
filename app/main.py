@@ -329,12 +329,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 # This prevents a new reference being committed between the
                 # reference snapshot and orphan unlink in this process.
                 with file_store.lock:
-                    referenced = conversation_files.referenced_file_ids()
-                    return file_store.delete_expired_web_chat_files(
-                        referenced,
-                        older_than_seconds=90 * 86400,
-                        limit=500,
-                    )
+                    with conversation_files.file_reference_snapshot_guard() as referenced:
+                        return file_store.delete_expired_web_chat_files(
+                            referenced,
+                            older_than_seconds=90 * 86400,
+                            limit=500,
+                        )
 
             return await asyncio.to_thread(cleanup_under_file_lock)
 
@@ -1532,17 +1532,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         require_scope(principal, "files")
         conversations = getattr(app.state, "web_chat_conversations", None)
         with file_store.lock:
-            if conversations is not None and conversations.file_reference_count(file_id) > 0:
-                raise HTTPException(
-                    status_code=409,
-                    detail="File is referenced by a saved Web Chat conversation; delete or update that conversation first",
-                )
-            try:
-                await file_store.delete(file_id, None if principal.kind == "master" else principal.key_id)
-            except KeyError as error:
-                raise HTTPException(status_code=404, detail=str(error)) from error
-            except PermissionError as error:
-                raise HTTPException(status_code=403, detail=str(error)) from error
+            if conversations is not None:
+                with conversations.file_deletion_guard(file_id) as can_delete:
+                    if not can_delete:
+                        raise HTTPException(
+                            status_code=409,
+                            detail="File is referenced by a saved Web Chat conversation; delete or update that conversation first",
+                        )
+                    try:
+                        await file_store.delete(file_id, None if principal.kind == "master" else principal.key_id)
+                    except KeyError as error:
+                        raise HTTPException(status_code=404, detail=str(error)) from error
+                    except PermissionError as error:
+                        raise HTTPException(status_code=403, detail=str(error)) from error
+            else:
+                try:
+                    await file_store.delete(file_id, None if principal.kind == "master" else principal.key_id)
+                except KeyError as error:
+                    raise HTTPException(status_code=404, detail=str(error)) from error
+                except PermissionError as error:
+                    raise HTTPException(status_code=403, detail=str(error)) from error
         return {"id": file_id, "object": "file", "deleted": True}
 
     @app.get("/api/extensions/files/{file_id}")
