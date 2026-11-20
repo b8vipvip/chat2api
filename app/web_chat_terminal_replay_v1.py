@@ -28,6 +28,24 @@ def is_replayed_mode1_terminal(
     )
 
 
+def is_already_finalized_worker_terminal(
+    telemetry_row: Any, client_id: str,
+) -> bool:
+    """Allow idempotent ACK only when the same Worker has a durable terminal row."""
+    if not isinstance(telemetry_row, dict):
+        return False
+    if str(telemetry_row.get("client_id") or "") != str(client_id or ""):
+        return False
+    if str(telemetry_row.get("status") or "").lower() not in {
+        "completed", "error", "cancelled",
+    }:
+        return False
+    if telemetry_row.get("web_chat_mode") is True:
+        key_id = str(telemetry_row.get("api_key_id") or "")
+        return bool(key_id and key_id != "master")
+    return True
+
+
 def replayed_terminal_projection(
     telemetry_row: dict[str, Any], message: dict[str, Any],
 ) -> dict[str, Any]:
