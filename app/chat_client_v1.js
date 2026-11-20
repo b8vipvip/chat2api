@@ -259,6 +259,8 @@
         requestId: typeof message.requestId === "string" ? message.requestId.slice(0, 140) : "",
         pending,
         recoveryStatus: typeof message.recoveryStatus === "string" ? message.recoveryStatus.slice(0, 40) : "",
+        lastEventId: Number.isSafeInteger(message.lastEventId) && message.lastEventId >= 0
+          ? Math.min(message.lastEventId, Number.MAX_SAFE_INTEGER) : 0,
       };
       if (toolEvents.length) normalized.toolEvents = toolEvents;
       return normalized;
