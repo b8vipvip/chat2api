@@ -65,6 +65,16 @@ await context.handleServerMessage({
   type: "chat.terminal.ack",
   request_id: "req_durable_terminal_123",
   terminal_type: "chat.completed",
+  accepted: false,
+});
+assert.equal(context.__CHAT2API_BACKGROUND_TRANSPORT_RECOVERY_V47__.outbox.size, 1,
+  "negative acknowledgement must retain the terminal outbox");
+assert.equal(storage.chat2apiWorkerTransportOutboxV47.length, 1);
+
+await context.handleServerMessage({
+  type: "chat.terminal.ack",
+  request_id: "req_durable_terminal_123",
+  terminal_type: "chat.completed",
   accepted: true,
 });
 assert.equal(context.__CHAT2API_BACKGROUND_TRANSPORT_RECOVERY_V47__.outbox.size, 0);
