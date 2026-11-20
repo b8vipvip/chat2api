@@ -158,6 +158,8 @@
               ...(status === "stalled" && payload.partial_text_available === true
                 && typeof payload.partial_text === "string"
                 ? {partial_text:payload.partial_text} : {}),
+              last_event_id:Number.isSafeInteger(payload.last_event_id)
+                ? payload.last_event_id : 0,
             };
             emit(safeRecord, result);
             return result;
@@ -178,6 +180,7 @@
             phase:String(payload.phase || ""),
             terminal:false,
             active:true,
+            last_event_id:Number.isSafeInteger(payload.last_event_id) ? payload.last_event_id : 0,
           });
           const requestedDelay = Number(payload.retry_after_ms);
           delay = Number.isFinite(requestedDelay)
