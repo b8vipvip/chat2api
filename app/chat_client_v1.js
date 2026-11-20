@@ -167,15 +167,38 @@
     return (bytes / (1024 * 1024)).toFixed(1) + " MiB";
   }
 
+  function normalizeToolEvents(value, role) {
+    if (role !== "assistant" || !Array.isArray(value)) return [];
+    return value.slice(-6).map(item => {
+      if (!item || typeof item !== "object") return null;
+      const toolName = String(item.toolName || "tool").replace(/[\\r\\n\\0-\\x1f]/g," ").slice(0,80) || "tool";
+      const callIdRaw = String(item.callId || "").slice(0,128);
+      const resultIdRaw = String(item.resultId || "").slice(0,128);
+      const validId = value => /^[A-Za-z0-9_.:-]{1,128}$/.test(value);
+      const callId = validId(callIdRaw) ? callIdRaw : "";
+      const resultId = validId(resultIdRaw) ? resultIdRaw : "";
+      if (!callId && !resultId) return null;
+      const statuses = ["running","completed","failed","cancelled"];
+      const status = statuses.includes(item.status) ? item.status : "completed";
+      return {
+        toolName, callId, resultId, status,
+        arguments: typeof item.arguments === "string" ? item.arguments.slice(0,2000) : "",
+        output: typeof item.output === "string" ? item.output.slice(0,2000) : "",
+      };
+    }).filter(Boolean);
+  }
+
   function normalizeConversationRow(row) {
     if (!row || typeof row !== "object" || typeof row.id !== "string") return null;
     const messages = Array.isArray(row.messages) ? row.messages.slice(-MAX_MESSAGES).map((message) => {
       if (!message || (message.role !== "user" && message.role !== "assistant")) return null;
       const content = normalizeMessageContent(message.content, message.role);
       const pending = message.pending === true;
+      const toolEvents = normalizeToolEvents(message.toolEvents,message.role);
       const emptyPendingAssistant = message.role === "assistant" && pending && content === "";
-      if ((!content && !emptyPendingAssistant) || (message.role === "assistant" && !String(content).trim() && !pending)) return null;
-      return {
+      if ((!content && !emptyPendingAssistant && !toolEvents.length)
+          || (message.role === "assistant" && !String(content).trim() && !pending && !toolEvents.length)) return null;
+      const normalized = {
         id: String(message.id || id()),
         role: message.role,
         content,
@@ -184,6 +207,8 @@
         pending,
         recoveryStatus: typeof message.recoveryStatus === "string" ? message.recoveryStatus.slice(0, 40) : "",
       };
+      if (toolEvents.length) normalized.toolEvents = toolEvents;
+      return normalized;
     }).filter(Boolean) : [];
     const hasSavedAttachments = messages.some((message) => messageAttachmentIds(message).length);
     return {
@@ -236,21 +261,30 @@
       apiKeyId: typeof conversation.apiKeyId === "string" ? conversation.apiKeyId : "",
       createdAt: String(conversation.createdAt || new Date().toISOString()),
       updatedAt: String(conversation.updatedAt || new Date().toISOString()),
-      messages: (conversation.messages || []).slice(-MAX_MESSAGES).map((message) => ({
-        id: String(message.id || id()),
-        role: message.role,
-        content: normalizeMessageContent(message.content, message.role),
-        createdAt: String(message.createdAt || ""),
-        requestId: typeof message.requestId === "string" ? message.requestId : "",
-        pending: message.pending === true,
-        recoveryStatus: typeof message.recoveryStatus === "string" ? message.recoveryStatus : "",
-      })),
+      messages: (conversation.messages || []).slice(-MAX_MESSAGES).map((message) => {
+        const toolEvents = normalizeToolEvents(message.toolEvents,message.role);
+        return {
+          id: String(message.id || id()),
+          role: message.role,
+          content: normalizeMessageContent(message.content, message.role),
+          createdAt: String(message.createdAt || ""),
+          requestId: typeof message.requestId === "string" ? message.requestId : "",
+          pending: message.pending === true,
+          recoveryStatus: typeof message.recoveryStatus === "string" ? message.recoveryStatus : "",
+          ...(toolEvents.length ? {toolEvents} : {}),
+        };
+      }),
     };
   }
 
   function messageContentWeight(message) {
-    if (typeof message?.content === "string") return message.content.length;
-    try { return JSON.stringify(message?.content || "").length; } catch { return 0; }
+    let contentWeight = 0;
+    if (typeof message?.content === "string") contentWeight = message.content.length;
+    else {
+      try { contentWeight = JSON.stringify(message?.content || "").length; } catch {}
+    }
+    try { return contentWeight + JSON.stringify(message?.toolEvents || []).length; }
+    catch { return contentWeight; }
   }
 
   function mergeConversation(serverRow, localRow) {
