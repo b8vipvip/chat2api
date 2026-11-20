@@ -2473,19 +2473,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 app.state.web_chat_cancel_events.pop(request_id, None)
             raise HTTPException(status_code=409, detail="Request cancelled before Worker dispatch")
         except HTTPException as error:
+            cancelled = web_chat_cancel_signal is not None and web_chat_cancel_signal.requested.is_set()
             await record_early_error(request_id=request_id, response_id=response_id, requested_model=body.model,
                                      prompt=prompt, principal=principal, stream=body.stream, prompt_mode=body.prompt_mode,
                                      started_mono=request_started, error=str(error.detail), request_type=request_type,
-                                     attachments_count=len(attachments))
+                                     attachments_count=len(attachments),
+                                     status_value="cancelled" if cancelled else "error")
+            release_admission_holds("web_chat_cancelled_before_worker_dispatch" if cancelled else "request_admission_failed")
             if web_chat_cancel_signal is not None:
                 web_chat_cancel_signal.finalized.set()
                 app.state.web_chat_cancel_events.pop(request_id, None)
             raise
         except RuntimeError as error:
+            cancelled = web_chat_cancel_signal is not None and web_chat_cancel_signal.requested.is_set()
             await record_early_error(request_id=request_id, response_id=response_id, requested_model=body.model,
                                      prompt=prompt, principal=principal, stream=body.stream, prompt_mode=body.prompt_mode,
                                      started_mono=request_started, error=str(error), request_type=request_type,
-                                     attachments_count=len(attachments))
+                                     attachments_count=len(attachments),
+                                     status_value="cancelled" if cancelled else "error")
+            release_admission_holds("web_chat_cancelled_before_worker_dispatch" if cancelled else "request_admission_failed")
             if web_chat_cancel_signal is not None:
                 web_chat_cancel_signal.finalized.set()
                 app.state.web_chat_cancel_events.pop(request_id, None)
@@ -2512,6 +2518,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     },
                     "error": "API transport ended before Worker admission",
                 })
+                release_admission_holds("request_transport_ended_before_worker_dispatch")
             if web_chat_cancel_signal is not None:
                 web_chat_cancel_signal.finalized.set()
                 app.state.web_chat_cancel_events.pop(request_id, None)
@@ -2526,23 +2533,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "Unexpected API admission failure request_id=%s exception_kind=%s",
                 request_id, kind,
             )
+            cancelled = web_chat_cancel_signal is not None and web_chat_cancel_signal.requested.is_set()
             try:
-                await telemetry.update(request_id, {
-                    "status": "error",
-                    "error": "Internal request admission failed (" + kind + ")",
-                    "diagnostics": {
-                        "request_admission_stage": "failed-before-worker-dispatch",
-                        "request_admission_failure_kind_v294": kind,
-                        "request_admission_wait_ms": round(
-                            (time.perf_counter() - request_started) * 1000, 1
-                        ),
-                    },
-                })
+                if cancelled:
+                    await record_early_error(
+                        request_id=request_id, response_id=response_id, requested_model=body.model,
+                        prompt=prompt, principal=principal, stream=body.stream, prompt_mode=body.prompt_mode,
+                        started_mono=request_started, error="Web Chat request cancelled before Worker dispatch",
+                        request_type=request_type, attachments_count=len(attachments), status_value="cancelled",
+                    )
+                else:
+                    await telemetry.update(request_id, {
+                        "status": "error",
+                        "error": "Internal request admission failed (" + kind + ")",
+                        "diagnostics": {
+                            "request_admission_stage": "failed-before-worker-dispatch",
+                            "request_admission_failure_kind_v294": kind,
+                            "request_admission_wait_ms": round(
+                                (time.perf_counter() - request_started) * 1000, 1
+                            ),
+                        },
+                    })
             except Exception:
                 logger.exception(
                     "Failed to persist request admission failure request_id=%s",
                     request_id,
                 )
+            release_admission_holds("web_chat_cancelled_before_worker_dispatch" if cancelled else "request_admission_failed")
             if web_chat_cancel_signal is not None:
                 web_chat_cancel_signal.finalized.set()
                 app.state.web_chat_cancel_events.pop(request_id, None)

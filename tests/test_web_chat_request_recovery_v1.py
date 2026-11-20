@@ -1,4 +1,5 @@
 """W-04 recovery contract: owner-scoped snapshots and no duplicate dispatch."""
+import asyncio
 import shutil
 import subprocess
 from pathlib import Path
@@ -11,6 +12,10 @@ from app.config import Settings
 from app.main import create_app
 from app.user_console_v104_patch import install_user_console_v104_patch
 from app.web_chat_recovery_api import install_web_chat_recovery_api
+from app.web_chat_cancellation_v1 import (
+    WebChatAdmissionCancelled, WebChatCancellationSignal,
+    await_worker_admission_or_cancel,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -204,6 +209,66 @@ def test_terminal_request_cancel_is_idempotent_and_never_signals_worker(tmp_path
         assert response.json()["terminal"] is True
         assert response.json()["cancel_requested"] is False
         assert sent == []
+
+
+def test_queued_cancel_signals_admission_and_waits_for_terminal_projection(tmp_path):
+    app = make_app(tmp_path)
+    request_id = "req_queuedcancel1"
+    with TestClient(app) as client:
+        user_id = register(client, "cancel-queued@example.org")
+        app.state.user_accounts.attach_key(user_id, "key_cancel_queued")
+        remember(app, request_id, "key_cancel_queued", status="queued")
+        signal = WebChatCancellationSignal()
+        signal.finalized.set()
+        app.state.web_chat_cancel_events[request_id] = signal
+
+        response = client.post(
+            f"/api/user/chat/requests/{request_id}/cancel",
+            headers={"Origin": "http://testserver"},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["queued"] is True
+        assert response.json()["cancel_requested"] is True
+        assert response.json()["terminal"] is False
+        assert signal.requested.is_set()
+        assert app.state.broker.requests.get(request_id) is None
+
+        repeated = client.post(
+            f"/api/user/chat/requests/{request_id}/cancel",
+            headers={"Origin": "http://testserver"},
+        )
+        assert repeated.status_code == 200
+        assert repeated.json()["already_requested"] is True
+        assert signal.requested.is_set()
+
+
+def test_worker_admission_wait_is_interruptible_without_redispatch() -> None:
+    async def scenario() -> None:
+        signal = WebChatCancellationSignal()
+        started = asyncio.Event()
+
+        async def wait_for_worker() -> str:
+            started.set()
+            await asyncio.Event().wait()
+            return "worker-never-selected"
+
+        task = asyncio.create_task(await_worker_admission_or_cancel(wait_for_worker, signal))
+        await started.wait()
+        signal.requested.set()
+        try:
+            await task
+        except WebChatAdmissionCancelled:
+            pass
+        else:
+            raise AssertionError("queued cancellation must interrupt Worker admission")
+
+        async def ready_worker() -> str:
+            return "worker-a"
+
+        result = await await_worker_admission_or_cancel(ready_worker, WebChatCancellationSignal())
+        assert result == "worker-a"
+
+    asyncio.run(scenario())
 
 
 def test_cancel_delivery_failure_does_not_leave_false_idempotency_marker(tmp_path):
