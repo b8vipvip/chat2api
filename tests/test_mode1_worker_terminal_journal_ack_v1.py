@@ -37,6 +37,8 @@ def test_mode1_worker_terminal_ack_requires_a_durable_owner_scoped_journal_recor
         events = await journal.events_after(state.request_id, "key-durable", 0)
         assert events["events"][-1]["type"] == "worker.terminal"
         assert events["events"][-1]["data"]["status"] == "completed"
+        assert events["events"][-1]["data"]["text"] == "durable terminal"
+        assert snapshot["worker_partial_text"] == "durable terminal"
 
     asyncio.run(scenario())
 
