@@ -241,7 +241,6 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
         input_confirmed = 0
         session_ready = False
         error_message = ""
-        graceful_finish = False
 
         # Session controls and remote audio are sent from separate coroutines.
         # Serialize WebSocket sends so binary PCM frames cannot collide with
@@ -629,7 +628,6 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         **({"attachment_count": len(attachments)} if attachments else {}),
                     })
                 elif control_type == "session.finish":
-                    graceful_finish = True
                     # A client-controlled finish is not evidence that the
                     # browser started Voice. Never record a false completion
                     # when Chrome has not confirmed its live session.
