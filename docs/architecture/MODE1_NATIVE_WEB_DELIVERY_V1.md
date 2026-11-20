@@ -1,78 +1,95 @@
-# Mode 1 Native Web Delivery — Architecture and Acceptance Plan
+# Mode 1 — Web Chat over the Existing Worker Generation Path
 
-Status: design baseline for Issue #854; data-plane implementation is gated.
+Status: corrected architecture baseline for Issue #854.
 
 Issue: https://github.com/b8vipvip/chat2api/issues/854
 
-## 1. Product contract
+## 1. Correct product definition
 
-Chat2API Web Chat remains the user-facing application. A separate authenticated Web BFF owns request identity, user/session association, conversation mapping, cancellation, recovery and content delivery. Actual generation may use the official ChatGPT web application only through an interaction mechanism that is explicitly authorized for this deployment.
+Mode 1 and Mode 2 use the **same existing Chat2API Worker devices and the same ChatGPT generation source**. The Worker devices already have their ChatGPT browser sessions and are the generation resources used by the current Mode 2 flow.
 
-The target flow is:
+Mode 1 does **not** create a browser runtime for every Web Chat user. Web Chat users do not install Chrome extensions, pair a local browser, or supply their own ChatGPT login. Do not add a per-user ChatGPT-account/runtime binding system.
 
-`Chat2API Web Chat → authenticated Web BFF → user-bound browser runtime → official ChatGPT web UI → validated native-content delivery → Web Chat Renderer`
+The distinction is the client interaction and delivery contract:
 
-The OpenAI-compatible `/v1` API remains a separate Mode 2 ingress and is not used as the Mode 1 generation backend.
+- **Mode 1:** a Chat2API Web Chat conversation UI, patterned after the administrator Playground's “聊天对话” experience, with multi-turn conversation, model selection, attachments, streaming/progress, cancellation/recovery and native rich-content rendering.
+- **Mode 2:** the existing OpenAI-compatible API surface for SDK/API clients.
 
-## 2. Mandatory authorization and credential boundary
+Both modes authenticate Chat2API requests with a selected Chat2API API Key and dispatch generation to the existing Worker fleet. The API Key is a Chat2API request principal; it is not a ChatGPT credential and must not be used as a Worker/runtime identity.
 
-The Phase 0 feasibility audit remains binding until superseded by written authorization and a reviewed architecture. This implementation must not:
+## 2. Correct request and generation flow
 
-- request, collect, persist, export, or forward ChatGPT passwords, session cookies, browser storage, or private bearer tokens;
-- proxy `chatgpt.com` pages, private `/backend-api/*` endpoints, WebSocket internals, or undocumented protocols;
-- spoof browser fingerprints, bypass login, CAPTCHA, Turnstile, rate limits, or other access controls;
-- pool, share, rotate, or transfer one ChatGPT account/session across users;
-- expose a ChatGPT plan session as a general-purpose OpenAI-compatible API.
+`Chat2API Web Chat → client configuration selects a Chat2API API Key → authenticated Mode 1 Web Chat adapter → existing API Key authorization / model policy / quota / file ownership → existing Worker selection and reconnect handling → RequestBroker + ChatRequestService + ClientRegistry → existing Worker device → its already logged-in ChatGPT browser → existing native capture / media transfer → validated native-content delivery → Web Chat Renderer`
 
-The default candidate runtime is a browser owned and controlled by the individual end user. Authentication stays in that browser. The server may store an opaque runtime binding and request metadata, but never upstream credentials. Requests must be initiated by the authenticated user or by automation that the same user explicitly authorizes.
+The exact Worker is selected by the existing Worker scheduling/routing rules (including any existing explicit Worker-routing input). Do not create a new `user_id → worker_id` binding, and do not infer Worker identity from API Key ID.
 
-DOM/media capture and automated page interaction must use a mechanism that is confirmed to be permitted for the target deployment. Until that basis is documented, the data plane remains disabled; no implementation may silently fall back to private endpoints or credential extraction.
+The selected API Key must flow through the same existing Chat2API principal checks and ownership accounting used by API requests:
 
-## 3. Component ownership
+- authenticate the Key and enforce its `chat` scope;
+- enforce existing model entitlement and quota/billing rules;
+- associate request telemetry, uploaded files and generated artifacts with the authenticated Key owner;
+- prevent a user from reading another user's requests, conversations, files or native media.
+
+The Web Chat conversation UX should reuse the interaction patterns of `app/admin_playground_chat_v69.js` (multi-turn messages, selected business API Key, model/reasoning selection, attachments and request status), while replacing administrator-only endpoints and master-key assumptions with user/client-config-safe endpoints and Key authorization.
+
+## 3. Mode 1 vs Mode 2 — what is shared and what differs
+
+| Area | Shared behavior | Mode 1 | Mode 2 |
+|---|---|---|---|
+| Generation source | Existing Worker devices and their current ChatGPT browser sessions | Same | Same |
+| Worker dispatch | Existing Worker registry, selection, reconnect handling and request lease | Same path | Same path |
+| Request identity | Chat2API API Key principal, request ID and existing quota/ownership rules | Selected by Web Chat client configuration | Supplied by SDK/API client |
+| User interface | — | Chat2API multi-turn Web Chat | External SDK/API client |
+| Delivery | Existing Worker terminal and native evidence authorities | Native rich content, media, files, charts/math and tool state | OpenAI-compatible response contract |
+| Conversation UX | Existing authenticated ownership rules | Web Chat conversation history and reconnect experience | Client-managed message history |
+
+Mode 1 is not a second generation backend, not a per-user browser product and not a new Worker fleet. It is a Web Chat adapter and native-content delivery experience over the existing generation resources.
+
+## 4. Component ownership
 
 | Component | Responsibility | Required invariant |
 |---|---|---|
-| Web Chat client | Prompt, attachments, model selection, live rendering | User never leaves Chat2API |
-| Web BFF | User authentication, request ID, conversation ID, runtime binding, cancellation and recovery | User/session owner is authoritative |
-| Runtime binding store | Bind one user to their own approved browser runtime | No shared-account or cross-user dispatch |
-| Browser interaction adapter | Interact with the visible official web UI using the approved mechanism | No cookie/token export or private API calls |
-| Native capture adapter | Convert approved native output into a bounded structured snapshot and media references | No raw HTML, script, CSS, arbitrary remote URL or unowned file |
-| Native delivery service | Validate, persist and stream structured content | Reuse existing owner-scoped NativeContentStore/FileStore and request terminal authority |
-| Web Chat Renderer | Render text, media, code, files, math, charts and tool states | Safe allowlist renderer; same-origin owned downloads |
+| Web Chat client | Multi-turn conversation UI, model selection, attachments, selected API Key, native rendering | User stays in Chat2API |
+| Client configuration / Key selector | Select the Chat2API API Key used by this client | Never substitute the administrator master key silently |
+| Mode 1 Web Chat adapter | Validate the selected Key, establish request/conversation identity, manage Web Chat transport, cancellation and recovery | Same principal, quota and owner checks as existing API requests |
+| Existing API policy layer | Key scope, model policy, quota, file and artifact ownership | No weaker authorization path for Web Chat |
+| Existing Worker registry/scheduler | Select and route to an available compatible Worker | Reuse existing Worker fleet; no per-user runtime binding |
+| Existing RequestBroker / ChatRequestService | Request lease and Worker `chat.request` dispatch | One Broker terminal owner; do not duplicate dispatch ownership |
+| Existing Worker browser runtime | Use its already logged-in ChatGPT browser to generate | Same generation source as Mode 2 |
+| Native capture and delivery | Reuse Worker native-content capture, chunk validation, `NativeContentStore`, media/file archives and request terminal evidence | Validate revisions, integrity, ownership and completeness |
+| Web Chat Renderer | Render text, images, video/audio, code, files, math, charts and tool states | Safe allowlist renderer; owner-checked media/download URLs |
 
-The existing `ChatRequestService` is a dispatch seam, not a complete Web BFF. It does not own authentication, user/runtime binding, terminal state, SSE, cancellation, persistence or billing. Those responsibilities must remain explicit and must not be duplicated inside the Worker.
+## 5. Implementation phases
 
-## 4. Implementation phases
+1. **Legacy cleanup** — remove the obsolete Mode 1 Cookie-proxy test switch, its persistence/API/UI and the old mode-selection branch. Keep Mode 2 behavior unchanged.
+2. **Web Chat Key/config contract** — make the Web Chat client select the intended Chat2API API Key from client configuration. Use existing API Key authentication, model permissions, quota and ownership checks. Do not expose or hardcode the administrator master key.
+3. **Mode 1 Web Chat adapter** — implement the multi-turn Web Chat request path using the selected Key and the existing Worker selection, Broker, `ChatRequestService` and registry dispatch path. Keep the existing Worker scheduling authority; do not create user-to-browser bindings.
+4. **Native rich-content delivery** — connect the Web Chat request to existing Worker native snapshot/chunk events, `NativeContentStore`, `NativeChunkAssembler`, `NativeDomEvidenceStore`, `FileStore` and media/generated-file archives. Ensure a partial or unverified snapshot is never presented as complete.
+5. **Conversation, streaming and recovery** — persist stable user/key-owned conversation and request associations; implement streaming/progress, cancellation, reconnect and recovery without duplicate generation or a second terminal owner.
+6. **Renderer completion** — render native text, images, video, audio, code, files, math, charts and tool activity/results in the Web Chat.
+7. **Acceptance** — production `app.entry:app` integration, real browser E2E, API Key isolation, concurrent users, Worker reconnect, interrupted-stream recovery, media/file integrity and Mode 2 regression.
 
-1. **Legacy cleanup** — remove the old Cookie-proxy test switch, its persistence/API/UI and the old mode-selection branch. Keep Mode 2 ingress behavior unchanged.
-2. **Authorization/runtime gate** — document the permitted official-web interaction mechanism and prove that the runtime is user-controlled. Add fail-closed capability checks; no runtime is eligible by default.
-3. **Identity and session binding** — add a durable, owner-scoped binding from a Chat2API user to exactly one approved runtime; reject stale, unpaired, shared or cross-user bindings.
-4. **Web BFF** — add a session-authenticated native-chat endpoint with stable request/conversation IDs, idempotent dispatch, cancellation and owner-checked recovery. Reuse the existing Broker/ChatRequestService terminal owner.
-5. **Native content delivery** — add validated revisioned text/media/tool snapshots, chunk integrity, owner-scoped file references and reconnect delivery. Do not make a partial snapshot final.
-6. **Renderer and persistence** — render all supported rich blocks in the existing Web Chat and persist conversation/session mappings with the existing security and retention guarantees.
-7. **Acceptance** — production `app.entry:app` integration, real browser tests, cross-user isolation, interrupted-stream recovery, media/file integrity and negative authorization tests.
+## 6. Issue #854 acceptance matrix
 
-## 5. Issue #854 acceptance matrix
-
+- Web Chat behaves like the Playground “聊天对话” experience: multi-turn, model selection, attachments and selected Chat2API API Key.
+- The selected Key is the request principal for authorization, model access, quota, request telemetry and file/artifact ownership.
+- Generation is executed by the same existing Worker devices and already logged-in ChatGPT browser sessions used by Mode 2.
+- Web Chat requests reuse the existing Worker scheduling/registry, Broker and ChatRequestService dispatch path.
+- No per-Web-user Chrome extension, ChatGPT login, browser pairing or `user_id → worker_id` binding is required.
 - Text streams incrementally and final content is preserved.
-- Images, video and audio are delivered as owned media assets with verified content identity.
-- Code and files preserve content and authenticated download behavior.
+- Images, video and audio are delivered as verified, owner-scoped media assets.
+- Code and files preserve original content and authenticated download behavior.
 - Math and charts use structured, validated representations.
 - Tool activity and results preserve their state transitions.
-- Conversations have stable per-user IDs and survive refresh/reconnect.
+- Conversations have stable owner-scoped IDs and survive refresh/reconnect.
 - Cancellation and recovery target the original request; no duplicate generation is submitted.
-- A user cannot observe, dispatch through, or recover another user's runtime, session, request, conversation or media.
-- No upstream credential, cookie, browser storage value or private protocol payload enters server logs, API responses or persistent server storage.
-- Mode 2 SDK/API behavior and its request/terminal/billing owners remain unchanged.
+- A user cannot observe or recover another user's request, conversation, file or media.
+- Mode 2 SDK/API behavior and its Worker, request-terminal and billing owners remain unchanged.
 
-## 6. Release gates
+## 7. Security and operational boundaries
 
-The Mode 1 data plane must remain unavailable until all of the following are evidenced:
-
-- explicit authorization or a documented supported mechanism for the exact official-web interaction and native capture path;
-- proof that each runtime is controlled by the corresponding end user, or written approval for a different deployment model;
-- threat model and review for account/session isolation, browser messaging, media/file delivery and data retention;
-- integrated automated tests and real desktop/mobile browser E2E;
-- no private-web API proxy, cookie/session extraction, access-control bypass or shared-account behavior.
-
-A UI switch or administrator preference is not an authorization grant and must not be able to bypass these gates.
+- The Chat2API API Key is only a Chat2API authorization/ownership credential. It is never a ChatGPT password, cookie, browser-storage value or upstream bearer token.
+- Reuse the current Worker login/runtime and supported Worker messaging contract. Do not add cookie extraction, credential export, private ChatGPT endpoint proxying, browser fingerprint spoofing or access-control bypass.
+- Do not log API Key plaintext, ChatGPT page contents or raw private browser state.
+- Do not let the Web Chat adapter create a second Worker lease, terminal authority, quota ledger or generated-file owner.
+- Existing Phase 0 restrictions against a separate hosted Cookie/private-endpoint proxy remain in force; this design does not require such a proxy.
