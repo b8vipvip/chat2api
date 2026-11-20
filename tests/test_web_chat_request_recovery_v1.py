@@ -363,6 +363,32 @@ def test_running_request_is_pollable_but_stale_running_state_is_not_replayed(tmp
         assert stale.json()["response_text"] == ""
 
 
+def test_recovering_mode1_request_waits_for_worker_terminal_outbox_without_redispatch(tmp_path):
+    app = make_app(tmp_path)
+    request_id = "req_recovering123"
+    with TestClient(app) as client:
+        user_id = register(client, "recovering@example.org")
+        app.state.user_accounts.attach_key(user_id, "key_recovering")
+        remember(
+            app, request_id, "key_recovering",
+            status="recovering", web_chat_mode=True,
+            client_id="ext_worker123",
+            response_text="", response_text_available=False,
+            response_text_provisional="saved partial",
+            diagnostics={"web_chat_request_recovery":"awaiting-worker-terminal-replay"},
+        )
+        response = client.get(f"/api/user/chat/requests/{request_id}/recovery")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "recovering"
+        assert payload["terminal"] is False
+        assert payload["recoverable"] is True
+        assert payload["active"] is True
+        assert payload["phase"] == "reconnecting"
+        assert payload["partial_text"] == "saved partial"
+        assert payload["response_text"] == ""
+
+
 def test_queued_admission_and_failed_partial_text_are_not_misreported(tmp_path):
     app = make_app(tmp_path)
     queued_id, failed_id = "req_queued123", "req_failed123"
