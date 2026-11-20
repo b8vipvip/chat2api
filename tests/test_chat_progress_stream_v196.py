@@ -74,7 +74,10 @@ def test_stream_status_keeps_final_content_separate_and_is_nonterminal():
     assert 'chunk_payload(response_id, model, {"chat2api_status":' in main
     assert 'if observed["text"] != last_reasoning_text:' in main
     assert '"reasoning": preview' in main
-    assert "for delta in final_text_chunks(final_text):" in main
+    assert "final_chunks = list(final_text_chunks(final_text))" in main
+    assert "for index, delta in enumerate(final_chunks):" in main
+    assert 'chunk_delta: dict[str, object] = {"content": delta}' in main
+    assert "chunk_payload(response_id, model, chunk_delta)" in main
     assert "yield \": chat2api-keepalive" in main
     assert 'elif event_type == "chat.completed":' in main
     assert 'elif event_type == "chat.completed":' in broker
