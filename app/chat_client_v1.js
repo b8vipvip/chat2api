@@ -1490,9 +1490,10 @@
       throw new StreamResponseError(event.error.message || "服务端返回流式错误");
     }
     const choice = Array.isArray(event?.choices) ? event.choices[0] : null;
-    if (choice?.delta && Number.isSafeInteger(choice.delta.chat2api_event_id)
-        && choice.delta.chat2api_event_id > Number(assistant.lastEventId || 0)) {
-      assistant.lastEventId = choice.delta.chat2api_event_id;
+    const eventCursor = choice?.delta?.chat2api_event_id
+      ?? choice?.delta?.chat2api_tool?.chat2api_event_id;
+    if (Number.isSafeInteger(eventCursor) && eventCursor > Number(assistant.lastEventId || 0)) {
+      assistant.lastEventId = eventCursor;
     }
     if (choice?.delta && Object.prototype.hasOwnProperty.call(choice.delta, "content")) {
       appendDelta(assistant, choice.delta.content);
