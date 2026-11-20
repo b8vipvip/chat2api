@@ -175,11 +175,12 @@ class TelemetryStore:
         active_request_ids: set[str] | None = None,
         event_journal: Any | None = None,
     ) -> int:
-        """Mark Mode 1 requests without a surviving Broker lease as stalled.
+        """Enter a bounded reconnect grace for Mode 1 requests without a Broker lease.
 
         A process restart destroys the in-memory Broker queue and its original
-        Worker WebSocket. Persisted event history remains replayable, but it is
-        not proof that the old browser generation is still executing.
+        Worker WebSocket. The extension's terminal outbox may replay a verified
+        terminal observation on its replacement socket; if it does not arrive
+        before the deadline, the watchdog marks the request stalled.
         """
         active = {str(value) for value in (active_request_ids or set()) if value}
         recovered = 0
