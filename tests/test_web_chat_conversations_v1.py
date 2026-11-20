@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import base64
 from pathlib import Path
+import json
 import shutil
+import sqlite3
 import subprocess
 
 from fastapi.testclient import TestClient
@@ -415,3 +417,59 @@ def test_conversation_attachment_references_protect_files_until_last_cross_devic
             headers={"Origin": "http://testserver"},
         ).status_code == 200
         assert app.state.file_store.get(document_id) is None
+
+
+
+def test_conversation_attachment_reference_migration_backfills_legacy_rows(tmp_path: Path) -> None:
+    database = tmp_path / "web_chat_conversations_v1.sqlite3"
+    file_id = "file_legacyattachment1234"
+    first = _conversation("c2a_legacy_ref_0001")
+    first["messages"][0]["content"] = [
+        {"type": "text", "text": "legacy attachment"},
+        {"type": "image_url", "image_url": {"url": file_id}},
+        {"type": "image_url", "image_url": {"url": file_id}},
+    ]
+    second = _conversation("c2a_legacy_ref_0002")
+    second["messages"][0]["content"] = [
+        {"type": "text", "text": "shared legacy attachment"},
+        {"type": "file", "file_id": file_id, "filename": "legacy.txt",
+         "mime_type": "text/plain", "size": 10},
+    ]
+    deleted = _conversation("c2a_legacy_ref_0003")
+    deleted["messages"][0]["content"] = [
+        {"type": "text", "text": "already deleted"},
+        {"type": "file", "file_id": "file_deletedlegacy1234",
+         "filename": "gone.txt", "mime_type": "text/plain", "size": 4},
+    ]
+
+    with sqlite3.connect(database) as connection:
+        connection.execute("""
+            CREATE TABLE web_chat_conversations (
+                user_id TEXT NOT NULL,
+                conversation_id TEXT NOT NULL,
+                revision INTEGER NOT NULL,
+                updated_at TEXT NOT NULL,
+                deleted INTEGER NOT NULL DEFAULT 0,
+                payload TEXT NOT NULL,
+                PRIMARY KEY (user_id, conversation_id)
+            )
+        """)
+        connection.execute("PRAGMA user_version=1")
+        for conversation, is_deleted in ((first, 0), (second, 0), (deleted, 1)):
+            connection.execute(
+                """
+                INSERT INTO web_chat_conversations
+                    (user_id, conversation_id, revision, updated_at, deleted, payload)
+                VALUES (?, ?, 1, ?, ?, ?)
+                """,
+                (
+                    "legacy-user", conversation["id"], "2026-11-20T00:00:00Z",
+                    is_deleted, json.dumps(conversation),
+                ),
+            )
+
+    migrated = WebChatConversationStoreV1(tmp_path)
+    assert migrated.file_reference_count(file_id, "legacy-user") == 2
+    assert migrated.referenced_file_ids() == {file_id}
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
