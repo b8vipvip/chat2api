@@ -568,18 +568,25 @@ def install_web_chat_conversations_v1(app: FastAPI) -> None:
         expected_revision = body.get("expected_revision")
         if type(expected_revision) is not int or expected_revision < 0:
             raise HTTPException(status_code=422, detail="expected_revision is invalid", headers=_PRIVATE_HEADERS)
-        try:
-            conversation = normalize_conversation(
-                conversation_id, body.get("conversation"),
-                accounts=accounts, telemetry=request.app.state.telemetry,
-                user_id=str(user["user_id"]),
-                file_store=getattr(request.app.state, "file_store", None),
-            )
-        except LookupError:
-            raise HTTPException(status_code=404, detail="conversation resource not found", headers=_PRIVATE_HEADERS)
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error), headers=_PRIVATE_HEADERS)
-        saved, row = store.upsert(str(user["user_id"]), conversation, expected_revision)
+        file_store = getattr(request.app.state, "file_store", None)
+        if file_store is None:
+            raise HTTPException(status_code=503, detail="file service unavailable", headers=_PRIVATE_HEADERS)
+        # Serialize attachment validation/reference increments with user/API
+        # file deletion in this process. The SQLite conversation transaction
+        # then commits the new reference counts atomically with the revision.
+        with file_store.lock:
+            try:
+                conversation = normalize_conversation(
+                    conversation_id, body.get("conversation"),
+                    accounts=accounts, telemetry=request.app.state.telemetry,
+                    user_id=str(user["user_id"]),
+                    file_store=file_store,
+                )
+            except LookupError:
+                raise HTTPException(status_code=404, detail="conversation resource not found", headers=_PRIVATE_HEADERS)
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error), headers=_PRIVATE_HEADERS)
+            saved, row = store.upsert(str(user["user_id"]), conversation, expected_revision)
         if not saved:
             return JSONResponse(
                 {"detail": "conversation revision conflict", "conversation": row},
