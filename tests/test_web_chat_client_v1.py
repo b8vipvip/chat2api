@@ -45,6 +45,9 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         assert "/api/user/chat/requests/" in script.text
         assert "/api/user/chat/requests/" in script.text
         assert "localStorage" in script.text
+        assert "/api/user/chat/conversations" in script.text
+        assert "syncServerConversations" in script.text
+        assert "expected_revision" in script.text
         assert "state.apiToken" in script.text
         assert "prompt_mode" not in script.text
         assert 'await apiJson("/api/user/me")' in script.text
