@@ -198,6 +198,63 @@ def test_tool_activity_is_bounded_nonterminal_and_original_socket_scoped() -> No
     asyncio.run(scenario())
 
 
+def test_mode1_tool_reference_cards_are_bounded_and_public_https_only() -> None:
+    async def scenario() -> None:
+        broker = RequestBroker()
+        state = await broker.create("req_tool_refs_123", "worker-tool-refs")
+        socket = object()
+        state.dispatch_socket = socket
+        state.mode1_web_chat = True
+        event = {
+            "type": "chat.tool.result",
+            "request_id": state.request_id,
+            "tool_name": "browser.search",
+            "call_id": "call-refs-123",
+            "result_id": "result-refs-123",
+            "status": "completed",
+            "output": "Found sources.",
+            "metadata": {
+                "content_references": [{
+                    "title": "Python docs",
+                    "snippet": "Official documentation",
+                    "safe_urls": ["https://docs.python.org/3/library/"],
+                }, {
+                    "title": "Private address",
+                    "url": "https://127.0.0.1/private",
+                }],
+                "search_result_groups": [{
+                    "entries": [{
+                        "title": "Second source",
+                        "url": "https://example.org/reference",
+                    }],
+                }],
+                "unrelated": {"url": "https://ignored.example.net/private"},
+            },
+        }
+        assert await broker.publish_worker_event(
+            state.request_id, event, client_id="worker-tool-refs",
+            websocket=socket, current_socket=socket,
+        )
+        observed = await state.queue.get()
+        assert observed["references"] == [
+            {
+                "url": "https://docs.python.org/3/library/",
+                "title": "Python docs",
+                "snippet": "Official documentation",
+            },
+            {
+                "url": "https://example.org/reference",
+                "title": "Second source",
+                "snippet": "",
+            },
+        ]
+        assert "metadata" not in observed
+        assert state.text == "" and state.terminal_event_type is None
+        await broker.release(state.request_id)
+
+    asyncio.run(scenario())
+
+
 def test_mode1_tool_events_use_the_existing_worker_and_web_chat_stream_only() -> None:
     source = (ROOT / "app/main.py").read_text(encoding="utf-8")
     event_handler = source.split('if request_id and message_type in {', 1)[1].split(
