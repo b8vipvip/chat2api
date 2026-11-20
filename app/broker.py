@@ -5,6 +5,8 @@ import math
 import re
 import time
 from urllib.parse import urlsplit
+
+from .chat_tool_references_v1 import extract_tool_references
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -38,6 +40,8 @@ class RequestState:
     completed_mono: float | None = None
     terminal_event_type: str | None = None
     diagnostics: dict[str, Any] = field(default_factory=dict)
+    # Mode 1 may expose bounded public citation cards in its Web Chat UI.
+    mode1_web_chat: bool = False
 
     def owns_dispatch_socket(self, client_id: str, websocket: Any, current_socket: Any) -> bool:
         """Require the assigned Worker and exact original/current socket."""
@@ -648,6 +652,10 @@ class RequestBroker:
             }
             if result_id:
                 normalized["result_id"] = result_id
+            if state.mode1_web_chat:
+                references = extract_tool_references(event.get("metadata"))
+                if references:
+                    normalized["references"] = references
             event = normalized
         elif event_type == "chat.completed":
             state.terminal_event_type = str(event_type)
