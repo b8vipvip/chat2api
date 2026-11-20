@@ -58,10 +58,13 @@ def test_api_queues_before_capacity_and_only_then_marks_running():
     handler = source[source.index('    @app.post("/v1/chat/completions")'):
                      source.index('    @app.post("/v1/images/generations")')]
     assert handler.index("await record_request_queued(") < handler.index(
-        "client_id = await resolve_client_with_reconnect_grace("
-    ) < handler.index("state = await chat_request_service.reserve(request_id, client_id)") < handler.index(
+        "await_worker_admission_or_cancel("
+    ) < handler.index("lambda: resolve_client_with_reconnect_grace(") < handler.index(
+        "state = await chat_request_service.reserve(request_id, client_id)"
+    ) < handler.index("await record_request_running(")
+    assert handler.index("async with app.state.web_chat_cancel_lock") < handler.index(
         "await record_request_running("
-    )
+    ) < handler.index("await chat_request_service.dispatch(")
     assert '"status": "queued"' in source
     assert '"request_admission_stage": "selecting-worker"' in source
     assert '"request_admission_stage": "waiting-capacity"' in handler
