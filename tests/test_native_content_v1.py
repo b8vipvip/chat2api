@@ -190,7 +190,7 @@ def test_request_scoped_mathml_preserves_units_operators_and_scripts(tmp_path):
                     {"tag": "mi", "text": "x"}, {"tag": "mi", "text": "y"},
                 ]},
             ]},
-            {"tag": "annotation", "text": r"\\frac{x}{y}"},
+            {"tag": "annotation", "text": r"\frac{x}{y}"},
         ],
     }]}
     value = {"version": 1, "revision": 1,
