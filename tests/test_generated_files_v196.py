@@ -37,7 +37,7 @@ def office_zip() -> bytes:
     ("voice.wav", "audio/wav", b"RIFF\x10\x00\x00\x00WAVEfmt "),
     ("voice.m4a", "audio/mp4", b"\x00\x00\x00\x18ftypM4A \x00\x00\x00\x00M4A "),
     ("voice.ogg", "audio/ogg", b"OggS\x00\x02audio"),
-    ("voice.opus", "audio/ogg", b"OggS\x00\x02OpusHead"),
+    ("voice.opus", "audio/ogg", b"OggS\x00\x02" + b"\x00" * 20 + b"\x01\x13OpusHead" + b"\x00" * 11),
     ("voice.flac", "audio/flac", b"fLaC\x00\x00\x00\x22audio"),
     ("clip.mp4", "video/mp4", b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00"),
     ("clip.webm", "video/webm", b"\x1a\x45\xdf\xa3webm"),

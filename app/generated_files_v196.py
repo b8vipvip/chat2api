@@ -101,9 +101,15 @@ class GeneratedFileArchive:
             raise ValueError("Generated WAV signature mismatch")
         if suffix in {".m4a", ".mp4"} and not (len(data) >= 12 and data[4:8] == b"ftyp"):
             raise ValueError("Generated MP4/M4A signature mismatch")
-        if suffix in {".ogg", ".opus"} and not (
-                data.startswith(b"OggS") and (suffix != ".opus" or b"OpusHead" in data[:256])):
-            raise ValueError("Generated Ogg/Opus signature mismatch")
+        if suffix == ".ogg" and not data.startswith(b"OggS"):
+            raise ValueError("Generated Ogg signature mismatch")
+        if suffix == ".opus":
+            segment_count = data[26] if len(data) > 26 else 0
+            packet_offset = 27 + segment_count
+            if (not data.startswith(b"OggS") or not 1 <= segment_count <= 64
+                    or len(data) < packet_offset + 19 or data[27] < 19
+                    or data[packet_offset:packet_offset + 8] != b"OpusHead"):
+                raise ValueError("Generated Opus signature mismatch")
         if suffix == ".flac" and not data.startswith(b"fLaC"):
             raise ValueError("Generated FLAC signature mismatch")
         if suffix == ".webm" and not data.startswith(b"\x1A\x45\xDF\xA3"):

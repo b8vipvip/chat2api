@@ -139,8 +139,14 @@
       && String.fromCharCode(...bytes.slice(8,12)) === "WAVE";
     if (ext === "m4a" || ext === "mp4") return bytes.length >= 12
       && String.fromCharCode(...bytes.slice(4,8)) === "ftyp";
-    if (ext === "ogg" || ext === "opus") return String.fromCharCode(...bytes.slice(0,4)) === "OggS"
-      && (ext !== "opus" || new TextDecoder().decode(bytes.slice(0,256)).includes("OpusHead"));
+    if (ext === "ogg") return String.fromCharCode(...bytes.slice(0,4)) === "OggS";
+    if (ext === "opus") {
+      const segments = bytes[26] || 0, packetOffset = 27 + segments;
+      return String.fromCharCode(...bytes.slice(0,4)) === "OggS"
+        && segments >= 1 && segments <= 64 && bytes.length >= packetOffset + 19
+        && bytes[27] >= 19
+        && String.fromCharCode(...bytes.slice(packetOffset,packetOffset+8)) === "OpusHead";
+    }
     if (ext === "flac") return String.fromCharCode(...bytes.slice(0,4)) === "fLaC";
     if (ext === "webm") return bytes[0] === 0x1a && bytes[1] === 0x45
       && bytes[2] === 0xdf && bytes[3] === 0xa3;

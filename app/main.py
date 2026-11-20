@@ -781,10 +781,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     # turn a completed OpenAI request into an HTTP 500 or
                     # terminate native SSE. Never invent a ready file.
                     pass
+            file_descriptor = {
+                "filename": name, "url": url, "bytes": size,
+                "status": status if status in {"ready", "failed"} else "processing",
+            }
             mime_type = item.get("mime_type")
-            files.append({"filename": name, "url": url, "bytes": size,
-                          "mime_type": mime_type if isinstance(mime_type, str) else "",
-                          "status": status if status in {"ready", "failed"} else "processing"})
+            if isinstance(mime_type, str) and mime_type:
+                file_descriptor["mime_type"] = mime_type
+            files.append(file_descriptor)
         # Legacy native v1 clients index assets directly by img.media_index.
         # A candidate report alone is insufficient: extra archived images
         # would otherwise make them draw the WRONG picture at each position.

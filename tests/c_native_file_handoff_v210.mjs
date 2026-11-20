@@ -208,7 +208,7 @@ test("verified audio/video download cards capture only allowlisted container sig
     ["voice.wav","audio/wav",new Uint8Array([82,73,70,70,16,0,0,0,87,65,86,69,1])],
     ["voice.m4a","audio/mp4",new Uint8Array([0,0,0,24,102,116,121,112,77,52,65,32,0,0,0,0])],
     ["voice.ogg","audio/ogg",new Uint8Array([79,103,103,83,0,2,1])],
-    ["voice.opus","audio/ogg",new Uint8Array([79,103,103,83,...new TextEncoder().encode("OpusHead")])],
+    ["voice.opus","audio/ogg",new Uint8Array([79,103,103,83,0,2,...new Array(20).fill(0),1,19,...new TextEncoder().encode("OpusHead"),...new Array(11).fill(0)])],
     ["voice.flac","audio/flac",new Uint8Array([102,76,97,67,0,0,0,34])],
     ["clip.mp4","video/mp4",new Uint8Array([0,0,0,24,102,116,121,112,105,115,111,109,0,0,2,0])],
     ["clip.webm","video/webm",new Uint8Array([0x1a,0x45,0xdf,0xa3,1,2,3])],
