@@ -105,4 +105,15 @@ The first Mode 1 delivery slice is implemented on the corrected shared-Worker ar
 - The Web Chat renderer receives the full server-validated native tree (including safe SVG attributes and MathML), request-owned verified media assets and archived generated-file descriptors. It applies a second browser-side allowlist and creates DOM nodes rather than inserting captured HTML.
 - The client subscribes to native revisions for the same request ID, removes provisional content if finality cannot be verified, and rehydrates the last available snapshot after refresh without re-submitting generation.
 
-This slice does not yet deliver durable server-side conversation synchronization, full audio/tool/citation component parity, or durable token-level SSE replay. Those remain separate acceptance items.
+### W-01 — durable conversation persistence and cross-device synchronization
+
+The first W-01 vertical slice is now implemented:
+
+- Add a private SQLite-backed conversation store at data_dir/web_chat_conversations_v1.sqlite3. Rows are keyed by (authenticated user_id, conversation_id), with a per-row revision and a payload-free deletion tombstone.
+- Add GET /api/user/chat/conversations, PUT /api/user/chat/conversations/{conversation_id}, and DELETE /api/user/chat/conversations/{conversation_id}?expected_revision=N. All routes require the existing HttpOnly user session, return private/no-store with Vary: Cookie, and do not accept caller-supplied user IDs.
+- Validate conversation/message IDs, message roles, bounded content and attachment metadata, request ID format, selected API Key ownership and any request owner already present in Telemetry. Reject cross-account Key/request associations.
+- Use optimistic revisions and return 409 with the current row on stale writes. The browser merges messages by stable message ID and retries; a tombstone prevents an offline device from resurrecting a deleted conversation.
+- Bootstrap merges the existing per-user localStorage history with server rows, uploads local-only legacy conversations, and then treats the server as the cross-device source of truth while keeping localStorage as a cache/offline fallback.
+- Preserve empty pending assistant placeholders so a refresh can retain the original request ID and allow the existing recovery path to reconcile the original request rather than dropping the placeholder.
+
+W-01 does not claim durable token-level SSE replay. Audio/voice, citation/reference cards, full tool/function-call state UI, KaTeX typesetting and complete ChatGPT component parity remain open acceptance items. Real-browser multi-device and concurrent-update E2E must still pass before the issue is complete.
