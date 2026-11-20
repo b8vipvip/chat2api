@@ -360,7 +360,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 except Exception:
                     logger.exception("Web Chat attachment retention scan failed")
 
-        file_retention_task = asyncio.create_task(expire_web_chat_orphan_files())
         await test_runs.load()
         recovered_runs = await test_runs.recover_interrupted()
         if recovered_runs:
@@ -386,6 +385,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     logger.exception("Mode 1 restart recovery watchdog failed")
 
         recovery_watchdog = asyncio.create_task(expire_lost_web_chat_leases())
+        file_retention_task = asyncio.create_task(expire_web_chat_orphan_files())
         try:
             yield
         finally:
