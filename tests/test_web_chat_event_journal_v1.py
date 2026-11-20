@@ -116,6 +116,10 @@ def test_running_mode1_request_is_marked_stalled_after_broker_restart(tmp_path):
             "req_restart_123", "key-restart",
             {"type": "chat.delta", "delta": "partial answer"},
         )
+        await journal.append_worker_event(
+            "req_restart_123", "key-restart",
+            {"type": "chat.completed", "text": "full Worker terminal answer"},
+        )
         telemetry = TelemetryStore(tmp_path)
         telemetry._remember({
             "request_id": "req_restart_123",
@@ -134,7 +138,7 @@ def test_running_mode1_request_is_marked_stalled_after_broker_restart(tmp_path):
         assert row["status"] == "recovering"
         assert row["response_text"] == ""
         assert row["response_text_available"] is False
-        assert row["response_text_provisional"] == "partial answer"
+        assert row["response_text_provisional"] == "full Worker terminal answer"
         assert row["diagnostics"]["web_chat_request_recovery"] == (
             "awaiting-worker-terminal-replay"
         )
@@ -148,7 +152,7 @@ def test_running_mode1_request_is_marked_stalled_after_broker_restart(tmp_path):
         assert expired == 1
         stalled = telemetry.get("req_restart_123")
         assert stalled["status"] == "stalled"
-        assert stalled["response_text_provisional"] == "partial answer"
+        assert stalled["response_text_provisional"] == "full Worker terminal answer"
         snapshot = await journal.snapshot("req_restart_123", "key-restart")
         assert snapshot["terminal_status"] == "stalled"
 
