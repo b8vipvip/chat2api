@@ -200,6 +200,9 @@ def normalize_conversation(
                 if not owner_key_id or not accounts.owns_key(user_id, owner_key_id):
                     raise LookupError("message request does not belong to this user")
         recovery_status = _bounded_string(message.get("recoveryStatus", ""), "message recovery status", 40)
+        last_event_id = message.get("lastEventId", 0)
+        if type(last_event_id) is not int or last_event_id < 0 or last_event_id > 9_007_199_254_740_991:
+            raise ValueError("conversation message last event ID is invalid")
         normalized_message = {
             "id": message_id,
             "role": role,
@@ -208,6 +211,7 @@ def normalize_conversation(
             "requestId": request_id,
             "pending": pending,
             "recoveryStatus": recovery_status,
+            "lastEventId": last_event_id,
         }
         if tool_events:
             normalized_message["toolEvents"] = tool_events
