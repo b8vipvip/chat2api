@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from typing import Any
+import time
 
 
 _TERMINAL_TYPES = {"chat.completed", "chat.error", "chat.cancelled"}
@@ -46,7 +47,7 @@ def replayed_terminal_projection(
         "web_chat_terminal_replay_reconciled": (
             "provisional-only" if message_type == "chat.completed" else "terminal-status"
         ),
-        "web_chat_terminal_replay_received_at": __import__("time").time(),
+        "web_chat_terminal_replay_received_at": time.time(),
         "worker_transport_replayed": True,
     })
     error = (
