@@ -2680,30 +2680,47 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # handler above, but does not expose or call the OpenAI-compatible /v1 route.
     app.state.chat_completions_adapter = chat_completions
 
+    async def require_mode1_api_key(
+        authorization: str | None = Header(default=None),
+        x_api_key: str | None = Header(default=None),
+    ) -> ApiPrincipal:
+        try:
+            return await require_api_key(authorization, x_api_key)
+        except HTTPException as error:
+            headers = {
+                **(error.headers or {}),
+                "Cache-Control": "private, no-store",
+                "Vary": "Cookie",
+            }
+            raise HTTPException(
+                status_code=error.status_code, detail=error.detail, headers=headers,
+            ) from error
+
     @app.post("/api/user/chat/completions")
     async def mode1_user_chat_completions(
         body: ChatCompletionRequest,
         request: Request,
         x_chat2api_request_id: str | None = Header(default=None),
-        principal: ApiPrincipal = Depends(require_api_key),
+        principal: ApiPrincipal = Depends(require_mode1_api_key),
     ) -> Response:
         from .user_commerce import USER_SESSION_COOKIE
 
+        private_headers = {"Cache-Control": "private, no-store", "Vary": "Cookie"}
         accounts = getattr(request.app.state, "user_accounts", None)
         if accounts is None:
             raise HTTPException(status_code=503, detail="User account service unavailable",
-                                headers={"Cache-Control": "private, no-store"})
+                                headers=private_headers)
         user = accounts.authenticate(request.cookies.get(USER_SESSION_COOKIE))
         if not user:
             raise HTTPException(status_code=401, detail="User login required",
-                                headers={"Cache-Control": "private, no-store"})
+                                headers=private_headers)
         # Mode 1 never accepts the administrator master key or a Key owned by
         # another account. The selected Chat2API Key remains the request owner.
         key_id = str(getattr(principal, "key_id", "") or "")
         if (getattr(principal, "kind", "") == "master" or not key_id
                 or not accounts.owns_key(str(user["user_id"]), key_id)):
             raise HTTPException(status_code=404, detail="API key not found",
-                                headers={"Cache-Control": "private, no-store"})
+                                headers=private_headers)
         request.scope["chat2api_mode1_web_chat"] = True
         adapter = request.app.state.chat_completions_adapter
         response = await adapter(body, request, None, x_chat2api_request_id, principal)
