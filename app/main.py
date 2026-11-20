@@ -1475,12 +1475,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.delete("/v1/files/{file_id}")
     async def delete_file(file_id: str, principal: ApiPrincipal = Depends(require_api_key)) -> dict[str, object]:
         require_scope(principal, "files")
-        try:
-            await file_store.delete(file_id, None if principal.kind == "master" else principal.key_id)
-        except KeyError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        except PermissionError as error:
-            raise HTTPException(status_code=403, detail=str(error)) from error
+        conversations = getattr(app.state, "web_chat_conversations", None)
+        with file_store.lock:
+            if conversations is not None and conversations.file_reference_count(file_id) > 0:
+                raise HTTPException(
+                    status_code=409,
+                    detail="File is referenced by a saved Web Chat conversation; delete or update that conversation first",
+                )
+            try:
+                await file_store.delete(file_id, None if principal.kind == "master" else principal.key_id)
+            except KeyError as error:
+                raise HTTPException(status_code=404, detail=str(error)) from error
+            except PermissionError as error:
+                raise HTTPException(status_code=403, detail=str(error)) from error
         return {"id": file_id, "object": "file", "deleted": True}
 
     @app.get("/api/extensions/files/{file_id}")
