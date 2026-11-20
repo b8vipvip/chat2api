@@ -2,6 +2,7 @@ import asyncio
 
 from app.telemetry import TelemetryStore
 from app.web_chat_terminal_replay_v1 import (
+    is_already_finalized_worker_terminal,
     is_replayed_mode1_terminal,
     replayed_terminal_projection,
 )
@@ -58,6 +59,23 @@ def test_replayed_completion_is_preserved_as_provisional_not_false_success():
     assert projection["response_text_available"] is False
     assert "archival" in projection["error"]
     assert projection["diagnostics"]["web_chat_terminal_replay_reconciled"] == "provisional-only"
+
+
+def test_already_finalized_terminal_ack_is_same_worker_and_terminal_only():
+    row = {
+        "client_id": "worker-a",
+        "web_chat_mode": True,
+        "api_key_id": "key-mode1",
+        "status": "completed",
+    }
+    assert is_already_finalized_worker_terminal(row, "worker-a")
+    assert not is_already_finalized_worker_terminal(row, "worker-b")
+    assert not is_already_finalized_worker_terminal({**row, "status": "stalled"}, "worker-a")
+    assert not is_already_finalized_worker_terminal({**row, "api_key_id": "master"}, "worker-a")
+    assert is_already_finalized_worker_terminal(
+        {"client_id": "worker-a", "web_chat_mode": False, "status": "error"},
+        "worker-a",
+    )
 
 
 def test_replayed_image_completion_is_not_reported_as_a_verified_chat_answer():
