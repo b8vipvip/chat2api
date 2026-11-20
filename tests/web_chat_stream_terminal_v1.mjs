@@ -195,7 +195,7 @@ test("normalizes persisted tool events without accepting unsafe IDs or control c
   const start = source.indexOf("  function safeToolName(");
   const end = source.indexOf("  function normalizeConversationRow(", start);
   assert.ok(start >= 0 && end > start);
-  const context = vm.createContext({});
+  const context = vm.createContext({URL});
   const normalizeToolEvents = vm.runInContext(
     source.slice(start, end) + "\nnormalizeToolEvents",
     context,
