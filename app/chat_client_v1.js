@@ -326,6 +326,8 @@
           requestId: typeof message.requestId === "string" ? message.requestId : "",
           pending: message.pending === true,
           recoveryStatus: typeof message.recoveryStatus === "string" ? message.recoveryStatus : "",
+          lastEventId: Number.isSafeInteger(message.lastEventId) && message.lastEventId >= 0
+            ? Math.min(message.lastEventId, Number.MAX_SAFE_INTEGER) : 0,
           ...(toolEvents.length ? {toolEvents} : {}),
         };
       }),
