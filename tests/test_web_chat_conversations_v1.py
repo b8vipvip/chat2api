@@ -184,7 +184,10 @@ def test_web_chat_conversation_api_auth_ownership_sync_and_conflicts(tmp_path: P
         assert deleted.json()["conversation"]["revision"] == 3
         listed = client.get("/api/user/chat/conversations")
         assert listed.status_code == 200
-        assert listed.json()["data"][0]["deleted"] is True
+        listed_rows = listed.json()["data"]
+        deleted_row = next(row for row in listed_rows if row["id"] == conversation_id)
+        assert deleted_row["deleted"] is True
+        assert any(row["id"] == tool_only_id and not row["deleted"] for row in listed_rows)
 
 
 def test_conversation_api_rejects_foreign_api_key_and_invalid_pending_message(tmp_path: Path) -> None:
