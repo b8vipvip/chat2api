@@ -107,6 +107,46 @@ def remember(app, request_id: str, user_key: str, **changes):
     })
 
 
+def test_sse_event_replay_is_owner_scoped_and_honors_last_event_id(tmp_path):
+    app = make_app(tmp_path)
+    request_id = "req_eventreplay123"
+    with TestClient(app) as alice, TestClient(app) as bob:
+        alice_id = register(alice, "replay-alice@example.org")
+        bob_id = register(bob, "replay-bob@example.org")
+        app.state.user_accounts.attach_key(alice_id, "key_replay_alice")
+        app.state.user_accounts.attach_key(bob_id, "key_replay_bob")
+        remember(
+            app, request_id, "key_replay_alice", status="completed",
+            response_text="complete", response_text_available=True,
+        )
+        delivery = asyncio.run(app.state.web_chat_event_journal.append_delivery(
+            request_id, "key_replay_alice", "x" * 5000,
+        ))
+        first_id, second_id = delivery["chunk_event_ids"]
+        terminal_id = delivery["terminal_event_id"]
+
+        replay = alice.get(
+            f"/api/user/chat/requests/{request_id}/events",
+            headers={"Last-Event-ID": str(first_id)},
+        )
+        assert replay.status_code == 200, replay.text
+        assert replay.headers["content-type"].startswith("text/event-stream")
+        assert replay.headers["cache-control"] == "private, no-store"
+        assert f"id: {second_id}\nevent: delivery.delta" in replay.text
+        assert f"id: {terminal_id}\nevent: delivery.completed" in replay.text
+        assert f"id: {first_id}\nevent: delivery.delta" not in replay.text
+
+        denied = bob.get(f"/api/user/chat/requests/{request_id}/events")
+        assert denied.status_code == 404
+        assert denied.headers["cache-control"] == "private, no-store"
+
+        invalid_cursor = alice.get(
+            f"/api/user/chat/requests/{request_id}/events",
+            headers={"Last-Event-ID": "not-a-number"},
+        )
+        assert invalid_cursor.status_code == 400
+
+
 def test_completed_snapshot_is_returned_only_to_key_owner_and_never_cached(tmp_path):
     app = make_app(tmp_path)
     request_id = "req_12345678"
@@ -344,6 +384,8 @@ def test_queued_admission_and_failed_partial_text_are_not_misreported(tmp_path):
         assert failed["status"] == "stalled"
         assert failed["response_text"] == ""
         assert failed["response_text_available"] is False
+        assert failed["partial_text"] == "unverified partial output"
+        assert failed["partial_text_available"] is True
 
 
 
@@ -428,6 +470,47 @@ assert(/^req_[A-Za-z0-9_-]{8,120}$/.test(api.createRequestId({randomUUID:()=>"12
   assert(calls.every(call=>call.url==="/api/user/chat/requests/req_12345678/recovery"));
   assert(updates.some(value=>value.status==="running"));
   assert(updates.some(value=>value.status==="completed"));
+  const replayWindow = {};
+  vm.runInNewContext(src, {
+    window:replayWindow, AbortController, Date, Promise, Math, TextDecoder,
+    setTimeout:()=>1, clearTimeout:()=>{},
+  });
+  const replayApi = replayWindow.Chat2APIStreamRecoveryV1;
+  const replayCalls = [], replayEvents = [];
+  const replayFrames = [
+    "id: 7\nevent: cursor\ndata: {}\n\n",
+    "id: 8\nevent: delivery.delta\ndata: {\"delta\":\"replayed answer\"}\n\n",
+    "id: 9\nevent: delivery.completed\ndata: {\"text_chars\":15}\n\n",
+  ].join("");
+  const replayBytes = new TextEncoder().encode(replayFrames);
+  let replayRead = false;
+  const replayController = replayApi.create({
+    fetcher:async(url, options)=>{
+      replayCalls.push({url,method:options.method,headers:options.headers});
+      return {
+        status:200,ok:true,
+        body:{getReader:()=>({
+          read:async()=> replayRead ? {done:true} : (replayRead=true,{done:false,value:replayBytes}),
+          cancel:async()=>{},releaseLock(){},
+        })},
+      };
+    },
+    onEvent:value=>replayEvents.push(value),
+  });
+  const replayResult = await replayController.replay({
+    request_id:"req_12345678",assistant_message_id:"message_123456"
+  }, 6);
+  assert.strictEqual(replayResult.status,"completed");
+  assert.strictEqual(replayResult.terminal,true);
+  assert.strictEqual(replayEvents.length,3);
+  assert.strictEqual(replayEvents[1].id,8);
+  assert.strictEqual(replayEvents[1].data.delta,"replayed answer");
+  assert.strictEqual(replayCalls.length,1);
+  assert.strictEqual(replayCalls[0].method,"GET");
+  assert.strictEqual(replayCalls[0].url,
+    "/api/user/chat/requests/req_12345678/events?after=6");
+  assert.strictEqual(replayCalls[0].headers["Last-Event-ID"],"6");
+
   const inconsistent = await api.create({
     fetcher:async()=>({status:200,ok:true,json:async()=>({
       request_id:"req_12345678", status:"completed", terminal:false,
