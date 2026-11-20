@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
+import subprocess
 
 from fastapi.testclient import TestClient
 
@@ -217,3 +219,17 @@ def test_conversation_api_rejects_foreign_api_key_and_invalid_pending_message(tm
         assert accepted.status_code == 200, accepted.text
         assert accepted.json()["conversation"]["messages"][0]["pending"] is True
 
+
+
+
+def test_browser_conversation_merge_conflict_resolution() -> None:
+    node = shutil.which("node")
+    if node is None:
+        return
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [node, "--test", "tests/web_chat_conversation_sync_v1.mjs"],
+        cwd=root, check=False, capture_output=True, text=True, timeout=20,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "conversation merge keeps remote messages" in result.stdout

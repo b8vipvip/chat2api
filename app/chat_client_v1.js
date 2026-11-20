@@ -267,7 +267,7 @@
       const localCompleted = !message.pending && message.recoveryStatus === "completed";
       const serverCompleted = !existing.pending && existing.recoveryStatus === "completed";
       if ((localCompleted && !serverCompleted) ||
-          (messageContentWeight(message) > messageContentWeight(existing))) {
+          (!serverCompleted && messageContentWeight(message) > messageContentWeight(existing))) {
         messages.set(message.id, message);
       }
     });
