@@ -408,22 +408,30 @@ class FileStore:
                         break
             if not expired:
                 return 0
+            deleted: list[StoredFile] = []
             for item in expired:
+                try:
+                    # Unlink first, then remove the manifest row. If unlink is
+                    # temporarily blocked (e.g. antivirus/file lock on Windows),
+                    # keep the row so a later retention pass can retry it.
+                    (self.root / item.path).unlink(missing_ok=True)
+                    deleted.append(item)
+                except OSError:
+                    continue
+            if not deleted:
+                return 0
+            for item in deleted:
                 self.items.pop(item.file_id, None)
             try:
                 self.save_index()
             except Exception:
-                for item in expired:
+                # Restore the in-memory rows. The durable index still points
+                # at the now-missing files and a later pass can safely retry
+                # the idempotent missing_ok unlink before pruning those rows.
+                for item in deleted:
                     self.items[item.file_id] = item
                 raise
-            for item in expired:
-                try:
-                    (self.root / item.path).unlink(missing_ok=True)
-                except OSError:
-                    # The catalog deletion is authoritative; orphan cleanup is
-                    # safe to retry on the next maintenance pass.
-                    pass
-            return len(expired)
+            return len(deleted)
 
     async def delete(self, file_id: str, owner_key_id: str | None = None) -> None:
         with self.lock:
