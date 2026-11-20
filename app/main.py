@@ -2675,6 +2675,43 @@ def create_app(settings: Settings | None = None) -> FastAPI:
              "usage": usage, "chat2api": meta}
         )
 
+    # The Mode 1 Web Chat adapter is a dedicated user-session + managed-Key
+    # ingress. It reuses the exact shared Chat Completions admission/Worker
+    # handler below, but does not expose or call the OpenAI-compatible /v1 route.
+    app.state.chat_completions_adapter = chat_completions
+
+    @app.post("/api/user/chat/completions")
+    async def mode1_user_chat_completions(
+        body: ChatCompletionRequest,
+        request: Request,
+        x_chat2api_request_id: str | None = Header(default=None),
+        principal: ApiPrincipal = Depends(require_api_key),
+    ) -> Response:
+        from .user_commerce import USER_SESSION_COOKIE
+
+        accounts = getattr(request.app.state, "user_accounts", None)
+        if accounts is None:
+            raise HTTPException(status_code=503, detail="User account service unavailable",
+                                headers={"Cache-Control": "private, no-store"})
+        user = accounts.authenticate(request.cookies.get(USER_SESSION_COOKIE))
+        if not user:
+            raise HTTPException(status_code=401, detail="User login required",
+                                headers={"Cache-Control": "private, no-store"})
+        # Mode 1 never accepts the administrator master key or a Key owned by
+        # another account. The selected Chat2API Key remains the request owner.
+        key_id = str(getattr(principal, "key_id", "") or "")
+        if (getattr(principal, "kind", "") == "master" or not key_id
+                or not accounts.owns_key(str(user["user_id"]), key_id)):
+            raise HTTPException(status_code=404, detail="API key not found",
+                                headers={"Cache-Control": "private, no-store"})
+        request.scope["chat2api_mode1_web_chat"] = True
+        adapter = request.app.state.chat_completions_adapter
+        response = await adapter(body, request, None, x_chat2api_request_id, principal)
+        if isinstance(response, Response):
+            response.headers["Cache-Control"] = "private, no-store"
+            response.headers["Vary"] = "Cookie"
+        return response
+
     @app.post("/v1/images/generations")
     async def image_generations(
         body: ImageGenerationRequest,

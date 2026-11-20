@@ -1297,7 +1297,7 @@
         .filter((message) => message.id !== assistant.id)
         .map((message) => ({role:message.role,content:message.content}));
       requestSubmitted = true;
-      const response = await fetch("/v1/chat/completions", {
+      const response = await fetch("/api/user/chat/completions", {
         method: "POST",
         credentials: "same-origin",
         headers: {
