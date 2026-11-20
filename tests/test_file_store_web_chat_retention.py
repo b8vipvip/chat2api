@@ -44,3 +44,39 @@ def test_retention_deletes_only_expired_unreferenced_web_chat_uploads(tmp_path: 
     asyncio.run(reopened.load())
     assert reopened.get(current_web.file_id).source == "web_chat"
     assert reopened.get(expired_api.file_id).source == "api"
+
+
+
+def test_retention_keeps_failed_unlinks_indexed_for_next_pass(tmp_path: Path, monkeypatch) -> None:
+    store = FileStore(tmp_path)
+    item = asyncio.run(store.create(
+        filename="locked-web-chat.txt",
+        data_base64=base64.b64encode(b"locked").decode("ascii"),
+        mime_type="text/plain",
+        owner_key_id="key-owner",
+        purpose="assistants",
+        source="web_chat",
+    ))
+    item.created_at = "2000-01-01T00:00:00+00:00"
+    store.save_index()
+    target = store.root / item.path
+    original_unlink = Path.unlink
+
+    def fail_target_once(path: Path, *args, **kwargs):
+        if path == target:
+            raise PermissionError("simulated Windows file lock")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_target_once)
+    assert store.delete_expired_web_chat_files(set()) == 0
+    assert store.get(item.file_id) is not None
+    assert target.exists()
+
+    reopened = FileStore(tmp_path)
+    asyncio.run(reopened.load())
+    assert reopened.get(item.file_id) is not None
+
+    monkeypatch.setattr(Path, "unlink", original_unlink)
+    assert reopened.delete_expired_web_chat_files(set()) == 1
+    assert reopened.get(item.file_id) is None
+    assert not target.exists()
