@@ -116,7 +116,8 @@ def test_all_request_scoped_worker_sidecars_require_original_dispatch_socket() -
     source = (ROOT / "app/main.py").read_text(encoding="utf-8")
     # File chunks, DOM evidence, native sidecars, probes and generic
     # Chat/Image progress+terminal ingress must share the exact socket check.
-    assert source.count(".owns_dispatch_socket(") == 5
+    assert source.count(".owns_dispatch_socket(") == 6
+    assert "web_chat_worker_terminal_journaled_event_id" in source
     assert "state.completed_mono is None" in source
     assert "active_state.completed_mono is None" in source
 
