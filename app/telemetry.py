@@ -397,10 +397,25 @@ class TelemetryStore:
             # authoritative Broker terminal status.
             if record.get("status") in {"error", "cancelled", "stalled"}:
                 candidate = record.get("response_text")
-                if isinstance(candidate, str) and candidate:
-                    # A later durable Worker terminal replay can replace an
-                    # earlier, shorter provisional preview. Keep the newest
-                    # bounded candidate, never promote it to response_text.
+                incoming_diagnostics = record.get("diagnostics")
+                replayed_terminal = (
+                    isinstance(incoming_diagnostics, dict)
+                    and incoming_diagnostics.get("web_chat_request_recovery")
+                    == "worker-terminal-replayed-after-broker-restart"
+                )
+                previous_candidate = (
+                    existing.get("response_text_provisional")
+                    if isinstance(existing, dict) else None
+                )
+                if isinstance(candidate, str) and candidate and (
+                    not isinstance(previous_candidate, str)
+                    or not previous_candidate
+                    or replayed_terminal
+                ):
+                    # Preserve the first forensic candidate against late,
+                    # conflicting partial snapshots. The one explicit
+                    # exception is an owner-bound durable Worker terminal
+                    # replay, which may replace an older preview.
                     record["response_text_provisional"] = candidate[:50000]
                     record["response_text_provisional_chars"] = len(candidate)
                     record["response_text_provisional_unverified"] = True
