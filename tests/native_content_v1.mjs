@@ -331,7 +331,7 @@ const mathTree=mathEl("math",[
       mathEl("mover",[mathEl("mo",[{nodeType:3,nodeValue:"∑"}],"∑"),
                       mathEl("mi",[{nodeType:3,nodeValue:"n"}],"n")]),
     ]),
-    mathEl("annotation",[{nodeType:3,nodeValue:"\\\\frac{x}{y}"}],"\\\\frac{x}{y}"),
+    mathEl("annotation",[{nodeType:3,nodeValue:"\\frac{x}{y}"}],"\\frac{x}{y}"),
   ]),
 ]);
 const mathReply=capture.snapshot({
@@ -346,7 +346,7 @@ assert.equal(units.tag,"mtext");
 assert.equal(units.text,"每炉");
 assert.equal(semantics.children[0].children[2].tag,"mover");
 assert.equal(semantics.children[1].tag,"annotation");
-assert.equal(semantics.children[1].text,"\\\\frac{x}{y}");
+assert.equal(semantics.children[1].text,"\\frac{x}{y}");
 const legacyUnit=mathEl("div",[{nodeType:3,nodeValue:"单位"}],"单位");
 const legacyMath=capture.snapshot({
   requestId:"req_legacyunitnative001",submitStartedAt:Date.now(),
