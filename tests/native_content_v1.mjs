@@ -323,12 +323,15 @@ function mathEl(tag,children=[],textValue=null){
   return el;
 }
 const mathTree=mathEl("math",[
-  mathEl("mrow",[
-    mathEl("msub",[mathEl("mi",[{nodeType:3,nodeValue:"N"}],"N"),
-                    mathEl("mtext",[{nodeType:3,nodeValue:"每炉"}],"每炉")]),
-    mathEl("mo",[{nodeType:3,nodeValue:"="}],"="),
-    mathEl("mover",[mathEl("mo",[{nodeType:3,nodeValue:"∑"}],"∑"),
-                    mathEl("mi",[{nodeType:3,nodeValue:"n"}],"n")]),
+  mathEl("semantics",[
+    mathEl("mrow",[
+      mathEl("msub",[mathEl("mi",[{nodeType:3,nodeValue:"N"}],"N"),
+                      mathEl("mtext",[{nodeType:3,nodeValue:"每炉"}],"每炉")]),
+      mathEl("mo",[{nodeType:3,nodeValue:"="}],"="),
+      mathEl("mover",[mathEl("mo",[{nodeType:3,nodeValue:"∑"}],"∑"),
+                      mathEl("mi",[{nodeType:3,nodeValue:"n"}],"n")]),
+    ]),
+    mathEl("annotation",[{nodeType:3,nodeValue:"\\\\frac{x}{y}"}],"\\\\frac{x}{y}"),
   ]),
 ]);
 const mathReply=capture.snapshot({
@@ -336,10 +339,14 @@ const mathReply=capture.snapshot({
   lastCandidateNode:new Element("DIV",[mathTree])
 });
 assert.equal(mathReply.root.children[0].tag,"math");
-const units=mathReply.root.children[0].children[0].children[0].children[1];
+const semantics=mathReply.root.children[0].children[0];
+assert.equal(semantics.tag,"semantics");
+const units=semantics.children[0].children[0].children[1];
 assert.equal(units.tag,"mtext");
 assert.equal(units.text,"每炉");
-assert.equal(mathReply.root.children[0].children[0].children[2].tag,"mover");
+assert.equal(semantics.children[0].children[2].tag,"mover");
+assert.equal(semantics.children[1].tag,"annotation");
+assert.equal(semantics.children[1].text,"\\\\frac{x}{y}");
 const legacyUnit=mathEl("div",[{nodeType:3,nodeValue:"单位"}],"单位");
 const legacyMath=capture.snapshot({
   requestId:"req_legacyunitnative001",submitStartedAt:Date.now(),
