@@ -125,6 +125,14 @@ def test_web_chat_conversations_sync_between_two_browser_profiles(tmp_path: Path
                                 "status": "completed",
                                 "arguments": '{"query":"cross-device sync"}',
                                 "output": "Found two search results.",
+                                "references": [
+                                    {
+                                        "url": "https://docs.python.org/3/library/",
+                                        "title": "Python library reference",
+                                        "snippet": "Official language documentation",
+                                    },
+                                    {"url": "javascript:alert(1)", "title": "Unsafe reference"},
+                                ],
                             }],
                         },
                     ],
@@ -162,6 +170,10 @@ def test_web_chat_conversations_sync_between_two_browser_profiles(tmp_path: Path
                 page_b.get_by_text("Found two search results.").wait_for(
                     state="visible", timeout=10000,
                 )
+                citation_links = page_b.locator(".message-tool-reference")
+                assert citation_links.count() == 1
+                assert citation_links.first.get_attribute("href") == "https://docs.python.org/3/library/"
+                assert citation_links.first.inner_text().startswith("Python library reference")
 
                 # Both browser profiles write against revision 1. Exactly one
                 # optimistic update may win; the other must receive a conflict.
