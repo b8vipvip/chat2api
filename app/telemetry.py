@@ -397,9 +397,11 @@ class TelemetryStore:
             if record.get("status") in {"error", "cancelled", "stalled"}:
                 candidate = record.get("response_text")
                 if isinstance(candidate, str) and candidate:
-                    if not record.get("response_text_provisional"):
-                        record["response_text_provisional"] = candidate[:50000]
-                        record["response_text_provisional_chars"] = len(candidate)
+                    # A later durable Worker terminal replay can replace an
+                    # earlier, shorter provisional preview. Keep the newest
+                    # bounded candidate, never promote it to response_text.
+                    record["response_text_provisional"] = candidate[:50000]
+                    record["response_text_provisional_chars"] = len(candidate)
                     record["response_text_provisional_unverified"] = True
                 record["response_text"] = ""
                 record["response_text_available"] = False
