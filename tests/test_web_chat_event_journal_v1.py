@@ -131,13 +131,24 @@ def test_running_mode1_request_is_marked_stalled_after_broker_restart(tmp_path):
         )
         assert recovered == 1
         row = telemetry.get("req_restart_123")
-        assert row["status"] == "stalled"
+        assert row["status"] == "recovering"
         assert row["response_text"] == ""
         assert row["response_text_available"] is False
         assert row["response_text_provisional"] == "partial answer"
         assert row["diagnostics"]["web_chat_request_recovery"] == (
-            "broker-state-lost-after-server-restart"
+            "awaiting-worker-terminal-replay"
         )
+        snapshot = await journal.snapshot("req_restart_123", "key-restart")
+        assert snapshot["terminal_status"] == ""
+
+        deadline = row["diagnostics"]["web_chat_recovery_deadline_at"]
+        expired = await telemetry.expire_recovering_after_restart(
+            journal, now=deadline + 1,
+        )
+        assert expired == 1
+        stalled = telemetry.get("req_restart_123")
+        assert stalled["status"] == "stalled"
+        assert stalled["response_text_provisional"] == "partial answer"
         snapshot = await journal.snapshot("req_restart_123", "key-restart")
         assert snapshot["terminal_status"] == "stalled"
 
