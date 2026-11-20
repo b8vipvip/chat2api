@@ -225,8 +225,13 @@ def test_worker_terminal_outbox_replays_across_two_server_instances(tmp_path):
         )
         assert paired.status_code == 200, paired.text
         client_id, worker_token = paired.json()["client_id"], paired.json()["token"]
-        key, _secret = asyncio.run(app_before_restart.state.api_keys.create("restart-owner"))
-        key_id = key["key_id"]
+        key_response = first_server.post(
+            "/api/admin/keys",
+            headers={"Authorization": "Bearer restart-master-key"},
+            json={"name": "restart-owner"},
+        )
+        assert key_response.status_code == 200, key_response.text
+        key_id = key_response.json()["key"]["key_id"]
         asyncio.run(app_before_restart.state.telemetry.append({
             "request_id": request_id,
             "client_id": client_id,
