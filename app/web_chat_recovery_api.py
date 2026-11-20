@@ -6,9 +6,12 @@ It never redispatches a generation and never infers completion from transport EO
 from __future__ import annotations
 
 import asyncio
+import json
 import re
+import time
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi.responses import StreamingResponse
 
 from .admin_auth import same_origin_admin_request
 from .user_commerce import USER_SESSION_COOKIE
@@ -63,10 +66,22 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
         status = str(row.get("status") or "unknown").lower()
         state = broker.requests.get(request_id)
         updated_at = row.get("updated_at") or row.get("recorded_at")
+        journal = getattr(request.app.state, "web_chat_event_journal", None)
+        journal_snapshot = {}
+        if journal is not None:
+            try:
+                journal_snapshot = await journal.snapshot(request_id, key_id)
+            except Exception:
+                journal_snapshot = {}
+        last_event_id = int(journal_snapshot.get("last_event_id") or 0)
 
         if status == "completed":
             final_text = str(row.get("response_text") or "")
-            available = bool(row.get("response_text_available")) and bool(final_text)
+            if not final_text and journal_snapshot.get("terminal_status") == "completed":
+                final_text = str(journal_snapshot.get("delivered_text") or "")
+            available = (
+                bool(row.get("response_text_available")) and bool(row.get("response_text"))
+            ) or bool(final_text and journal_snapshot.get("terminal_status") == "completed")
             return {
                 "request_id": request_id,
                 "status": "completed",
@@ -75,12 +90,22 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                 "active": False,
                 "response_text": final_text if available else "",
                 "response_text_available": available,
+                "last_event_id": last_event_id,
                 "updated_at": updated_at,
             }
 
         if status in _TERMINAL:
-            # Failed/aborted/stalled candidate text is intentionally never
-            # exposed as a completed assistant reply.
+            # Failed/aborted/stalled candidate text is never promoted to a
+            # completed reply. A clearly labelled partial copy is available
+            # so the user can retain work after a process restart.
+            partial_text = ""
+            if status == "stalled":
+                partial_text = str(
+                    row.get("response_text_provisional")
+                    or journal_snapshot.get("delivered_text")
+                    or journal_snapshot.get("worker_partial_text")
+                    or ""
+                )[:50_000]
             return {
                 "request_id": request_id,
                 "status": status,
@@ -89,6 +114,9 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                 "active": False,
                 "response_text": "",
                 "response_text_available": False,
+                "partial_text": partial_text,
+                "partial_text_available": bool(partial_text),
+                "last_event_id": last_event_id,
                 "error_code": "request_" + status,
                 "updated_at": updated_at,
             }
@@ -106,6 +134,7 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                 "response_text": "",
                 "response_text_available": False,
                 "retry_after_ms": 1000,
+                "last_event_id": last_event_id,
                 "updated_at": updated_at,
             }
 
@@ -121,6 +150,7 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                 "response_text": "",
                 "response_text_available": False,
                 "retry_after_ms": 1000,
+                "last_event_id": last_event_id,
                 "updated_at": updated_at,
             }
 
@@ -137,6 +167,167 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
             "response_text_available": False,
             "updated_at": updated_at,
         }
+
+
+    @app.get("/api/user/chat/requests/{request_id}/events")
+    async def replay_chat_request_events(
+        request_id: str,
+        request: Request,
+        response: Response,
+        after: int = Query(default=0, ge=0),
+        last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+    ) -> StreamingResponse:
+        response.headers["Cache-Control"] = "private, no-store"
+        response.headers["Vary"] = "Cookie"
+        if not _REQUEST_ID_RE.fullmatch(request_id):
+            _http_error(404, "request not found")
+        accounts, user = current_user(request)
+        telemetry = getattr(request.app.state, "telemetry", None)
+        broker = getattr(request.app.state, "broker", None)
+        journal = getattr(request.app.state, "web_chat_event_journal", None)
+        if telemetry is None or broker is None or journal is None:
+            _http_error(503, "request replay unavailable")
+        row = telemetry.get(request_id)
+        if row is None:
+            _http_error(404, "request not found")
+        key_id = str(row.get("api_key_id") or "")
+        if not key_id or not accounts.owns_key(str(user["user_id"]), key_id):
+            _http_error(404, "request not found")
+
+        cursor = int(after)
+        if last_event_id is not None and last_event_id.strip():
+            try:
+                header_cursor = int(last_event_id.strip())
+            except ValueError:
+                _http_error(400, "invalid Last-Event-ID")
+            if header_cursor < 0:
+                _http_error(400, "invalid Last-Event-ID")
+            cursor = max(cursor, header_cursor)
+
+        async def replay():
+            last_heartbeat = time.monotonic()
+            while True:
+                page = await journal.events_after(request_id, key_id, cursor, limit=128)
+                first_id = page.get("first_event_id")
+                last_id = int(page.get("last_event_id") or 0)
+                if first_id is not None and cursor < int(first_id) - 1:
+                    snapshot = await journal.snapshot(request_id, key_id)
+                    status_value = str(snapshot.get("terminal_status") or "")
+                    if status_value == "completed":
+                        payload = {
+                            "status": "completed",
+                            "terminal": True,
+                            "response_text": str(snapshot.get("delivered_text") or ""),
+                        }
+                    elif status_value in {"stalled", "error", "cancelled"}:
+                        payload = {
+                            "status": status_value,
+                            "terminal": True,
+                            "partial_text": str(
+                                snapshot.get("delivered_text")
+                                or snapshot.get("worker_partial_text") or ""
+                            )[:50_000],
+                        }
+                    else:
+                        payload = {"status": "reset", "terminal": False}
+                    yield (
+                        f"id: {last_id}\nevent: replay.reset\ndata: "
+                        + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+                        + "\n\n"
+                    )
+                    cursor = last_id
+                    if payload.get("terminal") is True:
+                        return
+
+                events = page.get("events") if isinstance(page.get("events"), list) else []
+                for item in events:
+                    sequence = int(item.get("id") or 0)
+                    if sequence <= cursor:
+                        continue
+                    cursor = sequence
+                    event_type = str(item.get("type") or "")
+                    payload = item.get("data") if isinstance(item.get("data"), dict) else {}
+                    if event_type in {"worker.delta", "worker.snapshot", "worker.terminal"}:
+                        event_type = "cursor"
+                        payload = {}
+                    yield (
+                        f"id: {sequence}\nevent: {event_type}\ndata: "
+                        + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+                        + "\n\n"
+                    )
+                    if event_type in {
+                        "delivery.completed", "delivery.error",
+                        "delivery.cancelled", "delivery.stalled",
+                    }:
+                        return
+
+                latest = telemetry.get(request_id) or {}
+                latest_status = str(latest.get("status") or "unknown").lower()
+                if latest_status in _TERMINAL:
+                    snapshot = await journal.snapshot(request_id, key_id)
+                    if latest_status == "completed":
+                        payload = {
+                            "status": "completed",
+                            "terminal": True,
+                            "response_text": str(
+                                latest.get("response_text")
+                                or snapshot.get("delivered_text") or ""
+                            ),
+                        }
+                    else:
+                        payload = {
+                            "status": latest_status,
+                            "terminal": True,
+                            "partial_text": str(
+                                latest.get("response_text_provisional")
+                                or snapshot.get("delivered_text")
+                                or snapshot.get("worker_partial_text") or ""
+                            )[:50_000],
+                        }
+                    yield (
+                        f"id: {int(snapshot.get('last_event_id') or cursor)}"
+                        "\nevent: recovery.terminal\ndata: "
+                        + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+                        + "\n\n"
+                    )
+                    return
+
+                state = broker.requests.get(request_id)
+                if latest_status == "running" and state is None:
+                    snapshot = await journal.snapshot(request_id, key_id)
+                    payload = {
+                        "status": "stalled",
+                        "terminal": True,
+                        "partial_text": str(
+                            snapshot.get("delivered_text")
+                            or snapshot.get("worker_partial_text") or ""
+                        )[:50_000],
+                    }
+                    yield (
+                        f"id: {int(snapshot.get('last_event_id') or cursor)}"
+                        "\nevent: recovery.stalled\ndata: "
+                        + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+                        + "\n\n"
+                    )
+                    return
+
+                if await request.is_disconnected():
+                    return
+                now = time.monotonic()
+                if now - last_heartbeat >= 10.0:
+                    yield ": chat2api-replay-keepalive\n\n"
+                    last_heartbeat = now
+                await asyncio.sleep(0.25)
+
+        return StreamingResponse(
+            replay(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "private, no-store",
+                "Vary": "Cookie",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
 
     @app.post("/api/user/chat/requests/{request_id}/cancel")
