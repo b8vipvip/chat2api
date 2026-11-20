@@ -194,6 +194,6 @@ test("normalizes persisted tool events without accepting unsafe IDs or control c
   }], "assistant");
   assert.equal(rows.length, 1);
   assert.equal(rows[0].toolName.includes(String.fromCharCode(10)), false);
-  assert.equal(rows[0].arguments.length, 2000);
+  assert.equal(rows[0].arguments.length, 1200);
   assert.deepEqual(JSON.parse(JSON.stringify(normalizeToolEvents(rows, "user"))), []);
 });

@@ -189,8 +189,8 @@
       const status = statuses.includes(item.status) ? item.status : "completed";
       return {
         toolName, callId, resultId, status,
-        arguments: typeof item.arguments === "string" ? item.arguments.slice(0,2000) : "",
-        output: typeof item.output === "string" ? item.output.slice(0,2000) : "",
+        arguments: typeof item.arguments === "string" ? item.arguments.slice(0,1200) : "",
+        output: typeof item.output === "string" ? item.output.slice(0,1200) : "",
       };
     }).filter(Boolean);
   }
@@ -1299,8 +1299,8 @@
     if (callId) row.callId = callId;
     if (resultId) row.resultId = resultId;
     row.status = normalizeToolStatus(event.status);
-    if (typeof event.arguments === "string" && event.arguments) row.arguments = event.arguments.slice(0,2000);
-    if (typeof event.output === "string" && event.output) row.output = event.output.slice(0,2000);
+    if (typeof event.arguments === "string" && event.arguments) row.arguments = event.arguments.slice(0,1200);
+    if (typeof event.output === "string" && event.output) row.output = event.output.slice(0,1200);
     while (rows.length > 6) rows.shift();
     assistant.toolEvents = rows;
     saveHistory();

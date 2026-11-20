@@ -93,39 +93,56 @@ def test_web_chat_conversations_sync_between_two_browser_profiles(tmp_path: Path
 
                 conversation_id = "conv_browser_sync_001"
                 created_at = "2026-11-20T00:00:00Z"
+                conversation_payload = {
+                    "id": conversation_id,
+                    "title": "Created on device A",
+                    "model": "gpt-5.6-sol",
+                    "apiKeyId": "",
+                    "createdAt": created_at,
+                    "updatedAt": created_at,
+                    "messages": [
+                        {
+                            "id": "message_browser_sync_01",
+                            "role": "user",
+                            "content": "Cross-device sync message",
+                            "createdAt": created_at,
+                            "requestId": "",
+                            "pending": False,
+                            "recoveryStatus": "",
+                        },
+                        {
+                            "id": "message_browser_tool_01",
+                            "role": "assistant",
+                            "content": "",
+                            "createdAt": created_at,
+                            "requestId": "",
+                            "pending": False,
+                            "recoveryStatus": "completed",
+                            "toolEvents": [{
+                                "toolName": "browser.search",
+                                "callId": "call-browser-search-01",
+                                "resultId": "result-browser-search-01",
+                                "status": "completed",
+                                "arguments": '{"query":"cross-device sync"}',
+                                "output": "Found two search results.",
+                            }],
+                        },
+                    ],
+                }
                 saved = page_a.evaluate(
-                    """async ({conversationId, createdAt}) => {
+                    """async ({conversationId, conversation}) => {
                       const response = await fetch(
                         "/api/user/chat/conversations/" + conversationId,
                         {
                           method: "PUT",
                           credentials: "same-origin",
                           headers: {"content-type": "application/json"},
-                          body: JSON.stringify({
-                            expected_revision: 0,
-                            conversation: {
-                              id: conversationId,
-                              title: "Created on device A",
-                              model: "gpt-5",
-                              apiKeyId: "",
-                              createdAt,
-                              updatedAt: createdAt,
-                              messages: [{
-                                id: "message_browser_sync_01",
-                                role: "user",
-                                content: "Cross-device sync message",
-                                createdAt,
-                                requestId: "",
-                                pending: false,
-                                recoveryStatus: ""
-                              }]
-                            }
-                          })
+                          body: JSON.stringify({expected_revision: 0, conversation})
                         }
                       );
                       return {status: response.status, body: await response.json()};
                     }""",
-                    {"conversationId": conversation_id, "createdAt": created_at},
+                    {"conversationId": conversation_id, "conversation": conversation_payload},
                 )
                 assert saved["status"] == 200, saved
                 assert saved["body"]["conversation"]["revision"] == 1
@@ -139,11 +156,41 @@ def test_web_chat_conversations_sync_between_two_browser_profiles(tmp_path: Path
                 page_b.get_by_text("Cross-device sync message").wait_for(
                     state="visible", timeout=10000,
                 )
+                tool_summary = page_b.get_by_text("browser.search · 已完成")
+                tool_summary.wait_for(state="visible", timeout=10000)
+                tool_summary.click()
+                page_b.get_by_text("Found two search results.").wait_for(
+                    state="visible", timeout=10000,
+                )
+
+                # Both browser profiles write against revision 1. Exactly one
+                # optimistic update may win; the other must receive a conflict.
+                update_a = {**conversation_payload, "title": "Concurrent update from device A"}
+                update_b = {**conversation_payload, "title": "Concurrent update from device B"}
+                start_update = """({conversationId, conversation}) => {
+                  window.__pendingConversationUpdate = fetch(
+                    "/api/user/chat/conversations/" + conversationId,
+                    {
+                      method: "PUT",
+                      credentials: "same-origin",
+                      headers: {"content-type": "application/json"},
+                      body: JSON.stringify({expected_revision: 1, conversation})
+                    }
+                  ).then(async response => ({status: response.status, body: await response.json()}));
+                  return true;
+                }"""
+                page_a.evaluate(start_update, {"conversationId": conversation_id, "conversation": update_a})
+                page_b.evaluate(start_update, {"conversationId": conversation_id, "conversation": update_b})
+                concurrent_a = page_a.evaluate("() => window.__pendingConversationUpdate")
+                concurrent_b = page_b.evaluate("() => window.__pendingConversationUpdate")
+                assert sorted([concurrent_a["status"], concurrent_b["status"]]) == [200, 409]
+                conflict = concurrent_a if concurrent_a["status"] == 409 else concurrent_b
+                assert conflict["body"]["conversation"]["revision"] == 2
 
                 deleted = page_a.evaluate(
                     """async (conversationId) => {
                       const response = await fetch(
-                        "/api/user/chat/conversations/" + conversationId + "?expected_revision=1",
+                        "/api/user/chat/conversations/" + conversationId + "?expected_revision=2",
                         {method: "DELETE", credentials: "same-origin"}
                       );
                       return {status: response.status, body: await response.json()};

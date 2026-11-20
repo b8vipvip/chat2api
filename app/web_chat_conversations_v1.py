@@ -24,7 +24,7 @@ _REQUEST_ID_RE = re.compile(r"^req_[A-Za-z0-9_-]{8,120}$")
 _TOOL_EVENT_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 _TOOL_EVENT_STATUSES = frozenset({"running", "completed", "failed", "cancelled"})
 _MAX_TOOL_EVENTS_PER_MESSAGE = 6
-_MAX_TOOL_EVENT_TEXT = 2000
+_MAX_TOOL_EVENT_TEXT = 1200
 _FILE_ID_RE = re.compile(r"^file_[A-Za-z0-9]{8,64}$")
 _ALLOWED_DOCUMENT_MIME_TYPES = frozenset({
     "application/pdf",
