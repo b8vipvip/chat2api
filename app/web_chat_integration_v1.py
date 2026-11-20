@@ -45,8 +45,10 @@ def install_web_chat_features_v1(app: Any) -> Any:
 
     from .web_chat_recovery_api import install_web_chat_recovery_api
     from .web_chat_file_download_api import install_web_chat_file_download_api
+    from .web_chat_conversations_v1 import install_web_chat_conversations_v1
     install_web_chat_recovery_api(app)
     install_web_chat_file_download_api(app)
+    install_web_chat_conversations_v1(app)
 
     if not callable(getattr(app.state, "native_response_snapshot", None)):
         raise RuntimeError("Web Chat native delivery requires the production native snapshot authority")
@@ -166,7 +168,7 @@ def install_web_chat_features_v1(app: Any) -> Any:
     async def web_chat_private_cache_boundary(request, call_next):
         response = await call_next(request)
         path = request.url.path
-        if path.startswith(("/api/user/chat/completions", "/api/user/chat/requests/", "/api/user/chat/files/", "/api/user/files/")):
+        if path.startswith(("/api/user/chat/completions", "/api/user/chat/conversations", "/api/user/chat/requests/", "/api/user/chat/files/", "/api/user/files/")):
             response.headers["Cache-Control"] = "private, no-store"
             vary_values = [value.strip() for value in response.headers.get("Vary", "").split(",") if value.strip()]
             if not any(value.lower() == "cookie" for value in vary_values):
