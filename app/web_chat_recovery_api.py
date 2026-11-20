@@ -134,6 +134,8 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                 "phase": "reconnecting",
                 "retry_after_ms": 500,
                 "last_event_id": last_event_id,
+                "response_text": "",
+                "response_text_available": False,
                 "partial_text": str(row.get("response_text_provisional") or "")[:50_000],
                 "partial_text_available": bool(row.get("response_text_provisional")),
                 "updated_at": updated_at,
