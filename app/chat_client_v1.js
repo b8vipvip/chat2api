@@ -383,11 +383,14 @@
         if (!response.ok || !result.conversation) {
           throw new Error(result.detail || "HTTP " + response.status);
         }
+        const currentFingerprint = JSON.stringify(serverConversationPayload(conversation));
+        const serverUpdatedAt = String(result.conversation.updatedAt || conversation.updatedAt);
         conversation.serverRevision = Number(result.conversation.revision || 0);
-        conversation.updatedAt = String(result.conversation.updatedAt || conversation.updatedAt);
-        state.remoteSyncFingerprints.set(conversationId, fingerprint);
+        if (currentFingerprint === fingerprint) conversation.updatedAt = serverUpdatedAt;
+        const savedFingerprint = JSON.stringify({...body, updatedAt:serverUpdatedAt});
+        state.remoteSyncFingerprints.set(conversationId, savedFingerprint);
         persistHistorySnapshot();
-        if (JSON.stringify(serverConversationPayload(conversation)) !== fingerprint) {
+        if (JSON.stringify(serverConversationPayload(conversation)) !== savedFingerprint) {
           state.remoteSyncAgain.add(conversationId);
         }
         return;
