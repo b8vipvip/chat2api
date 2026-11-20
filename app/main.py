@@ -1426,12 +1426,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         else:
             raise HTTPException(status_code=415, detail="Use multipart/form-data or the Chat2API JSON upload format")
         try:
+            upload_source = (
+                "web_chat"
+                if str(request.headers.get("x-chat2api-source") or "").strip().lower() == "web-chat"
+                else "api"
+            )
             item = await file_store.create(
                 filename=body.filename,
                 data_base64=body.data_base64,
                 mime_type=body.mime_type,
                 owner_key_id=principal.key_id,
                 purpose=body.purpose,
+                source=upload_source,
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
