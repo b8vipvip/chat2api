@@ -183,8 +183,18 @@ def test_request_scoped_mathml_preserves_units_operators_and_scripts(tmp_path):
             {"tag": "mover", "children": [
                 {"tag": "mo", "text": "∑"}, {"tag": "mi", "text": "n"}]},
             {"tag": "mtext", "text": "万元"}]}]}
+    katex_mathml = {"tag": "math", "children": [{
+        "tag": "semantics", "children": [
+            {"tag": "mrow", "children": [
+                {"tag": "mfrac", "children": [
+                    {"tag": "mi", "text": "x"}, {"tag": "mi", "text": "y"},
+                ]},
+            ]},
+            {"tag": "annotation", "text": r"\\frac{x}{y}"},
+        ],
+    }]}
     value = {"version": 1, "revision": 1,
-        "root": {"tag": "div", "children": [formula]}}
+        "root": {"tag": "div", "children": [formula, katex_mathml]}}
     assert validate_native_snapshot(value) == value
     store = NativeContentStore(tmp_path)
     assert store.publish("req_mathtestv26701", "owner", value)
