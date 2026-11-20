@@ -286,11 +286,16 @@ class WebChatEventJournal:
                     delivered_text += addition[:remaining]
                     delivered_truncated = delivered_truncated or len(addition) > remaining
                 elif event_type == "delivery.completed":
-                    terminal_status = "completed"
-                    terminal_message = ""
+                    if not terminal_status:
+                        terminal_status = "completed"
+                        terminal_message = ""
                 elif event_type in {"delivery.error", "delivery.cancelled", "delivery.stalled"}:
-                    terminal_status = str(payload.get("status") or event_type.removeprefix("delivery."))
-                    terminal_message = _text(payload.get("message"), 500)
+                    # The first durable terminal outcome is authoritative.
+                    # Late retries or delayed terminal messages must not
+                    # rewrite a completed/error/cancelled/stalled request.
+                    if not terminal_status:
+                        terminal_status = str(payload.get("status") or event_type.removeprefix("delivery."))
+                        terminal_message = _text(payload.get("message"), 500)
 
             connection.execute(
                 """
