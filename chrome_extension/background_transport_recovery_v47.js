@@ -62,12 +62,19 @@
         const payload = raw?.payload;
         const queuedAt = Number(raw?.queued_at_ms || 0);
         if (!recoverableTerminal(payload) || !queuedAt || now - queuedAt > RETENTION_MS) continue;
-        state.outbox.set(eventKey(payload), {
-          payload,
-          queued_at_ms: queuedAt,
-          last_sent_at_ms: Number(raw?.last_sent_at_ms || 0),
-          attempts: Math.max(0, Number(raw?.attempts || 0)),
-        });
+        const key = eventKey(payload);
+        const current = state.outbox.get(key);
+        // A terminal can arrive while async storage restoration is in flight.
+        // Keep the newer in-memory write rather than overwriting it with an
+        // older snapshot returned by chrome.storage.local.get().
+        if (!current || Number(current.queued_at_ms || 0) < queuedAt) {
+          state.outbox.set(key, {
+            payload,
+            queued_at_ms: queuedAt,
+            last_sent_at_ms: Number(raw?.last_sent_at_ms || 0),
+            attempts: Math.max(0, Number(raw?.attempts || 0)),
+          });
+        }
       }
       await persist();
     } finally {
