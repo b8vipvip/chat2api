@@ -326,8 +326,10 @@ def test_web_chat_image_picker_and_client_javascript_are_wired(tmp_path: Path) -
         assert "MAX_IMAGES_PER_MESSAGE = 4" in script.text
         assert "MAX_IMAGE_BYTES = 10 * 1024 * 1024" in script.text
         assert "apiKeyId" in script.text
-        assert "orphanedFileIds" in script.text
-        assert "remainingFileIds" in script.text
+        assert "orphanedFileIds" not in script.text
+        assert "remainingFileIds" not in script.text
+        assert "附件文件暂时保留" in script.text
+        assert "删除会同步到你的其他设备" in script.text
 
 
         drop_script = client.get("/assets/chat2api-image-drop-v1.js")
