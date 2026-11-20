@@ -7,6 +7,7 @@ import re
 import sqlite3
 import stat
 import threading
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -208,7 +209,7 @@ class WebChatConversationStoreV1:
                 os.fchmod(fd, 0o600)
         finally:
             os.close(fd)
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             connection.execute("PRAGMA journal_mode=WAL")
             version = int(connection.execute("PRAGMA user_version").fetchone()[0])
             if version > 1:
@@ -255,7 +256,7 @@ class WebChatConversationStoreV1:
         }
 
     def list_for_user(self, user_id: str) -> list[dict[str, Any]]:
-        with self.lock, self._connect() as connection:
+        with self.lock, closing(self._connect()) as connection:
             rows = connection.execute(
                 """
                 SELECT revision, deleted, payload
