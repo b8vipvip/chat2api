@@ -3756,11 +3756,53 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         and replay_diagnostics.get("worker_transport_replayed") is True
                         and replay_diagnostics.get("worker_transport_recovery") == "transport-outbox-v47"
                     ):
+                        # A Broker queue acceptance is not enough: the terminal
+                        # must also exist in the durable owner-scoped journal.
+                        # If a prior attempt closed the Broker state but its
+                        # journal write failed, retry the journal append only
+                        # for the exact same Worker terminal on the assigned
+                        # socket; never reopen or republish the terminal.
+                        terminal_journaled = bool(
+                            active_state
+                            and active_state.mode1_web_chat
+                            and active_state.diagnostics.get("web_chat_worker_terminal_journaled_type") == message_type
+                            and int(active_state.diagnostics.get("web_chat_worker_terminal_journaled_event_id") or 0) > 0
+                        )
+                        if (
+                            not terminal_journaled
+                            and active_state
+                            and active_state.mode1_web_chat
+                            and active_state.terminal_event_type == message_type
+                            and active_state.owns_dispatch_socket(
+                                client_id, websocket, registry.sockets.get(client_id)
+                            )
+                        ):
+                            try:
+                                retry_event_id = await event_journal.append_worker_event(
+                                    request_id, active_state.mode1_owner_key_id, message,
+                                )
+                                if retry_event_id:
+                                    active_state.last_event_id = max(
+                                        active_state.last_event_id, int(retry_event_id),
+                                    )
+                                    active_state.diagnostics["web_chat_worker_terminal_journaled_type"] = message_type
+                                    active_state.diagnostics["web_chat_worker_terminal_journaled_event_id"] = int(retry_event_id)
+                                    terminal_journaled = True
+                            except Exception:
+                                logger.exception(
+                                    "Worker terminal replay journal retry failed request_id=%s",
+                                    request_id,
+                                )
                         await websocket.send_json({
                             "type": "chat.terminal.ack",
                             "request_id": request_id,
                             "terminal_type": message_type,
-                            "accepted": bool(accepted),
+                            "accepted": bool(
+                                terminal_journaled
+                                and active_state
+                                and active_state.mode1_web_chat
+                                and active_state.terminal_event_type == message_type
+                            ),
                             "recovered": False,
                         })
                     if accepted and message_type == "chat.completed" and active_state:
