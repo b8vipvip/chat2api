@@ -4,6 +4,7 @@ import vm from "node:vm";
 
 const source = readFileSync("chrome_extension/background_transport_recovery_v47.js", "utf8");
 const storage = {};
+let failStorageWrites = false;
 const sent = [];
 const handled = [];
 const timers = new Map();
@@ -19,7 +20,10 @@ const context = {
     storage: {
       local: {
         get: async defaults => ({...defaults, ...storage}),
-        set: async value => Object.assign(storage, value),
+        set: async value => {
+          if (failStorageWrites) throw new Error("storage quota unavailable");
+          Object.assign(storage, value);
+        },
       },
     },
   },
@@ -90,4 +94,13 @@ await context.trySendSocket({
 assert.equal(sent.length, 2, "non-terminal events keep the original best-effort transport");
 assert.equal(sent[1].type, "chat.delta");
 assert.equal(context.__CHAT2API_BACKGROUND_TRANSPORT_RECOVERY_V47__.outbox.size, 0);
-console.log("Worker terminal outbox waits for server acknowledgement");
+
+failStorageWrites = true;
+const rejected = await context.trySendSocket({
+  type: "chat.error", request_id: "req_storage_failure_123", error: "storage failed",
+});
+assert.equal(rejected, false, "the Worker must not claim durability when storage rejects the write");
+assert.equal(context.__CHAT2API_BACKGROUND_TRANSPORT_RECOVERY_V47__.outbox.size, 0);
+assert.equal(sent.length, 2, "an unpersisted terminal must never be sent");
+
+console.log("Worker terminal outbox waits for server acknowledgement and durable storage");
