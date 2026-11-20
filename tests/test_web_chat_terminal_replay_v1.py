@@ -32,9 +32,13 @@ def test_only_owner_bound_mode1_terminal_outbox_replay_is_accepted():
     assert not is_replayed_mode1_terminal(
         row, {**message, "diagnostics": {"worker_transport_replayed": True}}, "worker-a",
     )
-    assert not is_replayed_mode1_terminal(
-        row, {**message, "type": "image.completed"}, "worker-a",
-    )
+    image_message = {**message, "type": "image.completed", "text": "must not become a chat answer"}
+    assert is_replayed_mode1_terminal(row, image_message, "worker-a")
+    image_projection = replayed_terminal_projection(row, image_message)
+    assert image_projection["status"] == "stalled"
+    assert image_projection["response_text"] == ""
+    assert image_projection["response_text_available"] is False
+    assert image_projection["diagnostics"]["web_chat_terminal_replay_reconciled"] == "media-terminal-only"
 
 
 def test_replayed_completion_is_preserved_as_provisional_not_false_success():
