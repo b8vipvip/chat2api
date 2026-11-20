@@ -89,6 +89,9 @@ def test_replayed_terminal_replaces_older_provisional_text_without_completing(tm
             "response_text": "full replayed Worker terminal",
             "response_text_available": False,
             "error": "archive and usage reconciliation not rerun",
+            "diagnostics": {
+                "web_chat_request_recovery": "worker-terminal-replayed-after-broker-restart",
+            },
         })
         row = telemetry.get("req_replay_update")
         assert row["status"] == "stalled"
