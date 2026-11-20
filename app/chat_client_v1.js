@@ -1526,6 +1526,10 @@
       onUpdate(update) {
         if (!update || update.request_id !== assistant.requestId || update.assistant_message_id !== assistant.id) return;
         assistant.recoveryStatus = String(update.status || "recovering").slice(0, 40);
+        if (Number.isSafeInteger(update.last_event_id)
+            && update.last_event_id > Number(assistant.lastEventId || 0)) {
+          assistant.lastEventId = update.last_event_id;
+        }
         if (update.status === "completed" && update.terminal === true && typeof update.response_text === "string") {
           assistant.content = update.response_text.slice(0, MAX_MESSAGE_CHARS);
         } else if (update.status === "stalled" && update.terminal === true
