@@ -294,6 +294,14 @@
     catch { return contentWeight; }
   }
 
+  function toolActivityWeight(events) {
+    if (!Array.isArray(events)) return 0;
+    return events.reduce((weight,item) => weight
+      + (item?.status === "running" ? 1 : 10)
+      + String(item?.arguments || "").length
+      + String(item?.output || "").length,0);
+  }
+
   function mergeConversation(serverRow, localRow) {
     if (!localRow) return {...serverRow};
     if (!serverRow) return {...localRow};
@@ -307,9 +315,15 @@
       }
       const localCompleted = !message.pending && message.recoveryStatus === "completed";
       const serverCompleted = !existing.pending && existing.recoveryStatus === "completed";
+      const localToolWeight = toolActivityWeight(message.toolEvents);
+      const serverToolWeight = toolActivityWeight(existing.toolEvents);
       if ((localCompleted && !serverCompleted) ||
           (!serverCompleted && messageContentWeight(message) > messageContentWeight(existing))) {
         messages.set(message.id, message);
+      } else if (localToolWeight > serverToolWeight) {
+        // Preserve newer call/result state without replacing an authoritative
+        // completed answer with a stale local text snapshot.
+        messages.set(message.id, {...existing,toolEvents:message.toolEvents});
       }
     });
     const localNewer = String(localRow.updatedAt || "") > String(serverRow.updatedAt || "");
