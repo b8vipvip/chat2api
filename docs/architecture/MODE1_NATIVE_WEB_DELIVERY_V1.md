@@ -93,3 +93,16 @@ Mode 1 is not a second generation backend, not a per-user browser product and no
 - Do not log API Key plaintext, ChatGPT page contents or raw private browser state.
 - Do not let the Web Chat adapter create a second Worker lease, terminal authority, quota ledger or generated-file owner.
 - Existing Phase 0 restrictions against a separate hosted Cookie/private-endpoint proxy remain in force; this design does not require such a proxy.
+
+
+## 8. Implementation progress — 2026-11-20
+
+The first Mode 1 delivery slice is implemented on the corrected shared-Worker architecture:
+
+- The existing /chat user client continues to select a user-owned Chat2API API Key and submits the generation request once through the existing Chat Completions / Worker dispatch path.
+- A separate same-origin, user-session-authenticated native-content read/SSE adapter is available at /api/user/chat/requests/{request_id}/native-content and /events. It checks Telemetry ownership against the signed-in user's API Keys before returning content.
+- The adapter calls the exact app.state.native_response_snapshot authority already used by /v1/native-content; it does not create another store, dispatch, Broker lease or terminal owner.
+- The Web Chat renderer receives the full server-validated native tree (including safe SVG attributes and MathML), request-owned verified media assets and archived generated-file descriptors. It applies a second browser-side allowlist and creates DOM nodes rather than inserting captured HTML.
+- The client subscribes to native revisions for the same request ID, removes provisional content if finality cannot be verified, and rehydrates the last available snapshot after refresh without re-submitting generation.
+
+This slice does not yet deliver durable server-side conversation synchronization, full audio/tool/citation component parity, or durable token-level SSE replay. Those remain separate acceptance items.

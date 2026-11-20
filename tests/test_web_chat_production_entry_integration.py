@@ -31,12 +31,15 @@ for path in ("/v1/images/generations", "/v1/audio/speech", "/v1/audio/conversati
     ]) == 1
 expected = {
     ("GET", "/api/user/chat/requests/{request_id}/recovery"),
+    ("GET", "/api/user/chat/requests/{request_id}/native-content"),
+    ("GET", "/api/user/chat/requests/{request_id}/native-content/events"),
     ("POST", "/api/user/chat/requests/{request_id}/cancel"),
     ("GET", "/api/user/chat/files/{file_id}/download"),
     ("GET", "/api/user/files/{file_id}/content"),
     ("DELETE", "/api/user/files/{file_id}"),
     ("GET", "/assets/chat2api-image-drop-v1.js"),
     ("GET", "/assets/chat2api-chat-renderer-v2.js"),
+    ("GET", "/assets/chat2api-chat-native-renderer-v1.js"),
     ("GET", "/assets/chat2api-chat-stream-recovery-v1.js"),
 }
 for method, path in expected:
@@ -50,6 +53,9 @@ for method, path in expected:
 with TestClient(app) as client:
     recovery = client.get("/api/user/chat/requests/req_12345678/recovery")
     assert recovery.status_code == 401
+    native = client.get("/api/user/chat/requests/req_12345678/native-content")
+    assert native.status_code == 401
+    assert native.headers["cache-control"] == "private, no-store"
     assert recovery.headers["cache-control"] == "private, no-store"
     download = client.get("/api/user/chat/files/file_12345678/download")
     assert download.status_code == 401
@@ -103,6 +109,9 @@ with TestClient(app) as client:
     renderer = client.get("/assets/chat2api-chat-renderer-v2.js")
     assert renderer.status_code == 200
     assert "Chat2APISafeRenderer" in renderer.text
+    native_renderer = client.get("/assets/chat2api-chat-native-renderer-v1.js")
+    assert native_renderer.status_code == 200
+    assert "Chat2APINativeRendererV1" in native_renderer.text
     recovery_js = client.get("/assets/chat2api-chat-stream-recovery-v1.js")
     assert recovery_js.status_code == 200
     assert "Chat2APIStreamRecoveryV1" in recovery_js.text
@@ -114,6 +123,7 @@ with TestClient(app) as client:
     assert "imageInput" in page.text
     assert "attachButton" in page.text
     assert page.text.index("chat2api-chat-renderer-v2.js") < page.text.index("chat2api-chat-client-v1.js")
+    assert page.text.index("chat2api-chat-native-renderer-v1.js") < page.text.index("chat2api-chat-client-v1.js")
     assert page.text.index("chat2api-chat-stream-recovery-v1.js") < page.text.index("chat2api-chat-client-v1.js")
     assert page.text.index("chat2api-image-drop-v1.js") < page.text.index("chat2api-chat-client-v1.js")
     assert page.text.index("chat2api-chat-renderer-v2.js") < page.text.index("chat2api-chat-client-v1.js")
@@ -122,6 +132,8 @@ with TestClient(app) as client:
     assert client_js.status_code == 200
     assert "X-Chat2API-Request-ID" in client_js.text
     assert "recoverPendingMessage" in client_js.text
+    assert "streamNativeContent" in client_js.text
+    assert "/api/user/chat/requests/" in client_js.text
     assert "Chat2APISafeRenderer" in client_js.text
     assert "uploadPendingImages" in client_js.text
     assert "uploadPendingFiles" in client_js.text
