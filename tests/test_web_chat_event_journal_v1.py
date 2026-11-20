@@ -293,6 +293,7 @@ def test_worker_terminal_outbox_replays_across_two_server_instances(tmp_path):
             duplicate_ack = worker.receive_json()
             assert duplicate_ack["accepted"] is True
             assert duplicate_ack["terminal_type"] == "chat.completed"
+            assert duplicate_ack["already_finalized"] is True
 
         recovered = app_after_restart.state.telemetry.get(request_id)
         assert recovered["status"] == "stalled"
