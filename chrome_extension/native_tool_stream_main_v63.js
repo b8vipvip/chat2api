@@ -152,9 +152,10 @@
     if (role === "assistant") {
       const running = ["in_progress", "pending", "running", "streaming"].includes(status);
       const completed = ["finished_successfully", "completed"].includes(status);
-      const failed = ["failed", "error", "cancelled"].includes(status);
-      if ((!text && !running) || (!running && !completed && !failed)) return;
-      const normalizedStatus = running ? "running" : failed ? "failed" : "completed";
+      const cancelled = status === "cancelled";
+      const failed = ["failed", "error"].includes(status);
+      if ((!text && !running) || (!running && !completed && !failed && !cancelled)) return;
+      const normalizedStatus = running ? "running" : cancelled ? "cancelled" : failed ? "failed" : "completed";
       // Emit once per state transition, not once per streamed argument patch.
       const key = normalizedStatus;
       const eventKey = "tool:" + String(message.id || "");
@@ -173,7 +174,7 @@
     }
 
     if (role === "tool") {
-      if (!["finished_successfully", "completed", "failed", "error"].includes(status)) return;
+      if (!["finished_successfully", "completed", "failed", "error", "cancelled"].includes(status)) return;
       const key = signature(message, "result") + JSON.stringify(metadata).length;
       if (emitted.get(message.id) === key) return;
       emitted.set(message.id, key);
@@ -184,7 +185,7 @@
         call_id: String(message?.metadata?.parent_id || message?.parent_id || ""),
         result_id: String(message.id || ""),
         output: text,
-        status: ["failed", "error"].includes(status) ? "failed" : "completed",
+        status: status === "cancelled" ? "cancelled" : ["failed", "error"].includes(status) ? "failed" : "completed",
         metadata,
       });
     }

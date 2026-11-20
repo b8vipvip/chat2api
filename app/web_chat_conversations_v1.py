@@ -178,7 +178,8 @@ def normalize_conversation(
         if type(pending) is not bool:
             raise ValueError("conversation message pending flag is invalid")
         content, has_message_attachments = _normalize_content(message.get("content", ""), role)
-        if not content and not (role == "assistant" and pending):
+        tool_events = _normalize_tool_events(message.get("toolEvents"), role)
+        if not content and not (role == "assistant" and pending) and not tool_events:
             raise ValueError("conversation message content is empty")
         if role == "assistant" and isinstance(content, list):
             raise ValueError("assistant message content must be text")
@@ -194,7 +195,6 @@ def normalize_conversation(
                 if not owner_key_id or not accounts.owns_key(user_id, owner_key_id):
                     raise LookupError("message request does not belong to this user")
         recovery_status = _bounded_string(message.get("recoveryStatus", ""), "message recovery status", 40)
-        tool_events = _normalize_tool_events(message.get("toolEvents"), role)
         normalized_message = {
             "id": message_id,
             "role": role,

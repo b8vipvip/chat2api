@@ -1229,7 +1229,7 @@
 
   function applyToolEvent(assistant, event) {
     if (!assistant || !event || !["call","result"].includes(event.phase)) return false;
-    const toolName = String(event.tool_name || "tool").replace(/[\\r\\n\\0-\\x1f]/g," ").slice(0,80) || "tool";
+    const toolName = String(event.tool_name || "tool").replace(/[\r\n\0-\x1f]/g," ").slice(0,80) || "tool";
     const callId = String(event.call_id || "").slice(0,128);
     const resultId = String(event.result_id || "").slice(0,128);
     if (!callId && !resultId) return false;
