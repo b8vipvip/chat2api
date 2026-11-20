@@ -190,16 +190,14 @@ test("preserves request-scoped tool calls and results as safe presentation state
   assert.equal(referenceLink.referrerPolicy, "no-referrer");
 
   const replayAssistant = {content:"",lastEventId:0,toolEvents:[]};
-  assert.equal(api.consumeSseFrame(
-    'id: 41\\nevent: delivery.delta\\ndata: {"delta":"replayed"}',
-    replayAssistant,
-  ), false);
+  assert.equal(api.consumeSseFrame([
+    "id: 41", "event: delivery.delta", 'data: {"delta":"replayed"}',
+  ].join("\n"), replayAssistant), false);
   assert.equal(replayAssistant.content, "replayed");
   assert.equal(replayAssistant.lastEventId, 41);
-  assert.equal(api.consumeSseFrame(
-    'id: 42\\nevent: delivery.completed\\ndata: {"text_chars":8}',
-    replayAssistant,
-  ), true);
+  assert.equal(api.consumeSseFrame([
+    "id: 42", "event: delivery.completed", 'data: {"text_chars":8}',
+  ].join("\n"), replayAssistant), true);
   assert.equal(replayAssistant.replayTerminalStatus, "completed");
   assert.equal(replayAssistant.lastEventId, 42);
 });
