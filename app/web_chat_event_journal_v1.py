@@ -9,6 +9,7 @@ import asyncio
 import json
 import sqlite3
 import time
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -46,13 +47,14 @@ class WebChatEventJournal:
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA busy_timeout=10000")
         connection.execute("PRAGMA foreign_keys=ON")
+        connection.execute("PRAGMA synchronous=FULL")
         return connection
 
     async def open(self) -> None:
         await asyncio.to_thread(self._initialize)
 
     def _initialize(self) -> None:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             connection.execute("PRAGMA journal_mode=WAL")
             connection.execute("PRAGMA synchronous=FULL")
             connection.executescript(
@@ -98,6 +100,7 @@ class WebChatEventJournal:
                 """,
                 (cutoff,),
             )
+            connection.commit()
 
     @staticmethod
     def _worker_record(event: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
@@ -201,7 +204,7 @@ class WebChatEventJournal:
             return []
         now = time.time()
         encoded = [(kind, _json_payload(payload)) for kind, payload in records]
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             state = connection.execute(
                 "SELECT * FROM web_chat_event_state WHERE request_id = ?",
@@ -310,7 +313,7 @@ class WebChatEventJournal:
         limit: int,
     ) -> dict[str, Any]:
         bounded_limit = max(1, min(int(limit), 512))
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             state = connection.execute(
                 """
                 SELECT * FROM web_chat_event_state
@@ -359,7 +362,7 @@ class WebChatEventJournal:
         return await asyncio.to_thread(self._snapshot, request_id, owner_key_id)
 
     def _snapshot(self, request_id: str, owner_key_id: str) -> dict[str, Any]:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             row = connection.execute(
                 """
                 SELECT last_sequence, worker_text, delivered_text,
