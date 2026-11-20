@@ -42,20 +42,45 @@ def is_replayed_mode1_terminal(
 
 
 def is_already_finalized_worker_terminal(
-    telemetry_row: Any, client_id: str,
+    telemetry_row: Any, client_id: str, terminal_type: str = "",
 ) -> bool:
-    """Allow idempotent ACK only when the same Worker has a durable terminal row."""
+    """ACK only an idempotent duplicate owned by the same Worker."""
     if not isinstance(telemetry_row, dict):
         return False
     if str(telemetry_row.get("client_id") or "") != str(client_id or ""):
         return False
-    if str(telemetry_row.get("status") or "").lower() not in {
-        "completed", "error", "cancelled",
-    }:
-        return False
+    status = str(telemetry_row.get("status") or "").lower()
     if telemetry_row.get("web_chat_mode") is True:
         key_id = str(telemetry_row.get("api_key_id") or "")
-        return bool(key_id and key_id != "master")
+        if not key_id or key_id == "master":
+            return False
+        diagnostics = telemetry_row.get("diagnostics")
+        diagnostics = diagnostics if isinstance(diagnostics, dict) else {}
+        replay_type = str(diagnostics.get("web_chat_terminal_replay_type") or "")
+        if status == "stalled":
+            # A replay that was already persisted as provisional/stalled must
+            # still be ACKed if the Worker missed the first ACK. Match the
+            # exact terminal type so a different event cannot close its outbox.
+            return bool(
+                diagnostics.get("web_chat_request_recovery")
+                == "worker-terminal-replayed-after-broker-restart"
+                and replay_type
+                and (not terminal_type or replay_type == terminal_type)
+            )
+        if status not in {"completed", "error", "cancelled"}:
+            return False
+        if replay_type:
+            return not terminal_type or replay_type == terminal_type
+        if terminal_type:
+            allowed = {
+                "completed": {"chat.completed", "image.completed"},
+                "error": {"chat.error", "image.error"},
+                "cancelled": {"chat.cancelled", "image.cancelled"},
+            }.get(status, set())
+            return terminal_type in allowed
+        return True
+    if status not in {"completed", "error", "cancelled"}:
+        return False
     return True
 
 
