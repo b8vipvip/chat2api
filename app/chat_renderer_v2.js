@@ -87,6 +87,23 @@
     }
   }
 
+  function safeCitationUrl(value) {
+    const normalized = safeUrl(value);
+    if (!normalized) return "";
+    try {
+      const url = new URL(normalized);
+      const host = url.hostname.toLowerCase().replace(/\.$/, "");
+      if (url.protocol !== "https:" || url.username || url.password
+          || (url.port && url.port !== "443") || !host || host.includes(":")
+          || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)
+          || ["chatgpt.com","chat.openai.com","localhost"].includes(host)
+          || /(?:^|\.)(?:chatgpt\.com|localhost|local|internal|test|invalid|example|onion)$/.test(host)
+          || !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(host)
+          || (window.location && url.origin === window.location.origin)) return "";
+      return url.href;
+    } catch { return ""; }
+  }
+
   function normalizeCitationReferences(value) {
     if (!Array.isArray(value)) return [];
     const result = [];
@@ -95,8 +112,8 @@
       if (!item || typeof item !== "object") continue;
       const id = String(item.id || "").trim().slice(0, 128);
       if (!/^[A-Za-z0-9_.:-]{1,128}$/.test(id) || seen.has(id)) continue;
-      const url = safeUrl(item.url);
-      if (!url || !url.startsWith("https://")) continue;
+      const url = safeCitationUrl(item.url);
+      if (!url) continue;
       seen.add(id);
       result.push({
         id,
