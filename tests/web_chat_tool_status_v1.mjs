@@ -82,15 +82,17 @@ assert.equal(api.applyToolEvent(completedAssistant,{
   result_id:"result-terminal-1",status:"completed",output:"done",
 }),true);
 assert.equal(completedAssistant.toolEvents[0].status,"completed");
-api.applyToolEvent(completedAssistant,{
+assert.equal(api.applyToolEvent(completedAssistant,{
   phase:"call",tool_name:"browser.search",call_id:"call-terminal-1",status:"running",
-});
+}),false);
 assert.equal(completedAssistant.toolEvents[0].status,"completed");
-api.applyToolEvent(completedAssistant,{
+assert.equal(api.applyToolEvent(completedAssistant,{
   phase:"result",tool_name:"browser.search",call_id:"call-terminal-1",
   result_id:"result-terminal-2",status:"failed",output:"late retry",
-});
+}),false);
 assert.equal(completedAssistant.toolEvents[0].status,"completed");
+assert.equal(completedAssistant.toolEvents[0].output,"done");
+assert.equal(completedAssistant.toolEvents[0].resultId,"result-terminal-1");
 
 const failedAssistant = {toolEvents:[]};
 api.applyToolEvent(failedAssistant,{
