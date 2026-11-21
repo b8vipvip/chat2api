@@ -1066,3 +1066,34 @@ async def test_runtime_startup_hook_recovers_terminal_usage_before_serving(tmp_p
     assert api_keys.charged_requests[request_id] == 17
     await app.router.shutdown()
     store.close()
+
+
+
+@pytest.mark.asyncio
+async def test_live_voice_zero_text_releases_admission_hold_without_fake_audio_charge(tmp_path: Path) -> None:
+    from app.quota_reservation_runtime_v1 import reserve_audio_request_quota
+
+    app, store, api_keys = _runtime(tmp_path)
+    request_id = "req_live_voice_zero_text_0001"
+    reservation = await reserve_audio_request_quota(
+        app, request_id, SimpleNamespace(key_id="key-1", kind="managed"),
+        "", model_id="gpt-live",
+    )
+    assert reservation is not None
+    assert reservation["reserved_tokens"] >= 4096
+
+    await app.state.telemetry.usage_accounting({
+        "request_id": request_id,
+        "api_key_id": "key-1",
+        "request_type": "voice_call",
+        "status": "completed",
+        "usage": {
+            "prompt_tokens": 0, "completion_tokens": 0,
+            "total_tokens": 0, "estimated": True,
+        },
+    })
+
+    assert store.get(request_id)["state"] == "released"
+    assert api_keys.keys["key-1"].tokens_used == 0
+    assert api_keys.charged_requests == {}
+    store.close()
