@@ -339,6 +339,8 @@ def test_worker_terminal_outbox_replays_across_two_server_instances(tmp_path):
             assert duplicate_ack["accepted"] is True
             assert duplicate_ack["terminal_type"] == "chat.completed"
             assert duplicate_ack["already_finalized"] is True
+            charged = app_after_restart.state.api_keys.keys[key_id].charged_requests
+            assert charged[request_id] == recovered["usage"]["total_tokens"]
 
         recovered = app_after_restart.state.telemetry.get(request_id)
         assert recovered["status"] == "completed"
