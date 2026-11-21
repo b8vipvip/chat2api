@@ -248,3 +248,50 @@ def test_gpt_live_stage_failure_is_propagated_and_not_misclassified_as_timeout(t
             assert row["diagnostics"]["voice_failure_code"] == "VOICE_TRANSPORT_NOT_READY"
             assert row["diagnostics"]["voice_failure_stage"] == "transport-not-ready"
             assert not client.app.state.broker.requests
+
+
+
+def test_voice_terminal_telemetry_retries_transient_usage_accounting_failure(tmp_path: Path) -> None:
+    with TestClient(app_v6(tmp_path)) as client:
+        key = client.post("/api/admin/keys", headers=headers(), json={"name": "Voice retry"})
+        assert key.status_code == 200, key.text
+        managed_token = key.json()["token"]
+        key_id = key.json()["key"]["key_id"]
+        original_accounting = client.app.state.telemetry.usage_accounting
+        attempts = []
+
+        async def fail_once(record):
+            if record.get("status") == "completed" and not attempts:
+                attempts.append(record["request_id"])
+                raise OSError("simulated transient usage ledger write failure")
+            await original_accounting(record)
+
+        client.app.state.telemetry.usage_accounting = fail_once
+        client_id, extension_token = pair_extension(client)
+        with client.websocket_connect(f"/ws/extensions/{client_id}?token={extension_token}") as websocket:
+            websocket.receive_json()
+
+            def request():
+                return client.post(
+                    "/v1/audio/speech",
+                    headers={"Authorization": f"Bearer {managed_token}"},
+                    json={"model": "gpt-live", "input": "retry telemetry settlement", "timeout": 30},
+                )
+
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(request)
+                message = websocket.receive_json()
+                assert message["type"] == "voice.request"
+                complete_voice(websocket, message["request_id"], "Voice delivery survived one accounting failure")
+                response = future.result(timeout=5)
+
+        assert response.status_code == 200, response.text
+        request_id = response.json()["chat2api"]["request_id"]
+        assert attempts == [request_id]
+        row = client.app.state.telemetry.get(request_id)
+        assert row["status"] == "completed"
+        assert row["response_text"] == "Voice delivery survived one accounting failure"
+        usage = row["usage"]
+        key_record = client.app.state.api_keys.keys[key_id]
+        assert key_record.charged_requests[request_id] == usage["total_tokens"]
+        assert key_record.tokens_used == usage["total_tokens"]
