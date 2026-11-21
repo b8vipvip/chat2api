@@ -10,6 +10,8 @@ import re
 import secrets
 import stat
 import threading
+import time
+from datetime import datetime, timezone
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any
@@ -41,6 +43,9 @@ class StoredFile:
     # Persisted content digest; empty only for legacy index rows whose content
     # was already missing when the index migration ran.
     sha256: str = ""
+    # Only browser-originated Web Chat uploads are eligible for orphan expiry.
+    # OpenAI-compatible API uploads remain user-managed by default.
+    source: str = "api"
 
     def public(self) -> dict[str, Any]:
         return {
@@ -128,6 +133,7 @@ class FileStore:
                     or "/" in item.path or "\\" in item.path or ":" in item.path
                     or Path(item.path).name != item.path
                     or not isinstance(item.purpose, str) or not item.purpose
+                    or not isinstance(item.source, str) or item.source not in {"api", "web_chat"}
                     or not isinstance(item.sha256, str)
                     or (item.sha256 and not re.fullmatch(r"[0-9a-f]{64}", item.sha256))
                 ):
@@ -258,7 +264,10 @@ class FileStore:
         mime_type: str | None,
         owner_key_id: str,
         purpose: str = "chat2api",
+        source: str = "api",
     ) -> StoredFile:
+        if source not in {"api", "web_chat"}:
+            raise ValueError("Unsupported file source")
         payload, detected = self._decode(data_base64, mime_type)
         clean = safe_name(filename)
         if detected == "application/octet-stream":
@@ -297,6 +306,7 @@ class FileStore:
             path=disk_name,
             purpose=purpose,
             sha256=hashlib.sha256(payload).hexdigest(),
+            source=source,
         )
         with self.lock:
             self.items[file_id] = item
@@ -364,6 +374,64 @@ class FileStore:
             finally:
                 if fd >= 0:
                     os.close(fd)
+
+    def delete_expired_web_chat_files(
+        self, referenced_file_ids: set[str], *,
+        older_than_seconds: int = 90 * 86400, limit: int = 500,
+    ) -> int:
+        """Delete only expired, unreferenced files uploaded by the Web Chat UI.
+
+        General API uploads are never auto-expired by this maintenance path.
+        The file index is committed before content unlink, matching delete().
+        """
+        cutoff = time.time() - max(86400, int(older_than_seconds))
+        bounded_limit = max(1, min(int(limit), 2000))
+        referenced = {str(value) for value in referenced_file_ids}
+        with self.lock:
+            expired: list[StoredFile] = []
+            for item in self.items.values():
+                if item.source != "web_chat" or item.file_id in referenced:
+                    continue
+                try:
+                    created = datetime.fromisoformat(
+                        str(item.created_at).replace("Z", "+00:00")
+                    )
+                    if created.tzinfo is None:
+                        created = created.replace(tzinfo=timezone.utc)
+                    created_at = created.timestamp()
+                except (TypeError, ValueError, OverflowError):
+                    # Unknown timestamps are not grounds for destructive cleanup.
+                    continue
+                if created_at <= cutoff:
+                    expired.append(item)
+                    if len(expired) >= bounded_limit:
+                        break
+            if not expired:
+                return 0
+            deleted: list[StoredFile] = []
+            for item in expired:
+                try:
+                    # Unlink first, then remove the manifest row. If unlink is
+                    # temporarily blocked (e.g. antivirus/file lock on Windows),
+                    # keep the row so a later retention pass can retry it.
+                    (self.root / item.path).unlink(missing_ok=True)
+                    deleted.append(item)
+                except OSError:
+                    continue
+            if not deleted:
+                return 0
+            for item in deleted:
+                self.items.pop(item.file_id, None)
+            try:
+                self.save_index()
+            except Exception:
+                # Restore the in-memory rows. The durable index still points
+                # at the now-missing files and a later pass can safely retry
+                # the idempotent missing_ok unlink before pruning those rows.
+                for item in deleted:
+                    self.items[item.file_id] = item
+                raise
+            return len(deleted)
 
     async def delete(self, file_id: str, owner_key_id: str | None = None) -> None:
         with self.lock:

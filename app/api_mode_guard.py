@@ -10,16 +10,14 @@ ASGIApp = Callable[[dict[str, Any], Callable[..., Any], Callable[..., Any]], Awa
 MODE_HEADER = b"x-chat2api-mode"
 API_PREFIX = "/v1"
 MODE2_VALUES = frozenset({"api", "mode2"})
-MODE1_VALUES = frozenset({"chat", "mode1"})
 
 
-class ModeResolverMiddleware:
-    """Resolve the API mode once at ingress without changing OpenAI API payloads.
+class ApiModeGuardMiddleware:
+    """Pin the OpenAI-compatible ingress to its single supported API mode.
 
-    Standard /v1 requests always resolve to Mode 2 when the optional extension
-    header is absent. The header is accepted only on /v1 routes. Mode 1 is not
-    an API transport: attempts to select it on /v1 are rejected rather than
-    forwarded to any web proxy. No proxy route is created by this middleware.
+    The header is an optional Chat2API compatibility extension. It can select
+    only the API aliases; it cannot switch a request to another product
+    entrypoint or route traffic to a browser session.
     """
 
     def __init__(self, app: ASGIApp) -> None:
@@ -101,19 +99,6 @@ class ModeResolverMiddleware:
         if requested_mode in MODE2_VALUES:
             self._set_mode_state(scope, source="header")
             await self.app(scope, receive, send)
-            return
-
-        if requested_mode in MODE1_VALUES:
-            await self._reject(
-                scope,
-                receive,
-                send,
-                message=(
-                    "Mode 1 is not an OpenAI API transport. Use of Mode 1 on /v1 "
-                    "is an entrypoint conflict; /v1 requests remain Mode 2."
-                ),
-                code="mode_entrypoint_conflict",
-            )
             return
 
         await self._reject(

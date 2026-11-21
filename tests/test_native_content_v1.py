@@ -183,8 +183,18 @@ def test_request_scoped_mathml_preserves_units_operators_and_scripts(tmp_path):
             {"tag": "mover", "children": [
                 {"tag": "mo", "text": "∑"}, {"tag": "mi", "text": "n"}]},
             {"tag": "mtext", "text": "万元"}]}]}
+    katex_mathml = {"tag": "math", "children": [{
+        "tag": "semantics", "children": [
+            {"tag": "mrow", "children": [
+                {"tag": "mfrac", "children": [
+                    {"tag": "mi", "text": "x"}, {"tag": "mi", "text": "y"},
+                ]},
+            ]},
+            {"tag": "annotation", "text": r"\frac{x}{y}"},
+        ],
+    }]}
     value = {"version": 1, "revision": 1,
-        "root": {"tag": "div", "children": [formula]}}
+        "root": {"tag": "div", "children": [formula, katex_mathml]}}
     assert validate_native_snapshot(value) == value
     store = NativeContentStore(tmp_path)
     assert store.publish("req_mathtestv26701", "owner", value)
@@ -646,3 +656,68 @@ def test_3a882b_terminal_diagnostics_never_equate_prior_revision_with_final():
     assert observed["native_final_capture_committed"] is False
     assert observed["native_structural_max_children"] == 1800
     assert observed["native_capture_failure"] == "structural-max-children"
+
+
+
+def test_public_https_citation_links_are_validated_and_legacy_projection_stays_unchanged():
+    from app.native_content_v1 import native_public_v1_tree
+
+    citation = {"tag": "a", "href": "https://example.org/reports/2026", "children": [
+        {"tag": "span", "text": "来源：年度报告"},
+    ]}
+    safe = validate_native_snapshot({"version": 1, "revision": 1, "root": citation})
+    assert safe["root"]["href"] == citation["href"]
+    legacy = native_public_v1_tree(safe["root"])
+    assert legacy["tag"] == "span"
+    assert "href" not in legacy
+    assert legacy["children"][0]["text"] == "来源：年度报告"
+
+
+@pytest.mark.parametrize("href", [
+    "javascript:alert(1)",
+    "http://example.org/insecure",
+    "https://127.0.0.1/admin",
+    "https://localhost/admin",
+    "https://user:pass@example.org/private",
+    "https://example.org:8443/private",
+    "https://worker.internal/private",
+    "https://chatgpt.com/backend-api/session",
+    "https://example.test/private",
+    "https://example.org/\nheader",
+])
+def test_citation_links_reject_active_private_and_non_https_targets(href):
+    with pytest.raises(ValueError):
+        validate_native_snapshot({"version": 1, "revision": 1,
+            "root": {"tag": "a", "href": href, "text": "source"}})
+
+
+def test_non_anchor_nodes_cannot_smuggle_link_targets():
+    with pytest.raises(ValueError):
+        validate_native_snapshot({"version": 1, "revision": 1,
+            "root": {"tag": "div", "href": "https://example.org"}})
+
+
+
+def test_extended_mathml_matrix_and_fenced_expression_nodes_are_preserved():
+    tree = {
+        "tag": "math",
+        "children": [
+            {"tag": "mtable", "children": [
+                {"tag": "mtr", "children": [
+                    {"tag": "mtd", "children": [
+                        {"tag": "mrow", "children": [
+                            {"tag": "mi", "text": "a"},
+                            {"tag": "mo", "text": "+"},
+                            {"tag": "mi", "text": "b"},
+                        ]},
+                    ]},
+                ]},
+            ]},
+            {"tag": "mfenced", "children": [
+                {"tag": "mphantom", "children": [{"tag": "mn", "text": "0"}]},
+            ]},
+        ],
+    }
+    safe = validate_native_snapshot({"version": 1, "revision": 9, "root": tree})
+    assert safe["root"]["children"][0]["tag"] == "mtable"
+    assert safe["root"]["children"][1]["tag"] == "mfenced"

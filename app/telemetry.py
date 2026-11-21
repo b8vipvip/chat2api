@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from collections import deque
 from pathlib import Path
@@ -169,6 +170,129 @@ class TelemetryStore:
                 continue
         return recovered
 
+    async def recover_running_after_restart(
+        self,
+        active_request_ids: set[str] | None = None,
+        event_journal: Any | None = None,
+    ) -> int:
+        """Enter a bounded reconnect grace for Mode 1 requests without a Broker lease.
+
+        A process restart destroys the in-memory Broker queue and its original
+        Worker WebSocket. The extension's terminal outbox may replay a verified
+        terminal observation on its replacement socket; if it does not arrive
+        before the deadline, the watchdog marks the request stalled.
+        """
+        active = {str(value) for value in (active_request_ids or set()) if value}
+        recovered = 0
+        for row in self.recent(self.items.maxlen or 500):
+            request_id = str(row.get("request_id") or "")
+            if (
+                not request_id
+                or request_id in active
+                or row.get("web_chat_mode") is not True
+                or str(row.get("status") or "").lower() != "running"
+            ):
+                continue
+            key_id = str(row.get("api_key_id") or "")
+            snapshot: dict[str, Any] = {}
+            if event_journal is not None and key_id:
+                try:
+                    snapshot = await event_journal.snapshot(request_id, key_id)
+                except Exception:
+                    snapshot = {}
+            partial = str(
+                snapshot.get("delivered_text")
+                or snapshot.get("worker_partial_text")
+                or row.get("response_text_provisional")
+                or ""
+            )[:50_000]
+            diagnostics = row.get("diagnostics")
+            diagnostics = dict(diagnostics) if isinstance(diagnostics, dict) else {}
+            diagnostics.update({
+                "web_chat_request_recovery": "awaiting-worker-terminal-replay",
+                "web_chat_event_replay_available": bool(snapshot.get("last_event_id")),
+                "web_chat_last_event_id": int(snapshot.get("last_event_id") or 0),
+                "web_chat_partial_text_unverified": bool(partial),
+                "web_chat_recovery_deadline_at": time.time() + 120.0,
+            })
+            try:
+                await self.upsert({
+                    **row,
+                    "status": "recovering",
+                    "response_text": "",
+                    "response_text_available": False,
+                    "response_text_provisional": partial,
+                    "response_text_provisional_chars": len(partial),
+                    "error": "Server restarted; waiting briefly for the Worker's durable terminal outbox",
+                    "diagnostics": diagnostics,
+                })
+                recovered += 1
+            except Exception:
+                # Keep startup available; an unreconciled row remains visible
+                # for later inspection and must never be treated as active.
+                continue
+        return recovered
+
+    async def expire_recovering_after_restart(
+        self,
+        event_journal: Any | None = None,
+        *,
+        now: float | None = None,
+    ) -> int:
+        """Fail closed after the Worker terminal-outbox reconnect grace expires."""
+        current = float(now if now is not None else time.time())
+        expired = 0
+        for row in self.recent(self.items.maxlen or 500):
+            request_id = str(row.get("request_id") or "")
+            diagnostics = row.get("diagnostics")
+            diagnostics = diagnostics if isinstance(diagnostics, dict) else {}
+            deadline = diagnostics.get("web_chat_recovery_deadline_at")
+            if (
+                not request_id
+                or row.get("web_chat_mode") is not True
+                or str(row.get("status") or "").lower() != "recovering"
+                or not isinstance(deadline, (int, float))
+                or float(deadline) > current
+            ):
+                continue
+            key_id = str(row.get("api_key_id") or "")
+            snapshot: dict[str, Any] = {}
+            if event_journal is not None and key_id:
+                try:
+                    snapshot = await event_journal.snapshot(request_id, key_id)
+                except Exception:
+                    snapshot = {}
+            partial = str(
+                snapshot.get("delivered_text")
+                or snapshot.get("worker_partial_text")
+                or row.get("response_text_provisional")
+                or ""
+            )[:50_000]
+            next_diagnostics = dict(diagnostics)
+            next_diagnostics.update({
+                "web_chat_request_recovery": "broker-state-lost-after-restart-grace-expired",
+                "web_chat_last_event_id": int(snapshot.get("last_event_id") or 0),
+                "web_chat_partial_text_unverified": bool(partial),
+            })
+            try:
+                await self.upsert({
+                    **row,
+                    "status": "stalled",
+                    "response_text": partial,
+                    "response_text_available": False,
+                    "error": "Worker did not replay a terminal event before the Broker restart recovery deadline",
+                    "diagnostics": next_diagnostics,
+                })
+                if event_journal is not None and key_id:
+                    await event_journal.append_terminal(
+                        request_id, key_id, "stalled",
+                        "Worker terminal replay grace expired after server restart",
+                    )
+                expired += 1
+            except Exception:
+                continue
+        return expired
+
     async def append(self, item: dict[str, Any]) -> None:
         await self.upsert(item)
 
@@ -273,10 +397,27 @@ class TelemetryStore:
             # authoritative Broker terminal status.
             if record.get("status") in {"error", "cancelled", "stalled"}:
                 candidate = record.get("response_text")
-                if isinstance(candidate, str) and candidate:
-                    if not record.get("response_text_provisional"):
-                        record["response_text_provisional"] = candidate[:50000]
-                        record["response_text_provisional_chars"] = len(candidate)
+                incoming_diagnostics = record.get("diagnostics")
+                replayed_terminal = (
+                    isinstance(incoming_diagnostics, dict)
+                    and incoming_diagnostics.get("web_chat_request_recovery")
+                    == "worker-terminal-replayed-after-broker-restart"
+                )
+                previous_candidate = (
+                    existing.get("response_text_provisional")
+                    if isinstance(existing, dict) else None
+                )
+                if isinstance(candidate, str) and candidate and (
+                    not isinstance(previous_candidate, str)
+                    or not previous_candidate
+                    or replayed_terminal
+                ):
+                    # Preserve the first forensic candidate against late,
+                    # conflicting partial snapshots. The one explicit
+                    # exception is an owner-bound durable Worker terminal
+                    # replay, which may replace an older preview.
+                    record["response_text_provisional"] = candidate[:50000]
+                    record["response_text_provisional_chars"] = len(candidate)
                     record["response_text_provisional_unverified"] = True
                 record["response_text"] = ""
                 record["response_text_available"] = False

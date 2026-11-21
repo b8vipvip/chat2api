@@ -267,6 +267,11 @@ jobs:
           node tests/terminal_transport_evidence_v215.mjs
           pytest -q tests/test_terminal_transport_topology_v215.py
 
+      - name: Mode 1 durable Worker terminal outbox v47
+        run: |
+          node --check chrome_extension/background_transport_recovery_v47.js
+          node tests/background_transport_recovery_v47.mjs
+
       - name: Multi-turn external reply boundary regression v214
         run: node tests/multiturn_prompt_boundary_v214.mjs
       - name: Worker probe observer regression

@@ -2,13 +2,15 @@
 
 Neither this store nor its SSE subscribers participate in Broker completion.
 The authoritative OpenAI reply remains the existing archived Markdown.
-No HTML, CSS text, media URLs, file bytes, tokens or JS are accepted.
+No raw HTML, CSS text, media URLs, file bytes, tokens or JS are accepted;
+only bounded public HTTPS citation targets may accompany inert text nodes.
 """
 from __future__ import annotations
 
 import json
 import base64
 import hashlib
+import ipaddress
 import math
 import os
 import re
@@ -18,6 +20,7 @@ import tempfile
 from contextlib import contextmanager
 from collections import OrderedDict
 from pathlib import Path
+from urllib.parse import urlsplit
 
 @contextmanager
 def _native_crossprocess_commit_lock(root: Path):
@@ -68,7 +71,10 @@ MAX_ACTIVE = 128
 MAX_AGE_SECONDS = 90 * 86400
 SNAPSHOT_FILENAME = re.compile(r"(?:req|resp|imgreq)_[a-zA-Z0-9_-]{6,100}\.json")
 MATH_TAGS = {"math", "semantics", "mrow", "mi", "mo", "mn", "msub", "mfrac",
-             "mtext", "mover", "munder", "munderover", "msup", "msubsup", "msqrt", "mroot"}
+             "mtext", "annotation", "mover", "munder", "munderover", "msup", "msubsup", "msqrt", "mroot",
+             "mspace", "mstyle", "mtable", "mtr", "mtd", "mmultiscripts", "mphantom",
+             "menclose", "mpadded", "merror", "ms", "mfenced", "mprescripts", "none",
+             "mstack", "mlongdiv", "msgroup", "msrow", "mscarries", "mscarry", "msline"}
 SVG_TAGS = {"svg", "g", "path", "line", "rect", "circle", "ellipse",
             "polyline", "polygon", "text", "tspan", "defs", "clippath"}
 SVG_ATTRS = {"viewBox", "width", "height", "preserveAspectRatio", "x", "y",
@@ -97,6 +103,42 @@ SVG_TRANSFORM = re.compile(
 SVG_ID = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]{0,80}$")
 SVG_CLIP = re.compile(r"^url\(#([A-Za-z_][A-Za-z0-9_-]{0,80})\)$")
 SVG_RATIO = re.compile(r"^(?:none|x(?:Min|Mid|Max)Y(?:Min|Mid|Max))(?:\s+(?:meet|slice))?$")
+
+def _safe_external_link(value: object) -> bool:
+    """Allow only public HTTPS citation destinations; never session/local URLs."""
+    if not isinstance(value, str) or not value or len(value) > 2048:
+        return False
+    if value != value.strip() or any(ord(char) < 32 or ord(char) == 127 for char in value):
+        return False
+    try:
+        parsed = urlsplit(value)
+        host = (parsed.hostname or "").lower().rstrip(".")
+        port = parsed.port
+    except ValueError:
+        return False
+    if parsed.scheme.lower() != "https" or not host or parsed.username or parsed.password:
+        return False
+    if port not in (None, 443) or ":" in host:
+        return False
+    try:
+        ipaddress.ip_address(host)
+        return False
+    except ValueError:
+        pass
+    if host in {"chatgpt.com", "chat.openai.com", "localhost"}:
+        return False
+    if host.endswith((".chatgpt.com", ".localhost", ".local", ".internal", ".test",
+                      ".invalid", ".example", ".onion")):
+        return False
+    try:
+        ascii_host = host.encode("idna").decode("ascii")
+    except UnicodeError:
+        return False
+    if "." not in ascii_host or not re.fullmatch(
+            r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}", ascii_host):
+        return False
+    return True
+
 
 def _svg_attribute(key: str, value: object) -> bool:
     """Only inert, bounded vector geometry. Never URLs or event handlers."""
@@ -135,7 +177,7 @@ def _svg_attribute(key: str, value: object) -> bool:
 
 SAFE_TAGS = MATH_TAGS | SVG_TAGS | {"div", "p", "span", "strong", "em", "h1", "h2", "h3", "h4",
              "ul", "ol", "li", "blockquote", "pre", "code", "table", "thead",
-             "tbody", "tr", "td", "th", "figure", "figcaption", "img", "hr", "br"}
+             "tbody", "tr", "td", "th", "figure", "figcaption", "img", "hr", "br", "a"}
 SAFE_STYLES = {
     "display": {"block", "inline", "inline-block", "flex", "inline-flex", "grid", "block math", "inline math"},
     "flexDirection": {"row", "row-reverse", "column", "column-reverse"},
@@ -199,9 +241,13 @@ def validate_native_snapshot(payload: object) -> dict:
             raise ValueError("Unscoped SVG element")
         if set(value) - {"tag", "text", "children", "style", "media_index",
                           "intrinsic_width", "intrinsic_height", "source_sha256", "attrs",
-                          "col_span", "row_span"}:
+                          "col_span", "row_span", "href"}:
             raise ValueError("Native element has unsafe attributes")
         result = {"tag": tag}
+        if "href" in value:
+            if tag != "a" or not _safe_external_link(value["href"]):
+                raise ValueError("Unsafe external link")
+            result["href"] = value["href"]
         # Browser-normalized table spans are layout structure, never raw
         # HTML attributes. Reject them on non-cells and cap expansion.
         if "col_span" in value or "row_span" in value:
@@ -869,8 +915,9 @@ def native_public_v1_tree(root: dict) -> dict:
     # Existing strict v1 consumers accept HTML nodes, not arbitrary MathML.
     # Preserve MathML natively in private admin preview; public v1 gets safe
     # inert HTML spans until the protocol formally negotiates MathML.
-    if root.get("tag") in MATH_TAGS | SVG_TAGS:
+    if root.get("tag") in MATH_TAGS | SVG_TAGS | {"a"}:
         result["tag"] = "span"
+        result.pop("href", None)
         if "style" in result:
             result["style"] = {k:v for k,v in result["style"].items() if k!="display"}
     if "children" in root:

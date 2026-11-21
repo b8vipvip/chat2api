@@ -17,8 +17,10 @@
     zip:"application/zip", json:"application/json", pdf:"application/pdf",
     csv:"text/csv", txt:"text/plain", md:"text/markdown",
     py:"text/x-python", js:"text/javascript", ts:"application/typescript", html:"text/html",
+    mp3:"audio/mpeg", wav:"audio/wav", m4a:"audio/mp4", ogg:"audio/ogg",
+    opus:"audio/ogg", flac:"audio/flac", mp4:"video/mp4", webm:"video/webm",
   });
-  const FILENAME = /([^\s\n<>:"\/\\|?*]{1,135}\.(?:xlsx|pptx|docx|zip|json|pdf|csv|txt|md|py|js|ts|html))(?=$|[\s）),;])/ig;
+  const FILENAME = /([^\s\n<>:"\/\\|?*]{1,135}\.(?:xlsx|pptx|docx|zip|json|pdf|csv|txt|md|py|js|ts|html|mp3|wav|m4a|ogg|opus|flac|mp4|webm))(?=$|[\s）),;])/ig;
   let session = null;
   const visible = node => {
     try {const rect=node.getBoundingClientRect(),css=getComputedStyle(node);
@@ -69,7 +71,7 @@
             const parsed=new URL(href,location.href);
             sameOriginFileLink=(parsed.origin===location.origin)
               && (Boolean(button.hasAttribute?.("download"))
-                || /\.(?:xlsx|pptx|docx|zip|json|pdf|csv|txt|md|py|js|ts|html)(?:[?#]|$)/i.test(parsed.pathname)
+                || /\.(?:xlsx|pptx|docx|zip|json|pdf|csv|txt|md|py|js|ts|html|mp3|wav|m4a|ogg|opus|flac|mp4|webm)(?:[?#]|$)/i.test(parsed.pathname)
                 || label.includes(filename));
           } catch (_) {}
         }
@@ -129,6 +131,23 @@
       return bytes[0]===80 && bytes[1]===75 && bytes[2]===3 && bytes[3]===4;
     if (ext==="pdf") return bytes[0]===37 && bytes[1]===80 && bytes[2]===68
       && bytes[3]===70 && bytes[4]===45;
+    if (ext==="mp3") return (bytes[0]===73 && bytes[1]===68 && bytes[2]===51)
+      || (bytes[0]===255 && (bytes[1]&224)===224);
+    if (ext==="wav") return bytes.length>=12 && String.fromCharCode(...bytes.slice(0,4))==="RIFF"
+      && String.fromCharCode(...bytes.slice(8,12))==="WAVE";
+    if (ext==="m4a" || ext==="mp4") return bytes.length>=12
+      && String.fromCharCode(...bytes.slice(4,8))==="ftyp";
+    if (ext==="ogg") return String.fromCharCode(...bytes.slice(0,4))==="OggS";
+    if (ext==="opus") {
+      const segments = bytes[26] || 0, packetOffset = 27 + segments;
+      return String.fromCharCode(...bytes.slice(0,4))==="OggS"
+        && segments >= 1 && segments <= 64 && bytes.length >= packetOffset + 19
+        && bytes[27] >= 19
+        && String.fromCharCode(...bytes.slice(packetOffset,packetOffset+8))==="OpusHead";
+    }
+    if (ext==="flac") return String.fromCharCode(...bytes.slice(0,4))==="fLaC";
+    if (ext==="webm") return bytes[0]===0x1a && bytes[1]===0x45
+      && bytes[2]===0xdf && bytes[3]===0xa3;
     if (bytes.slice(0,Math.min(bytes.length,4096)).includes(0)) return false;
     if(ext==="json") {try{JSON.parse(new TextDecoder().decode(bytes));}catch(_){return false;}}
     return true;

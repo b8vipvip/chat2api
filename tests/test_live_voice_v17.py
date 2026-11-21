@@ -269,3 +269,204 @@ def test_live_finish_before_browser_ready_never_reports_completed(tmp_path: Path
         record = app.state.telemetry.get(request_id)
         assert record["status"] == "error"
         assert "not ready" in record["error"].lower()
+
+
+
+def test_live_voice_bounds_pcm16_frames_and_keeps_session_after_bad_input(tmp_path: Path) -> None:
+    app = app_live(tmp_path)
+    with TestClient(app) as client:
+        managed_key = create_managed_key(client)
+        client_id, extension_token = pair_extension(client)
+        with client.websocket_connect(f"/ws/extensions/{client_id}?token={extension_token}") as extension:
+            extension.receive_json()
+            with client.websocket_connect(
+                f"/v1/audio/realtime?client_id={client_id}",
+                headers={"Authorization": f"Bearer {managed_key}"},
+            ) as live:
+                live.send_json({"type": "session.start", "model": "gpt-live"})
+                started = extension.receive_json()
+                request_id = started["request_id"]
+                extension.send_json({
+                    "type": "image.progress", "kind": "voice-live",
+                    "request_id": request_id, "live_event": "session.ready",
+                })
+                assert live.receive_json()["type"] == "session.ready"
+
+                live.send_bytes(b"\x01")
+                malformed = live.receive_json()
+                assert malformed["code"] == "INVALID_INPUT_AUDIO_FRAME"
+
+                live.send_bytes(b"\x00" * (64 * 1024 + 2))
+                oversized = live.receive_json()
+                assert oversized["code"] == "INVALID_INPUT_AUDIO_FRAME"
+
+                valid_pcm = b"\x01\x02" * 320
+                live.send_bytes(valid_pcm)
+                forwarded = extension.receive_json()
+                assert forwarded["type"] == "voice.live.audio"
+                assert base64.b64decode(forwarded["pcm_base64"]) == valid_pcm
+
+                response_id = "voice-pcm-bounded-response"
+                extension.send_json({
+                    "type": "image.progress", "kind": "voice-live",
+                    "request_id": request_id, "live_event": "response.audio.delta",
+                    "response_id": response_id, "sample_rate": 24000,
+                    "pcm_base64": base64.b64encode(b"\x03\x04" * 480).decode("ascii"),
+                })
+                assert live.receive_bytes() == b"\x03\x04" * 480
+                extension.send_json({
+                    "type": "image.progress", "kind": "voice-live",
+                    "request_id": request_id, "live_event": "response.done",
+                    "response_id": response_id, "text": "你好",
+                })
+                assert live.receive_json() == {
+                    "type": "response.done", "response_id": response_id, "text": "你好",
+                }
+                live.send_json({"type": "session.finish"})
+                assert extension.receive_json()["type"] == "voice.live.stop"
+
+        row = app.state.telemetry.get(request_id)
+        assert row["status"] == "completed"
+        assert row["diagnostics"]["input_audio_bytes"] == len(valid_pcm)
+        assert row["diagnostics"]["audio_bytes"] == 960
+
+
+def test_live_voice_rejects_invalid_output_pcm_frame_and_reclaims_worker(tmp_path: Path) -> None:
+    app = app_live(tmp_path)
+    with TestClient(app) as client:
+        managed_key = create_managed_key(client)
+        client_id, extension_token = pair_extension(client)
+        with client.websocket_connect(f"/ws/extensions/{client_id}?token={extension_token}") as extension:
+            extension.receive_json()
+            with client.websocket_connect(
+                f"/v1/audio/realtime?client_id={client_id}",
+                headers={"Authorization": f"Bearer {managed_key}"},
+            ) as live:
+                live.send_json({"type": "session.start", "model": "gpt-live"})
+                started = extension.receive_json()
+                request_id = started["request_id"]
+                extension.send_json({
+                    "type": "image.progress", "kind": "voice-live",
+                    "request_id": request_id, "live_event": "session.ready",
+                })
+                assert live.receive_json()["type"] == "session.ready"
+                extension.send_json({
+                    "type": "image.progress", "kind": "voice-live",
+                    "request_id": request_id, "live_event": "response.audio.delta",
+                    "response_id": "invalid-output-rate", "sample_rate": 48000,
+                    "pcm_base64": base64.b64encode(b"\x01\x02" * 100).decode("ascii"),
+                })
+                failure = live.receive_json()
+                assert failure["code"] == "INVALID_OUTPUT_AUDIO_FRAME"
+                stopped = extension.receive_json()
+                assert stopped["type"] == "voice.live.stop"
+                assert stopped["request_id"] == request_id
+
+        row = app.state.telemetry.get(request_id)
+        assert row["status"] == "error"
+        assert "output audio frame" in row["error"].lower()
+
+
+def test_live_voice_ready_session_without_response_is_not_completed(tmp_path: Path) -> None:
+    app = app_live(tmp_path)
+    with TestClient(app) as client:
+        managed_key = create_managed_key(client)
+        client_id, extension_token = pair_extension(client)
+        with client.websocket_connect(f"/ws/extensions/{client_id}?token={extension_token}") as extension:
+            extension.receive_json()
+            with client.websocket_connect(
+                f"/v1/audio/realtime?client_id={client_id}",
+                headers={"Authorization": f"Bearer {managed_key}"},
+            ) as live:
+                live.send_json({"type": "session.start", "model": "gpt-live"})
+                started = extension.receive_json()
+                request_id = started["request_id"]
+                extension.send_json({
+                    "type": "image.progress", "kind": "voice-live",
+                    "request_id": request_id, "live_event": "session.ready",
+                })
+                assert live.receive_json()["type"] == "session.ready"
+                extension.send_json({
+                    "type": "image.progress", "kind": "voice-live",
+                    "request_id": request_id, "live_event": "response.audio.delta",
+                    "response_id": "partial-audio-only",
+                    "sample_rate": 24000,
+                    "pcm_base64": base64.b64encode(b"\x05\x06" * 120).decode("ascii"),
+                })
+                assert live.receive_bytes() == b"\x05\x06" * 120
+                # Partial PCM delivery is not proof of a completed response.
+                live.send_json({"type": "session.finish"})
+                assert extension.receive_json()["type"] == "voice.live.stop"
+
+        row = app.state.telemetry.get(request_id)
+        assert row["status"] == "error"
+        assert "without a completed response" in row["error"]
+
+
+
+def test_live_voice_rejects_oversized_initial_control_frame(tmp_path: Path) -> None:
+    with TestClient(app_live(tmp_path)) as client:
+        managed_key = create_managed_key(client)
+        with client.websocket_connect(
+            "/v1/audio/realtime",
+            headers={"Authorization": f"Bearer {managed_key}"},
+        ) as live:
+            large = '{"type":"session.start","instructions":"' + ("x" * (64 * 1024)) + '"}'
+            live.send_text(large)
+            response = live.receive_json()
+            assert response["code"] == "LIVE_CONTROL_FRAME_TOO_LARGE"
+            assert response["retryable"] is False
+
+
+def test_live_voice_malformed_control_frames_do_not_terminate_session(tmp_path: Path) -> None:
+    app = app_live(tmp_path)
+    with TestClient(app) as client:
+        managed_key = create_managed_key(client)
+        client_id, extension_token = pair_extension(client)
+        with client.websocket_connect(f"/ws/extensions/{client_id}?token={extension_token}") as extension:
+            extension.receive_json()
+            with client.websocket_connect(
+                f"/v1/audio/realtime?client_id={client_id}",
+                headers={"Authorization": f"Bearer {managed_key}"},
+            ) as live:
+                live.send_json({"type": "session.start", "model": "gpt-live"})
+                started = extension.receive_json()
+                request_id = started["request_id"]
+                extension.send_json({
+                    "type": "image.progress", "kind": "voice-live",
+                    "request_id": request_id, "live_event": "session.ready",
+                })
+                assert live.receive_json()["type"] == "session.ready"
+
+                live.send_text("{not-json")
+                malformed_json = live.receive_json()
+                assert malformed_json["code"] == "INVALID_CONTROL_JSON"
+                assert malformed_json["retryable"] is False
+
+                live.send_text("[]")
+                non_object = live.receive_json()
+                assert non_object["code"] == "INVALID_CONTROL_FRAME"
+                assert non_object["retryable"] is False
+
+                live.send_json({"type": "ping", "timestamp": 123})
+                assert live.receive_json() == {"type": "pong", "timestamp": 123}
+
+                live.send_json({"type": "session.finish"})
+                assert extension.receive_json()["type"] == "voice.live.stop"
+
+        row = app.state.telemetry.get(request_id)
+        assert row["status"] == "error"
+        assert "without a completed response" in row["error"]
+
+
+def test_live_voice_requires_session_start_json_object(tmp_path: Path) -> None:
+    with TestClient(app_live(tmp_path)) as client:
+        managed_key = create_managed_key(client)
+        with client.websocket_connect(
+            "/v1/audio/realtime",
+            headers={"Authorization": f"Bearer {managed_key}"},
+        ) as live:
+            live.send_text("[]")
+            response = live.receive_json()
+            assert response["code"] == "INVALID_SESSION_START"
+            assert response["retryable"] is False

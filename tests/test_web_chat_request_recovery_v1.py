@@ -1,4 +1,5 @@
 """W-04 recovery contract: owner-scoped snapshots and no duplicate dispatch."""
+import asyncio
 import shutil
 import subprocess
 from pathlib import Path
@@ -11,6 +12,10 @@ from app.config import Settings
 from app.main import create_app
 from app.user_console_v104_patch import install_user_console_v104_patch
 from app.web_chat_recovery_api import install_web_chat_recovery_api
+from app.web_chat_cancellation_v1 import (
+    WebChatAdmissionCancelled, WebChatCancellationSignal,
+    await_worker_admission_or_cancel,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,6 +47,8 @@ const context = {
   window: {Chat2APIStreamRecoveryV1: {createRequestId: () => 'req_webchat_error'}},
   apiJson: async () => ({user: {user_id: 'user-a'}}),
   fetch: async () => ({ok: true, body}),
+  // The test extracts sendMessage independently of the native sidecar module.
+  streamNativeContent: () => Promise.resolve(),
   makeRecoveryController: () => null,
   selectedKeyId: () => 'key-a',
   selectedKeyHasScope: () => true,
@@ -98,6 +105,74 @@ def remember(app, request_id: str, user_key: str, **changes):
         "updated_at": "2026-11-12T08:00:00+00:00",
         **changes,
     })
+
+
+def test_sse_event_replay_is_owner_scoped_and_honors_last_event_id(tmp_path):
+    app = make_app(tmp_path)
+    request_id = "req_eventreplay123"
+    with TestClient(app) as alice, TestClient(app) as bob:
+        alice_id = register(alice, "replay-alice@example.org")
+        bob_id = register(bob, "replay-bob@example.org")
+        app.state.user_accounts.attach_key(alice_id, "key_replay_alice")
+        app.state.user_accounts.attach_key(bob_id, "key_replay_bob")
+        remember(
+            app, request_id, "key_replay_alice", status="completed",
+            response_text="complete", response_text_available=True,
+        )
+        delivery = asyncio.run(app.state.web_chat_event_journal.append_delivery(
+            request_id, "key_replay_alice", "x" * 5000,
+        ))
+        first_id, second_id = delivery["chunk_event_ids"]
+        terminal_id = asyncio.run(app.state.web_chat_event_journal.append_delivery_terminal(
+            request_id, "key_replay_alice", delivery["text_chars"],
+        ))
+
+        replay = alice.get(
+            f"/api/user/chat/requests/{request_id}/events",
+            headers={"Last-Event-ID": str(first_id)},
+        )
+        assert replay.status_code == 200, replay.text
+        assert replay.headers["content-type"].startswith("text/event-stream")
+        assert replay.headers["cache-control"] == "private, no-store"
+        assert f"id: {second_id}\nevent: delivery.delta" in replay.text
+        assert f"id: {terminal_id}\nevent: delivery.completed" in replay.text
+        assert f"id: {first_id}\nevent: delivery.delta" not in replay.text
+
+        denied = bob.get(f"/api/user/chat/requests/{request_id}/events")
+        assert denied.status_code == 404
+        assert denied.headers["cache-control"] == "private, no-store"
+
+        invalid_cursor = alice.get(
+            f"/api/user/chat/requests/{request_id}/events",
+            headers={"Last-Event-ID": "not-a-number"},
+        )
+        assert invalid_cursor.status_code == 400
+
+
+def test_recovering_sse_replay_surfaces_unverified_worker_progress_before_terminal(tmp_path):
+    app = make_app(tmp_path)
+    request_id = "req_recoveryprogress123"
+    with TestClient(app) as client:
+        user_id = register(client, "recovery-progress@example.org")
+        app.state.user_accounts.attach_key(user_id, "key_recovery_progress")
+        remember(
+            app, request_id, "key_recovery_progress",
+            status="recovering", web_chat_mode=True,
+            response_text="", response_text_available=False,
+        )
+        asyncio.run(app.state.web_chat_event_journal.append_worker_event(
+            request_id, "key_recovery_progress",
+            {"type": "chat.delta", "delta": "provisional worker answer"},
+        ))
+        asyncio.run(app.state.web_chat_event_journal.append_terminal(
+            request_id, "key_recovery_progress", "stalled", "worker lease expired",
+        ))
+        replay = client.get(f"/api/user/chat/requests/{request_id}/events")
+        assert replay.status_code == 200
+        assert "event: recovery.partial.snapshot" in replay.text
+        assert '"partial_text":"provisional worker answer"' in replay.text
+        assert '"partial_text_unverified":true' in replay.text
+        assert "event: delivery.stalled" in replay.text
 
 
 def test_completed_snapshot_is_returned_only_to_key_owner_and_never_cached(tmp_path):
@@ -204,6 +279,66 @@ def test_terminal_request_cancel_is_idempotent_and_never_signals_worker(tmp_path
         assert sent == []
 
 
+def test_queued_cancel_signals_admission_and_waits_for_terminal_projection(tmp_path):
+    app = make_app(tmp_path)
+    request_id = "req_queuedcancel1"
+    with TestClient(app) as client:
+        user_id = register(client, "cancel-queued@example.org")
+        app.state.user_accounts.attach_key(user_id, "key_cancel_queued")
+        remember(app, request_id, "key_cancel_queued", status="queued")
+        signal = WebChatCancellationSignal()
+        signal.finalized.set()
+        app.state.web_chat_cancel_events[request_id] = signal
+
+        response = client.post(
+            f"/api/user/chat/requests/{request_id}/cancel",
+            headers={"Origin": "http://testserver"},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["queued"] is True
+        assert response.json()["cancel_requested"] is True
+        assert response.json()["terminal"] is False
+        assert signal.requested.is_set()
+        assert app.state.broker.requests.get(request_id) is None
+
+        repeated = client.post(
+            f"/api/user/chat/requests/{request_id}/cancel",
+            headers={"Origin": "http://testserver"},
+        )
+        assert repeated.status_code == 200
+        assert repeated.json()["already_requested"] is True
+        assert signal.requested.is_set()
+
+
+def test_worker_admission_wait_is_interruptible_without_redispatch() -> None:
+    async def scenario() -> None:
+        signal = WebChatCancellationSignal()
+        started = asyncio.Event()
+
+        async def wait_for_worker() -> str:
+            started.set()
+            await asyncio.Event().wait()
+            return "worker-never-selected"
+
+        task = asyncio.create_task(await_worker_admission_or_cancel(wait_for_worker, signal))
+        await started.wait()
+        signal.requested.set()
+        try:
+            await task
+        except WebChatAdmissionCancelled:
+            pass
+        else:
+            raise AssertionError("queued cancellation must interrupt Worker admission")
+
+        async def ready_worker() -> str:
+            return "worker-a"
+
+        result = await await_worker_admission_or_cancel(ready_worker, WebChatCancellationSignal())
+        assert result == "worker-a"
+
+    asyncio.run(scenario())
+
+
 def test_cancel_delivery_failure_does_not_leave_false_idempotency_marker(tmp_path):
     app = make_app(tmp_path)
     request_id = "req_cancelfail"
@@ -254,6 +389,41 @@ def test_running_request_is_pollable_but_stale_running_state_is_not_replayed(tmp
         assert stale.json()["response_text"] == ""
 
 
+def test_recovering_mode1_request_waits_for_worker_terminal_outbox_without_redispatch(tmp_path):
+    app = make_app(tmp_path)
+    request_id = "req_recovering123"
+    with TestClient(app) as client:
+        user_id = register(client, "recovering@example.org")
+        app.state.user_accounts.attach_key(user_id, "key_recovering")
+        remember(
+            app, request_id, "key_recovering",
+            status="recovering", web_chat_mode=True,
+            client_id="ext_worker123",
+            response_text="", response_text_available=False,
+            response_text_provisional="",
+            diagnostics={"web_chat_request_recovery":"awaiting-worker-terminal-replay"},
+        )
+        # Simulate Worker deltas durably journaled before the Broker process
+        # restarted, while Telemetry never received its provisional snapshot.
+        app.state.web_chat_event_journal._append_records(
+            request_id, "key_recovering",
+            [("worker.delta", {"delta": "journal partial"})],
+        )
+        response = client.get(f"/api/user/chat/requests/{request_id}/recovery")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "recovering"
+        assert payload["terminal"] is False
+        assert payload["recoverable"] is True
+        assert payload["active"] is True
+        assert payload["phase"] == "reconnecting"
+        assert payload["partial_text"] == "journal partial"
+        assert payload["partial_text_available"] is True
+        assert payload["partial_text_unverified"] is True
+        assert payload["response_text"] == ""
+        assert payload["response_text_available"] is False
+
+
 def test_queued_admission_and_failed_partial_text_are_not_misreported(tmp_path):
     app = make_app(tmp_path)
     queued_id, failed_id = "req_queued123", "req_failed123"
@@ -277,6 +447,8 @@ def test_queued_admission_and_failed_partial_text_are_not_misreported(tmp_path):
         assert failed["status"] == "stalled"
         assert failed["response_text"] == ""
         assert failed["response_text_available"] is False
+        assert failed["partial_text"] == "unverified partial output"
+        assert failed["partial_text_available"] is True
 
 
 
@@ -329,7 +501,9 @@ const updates = [];
 const replies = [
   {status:200, ok:true, json:async()=>({
     request_id:"req_12345678", status:"running", terminal:false,
-    recoverable:true, active:true, phase:"generating", retry_after_ms:250
+    recoverable:true, active:true, phase:"reconnecting", retry_after_ms:250,
+    partial_text_available:true, partial_text_unverified:true,
+    partial_text:"durable partial"
   })},
   {status:200, ok:true, json:async()=>({
     request_id:"req_12345678", status:"completed", terminal:true,
@@ -359,8 +533,49 @@ assert(/^req_[A-Za-z0-9_-]{8,120}$/.test(api.createRequestId({randomUUID:()=>"12
   assert(calls.every(call=>call.method==="GET"));
   assert(calls.every(call=>call.credentials==="same-origin"));
   assert(calls.every(call=>call.url==="/api/user/chat/requests/req_12345678/recovery"));
-  assert(updates.some(value=>value.status==="running"));
+  assert(updates.some(value=>value.status==="running" && value.partial_text==="durable partial" && value.partial_text_unverified===true));
   assert(updates.some(value=>value.status==="completed"));
+  const replayWindow = {};
+  vm.runInNewContext(src, {
+    window:replayWindow, AbortController, Date, Promise, Math, TextDecoder,
+    setTimeout:()=>1, clearTimeout:()=>{},
+  });
+  const replayApi = replayWindow.Chat2APIStreamRecoveryV1;
+  const replayCalls = [], replayEvents = [];
+  const replayFrames = [
+    "id: 7\nevent: cursor\ndata: {}\n\n",
+    "id: 8\nevent: delivery.delta\ndata: {\"delta\":\"replayed answer\"}\n\n",
+    "id: 9\nevent: delivery.completed\ndata: {\"text_chars\":15}\n\n",
+  ].join("");
+  const replayBytes = new TextEncoder().encode(replayFrames);
+  let replayRead = false;
+  const replayController = replayApi.create({
+    fetcher:async(url, options)=>{
+      replayCalls.push({url,method:options.method,headers:options.headers});
+      return {
+        status:200,ok:true,
+        body:{getReader:()=>({
+          read:async()=> replayRead ? {done:true} : (replayRead=true,{done:false,value:replayBytes}),
+          cancel:async()=>{},releaseLock(){},
+        })},
+      };
+    },
+    onEvent:value=>replayEvents.push(value),
+  });
+  const replayResult = await replayController.replay({
+    request_id:"req_12345678",assistant_message_id:"message_123456"
+  }, 6);
+  assert.strictEqual(replayResult.status,"completed");
+  assert.strictEqual(replayResult.terminal,true);
+  assert.strictEqual(replayEvents.length,3);
+  assert.strictEqual(replayEvents[1].id,8);
+  assert.strictEqual(replayEvents[1].data.delta,"replayed answer");
+  assert.strictEqual(replayCalls.length,1);
+  assert.strictEqual(replayCalls[0].method,"GET");
+  assert.strictEqual(replayCalls[0].url,
+    "/api/user/chat/requests/req_12345678/events?after=6");
+  assert.strictEqual(replayCalls[0].headers["Last-Event-ID"],"6");
+
   const inconsistent = await api.create({
     fetcher:async()=>({status:200,ok:true,json:async()=>({
       request_id:"req_12345678", status:"completed", terminal:false,
@@ -376,7 +591,7 @@ assert(/^req_[A-Za-z0-9_-]{8,120}$/.test(api.createRequestId({randomUUID:()=>"12
       cancelCalls.push({url,method:options.method,credentials:options.credentials});
       return {status:200,ok:true,json:async()=>({
         request_id:"req_12345678", status:"cancellation_requested",
-        terminal:false, active:true, cancel_requested:true
+        terminal:false, active:true, cancel_requested:true, queued:true
       })};
     }
   });
@@ -385,6 +600,7 @@ assert(/^req_[A-Za-z0-9_-]{8,120}$/.test(api.createRequestId({randomUUID:()=>"12
   });
   assert.strictEqual(cancelResult.status, "cancellation_requested");
   assert.strictEqual(cancelResult.cancel_requested, true);
+  assert.strictEqual(cancelResult.queued, true);
   assert.strictEqual(cancelCalls.length, 1);
   assert.strictEqual(cancelCalls[0].method, "POST");
   assert.strictEqual(cancelCalls[0].credentials, "same-origin");

@@ -199,3 +199,34 @@ test("an unrelated earlier anchor must not consume the current PPTX download arm
     assert.equal(h.clicked(),1,"do not generate repeated download side-effects");
   }
 });
+
+
+
+test("verified audio/video download cards capture only allowlisted container signatures",async()=>{
+  const samples=[
+    ["voice.mp3","audio/mpeg",new Uint8Array([73,68,51,4,0,0,0,0,0,0,1])],
+    ["voice.wav","audio/wav",new Uint8Array([82,73,70,70,16,0,0,0,87,65,86,69,1])],
+    ["voice.m4a","audio/mp4",new Uint8Array([0,0,0,24,102,116,121,112,77,52,65,32,0,0,0,0])],
+    ["voice.ogg","audio/ogg",new Uint8Array([79,103,103,83,0,2,1])],
+    ["voice.opus","audio/ogg",new Uint8Array([79,103,103,83,0,2,...new Array(20).fill(0),1,19,...new TextEncoder().encode("OpusHead"),...new Array(11).fill(0)])],
+    ["voice.flac","audio/flac",new Uint8Array([102,76,97,67,0,0,0,34])],
+    ["clip.mp4","video/mp4",new Uint8Array([0,0,0,24,102,116,121,112,105,115,111,109,0,0,2,0])],
+    ["clip.webm","video/webm",new Uint8Array([0x1a,0x45,0xdf,0xa3,1,2,3])],
+  ];
+  for(const [fileName,mime,bytes] of samples){
+    const h=await harness({typedButtonOnly:true,fileName,mime,bytes});
+    const result=await h.content.capture(h.scope,"req_media_"+fileName);
+    assert.equal(result.count,1,fileName);
+    assert.deepEqual(Array.from(result.captured_types),[fileName.split(".").pop()]);
+    assert.ok(result.text.includes("data:"+mime+";base64,"));
+    assert.equal(h.clicked(),1);
+  }
+});
+
+test("audio/video file names do not admit mismatched media bytes",async()=>{
+  const h=await harness({typedButtonOnly:true,fileName:"fake.mp4",mime:"video/mp4",
+    bytes:new TextEncoder().encode("not a media container")});
+  const result=await h.content.capture(h.scope,"req_media_bad_signature");
+  assert.equal(result.count,0);
+  assert.equal(result.failure_stages.mp4,"new-blob-signature-invalid");
+});

@@ -37,7 +37,7 @@ STAGED_MARKER = re.compile(
 # Retain the existing 24 MiB aggregate limit and per-file checks.
 MAX_FILES_PER_RESPONSE = 8
 
-# Downloads only, never serve as inline HTML or script.
+# Documents/code are forced downloads; only signature-verified audio/video are served inline.
 FILE_MIMES = {
     ".pdf": ("application/pdf",),
     ".docx": ("application/vnd.openxmlformats-officedocument.wordprocessingml.document",),
@@ -52,6 +52,14 @@ FILE_MIMES = {
     ".ts": ("text/plain", "application/typescript", "application/octet-stream"),
     ".html": ("text/html", "text/plain"),
     ".zip": ("application/zip", "application/x-zip-compressed", "application/octet-stream"),
+    ".mp3": ("audio/mpeg",),
+    ".wav": ("audio/wav",),
+    ".m4a": ("audio/mp4",),
+    ".ogg": ("audio/ogg",),
+    ".opus": ("audio/ogg",),
+    ".flac": ("audio/flac",),
+    ".mp4": ("video/mp4",),
+    ".webm": ("video/webm",),
 }
 
 class GeneratedFileArchive:
@@ -85,6 +93,27 @@ class GeneratedFileArchive:
             raise ValueError("Generated PDF signature mismatch")
         if suffix in {".docx", ".xlsx", ".pptx", ".zip"} and not data.startswith(b"PK\x03\x04"):
             raise ValueError("Generated ZIP/Office signature mismatch")
+        if suffix == ".mp3" and not (
+                data.startswith(b"ID3") or
+                (len(data) >= 2 and data[0] == 0xFF and data[1] & 0xE0 == 0xE0)):
+            raise ValueError("Generated MP3 signature mismatch")
+        if suffix == ".wav" and not (len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WAVE"):
+            raise ValueError("Generated WAV signature mismatch")
+        if suffix in {".m4a", ".mp4"} and not (len(data) >= 12 and data[4:8] == b"ftyp"):
+            raise ValueError("Generated MP4/M4A signature mismatch")
+        if suffix == ".ogg" and not data.startswith(b"OggS"):
+            raise ValueError("Generated Ogg signature mismatch")
+        if suffix == ".opus":
+            segment_count = data[26] if len(data) > 26 else 0
+            packet_offset = 27 + segment_count
+            if (not data.startswith(b"OggS") or not 1 <= segment_count <= 64
+                    or len(data) < packet_offset + 19 or data[27] < 19
+                    or data[packet_offset:packet_offset + 8] != b"OpusHead"):
+                raise ValueError("Generated Opus signature mismatch")
+        if suffix == ".flac" and not data.startswith(b"fLaC"):
+            raise ValueError("Generated FLAC signature mismatch")
+        if suffix == ".webm" and not data.startswith(b"\x1A\x45\xDF\xA3"):
+            raise ValueError("Generated WebM signature mismatch")
         if suffix in {".html", ".txt", ".md", ".py", ".js", ".ts", ".csv", ".json"}:
             if b"\x00" in data[:4096]:
                 raise ValueError("Text file contains unexpected binary content")

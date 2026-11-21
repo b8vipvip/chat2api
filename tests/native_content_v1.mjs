@@ -29,7 +29,7 @@ class Element {
 const text={nodeType:3,nodeValue:"Hello safe rich text"};
 const img=new Element("IMG");
 const node=new Element("DIV",[text,img]);
-const ctx={Element,Node:{TEXT_NODE:3},Date,setTimeout,clearTimeout,TextEncoder,
+const ctx={Element,Node:{TEXT_NODE:3},Date,setTimeout,clearTimeout,TextEncoder,URL,
  getComputedStyle:()=>({display:"flex",visibility:"visible",flexDirection:"row",
     gap:"8px",color:"rgb(0, 0, 0)",backgroundImage:"url(https://secret.example/token)"}),
  chrome:{runtime:{sendMessage:async m=>{sent.push(m);return {ok:true,committed:true}}}},
@@ -323,12 +323,15 @@ function mathEl(tag,children=[],textValue=null){
   return el;
 }
 const mathTree=mathEl("math",[
-  mathEl("mrow",[
-    mathEl("msub",[mathEl("mi",[{nodeType:3,nodeValue:"N"}],"N"),
-                    mathEl("mtext",[{nodeType:3,nodeValue:"每炉"}],"每炉")]),
-    mathEl("mo",[{nodeType:3,nodeValue:"="}],"="),
-    mathEl("mover",[mathEl("mo",[{nodeType:3,nodeValue:"∑"}],"∑"),
-                    mathEl("mi",[{nodeType:3,nodeValue:"n"}],"n")]),
+  mathEl("semantics",[
+    mathEl("mrow",[
+      mathEl("msub",[mathEl("mi",[{nodeType:3,nodeValue:"N"}],"N"),
+                      mathEl("mtext",[{nodeType:3,nodeValue:"每炉"}],"每炉")]),
+      mathEl("mo",[{nodeType:3,nodeValue:"="}],"="),
+      mathEl("mover",[mathEl("mo",[{nodeType:3,nodeValue:"∑"}],"∑"),
+                      mathEl("mi",[{nodeType:3,nodeValue:"n"}],"n")]),
+    ]),
+    mathEl("annotation",[{nodeType:3,nodeValue:"\\frac{x}{y}"}],"\\frac{x}{y}"),
   ]),
 ]);
 const mathReply=capture.snapshot({
@@ -336,10 +339,14 @@ const mathReply=capture.snapshot({
   lastCandidateNode:new Element("DIV",[mathTree])
 });
 assert.equal(mathReply.root.children[0].tag,"math");
-const units=mathReply.root.children[0].children[0].children[0].children[1];
+const semantics=mathReply.root.children[0].children[0];
+assert.equal(semantics.tag,"semantics");
+const units=semantics.children[0].children[0].children[1];
 assert.equal(units.tag,"mtext");
 assert.equal(units.text,"每炉");
-assert.equal(mathReply.root.children[0].children[0].children[2].tag,"mover");
+assert.equal(semantics.children[0].children[2].tag,"mover");
+assert.equal(semantics.children[1].tag,"annotation");
+assert.equal(semantics.children[1].text,"\\frac{x}{y}");
 const legacyUnit=mathEl("div",[{nodeType:3,nodeValue:"单位"}],"单位");
 const legacyMath=capture.snapshot({
   requestId:"req_legacyunitnative001",submitStartedAt:Date.now(),
@@ -950,3 +957,33 @@ assert.equal(matchesSource(insertedText),false,
   "unrelated injected text block must fail structural parity");
 
 console.log("Phase 2 source DOM vs production native serializer: 8 images, 3 tables, order and image/text/table/code corruption negatives passed");
+
+
+
+// Public HTTPS citations are the only URL-bearing HTML node admitted by the
+// native capture sidecar. Session/local/private and active URL schemes fail closed.
+const citationSends=[];
+const citationCtx={...ctx,chrome:{runtime:{sendMessage:async m=>{citationSends.push(m);return {ok:true,committed:true};}}}};
+delete citationCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,citationCtx);
+const citationAnchor=new Element("A",[{nodeType:3,nodeValue:"Source report"}]);
+citationAnchor.href="https://example.org/reports/2026";
+const citationRoot=new Element("DIV",[citationAnchor]);
+await citationCtx.__CHAT2API_NATIVE_CONTENT_V1__.capture({
+  requestId:"req_nativecitation123",submitStartedAt:Date.now(),lastCandidateNode:citationRoot
+},true);
+assert.equal(citationSends.length,1);
+assert.equal(citationSends[0].event.snapshot.root.children[0].href,"https://example.org/reports/2026");
+
+const unsafeCitationSends=[];
+const unsafeCitationCtx={...ctx,chrome:{runtime:{sendMessage:async m=>{unsafeCitationSends.push(m);return {ok:true,committed:true};}}}};
+delete unsafeCitationCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,unsafeCitationCtx);
+const unsafeCitation=new Element("A",[{nodeType:3,nodeValue:"unsafe source"}]);
+unsafeCitation.href="https://127.0.0.1/admin";
+await unsafeCitationCtx.__CHAT2API_NATIVE_CONTENT_V1__.capture({
+  requestId:"req_nativecitationbad1",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[unsafeCitation])
+},true);
+assert.equal(unsafeCitationSends.length,1);
+assert.equal(unsafeCitationSends[0].event.snapshot.root.children[0].href,undefined);

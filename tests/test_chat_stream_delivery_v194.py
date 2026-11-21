@@ -49,9 +49,11 @@ def test_main_stream_does_not_use_unretractable_prefix_reconciliation():
     stream = source[start:end]
     assert "final_text.startswith(sent_text)" not in stream
     assert 'chunk_payload(response_id, model, {"reasoning": preview})' in stream
-    assert 'for delta in final_text_chunks(final_text):' in stream
-    assert 'chunk_payload(response_id, model, {"content": delta})' in stream
-    assert 'chunk_payload(response_id, model, {}, "stop", usage, meta)' in stream
+    assert "final_chunks = list(final_text_chunks(final_text))" in stream
+    assert "for index, delta in enumerate(final_chunks):" in stream
+    assert 'chunk_delta: dict[str, object] = {"content": delta}' in stream
+    assert "chunk_payload(response_id, model, chunk_delta)" in stream
+    assert 'chunk_payload(response_id, model, terminal_delta, "stop", usage, meta)' in stream
 
 
 def test_early_heartbeat_before_short_lived_http_peer_disconnect():

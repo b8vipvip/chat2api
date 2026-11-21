@@ -90,7 +90,7 @@
       result += String.fromCharCode(...bytes.subarray(at, at + 16384));
     return btoa(result);
   };
-  const validName = text => /^[^\/\\\r\n]{1,140}\.(?:xlsx|pptx|docx|zip|json|pdf|csv|txt|md|py|js|ts|html)$/i.test(text);
+  const validName = text => /^[^\/\\\r\n]{1,140}\.(?:xlsx|pptx|docx|zip|json|pdf|csv|txt|md|py|js|ts|html|mp3|wav|m4a|ogg|opus|flac|mp4|webm)$/i.test(text);
   const mimeForName = filename => ({
     xlsx:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     pptx:"application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -100,6 +100,8 @@
     json:"application/json",
     py:"text/x-python",js:"text/javascript",
     ts:"application/typescript",html:"text/html",
+    mp3:"audio/mpeg",wav:"audio/wav",m4a:"audio/mp4",ogg:"audio/ogg",
+    opus:"audio/ogg",flac:"audio/flac",mp4:"video/mp4",webm:"video/webm",
   })[String(filename || "").split(".").pop().toLowerCase()] || "";
   // OOXML filenames are uncompressed in ZIP local headers. Use a bounded
   // structural check for ambiguous application/octet-stream after the click.
@@ -130,6 +132,24 @@
       catch (_) { return false; }
     }
     if (ext === "pdf") return bytes[0] === 37 && bytes[1] === 80 && bytes[2] === 68 && bytes[3] === 70;
+    if (ext === "mp3") return (bytes[0] === 73 && bytes[1] === 68 && bytes[2] === 51)
+      || (bytes[0] === 255 && (bytes[1] & 224) === 224);
+    if (ext === "wav") return bytes.length >= 12
+      && String.fromCharCode(...bytes.slice(0,4)) === "RIFF"
+      && String.fromCharCode(...bytes.slice(8,12)) === "WAVE";
+    if (ext === "m4a" || ext === "mp4") return bytes.length >= 12
+      && String.fromCharCode(...bytes.slice(4,8)) === "ftyp";
+    if (ext === "ogg") return String.fromCharCode(...bytes.slice(0,4)) === "OggS";
+    if (ext === "opus") {
+      const segments = bytes[26] || 0, packetOffset = 27 + segments;
+      return String.fromCharCode(...bytes.slice(0,4)) === "OggS"
+        && segments >= 1 && segments <= 64 && bytes.length >= packetOffset + 19
+        && bytes[27] >= 19
+        && String.fromCharCode(...bytes.slice(packetOffset,packetOffset+8)) === "OpusHead";
+    }
+    if (ext === "flac") return String.fromCharCode(...bytes.slice(0,4)) === "fLaC";
+    if (ext === "webm") return bytes[0] === 0x1a && bytes[1] === 0x45
+      && bytes[2] === 0xdf && bytes[3] === 0xa3;
     return !bytes.slice(0, Math.min(256,bytes.length)).includes(0);
   };
   const allowedSource = raw => {
@@ -164,7 +184,7 @@
     // armed by one verified reply button; ordinary preview/navigation links
     // must never be read as binary file handoffs.
     const path = new URL(raw, location.href).pathname.toLowerCase();
-    const fileEndpoint = /\.(?:xlsx|pptx|docx|zip|json|pdf|csv|txt|md|py|js|ts|html)$/.test(path)
+    const fileEndpoint = /\.(?:xlsx|pptx|docx|zip|json|pdf|csv|txt|md|py|js|ts|html|mp3|wav|m4a|ogg|opus|flac|mp4|webm)$/.test(path)
       || /\/(?:download|files?\/download)(?:\/|$)/.test(path);
     if (!blob && !anchor?.hasAttribute?.("download") && !fileEndpoint) {
       stage(session, "download-action-is-preview"); return;
@@ -219,10 +239,13 @@
         const disposition = String(response.headers?.get?.("content-disposition") || "");
         const type = String(response.headers?.get?.("content-type") || "").toLowerCase();
         const ext = session.filename.split(".").pop().toLowerCase();
+        const expectedMime = mimeForName(session.filename);
         const mimeMatches = (ext === "zip" && /application\/(?:zip|x-zip-compressed)/.test(type))
           || (ext === "xlsx" && type.includes("spreadsheetml.sheet"))
           || (ext === "pptx" && type.includes("presentationml.presentation"))
-          || (ext === "json" && type.includes("application/json") && /attachment/i.test(disposition));
+          || (ext === "json" && type.includes("application/json") && /attachment/i.test(disposition))
+          || (["mp3","wav","m4a","ogg","opus","flac","mp4","webm"].includes(ext)
+              && type.split(";")[0].trim() === expectedMime && /attachment/i.test(disposition));
         const rawName = /filename\*\s*=\s*utf-8''([^;]+)/i.exec(disposition)?.[1]
           || /filename\s*=\s*"?([^";]+)"?/i.exec(disposition)?.[1] || "";
         let dispositionName = rawName.trim();

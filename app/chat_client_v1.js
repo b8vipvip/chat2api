@@ -17,11 +17,19 @@
     recoveryController: null,
     activeRequestRecord: null,
     recoveryInFlight: new Set(),
+    nativeSnapshots: new Map(),
+    nativeStreams: new Map(),
     pendingImages: [],
     pendingImagesConversationId: "",
     pendingFiles: [],
     pendingFilesConversationId: "",
     toastTimer: null,
+    remoteSyncReady: false,
+    remoteSyncTimers: new Map(),
+    remoteSyncInFlight: new Map(),
+    remoteSyncAgain: new Set(),
+    remoteSyncFingerprints: new Map(),
+    remoteSyncWarned: false,
   };
   const MAX_CONVERSATIONS = 15;
   const MAX_MESSAGES = 30;
@@ -159,49 +167,133 @@
     return (bytes / (1024 * 1024)).toFixed(1) + " MiB";
   }
 
+  function safeToolName(value) {
+    return Array.from(String(value || "tool")).filter(character => {
+      const code = character.charCodeAt(0);
+      return code >= 32 && code !== 127;
+    }).join("").slice(0,80) || "tool";
+  }
+
+  function cleanToolReferenceText(value, limit) {
+    if (typeof value !== "string") return "";
+    return value.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, limit);
+  }
+
+  function safeToolReference(value) {
+    if (!value || typeof value !== "object" || typeof value.url !== "string") return null;
+    const rawUrl = value.url;
+    if (!rawUrl || rawUrl.length > 2048 || rawUrl !== rawUrl.trim()
+        || /[\u0000-\u001f\u007f]/.test(rawUrl)) return null;
+    try {
+      const url = new URL(rawUrl);
+      const host = url.hostname.toLowerCase().replace(/\.$/, "");
+      if (url.protocol !== "https:" || url.username || url.password
+          || (url.port && url.port !== "443") || !host || host.includes(":")
+          || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)
+          || ["chatgpt.com","chat.openai.com","localhost"].includes(host)
+          || /(?:^|\.)(?:chatgpt\.com|localhost|local|internal|test|invalid|example|onion)$/.test(host)
+          || !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(host)) return null;
+      if (typeof window !== "undefined" && window.location
+          && url.origin === window.location.origin) return null;
+      return {
+        url: url.href,
+        title: cleanToolReferenceText(value.title, 180) || host,
+        snippet: cleanToolReferenceText(value.snippet, 420),
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function normalizeToolReferences(value) {
+    if (!Array.isArray(value)) return [];
+    const seen = new Set(), rows = [];
+    value.slice(0,32).forEach(item => {
+      const reference = safeToolReference(item);
+      if (!reference || seen.has(reference.url)) return;
+      seen.add(reference.url);
+      rows.push(reference);
+    });
+    return rows.slice(0,8);
+  }
+
+  function normalizeToolEvents(value, role) {
+    if (role !== "assistant" || !Array.isArray(value)) return [];
+    return value.slice(-6).map(item => {
+      if (!item || typeof item !== "object") return null;
+      const toolName = safeToolName(item.toolName);
+      const callIdRaw = String(item.callId || "").slice(0,128);
+      const resultIdRaw = String(item.resultId || "").slice(0,128);
+      const validId = value => /^[A-Za-z0-9_.:-]{1,128}$/.test(value);
+      const callId = validId(callIdRaw) ? callIdRaw : "";
+      const resultId = validId(resultIdRaw) ? resultIdRaw : "";
+      if (!callId && !resultId) return null;
+      const statuses = ["running","completed","failed","cancelled"];
+      const status = statuses.includes(item.status) ? item.status : "completed";
+      const normalized = {
+        toolName, callId, resultId, status,
+        arguments: typeof item.arguments === "string" ? item.arguments.slice(0,1200) : "",
+        output: typeof item.output === "string" ? item.output.slice(0,1200) : "",
+      };
+      const references = normalizeToolReferences(item.references);
+      if (references.length) normalized.references = references;
+      return normalized;
+    }).filter(Boolean);
+  }
+
+  function normalizeConversationRow(row) {
+    if (!row || typeof row !== "object" || typeof row.id !== "string") return null;
+    const messages = Array.isArray(row.messages) ? row.messages.slice(-MAX_MESSAGES).map((message) => {
+      if (!message || (message.role !== "user" && message.role !== "assistant")) return null;
+      const content = normalizeMessageContent(message.content, message.role);
+      const pending = message.pending === true;
+      const toolEvents = normalizeToolEvents(message.toolEvents,message.role);
+      const emptyPendingAssistant = message.role === "assistant" && pending && content === "";
+      if ((!content && !emptyPendingAssistant && !toolEvents.length)
+          || (message.role === "assistant" && !String(content).trim() && !pending && !toolEvents.length)) return null;
+      const normalized = {
+        id: String(message.id || id()),
+        role: message.role,
+        content,
+        createdAt: String(message.createdAt || ""),
+        requestId: typeof message.requestId === "string" ? message.requestId.slice(0, 140) : "",
+        pending,
+        recoveryStatus: typeof message.recoveryStatus === "string" ? message.recoveryStatus.slice(0, 40) : "",
+        lastEventId: Number.isSafeInteger(message.lastEventId) && message.lastEventId >= 0
+          ? Math.min(message.lastEventId, Number.MAX_SAFE_INTEGER) : 0,
+      };
+      if (toolEvents.length) normalized.toolEvents = toolEvents;
+      return normalized;
+    }).filter(Boolean) : [];
+    const hasSavedAttachments = messages.some((message) => messageAttachmentIds(message).length);
+    return {
+      id: row.id.slice(0, 128),
+      title: String(row.title || "新对话").slice(0, 80),
+      model: String(row.model || state.selectedModel).slice(0, 120),
+      apiKeyId: hasSavedAttachments && typeof row.apiKeyId === "string" ? row.apiKeyId.slice(0, 128) : "",
+      createdAt: String(row.createdAt || new Date().toISOString()),
+      updatedAt: String(row.updatedAt || row.createdAt || new Date().toISOString()),
+      messages,
+      serverRevision: Number.isInteger(row.revision) ? row.revision :
+        (Number.isInteger(row.serverRevision) ? row.serverRevision : 0),
+    };
+  }
+
   function loadHistory() {
     try {
       const raw = localStorage.getItem(state.storageKey);
       const rows = raw ? JSON.parse(raw) : [];
       if (!Array.isArray(rows)) return [];
       return rows.filter((row) => row && typeof row === "object" && typeof row.id === "string")
-        .slice(0, MAX_CONVERSATIONS)
-        .map((row) => {
-          const messages = Array.isArray(row.messages) ? row.messages.slice(-MAX_MESSAGES).map((message) => {
-            if (!message || (message.role !== "user" && message.role !== "assistant")) return null;
-            const content = normalizeMessageContent(message.content, message.role);
-            if (!content || (message.role === "assistant" && !String(content).trim())) return null;
-            return {
-              id: String(message.id || id()),
-              role: message.role,
-              content,
-              createdAt: String(message.createdAt || ""),
-              requestId: typeof message.requestId === "string" ? message.requestId.slice(0, 140) : "",
-              pending: message.pending === true,
-              recoveryStatus: typeof message.recoveryStatus === "string" ? message.recoveryStatus.slice(0, 40) : "",
-            };
-          }).filter(Boolean) : [];
-          const hasSavedAttachments = messages.some((message) => messageAttachmentIds(message).length);
-          return {
-            id: row.id,
-            title: String(row.title || "新对话").slice(0, 80),
-            model: String(row.model || state.selectedModel).slice(0, 120),
-            apiKeyId: hasSavedAttachments && typeof row.apiKeyId === "string" ? row.apiKeyId.slice(0, 120) : "",
-            createdAt: String(row.createdAt || new Date().toISOString()),
-            updatedAt: String(row.updatedAt || row.createdAt || new Date().toISOString()),
-            messages,
-          };
-        });
+        .slice(0, MAX_CONVERSATIONS).map(normalizeConversationRow).filter(Boolean);
     } catch {
       toast("本地聊天历史无法读取，已使用空白历史。");
       return [];
     }
   }
 
-  function saveHistory() {
+  function persistHistorySnapshot() {
     if (!state.storageKey) return;
-    state.conversations.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
-    state.conversations = state.conversations.slice(0, MAX_CONVERSATIONS);
     const payload = state.conversations.map((conversation) => ({
       ...conversation,
       messages: (conversation.messages || []).slice(-MAX_MESSAGES).map((message) => ({
@@ -212,7 +304,266 @@
     try {
       localStorage.setItem(state.storageKey, JSON.stringify(payload));
     } catch {
-      toast("浏览器本地存储空间不足；请导出并删除部分旧对话。");
+      toast("本地缓存空间不足；服务端会话仍会继续同步。");
+    }
+  }
+
+  function serverConversationPayload(conversation) {
+    return {
+      id: conversation.id,
+      title: String(conversation.title || "新对话").slice(0, 80),
+      model: String(conversation.model || state.selectedModel).slice(0, 120),
+      apiKeyId: typeof conversation.apiKeyId === "string" ? conversation.apiKeyId : "",
+      createdAt: String(conversation.createdAt || new Date().toISOString()),
+      updatedAt: String(conversation.updatedAt || new Date().toISOString()),
+      messages: (conversation.messages || []).slice(-MAX_MESSAGES).map((message) => {
+        const toolEvents = normalizeToolEvents(message.toolEvents,message.role);
+        return {
+          id: String(message.id || id()),
+          role: message.role,
+          content: normalizeMessageContent(message.content, message.role),
+          createdAt: String(message.createdAt || ""),
+          requestId: typeof message.requestId === "string" ? message.requestId : "",
+          pending: message.pending === true,
+          recoveryStatus: typeof message.recoveryStatus === "string" ? message.recoveryStatus : "",
+          lastEventId: Number.isSafeInteger(message.lastEventId) && message.lastEventId >= 0
+            ? Math.min(message.lastEventId, Number.MAX_SAFE_INTEGER) : 0,
+          ...(toolEvents.length ? {toolEvents} : {}),
+        };
+      }),
+    };
+  }
+
+  function messageContentWeight(message) {
+    let contentWeight = 0;
+    if (typeof message?.content === "string") contentWeight = message.content.length;
+    else {
+      try { contentWeight = JSON.stringify(message?.content || "").length; } catch {}
+    }
+    try { return contentWeight + JSON.stringify(message?.toolEvents || []).length; }
+    catch { return contentWeight; }
+  }
+
+  function toolActivityWeight(events) {
+    if (!Array.isArray(events)) return 0;
+    return events.reduce((weight,item) => weight
+      + (item?.status === "running" ? 1 : 10)
+      + String(item?.arguments || "").length
+      + String(item?.output || "").length,0);
+  }
+
+  function mergeConversation(serverRow, localRow) {
+    if (!localRow) return {...serverRow};
+    if (!serverRow) return {...localRow};
+    const messages = new Map();
+    (serverRow.messages || []).forEach((message) => messages.set(message.id, message));
+    (localRow.messages || []).forEach((message) => {
+      const existing = messages.get(message.id);
+      if (!existing) {
+        messages.set(message.id, message);
+        return;
+      }
+      const localCompleted = !message.pending && message.recoveryStatus === "completed";
+      const serverCompleted = !existing.pending && existing.recoveryStatus === "completed";
+      const localToolWeight = toolActivityWeight(message.toolEvents);
+      const serverToolWeight = toolActivityWeight(existing.toolEvents);
+      if ((localCompleted && !serverCompleted) ||
+          (!serverCompleted && messageContentWeight(message) > messageContentWeight(existing))) {
+        messages.set(message.id, message);
+      } else if (localToolWeight > serverToolWeight) {
+        // Preserve newer call/result state without replacing an authoritative
+        // completed answer with a stale local text snapshot.
+        messages.set(message.id, {...existing,toolEvents:message.toolEvents});
+      }
+    });
+    const localNewer = String(localRow.updatedAt || "") > String(serverRow.updatedAt || "");
+    const base = localNewer ? localRow : serverRow;
+    return {
+      ...serverRow,
+      ...base,
+      messages: [...messages.values()].sort((a, b) =>
+        String(a.createdAt || "").localeCompare(String(b.createdAt || ""))).slice(-MAX_MESSAGES),
+      serverRevision: Number(serverRow.serverRevision || 0),
+    };
+  }
+
+  async function syncServerConversations() {
+    const response = await fetch("/api/user/chat/conversations", {
+      credentials: "same-origin",
+      headers: {"Accept":"application/json"},
+    });
+    let payload = {};
+    try { payload = await response.json(); } catch {}
+    if (!response.ok) throw new Error(payload.detail || "HTTP " + response.status);
+    const serverRows = Array.isArray(payload.data) ? payload.data : [];
+    const serverActive = new Map();
+    const deletedIds = new Set();
+    state.remoteSyncFingerprints.clear();
+    serverRows.forEach((row) => {
+      if (!row || typeof row.id !== "string") return;
+      if (row.deleted === true) {
+        deletedIds.add(row.id);
+        return;
+      }
+      const normalized = normalizeConversationRow(row);
+      if (!normalized) return;
+      normalized.serverRevision = Number.isInteger(row.revision) ? row.revision : 0;
+      serverActive.set(normalized.id, normalized);
+      state.remoteSyncFingerprints.set(normalized.id, JSON.stringify(serverConversationPayload(normalized)));
+    });
+    const localById = new Map(state.conversations.map((row) => [row.id, row]));
+    const merged = [];
+    serverActive.forEach((serverRow, conversationId) => {
+      merged.push(mergeConversation(serverRow, localById.get(conversationId)));
+    });
+    localById.forEach((localRow, conversationId) => {
+      if (!serverActive.has(conversationId) && !deletedIds.has(conversationId)) {
+        merged.push({...localRow, serverRevision: 0});
+      }
+    });
+    state.conversations = merged.sort((a, b) =>
+      String(b.updatedAt || "").localeCompare(String(a.updatedAt || ""))).slice(0, MAX_CONVERSATIONS);
+    if (!state.conversations.some((row) => row.id === state.activeConversationId)) {
+      state.activeConversationId = state.conversations[0]?.id || "";
+    }
+    state.remoteSyncReady = true;
+    persistHistorySnapshot();
+    state.conversations.forEach((conversation) => scheduleConversationSync(conversation.id, 250));
+  }
+
+  function scheduleConversationSync(conversationId, delay = 450) {
+    if (!state.remoteSyncReady || !conversationId) return;
+    if (!state.conversations.some((row) => row.id === conversationId)) return;
+    const previous = state.remoteSyncTimers.get(conversationId);
+    if (previous) window.clearTimeout(previous);
+    const timer = window.setTimeout(() => {
+      state.remoteSyncTimers.delete(conversationId);
+      void syncConversationToServer(conversationId);
+    }, delay);
+    state.remoteSyncTimers.set(conversationId, timer);
+  }
+
+  async function syncConversationToServer(conversationId) {
+    if (!state.remoteSyncReady) return;
+    if (state.remoteSyncInFlight.has(conversationId)) {
+      state.remoteSyncAgain.add(conversationId);
+      return;
+    }
+    const task = (async () => {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const conversation = state.conversations.find((row) => row.id === conversationId);
+        if (!conversation) return;
+        const body = serverConversationPayload(conversation);
+        const fingerprint = JSON.stringify(body);
+        if (state.remoteSyncFingerprints.get(conversationId) === fingerprint) return;
+        const response = await fetch("/api/user/chat/conversations/" + encodeURIComponent(conversationId), {
+          method: "PUT",
+          credentials: "same-origin",
+          headers: {"Content-Type":"application/json", "Accept":"application/json"},
+          body: JSON.stringify({
+            expected_revision: Number(conversation.serverRevision || 0),
+            conversation: body,
+          }),
+        });
+        let result = {};
+        try { result = await response.json(); } catch {}
+        if (response.status === 409 && result.conversation) {
+          if (result.conversation.deleted === true) {
+            state.conversations = state.conversations.filter((row) => row.id !== conversationId);
+            state.remoteSyncFingerprints.delete(conversationId);
+            if (state.activeConversationId === conversationId) {
+              state.activeConversationId = state.conversations[0]?.id || "";
+            }
+            persistHistorySnapshot();
+            renderAll();
+            return;
+          }
+          const latest = normalizeConversationRow(result.conversation);
+          if (!latest) throw new Error("服务端返回了无效的会话冲突记录");
+          Object.assign(conversation, mergeConversation(latest, conversation));
+          conversation.serverRevision = latest.serverRevision;
+          persistHistorySnapshot();
+          continue;
+        }
+        if (!response.ok || !result.conversation) {
+          throw new Error(result.detail || "HTTP " + response.status);
+        }
+        const currentFingerprint = JSON.stringify(serverConversationPayload(conversation));
+        const serverUpdatedAt = String(result.conversation.updatedAt || conversation.updatedAt);
+        conversation.serverRevision = Number(result.conversation.revision || 0);
+        if (currentFingerprint === fingerprint) conversation.updatedAt = serverUpdatedAt;
+        const savedFingerprint = JSON.stringify({...body, updatedAt:serverUpdatedAt});
+        state.remoteSyncFingerprints.set(conversationId, savedFingerprint);
+        persistHistorySnapshot();
+        if (JSON.stringify(serverConversationPayload(conversation)) !== savedFingerprint) {
+          state.remoteSyncAgain.add(conversationId);
+        }
+        return;
+      }
+      throw new Error("会话在其他设备持续更新，请稍后重试同步");
+    })();
+    state.remoteSyncInFlight.set(conversationId, task);
+    try {
+      await task;
+    } catch (error) {
+      if (!state.remoteSyncWarned) {
+        state.remoteSyncWarned = true;
+        toast("服务端会话同步暂时失败，已保留本地记录：" + error.message);
+      }
+    } finally {
+      state.remoteSyncInFlight.delete(conversationId);
+      if (state.remoteSyncAgain.delete(conversationId)) scheduleConversationSync(conversationId, 150);
+    }
+  }
+
+  async function deleteConversationFromServer(conversation) {
+    const conversationId = conversation.id;
+    const timer = state.remoteSyncTimers.get(conversationId);
+    if (timer) window.clearTimeout(timer);
+    state.remoteSyncTimers.delete(conversationId);
+    const inFlight = state.remoteSyncInFlight.get(conversationId);
+    if (inFlight) {
+      try { await inFlight; } catch {}
+    }
+    const expectedRevision = Number(conversation.serverRevision || 0);
+    try {
+      const response = await fetch("/api/user/chat/conversations/" + encodeURIComponent(conversationId) +
+        "?expected_revision=" + encodeURIComponent(String(expectedRevision)), {
+        method: "DELETE",
+        credentials: "same-origin",
+        headers: {"Accept":"application/json"},
+      });
+      let result = {};
+      try { result = await response.json(); } catch {}
+      if (response.status === 409 && result.conversation && result.conversation.deleted !== true) {
+        const latest = normalizeConversationRow(result.conversation);
+        if (latest) {
+          const restored = mergeConversation(latest, conversation);
+          if (!state.conversations.some((row) => row.id === conversationId)) {
+            state.conversations.unshift(restored);
+            state.conversations.sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
+            state.conversations = state.conversations.slice(0, MAX_CONVERSATIONS);
+          }
+          saveHistory();
+          renderAll();
+          toast("该对话已在其他设备更新，已恢复最新版本；请再次确认删除。");
+        }
+        return;
+      }
+      if (!response.ok) throw new Error(result.detail || "HTTP " + response.status);
+      state.remoteSyncFingerprints.delete(conversationId);
+    } catch (error) {
+      toast("对话已从当前设备移除，但服务器删除同步失败：" + error.message);
+    }
+  }
+
+  function saveHistory() {
+    if (!state.storageKey) return;
+    state.conversations.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+    state.conversations = state.conversations.slice(0, MAX_CONVERSATIONS);
+    persistHistorySnapshot();
+    if (state.remoteSyncReady) {
+      state.conversations.forEach((conversation) => scheduleConversationSync(conversation.id));
     }
   }
 
@@ -278,28 +629,14 @@
       toast("请先移除待发送附件，再删除对话。");
       return;
     }
-    if (!window.confirm("删除这段本地对话？本地记录会删除，且仅清理未被其他本地对话引用的附件。")) return;
-    const remainingFileIds = new Set(
-      state.conversations
-        .filter((row) => row.id !== conversationId)
-        .flatMap((row) => row.messages.flatMap(messageAttachmentIds))
-    );
-    const orphanedFileIds = [...new Set(conversation.messages.flatMap(messageAttachmentIds))]
-      .filter((fileId) => !remainingFileIds.has(fileId));
+    if (!window.confirm("删除这段对话？删除会同步到你的其他设备。附件文件暂时保留，避免误删其他对话仍在使用的文件。")) return;
     state.conversations = state.conversations.filter((row) => row.id !== conversationId);
     if (state.activeConversationId === conversationId) {
       state.activeConversationId = state.conversations[0]?.id || "";
     }
     saveHistory();
+    void deleteConversationFromServer(conversation);
     renderAll();
-    if (orphanedFileIds.length) {
-      Promise.allSettled(orphanedFileIds.map((fileId) =>
-        apiJson("/api/user/files/" + encodeURIComponent(fileId), {method:"DELETE"})
-      )).then((results) => {
-        const failed = results.filter((result) => result.status === "rejected").length;
-        if (failed) toast("本地对话已删除；" + failed + " 个附件文件未能自动清理。");
-      });
-    }
   }
 
   function renameConversation(conversationId) {
@@ -629,13 +966,17 @@
           body.appendChild(grid);
         }
       } else {
-        const renderer = window.Chat2APISafeRenderer;
-        if (renderer && typeof renderer.renderMarkdown === "function") {
-          renderer.renderMarkdown(body, message.content);
-        } else {
-          body.textContent = message.content;
+        const nativeRenderer = window.Chat2APINativeRendererV1;
+        const nativeSnapshot = message.requestId ? state.nativeSnapshots.get(message.requestId) : null;
+        const nativeRendered = Boolean(nativeRenderer && typeof nativeRenderer.renderNativeSnapshot === "function" &&
+          nativeSnapshot && nativeRenderer.renderNativeSnapshot(body,nativeSnapshot));
+        if (!nativeRendered) {
+          const renderer = window.Chat2APISafeRenderer;
+          if (renderer && typeof renderer.renderMarkdown === "function") renderer.renderMarkdown(body,message.content);
+          else body.textContent = message.content;
         }
       }
+      if (message.role === "assistant") renderToolActivity(body,message);
       if (state.streaming && message.id === state.streamingMessageId) {
         const caret = document.createElement("span");
         caret.className = "streaming-caret";
@@ -815,6 +1156,7 @@
         headers: {
           "Authorization": "Bearer " + state.apiToken,
           "Content-Type": "application/json",
+          "X-Chat2API-Source": "web-chat",
         },
         body: JSON.stringify({
           filename: file.filename,
@@ -897,6 +1239,7 @@
         headers: {
           "Authorization": "Bearer " + state.apiToken,
           "Content-Type": "application/json",
+          "X-Chat2API-Source": "web-chat",
         },
         body: JSON.stringify({
           filename: image.filename,
@@ -983,22 +1326,189 @@
 
   class StreamResponseError extends Error {}
 
+  function normalizeToolStatus(value) {
+    const status = String(value || "").toLowerCase();
+    if (["running","in_progress","pending","streaming"].includes(status)) return "running";
+    if (["failed","error"].includes(status)) return "failed";
+    if (status === "cancelled") return "cancelled";
+    return "completed";
+  }
+
+  function applyToolEvent(assistant, event) {
+    if (!assistant || !event || !["call","result"].includes(event.phase)) return false;
+    const toolName = safeToolName(event.tool_name);
+    const callId = String(event.call_id || "").slice(0,128);
+    const resultId = String(event.result_id || "").slice(0,128);
+    if (!callId && !resultId) return false;
+    const rows = Array.isArray(assistant.toolEvents) ? assistant.toolEvents : [];
+    let row = rows.find(item => (callId && item.callId === callId)
+      || (resultId && item.resultId === resultId));
+    if (!row) {
+      row = {toolName,callId,resultId:"",status:"running",arguments:"",output:""};
+      rows.push(row);
+    }
+    row.toolName = toolName;
+    if (callId) row.callId = callId;
+    if (resultId) row.resultId = resultId;
+    row.status = normalizeToolStatus(event.status);
+    if (typeof event.arguments === "string" && event.arguments) row.arguments = event.arguments.slice(0,1200);
+    if (typeof event.output === "string" && event.output) row.output = event.output.slice(0,1200);
+    const references = normalizeToolReferences(event.references);
+    if (references.length) {
+      row.references = normalizeToolReferences([...(Array.isArray(row.references) ? row.references : []), ...references]);
+    }
+    while (rows.length > 6) rows.shift();
+    assistant.toolEvents = rows;
+    saveHistory();
+    return true;
+  }
+
+  function toolStatusLabel(status) {
+    return ({running:"执行中",completed:"已完成",failed:"失败",cancelled:"已取消"})[status] || "状态未知";
+  }
+
+  function renderToolActivity(body, message) {
+    const events = Array.isArray(message?.toolEvents) ? message.toolEvents.slice(-6) : [];
+    if (!events.length) return;
+    const section = document.createElement("section");
+    section.className = "message-tool-events";
+    events.forEach(item => {
+      const details = document.createElement("details");
+      details.className = "message-tool-event";
+      details.open = item.status === "running" || normalizeToolReferences(item.references).length > 0;
+      const summary = document.createElement("summary");
+      summary.textContent = String(item.toolName || "tool").slice(0,80) + " · " + toolStatusLabel(item.status);
+      details.appendChild(summary);
+      for (const [label,value] of [["调用参数",item.arguments],["执行结果",item.output]]) {
+        if (typeof value !== "string" || !value) continue;
+        const heading = document.createElement("div");
+        heading.className = "message-tool-event-label";
+        heading.textContent = label;
+        const pre = document.createElement("pre");
+        pre.className = "message-tool-event-data";
+        pre.textContent = value;
+        details.append(heading,pre);
+      }
+      const references = normalizeToolReferences(item.references);
+      if (references.length) {
+        const referenceBox = document.createElement("div");
+        referenceBox.className = "message-tool-references";
+        const referenceLabel = document.createElement("div");
+        referenceLabel.className = "message-tool-event-label";
+        referenceLabel.textContent = "参考来源";
+        referenceBox.appendChild(referenceLabel);
+        references.forEach(reference => {
+          const link = document.createElement("a");
+          link.className = "message-tool-reference";
+          link.href = reference.url;
+          link.target = "_blank";
+          link.rel = "noopener noreferrer nofollow";
+          link.referrerPolicy = "no-referrer";
+          const title = document.createElement("strong");
+          title.textContent = reference.title;
+          link.appendChild(title);
+          if (reference.snippet) {
+            const snippet = document.createElement("span");
+            snippet.textContent = reference.snippet;
+            link.appendChild(snippet);
+          }
+          referenceBox.appendChild(link);
+        });
+        details.appendChild(referenceBox);
+      }
+      section.appendChild(details);
+    });
+    body.appendChild(section);
+  }
+
   function consumeSseFrame(frame, assistant) {
-    const data = frame.split(/\r?\n/)
-      .filter((line) => line.startsWith("data:"))
-      .map((line) => line.slice(5).trimStart())
-      .join("\n");
+    const lines = String(frame || "").split(/\r?\n/);
+    let eventName = "message";
+    let eventId = 0;
+    const dataLines = [];
+    for (const line of lines) {
+      if (line.startsWith("id:")) {
+        const parsed = Number(line.slice(3).trim());
+        if (Number.isSafeInteger(parsed) && parsed >= 0) eventId = parsed;
+      } else if (line.startsWith("event:")) {
+        eventName = line.slice(6).trim();
+      } else if (line.startsWith("data:")) {
+        dataLines.push(line.slice(5).trimStart());
+      }
+    }
+    if (eventId && eventId > Number(assistant.lastEventId || 0)) {
+      assistant.lastEventId = eventId;
+    }
+    const data = dataLines.join("\n");
+    if (!data && eventName === "cursor") return false;
     if (!data) return false;
     if (data.trim() === "[DONE]") return true;
     let event;
     try { event = JSON.parse(data); } catch { return false; }
+
+    if (eventName === "delivery.delta") {
+      appendDelta(assistant, event.delta);
+      return false;
+    }
+    if (eventName === "chat.tool.call" || eventName === "chat.tool.result") {
+      applyToolEvent(assistant, {
+        ...event,
+        phase:eventName === "chat.tool.call" ? "call" : "result",
+      });
+      return false;
+    }
+    if (eventName === "recovery.partial.snapshot") {
+      if (event.partial_text_unverified === true && typeof event.partial_text === "string") {
+        assistant.content = event.partial_text.slice(0, MAX_MESSAGE_CHARS);
+      }
+      return false;
+    }
+    if (eventName === "delivery.completed") {
+      assistant.replayTerminalStatus = "completed";
+      return true;
+    }
+    if (eventName === "delivery.error" || eventName === "delivery.cancelled"
+        || eventName === "delivery.stalled" || eventName === "recovery.stalled"
+        || eventName === "recovery.terminal") {
+      const status = String(event.status || (
+        eventName === "delivery.cancelled" ? "cancelled" :
+        eventName === "delivery.error" ? "error" :
+        eventName === "recovery.stalled" ? "stalled" : "unknown"
+      ));
+      if (status === "completed" && typeof event.response_text === "string") {
+        assistant.content = event.response_text.slice(0, MAX_MESSAGE_CHARS);
+      } else if (typeof event.partial_text === "string" && event.partial_text) {
+        assistant.content = event.partial_text.slice(0, MAX_MESSAGE_CHARS);
+      }
+      assistant.replayTerminalStatus = status;
+      return true;
+    }
+    if (eventName === "replay.reset") {
+      if (event.status === "completed" && typeof event.response_text === "string") {
+        assistant.content = event.response_text.slice(0, MAX_MESSAGE_CHARS);
+        assistant.replayTerminalStatus = "completed";
+        return true;
+      }
+      if (event.status === "stalled" && typeof event.partial_text === "string") {
+        assistant.content = event.partial_text.slice(0, MAX_MESSAGE_CHARS);
+        assistant.replayTerminalStatus = "stalled";
+        return true;
+      }
+      return false;
+    }
     if (event?.error) {
       throw new StreamResponseError(event.error.message || "服务端返回流式错误");
     }
     const choice = Array.isArray(event?.choices) ? event.choices[0] : null;
+    const eventCursor = choice?.delta?.chat2api_event_id
+      ?? choice?.delta?.chat2api_tool?.chat2api_event_id;
+    if (Number.isSafeInteger(eventCursor) && eventCursor > Number(assistant.lastEventId || 0)) {
+      assistant.lastEventId = eventCursor;
+    }
     if (choice?.delta && Object.prototype.hasOwnProperty.call(choice.delta, "content")) {
       appendDelta(assistant, choice.delta.content);
     }
+    if (choice?.delta?.chat2api_tool) applyToolEvent(assistant,choice.delta.chat2api_tool);
     return false;
   }
 
@@ -1024,9 +1534,38 @@
       onUpdate(update) {
         if (!update || update.request_id !== assistant.requestId || update.assistant_message_id !== assistant.id) return;
         assistant.recoveryStatus = String(update.status || "recovering").slice(0, 40);
+        if (Number.isSafeInteger(update.last_event_id)
+            && update.last_event_id > Number(assistant.lastEventId || 0)) {
+          assistant.lastEventId = update.last_event_id;
+        }
         if (update.status === "completed" && update.terminal === true && typeof update.response_text === "string") {
           assistant.content = update.response_text.slice(0, MAX_MESSAGE_CHARS);
+        } else if (update.status === "stalled" && update.terminal === true
+            && typeof update.partial_text === "string" && update.partial_text) {
+          assistant.content = update.partial_text.slice(0, MAX_MESSAGE_CHARS);
+        } else if (update.partial_text_unverified === true
+            && typeof update.partial_text === "string" && update.partial_text.length > assistant.content.length) {
+          // Show durable Worker/delivery progress during the restart grace,
+          // but keep it explicitly provisional until terminal reconciliation.
+          assistant.content = update.partial_text.slice(0, MAX_MESSAGE_CHARS);
         }
+        saveHistory();
+        if (currentConversation()?.id === conversation.id) renderMessages();
+      },
+      onEvent(item) {
+        if (!item || item.request_id !== assistant.requestId
+            || item.assistant_message_id !== assistant.id) return;
+        const idValue = Number(item.id || 0);
+        if (Number.isSafeInteger(idValue) && idValue > Number(assistant.lastEventId || 0)) {
+          assistant.lastEventId = idValue;
+        }
+        const frame = [
+          "id: " + String(item.id || 0),
+          "event: " + String(item.event || "message"),
+          "data: " + JSON.stringify(item.data || {}),
+        ].join("\n");
+        consumeSseFrame(frame, assistant);
+        conversation.updatedAt = new Date().toISOString();
         saveHistory();
         if (currentConversation()?.id === conversation.id) renderMessages();
       },
@@ -1051,12 +1590,18 @@
     saveHistory();
     if (currentConversation()?.id === conversation.id) renderMessages();
     try {
-      const result = await controller.resume(record);
+      let result = null;
+      if (typeof controller.replay === "function") {
+        const replay = await controller.replay(record, Number(assistant.lastEventId || 0));
+        if (replay?.terminal === true) result = replay;
+      }
+      if (!result) result = await controller.resume(record);
       const status = String(result?.status || "recovery_failed");
       if (result?.terminal === true) {
         assistant.pending = false;
         assistant.recoveryStatus = status;
         if (status === "completed" && typeof result.response_text === "string") assistant.content = result.response_text.slice(0, MAX_MESSAGE_CHARS);
+        else if (status === "stalled" && typeof result.partial_text === "string" && result.partial_text) assistant.content = result.partial_text.slice(0, MAX_MESSAGE_CHARS);
       } else if (["recovery_timeout", "polling_stopped", "auth_required"].includes(status)) {
         assistant.pending = true;
         assistant.recoveryStatus = status;
@@ -1079,11 +1624,109 @@
     }
   }
 
+  function assistantMessageForRequest(requestId) {
+    for (const conversation of state.conversations) {
+      const message = (conversation.messages || []).find(item => item.role === "assistant" && item.requestId === requestId);
+      if (message) return {conversation,message};
+    }
+    return null;
+  }
+  function applyNativeSnapshot(requestId,snapshot) {
+    const renderer = window.Chat2APINativeRendererV1;
+    if (!renderer || typeof renderer.validateSnapshot !== "function" || !renderer.validateSnapshot(snapshot)) return false;
+    state.nativeSnapshots.set(requestId,snapshot);
+    while (state.nativeSnapshots.size > 24) state.nativeSnapshots.delete(state.nativeSnapshots.keys().next().value);
+    const found = assistantMessageForRequest(requestId);
+    if (found) found.message.nativeFinality = snapshot.finality;
+    if (found && currentConversation()?.id === found.conversation.id) renderMessages();
+    return true;
+  }
+  async function refreshNativeSnapshot(requestId) {
+    try {
+      const response = await fetch("/api/user/chat/requests/" + encodeURIComponent(requestId) + "/native-content",
+        {method:"GET",credentials:"same-origin",cache:"no-store",headers:{Accept:"application/json"}});
+      if (response.status === 404) {
+        const previous = state.nativeSnapshots.get(requestId);
+        if (previous && previous.finality !== "verified-final") {
+          state.nativeSnapshots.delete(requestId);
+          const found = assistantMessageForRequest(requestId);
+          if (found && currentConversation()?.id === found.conversation.id) renderMessages();
+        }
+        return false;
+      }
+      if (!response.ok) return false;
+      return applyNativeSnapshot(requestId,await response.json());
+    } catch (_) { return false; }
+  }
+  function consumeNativeSseFrame(frame,requestId) {
+    const lines = frame.split(/\r?\n/);
+    let eventName = "message";
+    const data = [];
+    for (const line of lines) {
+      if (line.startsWith("event:")) eventName = line.slice(6).trim();
+      else if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
+    }
+    if (eventName === "native.end") return true;
+    if (eventName !== "native.snapshot" || !data.length) return false;
+    try { applyNativeSnapshot(requestId,JSON.parse(data.join("\n"))); } catch (_) {}
+    return false;
+  }
+  async function streamNativeContent(requestId) {
+    if (!requestId || state.nativeStreams.has(requestId)) return;
+    const controller = new AbortController();
+    state.nativeStreams.set(requestId,controller);
+    let reader = null, ended = false;
+    try {
+      const response = await fetch("/api/user/chat/requests/" + encodeURIComponent(requestId) + "/native-content/events",
+        {method:"GET",credentials:"same-origin",cache:"no-store",headers:{Accept:"text/event-stream"},signal:controller.signal});
+      if (!response.ok || !response.body) return;
+      reader = response.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let buffer = "";
+      while (!ended) {
+        const part = await reader.read();
+        if (part.done) break;
+        buffer += decoder.decode(part.value,{stream:true});
+        let boundary;
+        while ((boundary = /\r?\n\r?\n/.exec(buffer))) {
+          const frame = buffer.slice(0,boundary.index);
+          buffer = buffer.slice(boundary.index + boundary[0].length);
+          if (consumeNativeSseFrame(frame,requestId)) { ended = true; break; }
+        }
+      }
+    } catch (_) {
+      // A presentation-sidecar failure never changes the authoritative chat terminal.
+    } finally {
+      if (reader) {
+        if (!ended) void reader.cancel().catch(() => {});
+        try { reader.releaseLock(); } catch (_) {}
+      }
+      state.nativeStreams.delete(requestId);
+      if (!controller.signal.aborted) await refreshNativeSnapshot(requestId);
+    }
+  }
+  async function hydrateNativeSnapshots() {
+    const candidates = [], seen = new Set();
+    for (const conversation of state.conversations) {
+      for (const message of conversation.messages || []) {
+        if (message.role !== "assistant" || !message.requestId || seen.has(message.requestId)) continue;
+        seen.add(message.requestId);
+        candidates.push({requestId:message.requestId,pending:message.pending === true});
+      }
+    }
+    await Promise.all(candidates.slice(-24).map(async item => {
+      if (item.pending) void streamNativeContent(item.requestId);
+      await refreshNativeSnapshot(item.requestId);
+    }));
+  }
   function resumePendingMessages() {
     const pending = [];
     state.conversations.forEach((conversation) => {
       (conversation.messages || []).forEach((message) => {
-        if (message.role === "assistant" && message.pending === true && message.requestId) pending.push({conversation,message});
+        if (message.role === "assistant" && message.pending === true && message.requestId) {
+          pending.push({conversation,message});
+          void streamNativeContent(message.requestId);
+        }
       });
     });
     pending.forEach(({conversation,message}) => { void recoverPendingMessage(conversation,message); });
@@ -1168,7 +1811,7 @@
       userMessage = {id:id(),role:"user",content:userContent,createdAt:new Date().toISOString()};
       conversation.messages.push(userMessage);
       autoTitle(conversation);
-      assistant = {id:id(),role:"assistant",content:"",createdAt:new Date().toISOString(),requestId,pending:true,recoveryStatus:"streaming"};
+      assistant = {id:id(),role:"assistant",content:"",createdAt:new Date().toISOString(),requestId,pending:true,recoveryStatus:"streaming",toolEvents:[],lastEventId:0};
       conversation.messages.push(assistant);
       state.recoveryController = makeRecoveryController(conversation, assistant);
       state.activeRequestRecord = {request_id:requestId, assistant_message_id:assistant.id};
@@ -1194,7 +1837,7 @@
         .filter((message) => message.id !== assistant.id)
         .map((message) => ({role:message.role,content:message.content}));
       requestSubmitted = true;
-      const response = await fetch("/v1/chat/completions", {
+      const response = await fetch("/api/user/chat/completions", {
         method: "POST",
         credentials: "same-origin",
         headers: {
@@ -1222,6 +1865,9 @@
       }
       if (!response.body) throw new Error("当前浏览器不支持流式响应读取");
 
+      // Observe native rich content for this same request ID; never dispatch twice.
+      void streamNativeContent(requestId);
+
       const reader = response.body.getReader();
       const decoder = new TextDecoder("utf-8");
       let buffer = "";
@@ -1241,7 +1887,7 @@
               break;
             }
           }
-          if (assistant.content) {
+          if (assistant.content || assistant.toolEvents?.length) {
             conversation.updatedAt = new Date().toISOString();
             if (assistant.content.length - lastSavedLength >= 1000) {
               saveHistory();
@@ -1259,7 +1905,7 @@
       if (done) {
         assistant.pending = false;
         assistant.recoveryStatus = "completed";
-        if (!assistant.content.trim()) {
+        if (!assistant.content.trim() && !assistant.toolEvents?.length) {
           conversation.messages = conversation.messages.filter((message) => message.id !== assistant.id);
           toast("模型没有返回文本内容。");
         }
@@ -1280,7 +1926,7 @@
         // Do not leave an empty assistant placeholder when the server failed
         // before delivering any content; preserve the message when partial
         // content was already streamed.
-        if (!assistant.content) {
+        if (!assistant.content && !assistant.toolEvents?.length) {
           conversation.messages = conversation.messages.filter((message) => message.id !== assistant.id);
         }
         toast("请求失败：" + error.message);
@@ -1298,7 +1944,7 @@
           else toast((error.name === "AbortError" ? "停止状态：" : "请求失败，恢复状态：") + recoveryStatusLabel(result?.status));
         });
       } else {
-        if (assistant && !assistant.content.trim()) conversation.messages = conversation.messages.filter((message) => message.id !== assistant.id);
+        if (assistant && !assistant.content.trim() && !assistant.toolEvents?.length) conversation.messages = conversation.messages.filter((message) => message.id !== assistant.id);
         toast("请求失败：" + error.message);
       }
     } finally {
@@ -1453,9 +2099,16 @@
     state.storageKey = historyKey(state.user.user_id);
     state.conversations = loadHistory();
     if (state.conversations.length) state.activeConversationId = state.conversations[0].id;
+    try {
+      await syncServerConversations();
+    } catch (error) {
+      state.remoteSyncReady = false;
+      toast("暂时无法同步服务端会话，当前先显示本地历史：" + error.message);
+    }
     renderAll();
     const ready = await loadKeys();
     resumePendingMessages();
+    void hydrateNativeSnapshots();
     if (!ready) return;
     if (currentConversation()) state.selectedModel = currentConversation().model || state.selectedModel;
     renderAll();
@@ -1506,14 +2159,27 @@
   $("stopButton").addEventListener("click", () => {
     const controller = state.recoveryController;
     const record = state.activeRequestRecord;
+    const abortGenerationTransport = () => {
+      if (state.abortController) state.abortController.abort();
+    };
     if (controller && record) {
+      // Complete the same-origin cancel handshake before aborting the SSE POST.
+      // This lets the server finalize a queued cancellation or deliver chat.cancel
+      // after the initial Worker dispatch, rather than racing the two requests.
       void controller.cancel(record).then((result) => {
-        if (result?.cancel_requested) toast("已向 Worker 发送停止请求。");
+        if (result?.queued && result?.terminal) toast("请求已在 Worker 分配前取消。");
+        else if (result?.queued && result?.cancel_requested) toast("已取消等待 Worker 分配的请求。");
+        else if (result?.cancel_requested) toast("已向 Worker 发送停止请求。");
         else if (result?.terminal) toast("请求已进入终态。");
         else toast("无法确认停止状态，将继续核对服务端请求。");
-      }).catch(() => toast("停止请求未确认；已保留请求恢复记录。"));
+        abortGenerationTransport();
+      }).catch(() => {
+        toast("停止请求未确认；已保留请求恢复记录。");
+        abortGenerationTransport();
+      });
+      return;
     }
-    if (state.abortController) state.abortController.abort();
+    abortGenerationTransport();
   });
   $("messageInput").addEventListener("input", resizeComposer);
   $("messageInput").addEventListener("paste", (event) => {
@@ -1557,6 +2223,7 @@
     if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
   } catch {}
   window.addEventListener("beforeunload", () => {
+    state.nativeStreams.forEach(controller => controller.abort());
     if (typeof state.destroyImageDrop === "function") state.destroyImageDrop();
     state.pendingImages.forEach((image) => {
       if (image.previewUrl) URL.revokeObjectURL(image.previewUrl);

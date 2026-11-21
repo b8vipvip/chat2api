@@ -22,6 +22,8 @@ SUPPORTED_MODELS = {"gpt-live", "gpt-live-mini"}
 MODEL_ALIASES = {"gpt-live-mini": "gpt-live"}
 REALTIME_SESSION_TTL_SECONDS = 60
 LIVE_CAPACITY_WEIGHT = 2
+MAX_LIVE_PCM_FRAME_BYTES = 64 * 1024
+MAX_LIVE_CONTROL_CHARS = 64 * 1024
 
 
 def _bearer(headers: Any) -> str:
@@ -232,12 +234,13 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
         requested_model = "gpt-live"
         effective_model = "gpt-live"
         observed_audio_bytes = 0
+        observed_input_audio_bytes = 0
+        observed_response_count = 0
         observed_media_count = 0
         observed_media_ids: list[str] = []
         input_confirmed = 0
         session_ready = False
         error_message = ""
-        graceful_finish = False
 
         # Session controls and remote audio are sent from separate coroutines.
         # Serialize WebSocket sends so binary PCM frames cannot collide with
@@ -251,7 +254,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 await websocket.send_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
 
         async def relay_extension_events() -> None:
-            nonlocal finished, observed_audio_bytes, observed_media_count, input_confirmed, session_ready, error_message
+            nonlocal finished, observed_audio_bytes, observed_response_count, observed_media_count, input_confirmed, session_ready, error_message
             assert state is not None
             text_by_response: dict[str, str] = {}
             while not finished:
@@ -339,11 +342,39 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 elif event_type == "response.audio.delta":
                     encoded = str(event.get("pcm_base64") or "")
                     if encoded:
+                        # A 24 kHz mono PCM16 delta is a bounded frame, not an
+                        # arbitrary binary tunnel. Reject oversized, odd-byte,
+                        # malformed or incorrectly-labelled samples before
+                        # allocating or forwarding them to the public socket.
+                        try:
+                            sample_rate = int(event.get("sample_rate") or 24000)
+                        except (TypeError, ValueError):
+                            sample_rate = 0
+                        if (
+                            sample_rate != 24000
+                            or len(encoded) > ((MAX_LIVE_PCM_FRAME_BYTES + 2) // 3) * 4
+                        ):
+                            error_message = "GPT-Live output audio frame is invalid or exceeds the frame limit"
+                            await send_json({
+                                "type": "error", "code": "INVALID_OUTPUT_AUDIO_FRAME",
+                                "message": error_message, "retryable": False,
+                            })
+                            return
                         try:
                             audio = base64.b64decode(encoded, validate=True)
                         except Exception:
-                            continue
-                        if audio and not finished:
+                            audio = b""
+                        if (
+                            not audio or len(audio) > MAX_LIVE_PCM_FRAME_BYTES
+                            or len(audio) % 2
+                        ):
+                            error_message = "GPT-Live output audio frame is malformed"
+                            await send_json({
+                                "type": "error", "code": "INVALID_OUTPUT_AUDIO_FRAME",
+                                "message": error_message, "retryable": False,
+                            })
+                            return
+                        if not finished:
                             async with ws_send_lock:
                                 await websocket.send_bytes(audio)
                             observed_audio_bytes += len(audio)
@@ -354,6 +385,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 elif event_type == "response.done":
                     response_id = str(event.get("response_id") or "")
                     if response_id:
+                        observed_response_count += 1
                         await send_json({
                             "type": "response.done",
                             "response_id": response_id,
@@ -391,10 +423,24 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
             if not raw:
                 await send_json({"type": "error", "code": "SESSION_START_REQUIRED", "message": "First frame must be session.start"})
                 return
+            if len(raw) > MAX_LIVE_CONTROL_CHARS:
+                await send_json({
+                    "type": "error", "code": "LIVE_CONTROL_FRAME_TOO_LARGE",
+                    "message": "Live session.start frame exceeds 64 KiB",
+                    "retryable": False,
+                })
+                return
             try:
                 start = json.loads(raw)
             except Exception:
                 await send_json({"type": "error", "code": "INVALID_JSON", "message": "session.start must be JSON"})
+                return
+            if not isinstance(start, dict):
+                await send_json({
+                    "type": "error", "code": "INVALID_SESSION_START",
+                    "message": "session.start must be a JSON object",
+                    "retryable": False,
+                })
                 return
             if start.get("type") != "session.start":
                 await send_json({"type": "error", "code": "SESSION_START_REQUIRED", "message": "First frame must be session.start"})
@@ -475,6 +521,14 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 payload = message.get("bytes")
                 if payload is not None:
                     if payload:
+                        if len(payload) > MAX_LIVE_PCM_FRAME_BYTES or len(payload) % 2:
+                            await send_json({
+                                "type": "error", "code": "INVALID_INPUT_AUDIO_FRAME",
+                                "message": "Input must be an even-length PCM16 frame no larger than 64 KiB",
+                                "retryable": False,
+                            })
+                            continue
+                        observed_input_audio_bytes += len(payload)
                         await registry.send(
                             selected_client,
                             {
@@ -489,9 +543,28 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 text = message.get("text")
                 if not text:
                     continue
+                if len(text) > MAX_LIVE_CONTROL_CHARS:
+                    await send_json({
+                        "type": "error", "code": "LIVE_CONTROL_FRAME_TOO_LARGE",
+                        "message": "Live control frame exceeds 64 KiB",
+                        "retryable": False,
+                    })
+                    continue
                 try:
                     control = json.loads(text)
-                except Exception:
+                except (TypeError, ValueError, RecursionError):
+                    await send_json({
+                        "type": "error", "code": "INVALID_CONTROL_JSON",
+                        "message": "Live control frame must contain valid JSON",
+                        "retryable": False,
+                    })
+                    continue
+                if not isinstance(control, dict):
+                    await send_json({
+                        "type": "error", "code": "INVALID_CONTROL_FRAME",
+                        "message": "Live control frame must be a JSON object",
+                        "retryable": False,
+                    })
                     continue
                 control_type = str(control.get("type") or "")
                 if control_type == "response.cancel":
@@ -581,7 +654,6 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         **({"attachment_count": len(attachments)} if attachments else {}),
                     })
                 elif control_type == "session.finish":
-                    graceful_finish = True
                     # A client-controlled finish is not evidence that the
                     # browser started Voice. Never record a false completion
                     # when Chrome has not confirmed its live session.
@@ -621,6 +693,11 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
             with suppress(Exception):
                 await send_json({"type": "error", "code": "GPT_LIVE_BRIDGE_ERROR", "message": str(error), "retryable": True})
         finally:
+            if session_ready and not error_message and not observed_response_count:
+                # Audio bytes prove transport, not a completed assistant turn.
+                # Require the browser's response.done signal before marking
+                # the live session successful, even if partial PCM was heard.
+                error_message = "GPT-Live session ended without a completed response"
             finished = True
             if started and selected_client:
                 with suppress(Exception):
@@ -650,7 +727,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         "stream": True, "prompt_mode": "voice-call",
                         "status": "cancelled" if error_message == "client-disconnected" else
                                   "error" if error_message else
-                                  "completed" if session_ready and (graceful_finish or observed_audio_bytes) else "error",
+                                  "completed" if session_ready and observed_response_count else "error",
                         "attachments_count": observed_media_count,
                         "audio_bytes": observed_audio_bytes,
                         "diagnostics": {
@@ -659,6 +736,8 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                             **state.diagnostics,
                             "route": "chatgpt-voice-live", "session_id": session_id,
                             "session_ready": session_ready, "audio_bytes": observed_audio_bytes,
+                            "input_audio_bytes": observed_input_audio_bytes,
+                            "completed_responses": observed_response_count,
                             "input_confirmed_turns": input_confirmed,
                             "attachments_confirmed": observed_media_count,
                             "browser_startup_error": error_message if error_message and not session_ready else None,

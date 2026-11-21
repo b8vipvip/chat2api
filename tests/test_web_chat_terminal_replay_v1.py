@@ -1,0 +1,200 @@
+import asyncio
+
+from app.telemetry import TelemetryStore
+from app.web_chat_terminal_replay_v1 import (
+    is_already_finalized_worker_terminal,
+    is_replayed_mode1_terminal,
+    replayed_terminal_projection,
+)
+
+
+def test_only_owner_bound_mode1_terminal_outbox_replay_is_accepted():
+    row = {
+        "api_key_id": "key-mode1",
+        "client_id": "worker-a",
+        "web_chat_mode": True,
+        "status": "recovering",
+    }
+    message = {
+        "type": "chat.completed",
+        "request_id": "req_replay_123",
+        "text": "recovered answer",
+        "diagnostics": {
+            "worker_transport_replayed": True,
+            "worker_transport_recovery": "transport-outbox-v47",
+        },
+    }
+    assert is_replayed_mode1_terminal(row, message, "worker-a")
+    assert not is_replayed_mode1_terminal(row, message, "worker-b")
+    assert not is_replayed_mode1_terminal({**row, "web_chat_mode": False}, message, "worker-a")
+    assert not is_replayed_mode1_terminal({**row, "status": "stalled"}, message, "worker-a")
+    assert not is_replayed_mode1_terminal({**row, "api_key_id": "master"}, message, "worker-a")
+    assert not is_replayed_mode1_terminal(
+        row, {**message, "diagnostics": {"worker_transport_replayed": True}}, "worker-a",
+    )
+    image_message = {**message, "type": "image.completed", "text": "must not become a chat answer"}
+    assert is_replayed_mode1_terminal(row, image_message, "worker-a")
+    image_projection = replayed_terminal_projection(row, image_message)
+    assert image_projection["status"] == "stalled"
+    assert image_projection["response_text"] == ""
+    assert image_projection["response_text_available"] is False
+    assert image_projection["diagnostics"]["web_chat_terminal_replay_reconciled"] == "media-terminal-only"
+
+
+def test_replayed_completion_is_preserved_as_provisional_not_false_success():
+    row = {
+        "api_key_id": "key-mode1",
+        "client_id": "worker-a",
+        "web_chat_mode": True,
+        "status": "recovering",
+        "diagnostics": {"web_chat_request_recovery": "awaiting-worker-terminal-replay"},
+    }
+    message = {
+        "type": "chat.completed",
+        "text": "A" * 60_000,
+        "diagnostics": {
+            "worker_transport_replayed": True,
+            "worker_transport_recovery": "transport-outbox-v47",
+        },
+    }
+    projection = replayed_terminal_projection(row, message)
+    assert projection["status"] == "stalled"
+    assert projection["response_text"] == "A" * 50_000
+    assert projection["response_text_available"] is False
+    assert "archival" in projection["error"]
+    assert projection["diagnostics"]["web_chat_terminal_replay_reconciled"] == "provisional-only"
+
+
+def test_late_replay_after_restart_grace_is_accepted_only_as_stalled_provisional():
+    message = {
+        "type": "chat.completed",
+        "text": "late terminal",
+        "diagnostics": {
+            "worker_transport_replayed": True,
+            "worker_transport_recovery": "transport-outbox-v47",
+        },
+    }
+    expired = {
+        "api_key_id": "key-mode1",
+        "client_id": "worker-a",
+        "web_chat_mode": True,
+        "status": "stalled",
+        "diagnostics": {
+            "web_chat_request_recovery": "broker-state-lost-after-restart-grace-expired",
+        },
+    }
+    assert is_replayed_mode1_terminal(expired, message, "worker-a")
+    projection = replayed_terminal_projection(expired, message)
+    assert projection["status"] == "stalled"
+    assert projection["response_text"] == "late terminal"
+    assert projection["response_text_available"] is False
+
+    unrelated_timeout = {
+        **expired,
+        "diagnostics": {"web_chat_request_recovery": "server-timeout"},
+    }
+    assert not is_replayed_mode1_terminal(unrelated_timeout, message, "worker-a")
+
+
+def test_already_finalized_terminal_ack_is_same_worker_and_terminal_only():
+    row = {
+        "client_id": "worker-a",
+        "web_chat_mode": True,
+        "api_key_id": "key-mode1",
+        "status": "completed",
+    }
+    assert is_already_finalized_worker_terminal(row, "worker-a")
+    assert not is_already_finalized_worker_terminal(row, "worker-b")
+    assert not is_already_finalized_worker_terminal({**row, "status": "stalled"}, "worker-a")
+    assert not is_already_finalized_worker_terminal({**row, "api_key_id": "master"}, "worker-a")
+    assert is_already_finalized_worker_terminal(
+        {"client_id": "worker-a", "web_chat_mode": False, "status": "error"},
+        "worker-a",
+    )
+
+
+def test_replayed_image_completion_is_not_reported_as_a_verified_chat_answer():
+    row = {
+        "api_key_id": "key-mode1",
+        "client_id": "worker-a",
+        "web_chat_mode": True,
+        "status": "recovering",
+    }
+    message = {
+        "type": "image.completed",
+        "diagnostics": {
+            "worker_transport_replayed": True,
+            "worker_transport_recovery": "transport-outbox-v47",
+        },
+    }
+    assert is_replayed_mode1_terminal(row, message, "worker-a")
+    projection = replayed_terminal_projection(row, message)
+    assert projection["status"] == "stalled"
+    assert projection["response_text"] == ""
+    assert projection["response_text_available"] is False
+    assert projection["diagnostics"]["web_chat_terminal_replay_reconciled"] == "media-terminal-only"
+
+
+def test_replayed_worker_error_and_cancel_keep_their_terminal_semantics():
+    row = {"diagnostics": {"existing": True}}
+    error = replayed_terminal_projection(row, {"type": "chat.error", "error": "worker failed"})
+    cancelled = replayed_terminal_projection(row, {"type": "chat.cancelled", "reason": "user stopped"})
+    assert error["status"] == "error"
+    assert error["error"] == "worker failed"
+    assert cancelled["status"] == "cancelled"
+    assert cancelled["error"] == "user stopped"
+    assert error["response_text"] == ""
+    assert cancelled["response_text"] == ""
+
+
+def test_replayed_terminal_replaces_older_provisional_text_without_completing(tmp_path):
+    async def scenario():
+        telemetry = TelemetryStore(tmp_path)
+        telemetry._remember({
+            "request_id": "req_replay_update",
+            "api_key_id": "key-mode1",
+            "web_chat_mode": True,
+            "status": "recovering",
+            "response_text": "",
+            "response_text_provisional": "short preview",
+        })
+        await telemetry.upsert({
+            "request_id": "req_replay_update",
+            "status": "stalled",
+            "response_text": "full replayed Worker terminal",
+            "response_text_available": False,
+            "error": "archive and usage reconciliation not rerun",
+            "diagnostics": {
+                "web_chat_request_recovery": "worker-terminal-replayed-after-broker-restart",
+            },
+        })
+        row = telemetry.get("req_replay_update")
+        assert row["status"] == "stalled"
+        assert row["response_text"] == ""
+        assert row["response_text_available"] is False
+        assert row["response_text_provisional"] == "full replayed Worker terminal"
+        assert row["response_text_provisional_unverified"] is True
+
+    asyncio.run(scenario())
+
+
+
+def test_duplicate_replayed_terminal_after_lost_ack_is_same_worker_and_same_type_only():
+    row = {
+        "api_key_id": "key-mode1",
+        "client_id": "worker-a",
+        "web_chat_mode": True,
+        "status": "stalled",
+        "diagnostics": {
+            "web_chat_request_recovery": "worker-terminal-replayed-after-broker-restart",
+            "web_chat_terminal_replay_type": "image.completed",
+        },
+    }
+    assert is_already_finalized_worker_terminal(row, "worker-a", "image.completed")
+    assert not is_already_finalized_worker_terminal(row, "worker-b", "image.completed")
+    assert not is_already_finalized_worker_terminal(row, "worker-a", "chat.completed")
+    assert not is_already_finalized_worker_terminal(
+        {**row, "diagnostics": {"web_chat_request_recovery": "server-timeout",
+                               "web_chat_terminal_replay_type": "image.completed"}},
+        "worker-a", "image.completed",
+    )

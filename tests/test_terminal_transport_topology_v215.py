@@ -75,7 +75,8 @@ def test_stream_completed_is_persisted_before_any_content_sse_yield():
         'elif event_type in {"chat.error", "chat.cancelled"}:', 1
     )[0]
     persisted = segment.index('usage, token_meta = await record_request(')
-    first_sse_output = segment.index('for delta in final_text_chunks(final_text):')
+    assert 'final_chunks = list(final_text_chunks(final_text))' in segment
+    first_sse_output = segment.index('for index, delta in enumerate(final_chunks):')
     assert persisted < first_sse_output
     assert 'recorded = True' in segment[persisted:first_sse_output]
     assert 'terminal_transport_server_seen' in source

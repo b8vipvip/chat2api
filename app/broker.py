@@ -5,6 +5,8 @@ import math
 import re
 import time
 from urllib.parse import urlsplit
+
+from .chat_tool_references_v1 import extract_tool_references
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -38,6 +40,12 @@ class RequestState:
     completed_mono: float | None = None
     terminal_event_type: str | None = None
     diagnostics: dict[str, Any] = field(default_factory=dict)
+    # Mode 1 may expose bounded public citation cards in its Web Chat UI.
+    mode1_web_chat: bool = False
+    mode1_owner_key_id: str = ""
+    last_event_id: int = 0
+    delivery_event_ids: list[int] = field(default_factory=list)
+    delivery_terminal_event_id: int = 0
 
     def owns_dispatch_socket(self, client_id: str, websocket: Any, current_socket: Any) -> bool:
         """Require the assigned Worker and exact original/current socket."""
@@ -516,6 +524,7 @@ class RequestBroker:
         self.requests: dict[str, RequestState] = {}
         self.client_requests: dict[str, str] = {}
         self.lock = asyncio.Lock()
+        self.event_journal: Any | None = None
 
     async def create(self, request_id: str, client_id: str) -> RequestState:
         async with self.lock:
@@ -623,6 +632,36 @@ class RequestBroker:
             state.text, snapshot_source = _monotonic_text(state.text, str(event.get("text") or ""))
             state.diagnostics["snapshot_text_source"] = snapshot_source
             state.diagnostics["snapshot_text_chars"] = len(state.text)
+        elif event_type in {"chat.tool.call", "chat.tool.result"}:
+            # Tool activity is presentation progress only. Normalize it before
+            # queueing so page-originated metadata cannot inflate or poison the
+            # request stream, and never let it mutate answer text or finality.
+            tool_name = re.sub(r"[^A-Za-z0-9_.:-]", "_",
+                               str(event.get("tool_name") or "tool").strip())[:80] or "tool"
+            call_id = re.sub(r"[^A-Za-z0-9_.:-]", "",
+                             str(event.get("call_id") or ""))[:128]
+            result_id = re.sub(r"[^A-Za-z0-9_.:-]", "",
+                               str(event.get("result_id") or ""))[:128]
+            raw_status = str(event.get("status") or "").lower()
+            status = {
+                "in_progress": "running", "pending": "running", "running": "running",
+                "streaming": "running", "finished_successfully": "completed",
+                "completed": "completed", "failed": "failed", "error": "failed",
+                "cancelled": "cancelled",
+            }.get(raw_status, "running" if event_type == "chat.tool.call" else "completed")
+            field_name = "arguments" if event_type == "chat.tool.call" else "output"
+            content = event.get(field_name)
+            normalized = {
+                "type": event_type, "tool_name": tool_name, "call_id": call_id,
+                "status": status, field_name: content[:8000] if isinstance(content, str) else "",
+            }
+            if result_id:
+                normalized["result_id"] = result_id
+            if state.mode1_web_chat:
+                references = extract_tool_references(event.get("metadata"))
+                if references:
+                    normalized["references"] = references
+            event = normalized
         elif event_type == "chat.completed":
             state.terminal_event_type = str(event_type)
             state.completed_mono = now
@@ -647,5 +686,21 @@ class RequestBroker:
             message = str(event.get("error") or event.get("reason") or "Request failed")
             if state.final_future and not state.final_future.done():
                 state.final_future.set_exception(RuntimeError(message))
+        if state.mode1_web_chat and state.mode1_owner_key_id and self.event_journal is not None:
+            try:
+                event_id = await self.event_journal.append_worker_event(
+                    request_id, state.mode1_owner_key_id, event,
+                )
+                if event_id:
+                    event = {**event, "event_id": event_id}
+                    state.last_event_id = max(state.last_event_id, int(event_id))
+                    if event_type in {"chat.completed", "chat.error", "chat.cancelled", "image.completed", "image.error", "image.cancelled"}:
+                        state.diagnostics["web_chat_worker_terminal_journaled_type"] = str(event_type)
+                        state.diagnostics["web_chat_worker_terminal_journaled_event_id"] = int(event_id)
+            except Exception as error:
+                # Keep the live Worker/Broker terminal authoritative. A failed
+                # sidecar journal is surfaced for recovery diagnostics rather
+                # than dropping a valid Worker event or changing Mode 2.
+                state.diagnostics["web_chat_event_journal_error"] = type(error).__name__
         await state.queue.put(event)
         return True

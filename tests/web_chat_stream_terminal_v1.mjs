@@ -64,7 +64,10 @@ async function send(chunks, close = true, onCancel = () => {}) {
       },
     },
   });
-  const sendMessage = vm.runInContext(source.slice(start, end) + "\nsendMessage", context);
+  // Keep the separate native-content sidecar out of this generation-stream test.
+  const sendSource = source.slice(start, end).replace("      void streamNativeContent(requestId);\n", "");
+  assert.ok(!sendSource.includes("void streamNativeContent(requestId);"));
+  const sendMessage = vm.runInContext(sendSource + "\nsendMessage", context);
   await sendMessage("test question");
   // The production client deliberately starts recovery without blocking sendMessage.
   // Let its Promise chain settle before asserting the user-visible recovery notice.
@@ -106,4 +109,127 @@ test("reports truncation even without content or with an unframed DONE marker", 
     {messages: [warning], replies: ["partial"], locked: false});
   assert.deepEqual(await send([terminal + "\n\n"]),
     {messages: ["模型没有返回文本内容。"], replies: [], locked: false});
+});
+
+
+test("preserves request-scoped tool calls and results as safe presentation state", () => {
+  const start = source.indexOf("  function appendDelta(");
+  const end = source.indexOf("  function recoveryStatusLabel(", start);
+  assert.ok(start >= 0 && end > start);
+  let saved = 0;
+  const document = {
+    createElement(tag) {
+      return {
+        tag, className: "", textContent: "", open: false, children: [],
+        appendChild(child) { this.children.push(child); },
+        append(...children) { this.children.push(...children); },
+      };
+    },
+  };
+  const referenceStart = source.indexOf("  function cleanToolReferenceText(");
+  const referenceEnd = source.indexOf("  function normalizeToolEvents(", referenceStart);
+  assert.ok(referenceStart >= 0 && referenceEnd > referenceStart);
+  const context = vm.createContext({
+    saveHistory() { saved += 1; }, document, URL, MAX_MESSAGE_CHARS:200000,
+    safeToolName(value) { return String(value || "tool").slice(0,80); },
+  });
+  const api = vm.runInContext(
+    source.slice(referenceStart, referenceEnd) + "\n" + source.slice(start, end)
+      + "\n({applyToolEvent,consumeSseFrame,renderToolActivity})",
+    context,
+  );
+  const assistant = {content: "", toolEvents: []};
+  const frame = (tool) => "data: " + JSON.stringify({
+    choices: [{delta: {chat2api_tool: tool}}],
+  }) + "\n\n";
+
+  assert.equal(api.consumeSseFrame(frame({
+    phase: "call", tool_name: "browser.search", call_id: "call-123",
+    status: "running", arguments: '{"query":"test"}',
+    references: [
+      {url:"https://docs.python.org/3/library/",title:"Python docs",snippet:"Official reference"},
+      {url:"javascript:alert(1)",title:"Unsafe"},
+      {url:"https://127.0.0.1/private",title:"Private"},
+    ],
+  }), assistant), false);
+  assert.equal(assistant.toolEvents.length, 1);
+  assert.equal(assistant.toolEvents[0].status, "running");
+  assert.deepEqual(JSON.parse(JSON.stringify(assistant.toolEvents[0].references)), [{
+    url:"https://docs.python.org/3/library/",title:"Python docs",snippet:"Official reference",
+  }]);
+
+  api.consumeSseFrame(frame({
+    phase: "call", tool_name: "browser.search", call_id: "call-123",
+    status: "completed", arguments: '{"query":"test"}',
+  }), assistant);
+  api.consumeSseFrame(frame({
+    phase: "result", tool_name: "browser.search", call_id: "call-123",
+    result_id: "result-123", status: "completed",
+    output: "<img src=x onerror=alert(1)>",
+  }), assistant);
+
+  assert.equal(assistant.toolEvents.length, 1);
+  assert.equal(assistant.toolEvents[0].status, "completed");
+  assert.equal(assistant.toolEvents[0].output, "<img src=x onerror=alert(1)>");
+  assert.ok(saved >= 3);
+
+  const body = {children: [], appendChild(child) { this.children.push(child); }};
+  api.renderToolActivity(body, assistant);
+  assert.equal(body.children.length, 1);
+  const details = body.children[0].children[0];
+  assert.equal(details.tag, "details");
+  assert.equal(details.children[0].textContent, "browser.search · 已完成");
+  const output = details.children.find(node => node.tag === "pre"
+    && node.textContent === "<img src=x onerror=alert(1)>");
+  assert.equal(output.textContent, "<img src=x onerror=alert(1)>");
+  const referenceBox = details.children.find(node => node.className === "message-tool-references");
+  assert.ok(referenceBox);
+  const referenceLink = referenceBox.children.find(node => node.tag === "a");
+  assert.equal(referenceLink.href, "https://docs.python.org/3/library/");
+  assert.equal(referenceLink.rel, "noopener noreferrer nofollow");
+  assert.equal(referenceLink.referrerPolicy, "no-referrer");
+
+  const replayAssistant = {content:"",lastEventId:0,toolEvents:[]};
+  assert.equal(api.consumeSseFrame([
+    "id: 41", "event: delivery.delta", 'data: {"delta":"replayed"}',
+  ].join("\n"), replayAssistant), false);
+  assert.equal(replayAssistant.content, "replayed");
+  assert.equal(replayAssistant.lastEventId, 41);
+  assert.equal(api.consumeSseFrame([
+    "id: 42", "event: delivery.completed", 'data: {"text_chars":8}',
+  ].join("\n"), replayAssistant), true);
+  assert.equal(replayAssistant.replayTerminalStatus, "completed");
+  assert.equal(replayAssistant.lastEventId, 42);
+});
+
+
+test("normalizes persisted tool events without accepting unsafe IDs or control characters", () => {
+  const start = source.indexOf("  function safeToolName(");
+  const end = source.indexOf("  function normalizeConversationRow(", start);
+  assert.ok(start >= 0 && end > start);
+  const context = vm.createContext({URL});
+  const normalizeToolEvents = vm.runInContext(
+    source.slice(start, end) + "\nnormalizeToolEvents",
+    context,
+  );
+  const rows = normalizeToolEvents([{
+    toolName: "browser.search" + String.fromCharCode(10) + "<script>",
+    callId: "call-123",
+    resultId: "result-123",
+    status: "completed",
+    arguments: "x".repeat(3000),
+    output: "ok",
+    references: [
+      {url:"https://docs.python.org/3/library/",title:"Python docs",snippet:"Reference"},
+      {url:"javascript:alert(1)",title:"Unsafe"},
+    ],
+  }, {
+    toolName: "forged", callId: "bad id", status: "completed",
+  }], "assistant");
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].toolName.includes(String.fromCharCode(10)), false);
+  assert.equal(rows[0].arguments.length, 1200);
+  assert.equal(rows[0].references.length, 1);
+  assert.equal(rows[0].references[0].url, "https://docs.python.org/3/library/");
+  assert.deepEqual(JSON.parse(JSON.stringify(normalizeToolEvents(rows, "user"))), []);
 });
