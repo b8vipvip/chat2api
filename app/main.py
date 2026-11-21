@@ -2018,6 +2018,73 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             and verified.get("delivered_text") == final_text
         )
 
+    async def ensure_replayed_usage_settlement(record: dict[str, Any]) -> bool:
+        """Retry and prove idempotent usage settlement before ACKing a replay."""
+        if (
+            not isinstance(record, dict)
+            or record.get("status") != "completed"
+            or record.get("web_chat_mode") is not True
+        ):
+            return False
+        request_id = str(record.get("request_id") or "")
+        key_id = str(record.get("api_key_id") or "")
+        usage = record.get("usage") if isinstance(record.get("usage"), dict) else {}
+        counts: dict[str, int] = {}
+        for field in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            value = usage.get(field)
+            if type(value) is not int or value < 0:
+                return False
+            counts[field] = value
+        if counts["total_tokens"] <= 0 or counts["total_tokens"] != (
+            counts["prompt_tokens"] + counts["completion_tokens"]
+        ):
+            return False
+        if not request_id or not key_id or key_id == "master":
+            return False
+        api_key = getattr(api_keys, "keys", {}).get(key_id)
+        accounting = getattr(telemetry, "usage_accounting", None)
+        if api_key is None or not callable(accounting):
+            return False
+
+        # Telemetry is written before its accounting callback. If the callback
+        # was interrupted, a duplicate Worker replay must retry that same
+        # idempotent request_id charge rather than ACKing a merely completed row.
+        await accounting(record)
+        ledger = getattr(api_key, "charged_requests", None)
+        if not isinstance(ledger, dict):
+            ledger = getattr(api_keys, "charged_requests", None)
+        charged = ledger.get(request_id, 0) if isinstance(ledger, dict) else 0
+        if type(charged) is not int or charged < counts["total_tokens"]:
+            return False
+
+        if getattr(app.state, "quota_reservation_runtime_enabled", False):
+            quota_store = getattr(app.state, "quota_reservations", None)
+            reservation = quota_store.get(request_id) if quota_store is not None else None
+            if reservation:
+                if str(reservation.get("key_id") or "") != key_id:
+                    return False
+                reservation_state = str(reservation.get("state") or "")
+                if reservation_state in {"reserved", "committing", "released"}:
+                    return False
+                if (
+                    reservation_state == "settled"
+                    and int(reservation.get("actual_tokens") or 0) < counts["total_tokens"]
+                ):
+                    return False
+
+        # A failed first finalization may have retained a provisional copy after
+        # the completed row was committed. Clear it only after ledger proof.
+        await telemetry.upsert({
+            "request_id": request_id,
+            "response_text_provisional": "",
+        })
+        confirmed = telemetry.get(request_id) or {}
+        return bool(
+            confirmed.get("status") == "completed"
+            and confirmed.get("response_text_available") is True
+            and confirmed.get("response_text_provisional", "") == ""
+        )
+
     def media_base_for_websocket(websocket: WebSocket) -> str:
         base_url = str(websocket.base_url)
         if base_url.startswith("ws://"):
@@ -2041,7 +2108,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if (
             not request_id or not owner or owner == "master"
             or not isinstance(candidate, str) or not candidate
-            or len(candidate) > 1_000_000
+            or len(candidate) > 8_000_000
             or "<chat2api-truncated>" in candidate
             or str(recovered_row.get("status") or "").lower() != "recovering"
         ):
@@ -2101,6 +2168,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         archived_text, media_items, file_items = await archive_verified_terminal(
             state, candidate, owner, request_id, media_base_for_websocket(websocket),
         )
+        # The SSE journal retains at most two million final-text characters.
+        # Check after media/file rewriting so large inline Base64 assets can be
+        # archived into compact owned URLs before applying the delivery bound.
+        if len(archived_text) > 2_000_000:
+            raise ValueError("Recovered response exceeds the durable SSE delivery limit")
         completion_usage, token_meta = standard_usage("", archived_text)
         completion_tokens = completion_usage.get("completion_tokens")
         if type(completion_tokens) is not int or completion_tokens < 0:
@@ -2139,6 +2211,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             prompt_chars_override=prompt_chars,
             timings_override=timings,
         )
+        completed_row = telemetry.get(request_id) or {}
+        if not await ensure_replayed_usage_settlement(completed_row):
+            raise RuntimeError("Recovered API-key usage settlement was not durably verified")
         if not await ensure_replayed_delivery_terminal(request_id, owner, archived_text):
             raise RuntimeError("Recovered SSE delivery terminal was not durably journaled")
         return True
@@ -3754,6 +3829,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 generated_staging.ingest,
                                 request_id=request_id,
                                 upload_id=message.get("upload_id"),
+                                owner_key_id=str((telemetry.get(request_id) or {}).get("api_key_id") or ""),
                                 filename=message.get("filename"),
                                 mime=message.get("mime"),
                                 sequence=message.get("sequence"),
@@ -3902,10 +3978,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         replay_owner = str(recovered_row.get("api_key_id") or "")
                         if message_type == "chat.completed" and str(recovered_row.get("status") or "").lower() == "recovering":
                             try:
-                                await event_journal.append_worker_event(
-                                    request_id, replay_owner,
-                                    {"type": "chat.snapshot", "text": str(message.get("text") or "")},
-                                )
+                                # The journal intentionally keeps only a bounded
+                                # terminal summary, never the potentially multi-MiB
+                                # inline media payload. Archive the full Worker text
+                                # before publishing any user-visible completion.
                                 await event_journal.append_worker_event(
                                     request_id, replay_owner, message,
                                 )
@@ -4030,20 +4106,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 and str(recovered_row.get("status") or "").lower() == "completed"
                             ):
                                 try:
-                                    snapshot = await event_journal.snapshot(
-                                        request_id, str(recovered_row.get("api_key_id") or ""),
+                                    delivery_durable = await ensure_replayed_usage_settlement(
+                                        recovered_row,
                                     )
-                                    if snapshot.get("terminal_status") != "completed":
-                                        final_text = recovered_row.get("response_text")
-                                        delivery_durable = bool(
-                                            isinstance(final_text, str)
-                                            and recovered_row.get("response_text_available") is True
-                                            and await ensure_replayed_delivery_terminal(
-                                                request_id,
-                                                str(recovered_row.get("api_key_id") or ""),
-                                                final_text,
-                                            )
+                                    if delivery_durable:
+                                        snapshot = await event_journal.snapshot(
+                                            request_id, str(recovered_row.get("api_key_id") or ""),
                                         )
+                                        if snapshot.get("terminal_status") != "completed":
+                                            final_text = recovered_row.get("response_text")
+                                            delivery_durable = bool(
+                                                isinstance(final_text, str)
+                                                and recovered_row.get("response_text_available") is True
+                                                and await ensure_replayed_delivery_terminal(
+                                                    request_id,
+                                                    str(recovered_row.get("api_key_id") or ""),
+                                                    final_text,
+                                                )
+                                            )
                                 except Exception:
                                     delivery_durable = False
                             if delivery_durable:
@@ -4060,7 +4140,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                     "request_id": request_id,
                                     "terminal_type": message_type,
                                     "accepted": False,
-                                    "reason": "delivery_terminal_not_durable",
+                                    "reason": "usage_or_delivery_terminal_not_durable",
                                 })
                         else:
                             await websocket.send_json({
