@@ -171,6 +171,25 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
                 too_many = live.receive_json()
                 assert too_many["type"] == "error"
                 assert too_many["code"] == "INVALID_MEDIA_INPUT"
+                live.send_json({
+                    "type": "input_media", "text": "这张图片发送失败",
+                    "item_id": "failed-media",
+                    "attachments": [{"type": "input_image", "file_id": extra_files[0]}],
+                })
+                failed_media_dispatch = ext.receive_json()
+                assert failed_media_dispatch["type"] == "voice.live.multimodal"
+                assert live.receive_json()["type"] == "input_media.queued"
+                ext.send_json({"type": "image.progress", "kind": "voice-live", "request_id": request_id,
+                               "live_event": "input.text.sent", "item_id": "failed-media",
+                               "text": "这张图片发送失败"})
+                assert live.receive_json()["type"] == "input_text.sent"
+                ext.send_json({"type": "image.progress", "kind": "voice-live", "request_id": request_id,
+                               "live_event": "input.error", "item_id": "failed-media",
+                               "message": "simulated attachment send failure"})
+                failed_media = live.receive_json()
+                assert failed_media["type"] == "error"
+                assert failed_media["code"] == "VOICE_CALL_INPUT_FAILED"
+
                 live.send_json({"type": "input_text", "text": "失败后重试", "item_id": "retry-item"})
                 failed_dispatch = ext.receive_json()
                 assert failed_dispatch["type"] == "voice.live.text"
@@ -215,6 +234,6 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
         row = app.state.telemetry.get(request_id)
         assert row and row["request_type"] == "voice_call"
         assert row["diagnostics"]["attachments_confirmed"] == 1
-        assert row["diagnostics"]["input_confirmed_turns"] == 3
+        assert row["diagnostics"]["input_confirmed_turns"] == 4
         assert row["input_file_ids"] == [file_a]
         assert row["diagnostics"]["audio_bytes"] == 1600
