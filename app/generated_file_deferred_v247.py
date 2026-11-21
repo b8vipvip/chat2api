@@ -10,6 +10,7 @@ import base64
 import binascii
 import hashlib
 import logging
+import re
 import secrets
 import sqlite3
 import threading
@@ -21,6 +22,8 @@ from .generated_files_v196 import (
     FILE_MARKER, STAGED_MARKER, MAX_FILES_PER_RESPONSE,
     MAX_FILE_BYTES, MAX_INLINE_FILE_BYTES, MAX_TOTAL_BYTES,
 )
+
+PENDING_STAGE_PATH = re.compile(r"^pgen_[a-f0-9]{32}\\.(?:bin|part)$")
 
 
 class FileStillProcessing(Exception):
@@ -51,8 +54,37 @@ class DeferredGeneratedFiles:
             # deduplicates by owner/request/name/hash in a SQLite transaction.
             conn.execute("UPDATE deferred_generated_files SET state='pending' WHERE state='processing'")
             rows = conn.execute("SELECT id FROM deferred_generated_files WHERE state='pending'").fetchall()
+        pending_ids = {str(row["id"]) for row in rows}
+        self._cleanup_staging_files(pending_ids)
         for row in rows:
             self.pool.submit(self._finish, row["id"])
+
+    def _cleanup_staging_files(self, pending_ids: set[str]) -> None:
+        """Retry cleanup of terminal and orphan staging bytes after a restart.
+
+        Only a .bin referenced by a pending manifest is live work. Ready/failed
+        manifests and files left before their SQLite insert must not accumulate.
+        """
+        try:
+            paths = list(self.root.iterdir())
+        except OSError:
+            logging.getLogger(__name__).exception(
+                "Could not scan deferred generated-file staging directory"
+            )
+            return
+        for path in paths:
+            if not PENDING_STAGE_PATH.fullmatch(path.name):
+                continue
+            pending_id = path.stem
+            if path.suffix == ".bin" and pending_id in pending_ids:
+                continue
+            try:
+                # unlink removes a symlink itself rather than following it.
+                path.unlink(missing_ok=True)
+            except OSError:
+                logging.getLogger(__name__).exception(
+                    "Failed to clean orphaned deferred-file staging bytes"
+                )
 
     def _db(self):
         conn = sqlite3.connect(self.archive.db_path, timeout=20)
