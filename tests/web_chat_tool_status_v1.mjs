@@ -55,7 +55,7 @@ for (const [input, expected] of cases) {
   assert.equal(api.normalizeToolStatus(input), expected, String(input));
 }
 
-const events = cases.slice(0, 4).concat(cases.slice(8, 10), cases.slice(15, 18), cases.slice(24));
+const events = [cases[0],cases[8],cases[15],cases[18],cases[24],cases[26]];
 const rows = api.normalizeToolEvents(events.map(([status], index) => ({
   toolName: "browser.search",
   callId: "call-" + index,
@@ -65,6 +65,10 @@ assert.deepEqual(
   Array.from(rows, row => row.status),
   events.map(([, expected]) => expected),
 );
+const boundedRows = api.normalizeToolEvents(Array.from({length:8},(_,index)=>({
+  toolName:"browser.search",callId:"bounded-"+index,status:"running",
+})), "assistant");
+assert.equal(boundedRows.length,6);
 assert.deepEqual(api.normalizeToolEvents([{callId:"call-1",status:"completed"}], "user"), []);
 
 // Replayed/out-of-order events must not reopen a tool after terminal result.
