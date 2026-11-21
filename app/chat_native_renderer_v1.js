@@ -21,14 +21,17 @@
     mathsize:["small","normal","big"],display:["block","inline"],dir:["ltr","rtl"],
     form:["prefix","infix","postfix"],numalign:["left","center","right"],denomalign:["left","center","right"],
     align:["top","bottom","center","baseline","axis","left","right"],
-    rowalign:["top","bottom","center","baseline","axis"],columnalign:["left","center","right"],
-    groupalign:["left","center","right","decimalpoint"],frame:["none","solid","dashed"],side:["left","right"],
+    frame:["none","solid","dashed"],side:["left","right"],
     encoding:["application/x-tex","application/mathml-presentation+xml","application/mathml-content+xml","text/plain"]
   };
   const MATH_LENGTH_ATTRS = new Set(["mathsize","width","height","depth","lspace","rspace","minsize","maxsize","linethickness","subscriptshift","superscriptshift","minlabelspacing","voffset"]);
   const MATH_LENGTH = /^(?:[+-]?(?:\d{1,4}(?:\.\d{1,3})?|\.\d{1,3})(?:em|ex|px|pt|pc|in|cm|mm|%)|0)$/;
   const MATH_SPACE_NAMES = new Set(["veryverythinmathspace","verythinmathspace","thinmathspace","mediummathspace","thickmathspace","verythickmathspace","veryverythickmathspace"]);
-  const MATH_ALIGN_LIST = new Set(["top","bottom","center","baseline","axis","left","right","decimalpoint"]);
+  const MATH_ALIGN_VALUES = {
+    rowalign:new Set(["top","bottom","center","baseline","axis"]),
+    columnalign:new Set(["left","center","right"]),
+    groupalign:new Set(["left","center","right","decimalpoint"])
+  };
   const MATH_NOTATION = new Set(["longdiv","actuarial","radical","box","roundedbox","circle","left","right","top","bottom","updiagonalstrike","downdiagonalstrike","verticalstrike","horizontalstrike","madruwb"]);
   const MATH_MULTI_LENGTH_ATTRS = new Set(["rowspacing","columnspacing","framespacing","columnwidth"]);
   const SVG_TAGS = new Set(["svg","g","path","line","rect","circle","ellipse","polyline","polygon","text","tspan","defs","clippath"]);
@@ -151,8 +154,8 @@
         ["auto","fit"].includes(token) || MATH_SPACE_NAMES.has(token) || MATH_LENGTH.test(token));
     }
     if (["rowalign","columnalign","groupalign"].includes(key)) {
-      const tokens = value.split(/\s+/);
-      return tokens.length <= 16 && tokens.every(token => MATH_ALIGN_LIST.has(token));
+      const tokens = value.split(/\s+/), allowed = MATH_ALIGN_VALUES[key];
+      return tokens.length <= 16 && tokens.every(token => allowed.has(token));
     }
     if (key === "notation") {
       const tokens = value.split(/\s+/);
