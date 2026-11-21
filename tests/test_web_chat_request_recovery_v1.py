@@ -149,6 +149,32 @@ def test_sse_event_replay_is_owner_scoped_and_honors_last_event_id(tmp_path):
         assert invalid_cursor.status_code == 400
 
 
+def test_recovering_sse_replay_surfaces_unverified_worker_progress_before_terminal(tmp_path):
+    app = make_app(tmp_path)
+    request_id = "req_recoveryprogress123"
+    with TestClient(app) as client:
+        user_id = register(client, "recovery-progress@example.org")
+        app.state.user_accounts.attach_key(user_id, "key_recovery_progress")
+        remember(
+            app, request_id, "key_recovery_progress",
+            status="recovering", web_chat_mode=True,
+            response_text="", response_text_available=False,
+        )
+        asyncio.run(app.state.web_chat_event_journal.append_worker_event(
+            request_id, "key_recovery_progress",
+            {"type": "chat.delta", "delta": "provisional worker answer"},
+        ))
+        asyncio.run(app.state.web_chat_event_journal.append_terminal(
+            request_id, "key_recovery_progress", "stalled", "worker lease expired",
+        ))
+        replay = client.get(f"/api/user/chat/requests/{request_id}/events")
+        assert replay.status_code == 200
+        assert "event: recovery.partial.snapshot" in replay.text
+        assert '"partial_text":"provisional worker answer"' in replay.text
+        assert '"partial_text_unverified":true' in replay.text
+        assert "event: delivery.stalled" in replay.text
+
+
 def test_completed_snapshot_is_returned_only_to_key_owner_and_never_cached(tmp_path):
     app = make_app(tmp_path)
     request_id = "req_12345678"
