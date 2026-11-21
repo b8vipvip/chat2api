@@ -1,3 +1,6 @@
+import asyncio
+
+from app.broker import RequestBroker
 from app.chat_tool_references_v1 import extract_tool_references, normalize_tool_references
 
 
@@ -87,3 +90,56 @@ def test_extracts_search_results_references_and_sources_roots() -> None:
             "snippet": "",
         },
     ]
+
+
+def test_mode1_broker_extracts_forwarded_citation_roots_from_tool_metadata() -> None:
+    async def scenario() -> None:
+        broker = RequestBroker()
+        state = await broker.create("req_tool_refs_123", "worker-client")
+        state.mode1_web_chat = True
+        state.mode1_owner_key_id = "key-owner"
+
+        accepted = await broker.publish("req_tool_refs_123", {
+            "type": "chat.tool.result",
+            "tool_name": "browser.search",
+            "call_id": "call-123",
+            "result_id": "result-123",
+            "status": "completed",
+            "output": "Found sources",
+            "metadata": {
+                "search_results": [{
+                    "title": "Search result",
+                    "url": "https://search.example.org/a",
+                }],
+                "references": [{
+                    "name": "Reference",
+                    "href": "https://docs.example.org/reference",
+                }],
+                "sources": [{
+                    "source_name": "Source",
+                    "safe_url": "https://source.example.org/item",
+                }],
+            },
+        })
+
+        assert accepted is True
+        event = await state.queue.get()
+        assert event["references"] == [
+            {
+                "url": "https://search.example.org/a",
+                "title": "Search result",
+                "snippet": "",
+            },
+            {
+                "url": "https://docs.example.org/reference",
+                "title": "Reference",
+                "snippet": "",
+            },
+            {
+                "url": "https://source.example.org/item",
+                "title": "Source",
+                "snippet": "",
+            },
+        ]
+
+    asyncio.run(scenario())
