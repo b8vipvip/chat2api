@@ -301,12 +301,15 @@ class GeneratedFileStaging:
             if time.monotonic() - row.created_at > MAX_STAGE_AGE_SECONDS
         ]
         for request_id, upload_id in expired:
-            row = self.entries.pop((request_id, upload_id), None)
+            key = (request_id, upload_id)
+            row = self.entries.get(key)
             if row is not None:
                 try:
                     row.path.unlink(missing_ok=True)
                 except OSError:
-                    pass
+                    # Keep both the in-memory entry and durable row retryable.
+                    continue
+                self.entries.pop(key, None)
                 self._delete_persisted(request_id, upload_id, row.path)
 
     def ingest(
