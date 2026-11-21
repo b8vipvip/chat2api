@@ -3,8 +3,8 @@ import {readFileSync} from "node:fs";
 import {runInNewContext} from "node:vm";
 
 const source = readFileSync("app/chat_client_v1.js", "utf8");
-const statusMatch = source.match(/function normalizeToolStatus\\(value\\) \\{[\\s\\S]*?\\n  \\}/);
-const eventsMatch = source.match(/function normalizeToolEvents\\(value, role\\) \\{[\\s\\S]*?\\n  \\}/);
+const statusMatch = source.match(/function normalizeToolStatus\(value\) \{[\s\S]*?\n  \}/);
+const eventsMatch = source.match(/function normalizeToolEvents\(value, role\) \{[\s\S]*?\n  \}/);
 assert.ok(statusMatch, "production normalizeToolStatus function must remain extractable");
 assert.ok(eventsMatch, "production normalizeToolEvents function must remain extractable");
 
@@ -13,7 +13,7 @@ const helpers = {
   normalizeToolReferences: () => [],
 };
 const api = runInNewContext(
-  statusMatch[0] + "\\n" + eventsMatch[0] + "\\n({normalizeToolStatus,normalizeToolEvents})",
+  statusMatch[0] + "\n" + eventsMatch[0] + "\n({normalizeToolStatus,normalizeToolEvents})",
   helpers,
 );
 
