@@ -1823,8 +1823,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         attachments_count: int = 0,
         media_items: list[dict[str, object]] | None = None,
         file_items: list[dict[str, object]] | None = None,
+        usage_override: dict[str, object] | None = None,
+        prompt_chars_override: int | None = None,
+        timings_override: dict[str, object] | None = None,
     ) -> tuple[dict[str, int], dict[str, object]]:
-        usage, token_meta = standard_usage(prompt, final_text)
+        if usage_override is None:
+            usage, token_meta = standard_usage(prompt, final_text)
+        else:
+            counts: dict[str, int] = {}
+            for field in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                value = usage_override.get(field)
+                if type(value) is not int or value < 0:
+                    raise ValueError("Recovered usage contains an invalid token count")
+                counts[field] = value
+            if counts["total_tokens"] != counts["prompt_tokens"] + counts["completion_tokens"]:
+                raise ValueError("Recovered usage token totals do not reconcile")
+            usage = counts
+            token_meta = {"estimated": bool(usage_override.get("estimated", True))}
+            estimator = str(usage_override.get("estimator") or "").strip()[:80]
+            if estimator:
+                token_meta["estimator"] = estimator
+        prompt_chars = len(prompt)
+        if prompt_chars_override is not None:
+            if type(prompt_chars_override) is not int or prompt_chars_override < 0:
+                raise ValueError("Recovered prompt character count is invalid")
+            prompt_chars = prompt_chars_override
+        timings = dict(timings_override) if isinstance(timings_override, dict) else state.timings()
         state.diagnostics["server_finalization_stage"] = "request-row-finalized"
         # Diagnostics only: bounded structural evidence for A/B/C/D visual
         # comparisons. Do not export DOM HTML, CSS text, URLs or image bytes.
@@ -1902,7 +1926,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "attachments_count": attachments_count,
                 "stream": stream,
                 "prompt_mode": prompt_mode,
-                "prompt_chars": len(prompt),
+                "prompt_chars": prompt_chars,
                 "completion_chars": len(final_text),
                 "response_media": media_items or [],
                 "response_media_count": len(media_items or []),
@@ -1916,7 +1940,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "probe_summary": worker_probes.summary(state.request_id),
                 "probe_capture_status": worker_probes.summary(state.request_id)["capture_status"],
                 "usage": {**usage, **token_meta},
-                "timings": state.timings(),
+                "timings": timings,
                 "diagnostics": dict(state.diagnostics),
                 "error": error,
             }
