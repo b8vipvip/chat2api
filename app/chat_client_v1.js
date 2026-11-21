@@ -1537,6 +1537,11 @@
         } else if (update.status === "stalled" && update.terminal === true
             && typeof update.partial_text === "string" && update.partial_text) {
           assistant.content = update.partial_text.slice(0, MAX_MESSAGE_CHARS);
+        } else if (update.partial_text_unverified === true
+            && typeof update.partial_text === "string" && update.partial_text.length > assistant.content.length) {
+          // Show durable Worker/delivery progress during the restart grace,
+          // but keep it explicitly provisional until terminal reconciliation.
+          assistant.content = update.partial_text.slice(0, MAX_MESSAGE_CHARS);
         }
         saveHistory();
         if (currentConversation()?.id === conversation.id) renderMessages();
