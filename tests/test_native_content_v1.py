@@ -824,5 +824,5 @@ def test_mathml_presentation_attributes_reject_unsafe_values_and_scopes(tag, att
         validate_native_snapshot({
             "version": 1,
             "revision": 1,
-            "root": {"tag": tag, "math_attrs": attrs, "text": "x" if tag in {"mi", "mo"} else None},
+            "root": {"tag": tag, "math_attrs": attrs},
         })
