@@ -42,6 +42,13 @@
     return normalize(element.innerText || element.textContent || "");
   }
 
+  function assertComposerDraftSafe(element, target) {
+    const current = composerText(element);
+    if (current && current !== normalize(target)) {
+      throw new Error("ChatGPT Voice composer contains an unsent draft; refusing to overwrite it");
+    }
+  }
+
   function setComposerText(element, text) {
     element.focus();
     if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
@@ -152,6 +159,7 @@
     if (!target) throw new Error("Live text input is empty");
     const composer = await waitFor(findComposer, 8000, 100);
     if (!composer) throw new Error("ChatGPT Voice text composer is not available");
+    assertComposerDraftSafe(composer, target);
     const baselineUsers = [...document.querySelectorAll("[data-message-author-role='user']")].filter(visible).length;
 
     setComposerText(composer, text);
@@ -210,14 +218,17 @@
       throw new Error("Live media message requires 1-4 uploaded attachments");
     if (!globalThis.__CHAT2API_MULTIMODAL_V4__?.attach)
       throw new Error("ChatGPT multimodal upload controller is not available");
+    const instruction = String(text || "").trim()
+      || "请直接理解我在通话中发送的图片或文件，并用语音回答，不要结束语音通话。";
+    const composer = await waitFor(findComposer, 8000, 100);
+    if (!composer) throw new Error("ChatGPT Voice text composer is not available");
+    assertComposerDraftSafe(composer, instruction);
     // Reuse the canonical Worker v78 upload and settle evidence. No competing
     // uploader, fallback automation, or terminal decision is introduced.
     const upload = await globalThis.__CHAT2API_MULTIMODAL_V4__.attach(attachments);
     if (upload.attachment_verified !== true || upload.attachments_count !== attachments.length)
       throw new Error("ChatGPT did not confirm all live media attachments");
     assertLiveTurnOwner(active);
-    const instruction = String(text || "").trim()
-      || "请直接理解我在通话中发送的图片或文件，并用语音回答，不要结束语音通话。";
     await sendLiveText(active, itemId, instruction);
     await emitLive(active, "input.media.sent", {
       item_id: itemId || "",
