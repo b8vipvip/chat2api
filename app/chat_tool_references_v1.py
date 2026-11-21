@@ -74,6 +74,7 @@ def normalize_tool_references(value: Any) -> list[dict[str, str]]:
             break
     return result
 
+
 def extract_tool_references(metadata: Any) -> list[dict[str, str]]:
     """Extract only bounded citation/search-result roots from Worker metadata."""
     if not isinstance(metadata, dict):
