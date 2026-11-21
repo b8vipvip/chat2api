@@ -1,6 +1,7 @@
 """Generated file staging remains bounded, ordered and request-scoped."""
 import base64
 import hashlib
+import sqlite3
 
 import pytest
 
@@ -26,9 +27,12 @@ def push(staging, request_id, data, digest=None, complete=True):
 
 
 def test_large_staged_xlsx_is_archived_with_exact_bytes(tmp_path):
-    staging=GeneratedFileStaging(tmp_path)
+    first_process=GeneratedFileStaging(tmp_path)
     payload=b"PK\x03\x04"+b"Z"*(6*1024*1024+101)
-    push(staging,"req_real",payload)
+    push(first_process,"req_real",payload)
+    # A fresh instance models the API process restarting before terminal
+    # replay; only a fully verified stage is restored.
+    staging=GeneratedFileStaging(tmp_path)
     assert staging.read("req_real",UPID,"budget.xlsx")== (payload,MIME)
     with pytest.raises(ValueError):
         staging.read("req_unrelated",UPID,"budget.xlsx")
@@ -76,3 +80,33 @@ def test_missing_final_never_archives_and_mixed_batch_is_atomic(tmp_path):
     with pytest.raises(ValueError):
         archive.rewrite_markdown(source,"owner","req_incomplete","https://files.example")
     assert archive.list_items(10)==[]
+
+
+def test_restart_promotes_fully_written_stage_and_discards_partial_or_corrupt_files(tmp_path):
+    complete = GeneratedFileStaging(tmp_path)
+    payload = b"PK\x03\x04" + b"complete" * 2048
+    push(complete, "req_full_before_flag", payload)
+    with sqlite3.connect(complete.db_path) as conn:
+        conn.execute(
+            "UPDATE generated_file_stages SET finished=0 WHERE request_id=? AND upload_id=?",
+            ("req_full_before_flag", UPID),
+        )
+    recovered = GeneratedFileStaging(tmp_path)
+    assert recovered.read("req_full_before_flag", UPID, "budget.xlsx") == (payload, MIME)
+
+    partial = GeneratedFileStaging(tmp_path)
+    partial_payload = b"PK\x03\x04" + b"partial" * (MAX_CHUNK_BYTES // 7 + 10)
+    push(partial, "req_partial", partial_payload, complete=False)
+    partial_recovered = GeneratedFileStaging(tmp_path)
+    with pytest.raises(ValueError, match="not verified"):
+        partial_recovered.read("req_partial", UPID, "budget.xlsx")
+
+    corrupt = GeneratedFileStaging(tmp_path)
+    corrupt_payload = b"PK\x03\x04" + b"verified"
+    push(corrupt, "req_corrupt_restart", corrupt_payload)
+    corrupt_path = corrupt.entries[("req_corrupt_restart", UPID)].path
+    corrupt_path.write_bytes(b"tampered")
+    corrupt_recovered = GeneratedFileStaging(tmp_path)
+    with pytest.raises(ValueError, match="not verified"):
+        corrupt_recovered.read("req_corrupt_restart", UPID, "budget.xlsx")
+    assert not corrupt_path.exists()
