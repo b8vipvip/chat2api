@@ -245,7 +245,7 @@ class GeneratedFileArchive:
                 upload_id = match.group(2).lower()
                 if not getattr(self, "staging", None):
                     raise ValueError("Generated staged upload transport unavailable")
-                data, mime = self.staging.read(request_id, upload_id, filename)
+                data, mime = self.staging.read(request_id, upload_id, filename, owner_key_id=owner)
                 consumed_stages.append(upload_id)
             else:
                 mime, encoded = match.group(3), match.group(4)
