@@ -191,3 +191,17 @@ def test_persisted_stage_pruning_is_rate_limited(tmp_path, monkeypatch):
     staging._prune()
     staging._prune()
     assert calls["count"] == 1
+
+
+def test_persisted_stage_pruning_does_not_retry_busy_index_on_every_call(tmp_path, monkeypatch):
+    staging = GeneratedFileStaging(tmp_path)
+    calls = {"count": 0}
+
+    def busy_db():
+        calls["count"] += 1
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(staging, "_db", busy_db)
+    staging._prune()
+    staging._prune()
+    assert calls["count"] == 1
