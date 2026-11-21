@@ -6,6 +6,7 @@
   "use strict";
   const MAX_TEXT = 120000;
   const MAX_BLOCKS = 100;
+  const MAX_MATH_CHARS = 4096;
   const TICK = String.fromCharCode(96);
   const FENCE = TICK.repeat(3);
 
@@ -42,13 +43,51 @@
     parent.appendChild(a);
   }
 
+  function mathFallback(host, tex, displayMode) {
+    if (displayMode) {
+      const pre = node("pre", "math-fallback");
+      pre.appendChild(node("code", "", tex));
+      host.appendChild(pre);
+    } else {
+      host.appendChild(node("code", "math-fallback", tex));
+    }
+  }
+
+  function renderMath(host, source, displayMode) {
+    const tex = String(source || "").slice(0, MAX_MATH_CHARS);
+    if (!tex.trim()) return;
+    const katex = window.katex;
+    if (!katex || typeof katex.render !== "function") {
+      mathFallback(host, tex, displayMode);
+      return;
+    }
+    const target = node(displayMode ? "div" : "span",
+      displayMode ? "math-block" : "math-inline");
+    try {
+      katex.render(tex, target, {
+        displayMode: Boolean(displayMode),
+        output: "htmlAndMathml",
+        throwOnError: false,
+        trust: false,
+        strict: "warn",
+        maxExpand: 1000,
+        maxSize: 20,
+      });
+      host.appendChild(target);
+    } catch {
+      mathFallback(host, tex, displayMode);
+    }
+  }
+
   function inline(parent, raw) {
     const text = String(raw || "");
     const pattern = new RegExp(
       "(" + TICK + "[^" + TICK + "\\n]+" + TICK +
+      "|\\\\\\([^\\n]+?\\\\\\)" +
+      "|\\$(?!\\$)[^$\\n]+\\$(?!\\$)" +
       "|\\[[^\\]\\n]{1,160}\\]\\([^\\s)]+\\)" +
       "|\\*\\*[^*\\n]+\\*\\*|\\*[^*\\n]+\\*" +
-      "|\\$[^$\\n]+\\$|https?:\\/\\/[^\\s<>]+)", "g"
+      "|https?:\\/\\/[^\\s<>]+)", "g"
     );
     let last = 0;
     for (const match of text.matchAll(pattern)) {
@@ -58,13 +97,14 @@
       }
       if (token.startsWith(TICK)) {
         parent.appendChild(node("code", "", token.slice(1, -1)));
+      } else if (token.startsWith("\\(")) {
+        renderMath(parent, token.slice(2, -2), false);
+      } else if (token.startsWith("$")) {
+        renderMath(parent, token.slice(1, -1), false);
       } else if (token.startsWith("**")) {
         parent.appendChild(node("strong", "", token.slice(2, -2)));
       } else if (token.startsWith("*")) {
         parent.appendChild(node("em", "", token.slice(1, -1)));
-      } else if (token.startsWith("$")) {
-        // No unreviewed TeX engine, dynamic HTML, or unsafe MathML injection.
-        parent.appendChild(node("code", "math-fallback", token.slice(1, -1)));
       } else if (token.startsWith("[")) {
         const split = token.indexOf("](");
         appendLink(parent, token.slice(1, split), token.slice(split + 2, -1));
@@ -127,14 +167,26 @@
         codeBlock(host, language, code);
         continue;
       }
-      if (line.trim() === "$$") {
+      const trimmed = line.trim();
+      const displayInline = trimmed.match(/^\$\$([\s\S]+)\$\$/)
+        || trimmed.match(/^\\\[([\s\S]+)\\\]$/);
+      if (trimmed === "$" || trimmed === "\\[" || displayInline) {
+        if (displayInline) {
+          renderMath(host, displayInline[1], true);
+          i++;
+          continue;
+        }
+        const close = trimmed === "$" ? "$" : "\\]";
         const math = [];
+        const openingLine = line;
         i++;
-        while (i < lines.length && lines[i].trim() !== "$$") math.push(lines[i++]);
-        if (i < lines.length) i++;
-        const pre = node("pre", "math-fallback");
-        pre.appendChild(node("code", "", math.join("\n")));
-        host.appendChild(pre);
+        while (i < lines.length && lines[i].trim() !== close) math.push(lines[i++]);
+        if (i >= lines.length) {
+          paragraph(host, [openingLine]);
+          continue;
+        }
+        i++;
+        renderMath(host, math.join("\n"), true);
         continue;
       }
       const heading = line.match(/^(#{1,4})\s+(.+)$/);
@@ -206,7 +258,10 @@
       const body = [];
       while (i < lines.length && lines[i].trim()) {
         if (body.length && (lines[i].trim().startsWith(FENCE) ||
-            lines[i].trim() === "$" || /^#{1,4}\s+/.test(lines[i]) ||
+            lines[i].trim() === "$" || lines[i].trim() === "\\[" ||
+            /^\$\$[\s\S]+\$\$/.test(lines[i].trim()) ||
+            /^\\\[[\s\S]+\\\]$/.test(lines[i].trim()) ||
+            /^#{1,4}\s+/.test(lines[i]) ||
             /^>\s?/.test(lines[i]) || /^\s*(?:[-*+] |\d+\. )/.test(lines[i]) ||
             (lines[i].includes("|") && i + 1 < lines.length &&
              /^\s*\|?\s*:?-{3,}/.test(lines[i + 1])) ||
@@ -233,7 +288,7 @@
       } else if (type === "code") {
         codeBlock(host, String(part.language || "code"), String(part.text || "").slice(0, MAX_TEXT).split("\n"));
       } else if (type === "math") {
-        host.appendChild(node("pre", "math-fallback", String(part.tex || "").slice(0, 4096)));
+        renderMath(host, String(part.tex || ""), true);
       } else if (type === "citation") {
         const div = node("div", "rich-citation");
         div.appendChild(node("span", "", "引用链接（未验证）："));
