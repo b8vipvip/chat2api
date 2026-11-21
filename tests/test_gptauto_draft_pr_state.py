@@ -102,5 +102,6 @@ def test_gptauto_executor_preserves_mainline_repair_without_pr_context():
     assert no_pr_guard < pr_comment
     assert 'echo "pr-unavailable=true" >> "$GITHUB_OUTPUT"' in executor
     assert "gptauto-mainline-repair-${{ steps.state.outputs.task-id }}" in executor
+    assert r"\${{" not in executor, "GitHub expressions must not be escaped into literal shell text"
     assert "steps.state.outputs.pr-number != ''" in executor
     assert "preserving repair request artifact and keeping the Completion Lease active" in executor
