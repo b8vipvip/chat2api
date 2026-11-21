@@ -170,13 +170,13 @@
       const trimmed = line.trim();
       const displayInline = trimmed.match(/^\$\$([\s\S]+)\$\$/)
         || trimmed.match(/^\\\[([\s\S]+)\\\]$/);
-      if (trimmed === "$" || trimmed === "\\[" || displayInline) {
+      if (trimmed === "$$" || trimmed === "\\[" || displayInline) {
         if (displayInline) {
           renderMath(host, displayInline[1], true);
           i++;
           continue;
         }
-        const close = trimmed === "$" ? "$" : "\\]";
+        const close = trimmed === "$$" ? "$$" : "\\]";
         const math = [];
         const openingLine = line;
         i++;
@@ -258,7 +258,7 @@
       const body = [];
       while (i < lines.length && lines[i].trim()) {
         if (body.length && (lines[i].trim().startsWith(FENCE) ||
-            lines[i].trim() === "$" || lines[i].trim() === "\\[" ||
+            lines[i].trim() === "$$" || lines[i].trim() === "\\[" ||
             /^\$\$[\s\S]+\$\$/.test(lines[i].trim()) ||
             /^\\\[[\s\S]+\\\]$/.test(lines[i].trim()) ||
             /^#{1,4}\s+/.test(lines[i]) ||
