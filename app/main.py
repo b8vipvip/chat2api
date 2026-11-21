@@ -1826,6 +1826,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         usage_override: dict[str, object] | None = None,
         prompt_chars_override: int | None = None,
         timings_override: dict[str, object] | None = None,
+        verify_replayed_usage_settlement: bool = False,
     ) -> tuple[dict[str, int], dict[str, object]]:
         if usage_override is None:
             usage, token_meta = standard_usage(prompt, final_text)
@@ -1946,8 +1947,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "error": error,
             }
         )
+        if verify_replayed_usage_settlement:
+            completed_row = telemetry.get(state.request_id) or {}
+            if not await ensure_replayed_usage_settlement(completed_row):
+                raise RuntimeError("Recovered API-key usage settlement was not durably verified")
         # The terminal cursor is appended only after the authoritative
-        # telemetry terminal has been written. A crash between the two leaves
+        # telemetry terminal has been written and replay usage has been verified.
+        # A crash between the two leaves
         # replayable content but cannot falsely turn a running row into success.
         if state.mode1_web_chat and state.mode1_owner_key_id:
             try:
@@ -2210,10 +2216,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             usage_override=usage_override,
             prompt_chars_override=prompt_chars,
             timings_override=timings,
+            verify_replayed_usage_settlement=True,
         )
-        completed_row = telemetry.get(request_id) or {}
-        if not await ensure_replayed_usage_settlement(completed_row):
-            raise RuntimeError("Recovered API-key usage settlement was not durably verified")
         if not await ensure_replayed_delivery_terminal(request_id, owner, archived_text):
             raise RuntimeError("Recovered SSE delivery terminal was not durably journaled")
         return True
