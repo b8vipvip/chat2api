@@ -2,10 +2,13 @@
 import base64
 import hashlib
 import sqlite3
+import time
 
 import pytest
 
-from app.generated_file_staging_v238 import GeneratedFileStaging, MAX_CHUNK_BYTES
+from app.generated_file_staging_v238 import (
+    GeneratedFileStaging, MAX_CHUNK_BYTES, MAX_STAGE_AGE_SECONDS,
+)
 from app.generated_files_v196 import GeneratedFileArchive
 from app.media_archive_v173 import MediaArchive
 
@@ -143,3 +146,62 @@ def test_startup_does_not_delete_another_process_incomplete_stage(tmp_path):
     assert first_process.read(
         "req_live_upload", UPID, "budget.xlsx", owner_key_id="owner",
     ) == (payload, MIME)
+
+
+
+def test_prune_expires_incomplete_stage_not_restored_by_this_process(tmp_path):
+    first_process = GeneratedFileStaging(tmp_path)
+    payload = b"x" * (MAX_CHUNK_BYTES + 100)
+    request_id = "req_expired_cross_process"
+    push(first_process, request_id, payload, complete=False)
+    stage_path = first_process.entries[(request_id, UPID)].path
+
+    # The second process keeps a fresh incomplete upload intact, but does not
+    # restore it into memory because it belongs to the first process.
+    second_process = GeneratedFileStaging(tmp_path)
+    assert stage_path.exists()
+    with sqlite3.connect(second_process.db_path) as conn:
+        conn.execute(
+            "UPDATE generated_file_stages SET created_at=? WHERE request_id=? AND upload_id=?",
+            (time.time() - MAX_STAGE_AGE_SECONDS - 1, request_id, UPID),
+        )
+
+    with pytest.raises(ValueError, match="not verified"):
+        second_process.read(request_id, UPID, "budget.xlsx", owner_key_id="owner")
+
+    assert not stage_path.exists()
+    with sqlite3.connect(second_process.db_path) as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM generated_file_stages WHERE request_id=? AND upload_id=?",
+            (request_id, UPID),
+        ).fetchone()[0] == 0
+
+
+
+def test_persisted_stage_pruning_is_rate_limited(tmp_path, monkeypatch):
+    staging = GeneratedFileStaging(tmp_path)
+    original_db = staging._db
+    calls = {"count": 0}
+
+    def counted_db():
+        calls["count"] += 1
+        return original_db()
+
+    monkeypatch.setattr(staging, "_db", counted_db)
+    staging._prune()
+    staging._prune()
+    assert calls["count"] == 1
+
+
+def test_persisted_stage_pruning_does_not_retry_busy_index_on_every_call(tmp_path, monkeypatch):
+    staging = GeneratedFileStaging(tmp_path)
+    calls = {"count": 0}
+
+    def busy_db():
+        calls["count"] += 1
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(staging, "_db", busy_db)
+    staging._prune()
+    staging._prune()
+    assert calls["count"] == 1
