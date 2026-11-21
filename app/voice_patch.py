@@ -136,34 +136,54 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
         usage, token_meta = _audio_usage(prompt, transcript)
         diagnostics = dict(state.diagnostics)
         diagnostics["audio_bytes"] = int(audio_bytes)
-        await telemetry.upsert(
-            {
-                "request_id": request_id,
-                "response_id": response_id,
-                "client_id": client_id,
-                "api_key_id": principal.key_id,
-                "api_key_name": principal.name,
-                "auth_kind": principal.kind,
-                "requested_model": model,
-                "request_type": request_type,
-                "attachments_count": 1 if request_type == "voice_conversation" else 0,
-                "input_file_ids": list(dict.fromkeys(
-                    str(value) for value in (input_file_ids or []) if value
-                )),
-                "stream": False,
-                "prompt_mode": "voice",
-                "prompt_chars": len(prompt),
-                "completion_chars": len(transcript),
-                "status": status_value,
-                "response_text": transcript if status_value == "completed" else "",
-                "response_text_available": bool(transcript) if status_value == "completed" else False,
-                "usage": {**usage, **token_meta},
-                "timings": state.timings(),
-                "diagnostics": diagnostics,
-                "error": error,
-            },
-            create_only=create_only,
-        )
+        record = {
+            "request_id": request_id,
+            "response_id": response_id,
+            "client_id": client_id,
+            "api_key_id": principal.key_id,
+            "api_key_name": principal.name,
+            "auth_kind": principal.kind,
+            "requested_model": model,
+            "request_type": request_type,
+            "attachments_count": 1 if request_type == "voice_conversation" else 0,
+            "input_file_ids": list(dict.fromkeys(
+                str(value) for value in (input_file_ids or []) if value
+            )),
+            "stream": False,
+            "prompt_mode": "voice",
+            "prompt_chars": len(prompt),
+            "completion_chars": len(transcript),
+            "status": status_value,
+            "response_text": transcript if status_value == "completed" else "",
+            "response_text_available": bool(transcript) if status_value == "completed" else False,
+            "usage": {**usage, **token_meta},
+            "timings": state.timings(),
+            "diagnostics": diagnostics,
+            "error": error,
+        }
+        terminal = status_value in {"completed", "error", "cancelled", "stalled"}
+        attempts = 2 if terminal else 1
+        for attempt in range(attempts):
+            try:
+                # Telemetry writes the row before invoking the usage-accounting
+                # callback. If accounting fails after the append, retry the
+                # identical request_id/terminal so the idempotent key ledger
+                # can finish settlement without replacing a completed Voice
+                # result with a false error or releasing its quota hold.
+                await telemetry.upsert(
+                    record,
+                    create_only=create_only and attempt == 0,
+                )
+                break
+            except DuplicateRequestIdentity:
+                raise
+            except Exception as telemetry_error:
+                if attempt + 1 >= attempts:
+                    raise
+                logger.warning(
+                    "Voice terminal telemetry retry request_id=%s attempt=%s error_type=%s",
+                    request_id, attempt + 1, type(telemetry_error).__name__,
+                )
         return usage, token_meta
 
     async def execute_voice(
