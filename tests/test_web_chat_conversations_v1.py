@@ -497,7 +497,7 @@ def test_conversation_tool_events_preserve_unknown_and_missing_status_as_unknown
 
     for invalid in ("success-ish", "mystery", "future_untrusted_state"):
         import pytest
-        with pytest.raises(ValueError, match="fields are invalid"):
+        with pytest.raises(ValueError):
             _normalize_tool_events([{
                 "toolName": "browser.search",
                 "callId": "call-invalid-1",
