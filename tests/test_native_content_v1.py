@@ -782,7 +782,7 @@ def test_mathml_presentation_attributes_roundtrip_and_legacy_projection(tmp_path
                 {
                     "tag": "annotation",
                     "math_attrs": {"encoding": "application/x-tex"},
-                    "text": r"\\frac{x}{y}",
+                    "text": r"\frac{x}{y}",
                 },
             ],
         },
