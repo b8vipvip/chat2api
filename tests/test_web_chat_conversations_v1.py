@@ -119,6 +119,12 @@ def test_web_chat_conversation_api_auth_ownership_sync_and_conflicts(tmp_path: P
             "resultId": "result-123", "status": "completed",
             "arguments": '{"query":"Mode 1"}',
             "output": "Found two relevant pages.",
+            "references": [{
+                "id": "turn0search0",
+                "url": "https://docs.python.org/3/library/",
+                "title": "Python documentation",
+                "snippet": "Official library reference",
+            }],
         }]
         created = client.put(
             f"/api/user/chat/conversations/{conversation_id}",
@@ -128,6 +134,8 @@ def test_web_chat_conversation_api_auth_ownership_sync_and_conflicts(tmp_path: P
         assert created.json()["conversation"]["revision"] == 1
         assert created.json()["conversation"]["messages"][1]["toolEvents"][0]["toolName"] == "browser.search"
         assert created.json()["conversation"]["messages"][1]["toolEvents"][0]["output"] == "Found two relevant pages."
+        assert created.json()["conversation"]["messages"][1]["toolEvents"][0]["references"][0]["id"] == "turn0search0"
+        assert created.json()["conversation"]["messages"][1]["toolEvents"][0]["references"][0]["url"] == "https://docs.python.org/3/library/"
         assert created.json()["conversation"]["messages"][1]["lastEventId"] == 42
         assert created.headers["cache-control"] == "private, no-store"
         assert "cookie" in {value.strip().lower() for value in created.headers["vary"].split(",")}
