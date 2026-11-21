@@ -307,6 +307,24 @@ def test_staging_unlink_error_after_ready_does_not_make_download_fail(tmp_path, 
     assert deferred.read(fid, token)[0] == raw
     assert len(generated.list_items()) == 1
 
+    # A successful ready manifest may outlive one failed unlink attempt. A
+    # fresh process retries that cleanup without touching the archived object.
+    pending_id = files[0]["id"]
+    stale_ready_bytes = deferred.root / (pending_id + ".bin")
+    assert stale_ready_bytes.exists()
+    orphan_bin = deferred.root / ("pgen_" + "a" * 32 + ".bin")
+    orphan_part = deferred.root / ("pgen_" + "b" * 32 + ".part")
+    orphan_bin.write_bytes(b"orphan")
+    orphan_part.write_bytes(b"partial")
+    monkeypatch.undo()
+
+    reopened = DeferredGeneratedFiles(generated)
+    reopened.pool.shutdown(wait=True)
+    assert not stale_ready_bytes.exists()
+    assert not orphan_bin.exists()
+    assert not orphan_part.exists()
+    assert reopened.read(fid, token)[0] == raw
+
 
 def test_disappeared_pending_row_after_original_store_is_compensated(tmp_path, monkeypatch):
     generated, deferred = _real_deferred(tmp_path)
