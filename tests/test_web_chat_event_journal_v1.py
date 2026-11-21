@@ -182,18 +182,49 @@ def test_event_journal_first_terminal_outcome_is_absorbing(tmp_path):
     async def scenario():
         journal = WebChatEventJournal(tmp_path)
         await journal.open()
-        await journal.append_delivery("req_absorb_123", "key-absorb", "verified response")
-        await journal.append_delivery_terminal("req_absorb_123", "key-absorb", 17)
-        await journal.append_terminal(
+        delivery = await journal.append_delivery(
+            "req_absorb_123", "key-absorb", "verified response",
+        )
+        assert delivery["chunk_event_ids"] == [1]
+        terminal_id = await journal.append_delivery_terminal(
+            "req_absorb_123", "key-absorb", 17,
+        )
+        assert terminal_id == 2
+
+        # Late retries, chunks, and Worker observations must not append
+        # records after the first terminal event, even if they disagree.
+        assert await journal.append_terminal(
             "req_absorb_123", "key-absorb", "stalled", "late watchdog",
-        )
-        await journal.append_terminal(
+        ) is None
+        assert await journal.append_terminal(
             "req_absorb_123", "key-absorb", "error", "late Worker retry",
-        )
+        ) is None
+        assert await journal.append_delivery_terminal(
+            "req_absorb_123", "key-absorb", 17,
+        ) == 0
+        assert await journal.append_delivery(
+            "req_absorb_123", "key-absorb", "late text",
+        ) == {
+            "chunk_event_ids": [],
+            "terminal_event_id": 0,
+            "text_chars": 9,
+        }
+        assert await journal.append_worker_event(
+            "req_absorb_123", "key-absorb",
+            {"type": "chat.delta", "delta": "late worker text"},
+        ) is None
+
+        page = await journal.events_after("req_absorb_123", "key-absorb", 0)
+        assert [event["id"] for event in page["events"]] == [1, 2]
+        assert [event["type"] for event in page["events"]] == [
+            "delivery.delta", "delivery.completed",
+        ]
         snapshot = await journal.snapshot("req_absorb_123", "key-absorb")
+        assert snapshot["last_event_id"] == 2
         assert snapshot["terminal_status"] == "completed"
         assert snapshot["terminal_message"] == ""
         assert snapshot["delivered_text"] == "verified response"
+        assert snapshot["worker_partial_text"] == ""
 
     asyncio.run(scenario())
 
