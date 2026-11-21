@@ -113,7 +113,7 @@ def test_web_chat_conversations_sync_between_two_browser_profiles(tmp_path: Path
                         {
                             "id": "message_browser_tool_01",
                             "role": "assistant",
-                            "content": "Sources: \\uE200cite\\uE202turn0search1\\uE201 and \\uE200cite\\uE202turn0search0\\uE201",
+                            "content": "Sources: \uE200cite\uE202turn0search1\uE201 and \uE200cite\uE202turn0search0\uE201",
                             "createdAt": created_at,
                             "requestId": "",
                             "pending": False,
