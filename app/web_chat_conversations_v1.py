@@ -212,6 +212,16 @@ def normalize_conversation(
                     part["mime_type"] = str(item.mime_type or "").lower()
                     part["size"] = int(item.size)
         tool_events = _normalize_tool_events(message.get("toolEvents"), role)
+        message_references = normalize_tool_references(
+            [
+                *(message.get("references") if isinstance(message.get("references"), list) else []),
+                *(
+                    reference
+                    for event in tool_events
+                    for reference in event.get("references", [])
+                ),
+            ] if role == "assistant" else []
+        )
         if not content and not (role == "assistant" and pending) and not tool_events:
             raise ValueError("conversation message content is empty")
         if role == "assistant" and isinstance(content, list):
@@ -243,6 +253,8 @@ def normalize_conversation(
         }
         if tool_events:
             normalized_message["toolEvents"] = tool_events
+        if message_references:
+            normalized_message["references"] = message_references
         messages.append(normalized_message)
     if has_attachments and not api_key_id:
         raise ValueError("conversations with attachments must retain their owning API Key")
