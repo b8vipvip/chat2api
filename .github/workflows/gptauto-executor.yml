@@ -231,11 +231,11 @@ jobs:
           fi
 
       - name: Upload mainline repair request
-        if: \${{ steps.state.outputs.action == 'repair_request' && steps.state.outputs.pr-number == '' && steps.transient-retry.outputs.retried != 'true' }}
+        if: ${{ steps.state.outputs.action == 'repair_request' && steps.state.outputs.pr-number == '' && steps.transient-retry.outputs.retried != 'true' }}
         uses: actions/upload-artifact@v4
         with:
-          name: gptauto-mainline-repair-\${{ steps.state.outputs.task-id }}
-          path: .gptauto/repair-requests/\${{ steps.state.outputs.task-id }}.json
+          name: gptauto-mainline-repair-${{ steps.state.outputs.task-id }}
+          path: .gptauto/repair-requests/${{ steps.state.outputs.task-id }}.json
           retention-days: 30
           if-no-files-found: error
 
