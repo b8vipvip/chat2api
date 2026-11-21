@@ -6,19 +6,41 @@ const source = readFileSync("app/chat_client_v1.js", "utf8");
 const statusMatch = source.match(/function normalizeToolStatus\(value\) \{[\s\S]*?\n  \}/);
 const eventsMatch = source.match(/function normalizeToolEvents\(value, role\) \{[\s\S]*?\n  \}/);
 const applyMatch = source.match(/function applyToolEvent\(assistant, event\) \{[\s\S]*?\n  \}/);
+const refsMatch = source.match(/function referencesForMessage\(message\) \{[\s\S]*?\n  \}/);
+const rowMatch = source.match(/function normalizeConversationRow\(row\) \{[\s\S]*?\n  \}/);
 assert.ok(statusMatch, "production normalizeToolStatus function must remain extractable");
 assert.ok(eventsMatch, "production normalizeToolEvents function must remain extractable");
 assert.ok(applyMatch, "production applyToolEvent function must remain extractable");
+assert.ok(refsMatch, "production referencesForMessage function must remain extractable");
+assert.ok(rowMatch, "production normalizeConversationRow function must remain extractable");
 
 let historyWrites = 0;
 const helpers = {
   safeToolName: value => String(value || "tool").slice(0, 80),
-  normalizeToolReferences: () => [],
+  normalizeToolReferences: value => {
+    if (!Array.isArray(value)) return [];
+    const seen = new Set(), rows = [];
+    for (const item of value) {
+      if (!item || typeof item.url !== "string") continue;
+      const identity = item.id ? "id:" + item.id : "url:" + item.url;
+      if (seen.has(identity)) continue;
+      seen.add(identity);
+      rows.push(item);
+      if (rows.length >= 8) break;
+    }
+    return rows;
+  },
+  normalizeMessageContent: value => String(value || ""),
+  messageAttachmentIds: () => [],
+  MAX_MESSAGES: 50,
+  state: {selectedModel:"gpt-test"},
+  id: () => "generated-id",
   saveHistory: () => { historyWrites += 1; },
 };
 const api = runInNewContext(
   statusMatch[0] + "\n" + eventsMatch[0] + "\n" + applyMatch[0] +
-    "\n({normalizeToolStatus,normalizeToolEvents,applyToolEvent})",
+    "\n" + refsMatch[0] + "\n" + rowMatch[0] +
+    "\n({normalizeToolStatus,normalizeToolEvents,applyToolEvent,referencesForMessage,normalizeConversationRow})",
   helpers,
 );
 
@@ -114,3 +136,32 @@ api.applyToolEvent(runningAssistant,{
 assert.equal(runningAssistant.toolEvents[0].status,"running");
 assert.equal(historyWrites,5);
 console.log("Web Chat tool status normalization preserves unknown/nonterminal states");
+
+
+// Citations must outlive the six most recent tool-detail rows.
+const citationAssistant = {toolEvents:[]};
+for (let index=0; index<8; index+=1) {
+  api.applyToolEvent(citationAssistant,{
+    phase:"result",tool_name:"browser.search",
+    call_id:"citation-call-"+index,result_id:"citation-result-"+index,
+    status:"completed",output:"result "+index,
+    references:[{
+      id:"turn0search"+index,
+      url:"https://docs"+index+".example.org/reference",
+      title:"Source "+index,
+    }],
+  });
+}
+assert.equal(citationAssistant.toolEvents.length,6);
+assert.equal(citationAssistant.references.length,8);
+assert.equal(api.referencesForMessage(citationAssistant).length,8);
+const restored = api.normalizeConversationRow({
+  id:"conversation-citations",
+  messages:[{
+    id:"assistant-citations",role:"assistant",content:"Answer",
+    toolEvents:citationAssistant.toolEvents,references:citationAssistant.references,
+  }],
+});
+assert.equal(restored.messages[0].toolEvents.length,6);
+assert.equal(restored.messages[0].references.length,8);
+assert.equal(api.referencesForMessage(restored.messages[0]).length,8);
