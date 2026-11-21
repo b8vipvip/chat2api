@@ -263,6 +263,12 @@ def test_worker_terminal_outbox_replays_across_two_server_instances(tmp_path):
         )
         assert key_response.status_code == 200, key_response.text
         key_id = key_response.json()["key"]["key_id"]
+        app_before_restart.state.quota_reservations.reserve_for_key(
+            app_before_restart.state.api_keys,
+            request_id,
+            key_id,
+            estimated_tokens=64,
+        )
         asyncio.run(app_before_restart.state.telemetry.append({
             "request_id": request_id,
             "client_id": client_id,
@@ -341,6 +347,9 @@ def test_worker_terminal_outbox_replays_across_two_server_instances(tmp_path):
             assert duplicate_ack["already_finalized"] is True
             charged = app_after_restart.state.api_keys.keys[key_id].charged_requests
             assert charged[request_id] == recovered["usage"]["total_tokens"]
+            reservation = app_after_restart.state.quota_reservations.get(request_id)
+            assert reservation["state"] == "settled"
+            assert reservation["actual_tokens"] == recovered["usage"]["total_tokens"]
 
         recovered = app_after_restart.state.telemetry.get(request_id)
         assert recovered["status"] == "completed"
