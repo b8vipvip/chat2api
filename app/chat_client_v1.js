@@ -1408,6 +1408,13 @@
     return true;
   }
 
+  function toolStatusLabel(status) {
+    return ({
+      running:"执行中",completed:"已完成",failed:"失败",
+      cancelled:"已取消",unknown:"状态未知",
+    })[status] || "状态未知";
+  }
+
   function renderToolActivity(body, message) {
     const events = Array.isArray(message?.toolEvents) ? message.toolEvents.slice(-6) : [];
     if (!events.length) return;
