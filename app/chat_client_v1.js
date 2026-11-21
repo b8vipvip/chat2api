@@ -915,6 +915,7 @@
       }
       const body = document.createElement("div");
       body.className = "message-body";
+      let nativeRendered = false;
       if (message.role === "user") {
         const text = messageText(message);
         if (text) {
@@ -980,7 +981,7 @@
         const nativeRenderer = window.Chat2APINativeRendererV1;
         const nativeSnapshot = message.requestId ? state.nativeSnapshots.get(message.requestId) : null;
         const messageReferences = referencesForMessage(message);
-        const nativeRendered = Boolean(nativeRenderer && typeof nativeRenderer.renderNativeSnapshot === "function" &&
+        nativeRendered = Boolean(nativeRenderer && typeof nativeRenderer.renderNativeSnapshot === "function" &&
           nativeSnapshot && nativeRenderer.renderNativeSnapshot(body,nativeSnapshot,messageReferences));
         if (!nativeRendered) {
           const renderer = window.Chat2APISafeRenderer;
