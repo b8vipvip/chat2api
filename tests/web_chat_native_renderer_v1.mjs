@@ -91,7 +91,11 @@ wrongMathAttributeScope.root.children[1].math_attrs = {stretchy:"true"};
 assert.equal(renderer.validateSnapshot(wrongMathAttributeScope),false);
 
 const renderedHost = new FakeElement("host");
-assert.equal(renderer.renderNativeSnapshot(renderedHost,good),true);
+assert.equal(renderer.renderNativeSnapshot(renderedHost,good,[
+  {id:"turn0search0",url:"https://docs.python.org/3/",title:"Python docs",snippet:"Official documentation"},
+  {id:"bad<script>",url:"https://evil.example/source",title:"Unsafe ID"},
+  {id:"turn0private",url:"https://127.0.0.1/private",title:"Private URL"},
+]),true);
 function findTag(node,tag) {
   if (node && node.tagName === tag) return node;
   for (const child of node?.childNodes || []) {
@@ -127,6 +131,19 @@ assert.equal(renderedLink.href,"https://example.org/citation");
 assert.equal(renderedLink.target,"_blank");
 assert.equal(renderedLink.rel,"noopener noreferrer nofollow");
 assert.equal(renderedLink.referrerPolicy,"no-referrer");
+function findAll(node,predicate,result=[]) {
+  if (predicate(node)) result.push(node);
+  for (const child of node?.childNodes || []) findAll(child,predicate,result);
+  return result;
+}
+const sourceCards = findAll(renderedHost,node=>node.className==="native-source-reference");
+assert.equal(sourceCards.length,1);
+assert.equal(sourceCards[0].href,"https://docs.python.org/3/");
+assert.equal(sourceCards[0].target,"_blank");
+assert.equal(sourceCards[0].rel,"noopener noreferrer nofollow");
+assert.equal(sourceCards[0].referrerPolicy,"no-referrer");
+assert.equal(sourceCards[0].childNodes[0].textContent,"[1] Python docs");
+assert.equal(sourceCards[0].childNodes[1].textContent,"Official documentation");
 const renderedAudio = findTag(renderedHost,"audio");
 const renderedVideo = findTag(renderedHost,"video");
 assert.ok(renderedAudio);
