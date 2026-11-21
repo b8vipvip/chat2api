@@ -155,11 +155,15 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
                 ext.send_json({"type": "image.progress", "kind": "voice-live", "request_id": request_id,
                                "live_event": "input.media.sent", "item_id": "media195",
                                "attachment_count": 999, "text": "看看这张图，用语音告诉我"})
-                assert live.receive_json()["type"] == "input_media.sent"
+                first_media_ack = live.receive_json()
+                assert first_media_ack["type"] == "input_media.sent"
+                assert first_media_ack["attachment_count"] == 1
                 ext.send_json({"type": "image.progress", "kind": "voice-live", "request_id": request_id,
                                "live_event": "input.media.sent", "item_id": "media195",
-                               "attachment_count": 999, "text": "看看这张图，用语音告诉我"})
-                assert live.receive_json()["type"] == "input_media.sent"
+                               "attachment_count": "not-a-number", "text": "看看这张图，用语音告诉我"})
+                duplicate_media_ack = live.receive_json()
+                assert duplicate_media_ack["type"] == "input_media.sent"
+                assert duplicate_media_ack["attachment_count"] == 0
                 # Invalid cross-key file must produce a per-input error, NOT
                 # a voice.live.stop or WebSocket disconnect.
                 live.send_json({"type": "input_media", "text": "私密文件", "attachments": [
