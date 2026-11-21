@@ -430,9 +430,8 @@ class FileStore:
                 try:
                     self.save_index()
                 except Exception:
-                    for item in candidates:
-                        if item.file_id in previous_pending:
-                            item.pending_delete = previous_pending[item.file_id]
+                    for file_id, was_pending in previous_pending.items():
+                        self.items[file_id].pending_delete = was_pending
                     raise
             if not candidates:
                 return 0
