@@ -456,7 +456,7 @@ def test_live_voice_malformed_control_frames_do_not_terminate_session(tmp_path: 
 
         row = app.state.telemetry.get(request_id)
         assert row["status"] == "error"
-        assert row["error"] is None
+        assert "without a completed response" in row["error"]
 
 
 def test_live_voice_requires_session_start_json_object(tmp_path: Path) -> None:
