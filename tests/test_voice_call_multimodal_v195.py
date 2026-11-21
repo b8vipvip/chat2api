@@ -149,7 +149,12 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
                 queued = live.receive_json()
                 assert queued["type"] == "input_media.queued"
                 ext.send_json({"type": "image.progress", "kind": "voice-live", "request_id": request_id,
-                               "live_event": "input.media.sent", "item_id": "media195", "attachment_count": 1})
+                               "live_event": "input.text.sent", "item_id": "media195",
+                               "text": "看看这张图，用语音告诉我"})
+                assert live.receive_json()["type"] == "input_text.sent"
+                ext.send_json({"type": "image.progress", "kind": "voice-live", "request_id": request_id,
+                               "live_event": "input.media.sent", "item_id": "media195",
+                               "attachment_count": 1, "text": "看看这张图，用语音告诉我"})
                 assert live.receive_json()["type"] == "input_media.sent"
                 # Invalid cross-key file must produce a per-input error, NOT
                 # a voice.live.stop or WebSocket disconnect.
@@ -166,11 +171,34 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
                 too_many = live.receive_json()
                 assert too_many["type"] == "error"
                 assert too_many["code"] == "INVALID_MEDIA_INPUT"
+                live.send_json({"type": "input_text", "text": "失败后重试", "item_id": "retry-item"})
+                failed_dispatch = ext.receive_json()
+                assert failed_dispatch["type"] == "voice.live.text"
+                assert live.receive_json()["type"] == "input_text.queued"
+                ext.send_json({"type": "image.progress", "kind": "voice-live", "request_id": request_id,
+                               "live_event": "input.error", "item_id": "retry-item",
+                               "message": "simulated composer failure"})
+                failed_input = live.receive_json()
+                assert failed_input["type"] == "error"
+                assert failed_input["code"] == "VOICE_CALL_INPUT_FAILED"
+
+                # The same item ID is reusable after an explicit Worker failure.
+                live.send_json({"type": "input_text", "text": "重试成功", "item_id": "retry-item"})
+                retry_dispatch = ext.receive_json()
+                assert retry_dispatch["type"] == "voice.live.text"
+                assert live.receive_json()["type"] == "input_text.queued"
+                ext.send_json({"type": "image.progress", "kind": "voice-live", "request_id": request_id,
+                               "live_event": "input.text.sent", "item_id": "retry-item", "text": "重试成功"})
+                assert live.receive_json()["type"] == "input_text.sent"
+
                 live.send_json({"type": "input_text", "text": "通话仍然在吗？", "item_id": "followup"})
                 after = ext.receive_json()
                 assert after["type"] == "voice.live.text"
                 assert after["text"] == "通话仍然在吗？"
                 assert live.receive_json()["type"] == "input_text.queued"
+                ext.send_json({"type": "image.progress", "kind": "voice-live", "request_id": request_id,
+                               "live_event": "input.text.sent", "item_id": "followup", "text": "通话仍然在吗？"})
+                assert live.receive_json()["type"] == "input_text.sent"
                 ext.send_json({"type": "image.progress", "kind": "voice-live", "request_id": request_id,
                                "live_event": "response.audio.delta", "response_id": "r195",
                                "pcm_base64": base64.b64encode(b"\x01\x02" * 800).decode()})
@@ -181,5 +209,6 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
         row = app.state.telemetry.get(request_id)
         assert row and row["request_type"] == "voice_call"
         assert row["diagnostics"]["attachments_confirmed"] == 1
+        assert row["diagnostics"]["input_confirmed_turns"] == 3
         assert row["input_file_ids"] == [file_a]
         assert row["diagnostics"]["audio_bytes"] == 1600
