@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from app.config import Settings
 from app.main import create_app
 from app.user_console_v104_patch import install_user_console_v104_patch
+from app.web_chat_integration_v1 import install_web_chat_features_v1
 
 
 def test_chat_client_stream_terminal_handling() -> None:
@@ -25,6 +26,7 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
     )
     app = create_app(settings)
     install_user_console_v104_patch(app)
+    install_web_chat_features_v1(app)
 
     with TestClient(app) as client:
         page = client.get("/chat")
