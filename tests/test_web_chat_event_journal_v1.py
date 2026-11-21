@@ -267,11 +267,25 @@ def test_worker_terminal_outbox_replays_across_two_server_instances(tmp_path):
             "request_id": request_id,
             "client_id": client_id,
             "api_key_id": key_id,
+            "api_key_name": "restart-owner",
+            "auth_kind": "managed",
+            "response_id": "resp_brokerrestart123",
             "requested_model": "gpt-5.6",
             "request_type": "web_chat",
             "web_chat_mode": True,
             "status": "running",
             "stream": True,
+            "prompt_mode": "auto",
+            "prompt_chars": 18,
+            "attachments_count": 0,
+            "usage": {
+                "prompt_tokens": 12,
+                "completion_tokens": 0,
+                "total_tokens": 12,
+                "estimated": True,
+                "estimator": "chat2api-heuristic-v1",
+            },
+            "timings": {},
             "diagnostics": {"route": "web-chat"},
         }))
         asyncio.run(app_before_restart.state.web_chat_event_journal.append_worker_event(
@@ -327,11 +341,18 @@ def test_worker_terminal_outbox_replays_across_two_server_instances(tmp_path):
             assert duplicate_ack["already_finalized"] is True
 
         recovered = app_after_restart.state.telemetry.get(request_id)
-        assert recovered["status"] == "stalled"
-        assert recovered["response_text_available"] is False
-        assert recovered["diagnostics"]["web_chat_terminal_replay_reconciled"] == "provisional-only"
+        assert recovered["status"] == "completed"
+        assert recovered["response_text_available"] is True
+        assert recovered["response_text"] == "full answer from durable Worker terminal outbox"
+        assert recovered["response_text_provisional"] == ""
+        assert recovered["diagnostics"]["web_chat_terminal_replay_reconciled"] == "full-finalization"
+        assert recovered["usage"]["prompt_tokens"] == 12
+        assert recovered["usage"]["completion_tokens"] > 0
+        assert recovered["usage"]["total_tokens"] == (
+            recovered["usage"]["prompt_tokens"] + recovered["usage"]["completion_tokens"]
+        )
         snapshot = asyncio.run(
             app_after_restart.state.web_chat_event_journal.snapshot(request_id, key_id)
         )
-        assert snapshot["terminal_status"] == "stalled"
-        assert snapshot["worker_partial_text"] == "full answer from durable Worker terminal outbox"
+        assert snapshot["terminal_status"] == "completed"
+        assert snapshot["delivered_text"] == "full answer from durable Worker terminal outbox"
