@@ -1353,18 +1353,17 @@
         arguments:"",output:"",
       };
       rows.push(row);
+    } else if (["completed","failed","cancelled"].includes(row.status)) {
+      // A terminal tool event is immutable: replayed calls or late retries
+      // must not change its status, output, IDs, or attached references.
+      return false;
     }
     row.toolName = toolName;
     if (callId) row.callId = callId;
     if (resultId) row.resultId = resultId;
     const nextStatus = normalizeToolStatus(event.status);
-    const terminal = ["completed","failed","cancelled"];
-    // Tool events can be replayed or arrive out of order. Once a terminal
-    // result is observed, a late call/retry cannot reopen that tool activity.
-    // Unknown metadata also cannot regress a known running state.
-    if (!terminal.includes(row.status) && nextStatus !== "unknown") {
-      row.status = nextStatus;
-    }
+    // Unknown metadata cannot regress a known running state or imply success.
+    if (nextStatus !== "unknown") row.status = nextStatus;
     if (typeof event.arguments === "string" && event.arguments) row.arguments = event.arguments.slice(0,1200);
     if (typeof event.output === "string" && event.output) row.output = event.output.slice(0,1200);
     const references = normalizeToolReferences(event.references);
