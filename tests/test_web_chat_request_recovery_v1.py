@@ -680,3 +680,40 @@ def test_long_lived_replay_revalidates_user_session_and_key_ownership(monkeypatc
 
         asyncio.run(asyncio.wait_for(consume(), timeout=2))
         assert len(calls) >= 2
+
+
+
+def test_recovery_prefers_longest_unverified_partial_across_worker_and_delivery_journals(tmp_path):
+    app = make_app(tmp_path)
+    request_id = "req_longpartial123"
+    with TestClient(app) as client:
+        user_id = register(client, "long-partial@example.org")
+        app.state.user_accounts.attach_key(user_id, "key_long_partial")
+        remember(
+            app, request_id, "key_long_partial",
+            status="recovering", web_chat_mode=True,
+            response_text_provisional="short provisional",
+        )
+        asyncio.run(app.state.web_chat_event_journal.append_delivery(
+            request_id, "key_long_partial", "short delivered",
+        ))
+        asyncio.run(app.state.web_chat_event_journal.append_worker_event(
+            request_id, "key_long_partial",
+            {"type": "chat.delta", "delta": "worker partial response is longer"},
+        ))
+
+        recovery = client.get(
+            f"/api/user/chat/requests/{request_id}/recovery"
+        )
+        assert recovery.status_code == 200
+        assert recovery.json()["partial_text"] == "worker partial response is longer"
+        assert recovery.json()["partial_text_unverified"] is True
+
+        asyncio.run(app.state.web_chat_event_journal.append_terminal(
+            request_id, "key_long_partial", "stalled", "worker lease expired",
+        ))
+        replay = client.get(f"/api/user/chat/requests/{request_id}/events")
+        assert replay.status_code == 200
+        assert '"partial_text":"worker partial response is longer"' in replay.text
+        assert "event: recovery.partial.snapshot" in replay.text
+        assert "event: delivery.stalled" in replay.text
