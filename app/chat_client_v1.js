@@ -240,8 +240,7 @@
       const callId = validId(callIdRaw) ? callIdRaw : "";
       const resultId = validId(resultIdRaw) ? resultIdRaw : "";
       if (!callId && !resultId) return null;
-      const statuses = ["running","completed","failed","cancelled"];
-      const status = statuses.includes(item.status) ? item.status : "completed";
+      const status = normalizeToolStatus(item.status);
       const normalized = {
         toolName, callId, resultId, status,
         arguments: typeof item.arguments === "string" ? item.arguments.slice(0,1200) : "",
@@ -1341,11 +1340,15 @@
   class StreamResponseError extends Error {}
 
   function normalizeToolStatus(value) {
-    const status = String(value || "").toLowerCase();
-    if (["running","in_progress","pending","streaming"].includes(status)) return "running";
-    if (["failed","error"].includes(status)) return "failed";
-    if (status === "cancelled") return "cancelled";
-    return "completed";
+    const status = String(value ?? "").trim().toLowerCase();
+    if (["running","in_progress","pending","streaming","queued","waiting",
+         "retrying","requires_action"].includes(status)) return "running";
+    if (["failed","error","errored","incomplete","timeout","timed_out",
+         "rejected"].includes(status)) return "failed";
+    if (["cancelled","canceled","aborted"].includes(status)) return "cancelled";
+    if (["completed","complete","succeeded","success","finished","done"].includes(status)) return "completed";
+    // Unknown upstream states must never be presented as successful completion.
+    return "unknown";
   }
 
   function applyToolEvent(assistant, event) {
