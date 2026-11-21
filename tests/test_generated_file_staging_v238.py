@@ -175,3 +175,19 @@ def test_prune_expires_incomplete_stage_not_restored_by_this_process(tmp_path):
             "SELECT COUNT(*) FROM generated_file_stages WHERE request_id=? AND upload_id=?",
             (request_id, UPID),
         ).fetchone()[0] == 0
+
+
+
+def test_persisted_stage_pruning_is_rate_limited(tmp_path, monkeypatch):
+    staging = GeneratedFileStaging(tmp_path)
+    original_db = staging._db
+    calls = {"count": 0}
+
+    def counted_db():
+        calls["count"] += 1
+        return original_db()
+
+    monkeypatch.setattr(staging, "_db", counted_db)
+    staging._prune()
+    staging._prune()
+    assert calls["count"] == 1
