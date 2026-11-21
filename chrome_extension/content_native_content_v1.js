@@ -180,9 +180,6 @@
     form:["prefix","infix","postfix"],
     numalign:["left","center","right"],denomalign:["left","center","right"],
     align:["top","bottom","center","baseline","axis","left","right"],
-    rowalign:["top","bottom","center","baseline","axis"],
-    columnalign:["left","center","right"],
-    groupalign:["left","center","right","decimalpoint"],
     frame:["none","solid","dashed"],side:["left","right"],
     encoding:["application/x-tex","application/mathml-presentation+xml",
       "application/mathml-content+xml","text/plain"],
@@ -197,7 +194,11 @@
     "thickmathspace","verythickmathspace","veryverythickmathspace",
   ]);
   const mathColor = /^(?:#[0-9a-f]{3,8}|rgba?\([0-9.,\s%]+\)|black|white|red|green|blue|gray|grey|transparent|currentColor)$/i;
-  const mathAlignList = new Set(["top","bottom","center","baseline","axis","left","right","decimalpoint"]);
+  const mathAlignValues = {
+    rowalign:new Set(["top","bottom","center","baseline","axis"]),
+    columnalign:new Set(["left","center","right"]),
+    groupalign:new Set(["left","center","right","decimalpoint"]),
+  };
   const mathNotation = new Set(["longdiv","actuarial","radical","box","roundedbox","circle",
     "left","right","top","bottom","updiagonalstrike","downdiagonalstrike",
     "verticalstrike","horizontalstrike","madruwb"]);
@@ -226,8 +227,8 @@
         mathSpaceNames.has(token) || mathLength.test(token)) ? raw : null;
     }
     if (["rowalign","columnalign","groupalign"].includes(key)) {
-      const tokens = raw.split(/\s+/);
-      return tokens.length <= 16 && tokens.every(token => mathAlignList.has(token)) ? raw : null;
+      const tokens = raw.split(/\s+/), allowed = mathAlignValues[key];
+      return tokens.length <= 16 && tokens.every(token => allowed.has(token)) ? raw : null;
     }
     if (key === "notation") {
       const tokens = raw.split(/\s+/);
