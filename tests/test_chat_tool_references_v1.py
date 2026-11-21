@@ -107,12 +107,11 @@ def test_extracts_search_results_references_and_sources_roots() -> None:
     ]
 
 
-def test_mode1_broker_extracts_forwarded_citation_roots_from_tool_metadata() -> None:
+def test_broker_extracts_forwarded_citation_roots_in_api_and_web_chat_modes() -> None:
     async def scenario() -> None:
         broker = RequestBroker()
         state = await broker.create("req_tool_refs_123", "worker-client")
-        state.mode1_web_chat = True
-        state.mode1_owner_key_id = "key-owner"
+        assert state.mode1_web_chat is False
 
         accepted = await broker.publish("req_tool_refs_123", {
             "type": "chat.tool.result",
