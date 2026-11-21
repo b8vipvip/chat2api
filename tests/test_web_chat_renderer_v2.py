@@ -94,6 +94,7 @@ renderer.renderMarkdown(citationHost,
     {id:"turn0search1",url:"https://example.org/second",title:"Second source"},
     {id:"bad<script>",url:"https://evil.example/source",title:"Invalid ID"},
     {id:"turn0http",url:"http://example.org/insecure",title:"Insecure"},
+    {id:"turn0private",url:"https://127.0.0.1/private",title:"Private"},
   ]);
 const citationNodes = all(citationHost);
 const citationLinks = citationNodes.filter(x => x.tag === "a" && x.className === "inline-citation");
@@ -102,6 +103,8 @@ assert.deepEqual(citationLinks.map(x => x.href),[
 ]);
 assert.deepEqual(citationLinks.map(x => x.textContent),["[1]","[2]"]);
 assert.equal(citationLinks[0].title,"Python docs");
+assert.equal(citationLinks[0].rel,"noopener noreferrer nofollow");
+assert.equal(citationLinks[0].referrerPolicy,"no-referrer");
 assert(!citationHost.textContent.includes(citeOpen));
 const unresolvedHost = new Element("root");
 renderer.renderMarkdown(unresolvedHost,"Missing "+citeOpen+"turn-missing"+citeClose,[]);
