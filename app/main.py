@@ -57,7 +57,7 @@ from .native_content_v1 import (NativeContentStore, NativeChunkAssembler, native
 from .native_dom_evidence_v1 import NativeDomEvidenceStore
 from .native_capture_audit_v281 import capture_comparison
 from .native_snapshot_finality_v282 import native_snapshot_finality, native_terminal_view
-from .media_public_origin_v187 import media_base_for_request
+from .media_public_origin_v187 import effective_media_base_url, media_base_for_request
 from .response_history_media_v188 import history_safe_response_text
 from .responses_multimodal_input_v183 import (
     attachment_specs as canonical_attachment_specs,
@@ -2018,6 +2018,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             and verified.get("delivered_text") == final_text
         )
 
+    def media_base_for_websocket(websocket: WebSocket) -> str:
+        base_url = str(websocket.base_url)
+        if base_url.startswith("ws://"):
+            base_url = "http://" + base_url[5:]
+        elif base_url.startswith("wss://"):
+            base_url = "https://" + base_url[6:]
+        return effective_media_base_url(
+            base_url,
+            websocket.headers.get("origin"),
+            config.public_url,
+        )
+
     async def finalize_replayed_chat_completion(
         websocket: WebSocket, recovered_row: dict[str, Any],
         message: dict[str, Any], client_id: str,
@@ -2087,7 +2099,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # after the full text has been archived into request-owned storage may
         # the API publish completed status and settle quota/wallet reservations.
         archived_text, media_items, file_items = await archive_verified_terminal(
-            state, candidate, owner, request_id, media_base_for_request(websocket),
+            state, candidate, owner, request_id, media_base_for_websocket(websocket),
         )
         completion_usage, token_meta = standard_usage("", archived_text)
         completion_tokens = completion_usage.get("completion_tokens")
