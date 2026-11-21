@@ -83,6 +83,29 @@ assert(katexCalls.some(x => x.tex === "\\sqrt{4}" && x.options.displayMode === t
 assert(katexCalls.every(x => x.options.trust === false && x.options.throwOnError === false
   && x.options.maxExpand === 1000 && x.options.maxSize === 20));
 assert(!nodes.some(x => x.className === "math-fallback"));
+const citeOpen = String.fromCharCode(0xE200) + "cite" + String.fromCharCode(0xE202);
+const citeSep = String.fromCharCode(0xE202);
+const citeClose = String.fromCharCode(0xE201);
+const citationHost = new Element("root");
+renderer.renderMarkdown(citationHost,
+  "Sources " + citeOpen + "turn0search0" + citeSep + "turn0search1" + citeClose,
+  [
+    {id:"turn0search0",url:"https://docs.python.org/3/",title:"Python docs"},
+    {id:"turn0search1",url:"https://example.org/second",title:"Second source"},
+    {id:"bad<script>",url:"https://evil.example/source",title:"Invalid ID"},
+    {id:"turn0http",url:"http://example.org/insecure",title:"Insecure"},
+  ]);
+const citationNodes = all(citationHost);
+const citationLinks = citationNodes.filter(x => x.tag === "a" && x.className === "inline-citation");
+assert.deepEqual(citationLinks.map(x => x.href),[
+  "https://docs.python.org/3/","https://example.org/second",
+]);
+assert.deepEqual(citationLinks.map(x => x.textContent),["[1]","[2]"]);
+assert.equal(citationLinks[0].title,"Python docs");
+assert(!citationHost.textContent.includes(citeOpen));
+const unresolvedHost = new Element("root");
+renderer.renderMarkdown(unresolvedHost,"Missing "+citeOpen+"turn-missing"+citeClose,[]);
+assert(all(unresolvedHost).some(x => x.className === "citation-unresolved"));
 const unclosedMath = new Element("root");
 renderer.renderMarkdown(unclosedMath,twoDollar + "\\nnot closed");
 assert(unclosedMath.textContent.includes(twoDollar));
