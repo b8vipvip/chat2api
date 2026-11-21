@@ -181,7 +181,9 @@ class WebChatEventJournal:
             self._append_records, request_id, owner_key_id,
             [("delivery.completed", {"text_chars": max(0, int(text_chars))})],
         )
-        return rows[0]
+        # A prior terminal (including this same completion) may already
+        # own the journal. Zero means no new terminal event was appended.
+        return rows[0] if rows else 0
 
     async def append_terminal(
         self, request_id: str, owner_key_id: str, status: str, message: str = "",
