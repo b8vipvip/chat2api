@@ -220,6 +220,12 @@ class WebChatEventJournal:
             if state is not None and str(state["owner_key_id"]) != owner_key_id:
                 connection.rollback()
                 raise PermissionError("Web Chat event request owner mismatch")
+            if state is not None and str(state["terminal_status"] or ""):
+                # The first durable delivery terminal is absorbing. Do not
+                # append late Worker retries, delivery chunks, or competing
+                # terminal markers after a client may have observed finality.
+                connection.rollback()
+                return []
             if state is None:
                 connection.execute(
                     """
