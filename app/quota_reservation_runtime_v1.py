@@ -461,6 +461,26 @@ def install_quota_reservation_runtime_v1(app: Any) -> Any:
         "/v1/responses#image_generation (delegated to Images executor)",
         "/v1/audio/speech",
         "/v1/audio/conversations",
+        "/v1/audio/realtime",
     ]
+
+    async def recover_quota_reservations_on_startup() -> None:
+        # Telemetry may have reached disk before its accounting callback ran.
+        # Recover both reserved and committing terminal rows before accepting
+        # new requests, then reconcile the idempotent API-key ledger.
+        try:
+            replayed = await store.recover_committing(telemetry, api_keys)
+            reconciled = store.reconcile(api_keys)
+        except Exception as error:
+            app.state.quota_reservation_recovery_status = "failed"
+            logger.exception("Quota reservation startup recovery failed")
+            raise RuntimeError("Quota reservation startup recovery failed") from error
+        app.state.quota_reservation_recovery_status = "ready"
+        app.state.quota_reservation_recovery_result = {
+            "replayed": int(replayed or 0),
+            "reconciled": int(reconciled or 0),
+        }
+
+    app.add_event_handler("startup", recover_quota_reservations_on_startup)
     app.state.quota_reservation_runtime_v1_installed = True
     return app
