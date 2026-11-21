@@ -295,6 +295,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
         pending_input_text: dict[str, str] = {}
         pending_input_media_ids: dict[str, list[str]] = {}
         confirmed_media_ids: set[str] = set()
+        confirmed_media_item_ids: set[str] = set()
         confirmed_input_ids: set[str] = set()
         observed_input_text_ids: set[str] = set()
 
@@ -377,7 +378,12 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                             if len(confirmed_input_ids) >= 512:
                                 confirmed_input_ids.clear()
                             confirmed_input_ids.add(item_id)
-                    observed_media_count += int(event.get("attachment_count") or 0)
+                    if not item_id or item_id not in confirmed_media_item_ids:
+                        observed_media_count += int(event.get("attachment_count") or 0)
+                        if item_id:
+                            if len(confirmed_media_item_ids) >= 512:
+                                confirmed_media_item_ids.clear()
+                            confirmed_media_item_ids.add(item_id)
                     confirmed_text = pending_input_text.pop(item_id, "") or str(event.get("text") or "").strip()
                     if confirmed_text and (not item_id or item_id not in observed_input_text_ids):
                         observed_prompt_parts.append(confirmed_text)
