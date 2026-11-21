@@ -47,18 +47,25 @@ const document = {
   createElement: tag => new Element(tag),
   createTextNode: text => new Element("#text", text)
 };
-const window = {};
+const katexCalls = [];
+const window = {katex: {render(tex, target, options) {
+  katexCalls.push({tex, options});
+  target.appendChild(new Element("span", "rendered:" + tex));
+}}};
 const navigator = {clipboard: {writeText: async () => {}}};
 vm.runInNewContext(src, {window, document, navigator, URL});
 const renderer = window.Chat2APISafeRenderer;
 assert(renderer);
 const host = new Element("root");
 const ticks = String.fromCharCode(96).repeat(3);
+const twoDollar = String.fromCharCode(36,36);
 renderer.renderMarkdown(host,
   "# Heading\n" +
   "<svg onload=alert(1)>raw</svg>\n" +
   "[unsafe](javascript:alert(1)) [safe](https://example.org/x)\n" +
-  "**bold** *italic* $x^2$\n" +
+  "**bold** *italic* $x^2$ and \\(y^2\\)\n" +
+  twoDollar + "\n\\frac{1}{2}\n" + twoDollar + "\n" +
+  "\\[\\sqrt{4}\\]\n" +
   "| a | b |\n| --- | --- |\n| 1 | 2 |\n" +
   ticks + "js\n<img src=x onerror=alert(1)>\n" + ticks + "\n");
 const all = node => [node, ...node.children.flatMap(all)];
@@ -67,7 +74,23 @@ assert(!nodes.some(x => ["script", "iframe", "svg", "img", "object", "style"].in
 assert(!nodes.some(x => x.tag === "a" && !x.href.startsWith("https://")));
 assert(nodes.some(x => x.tag === "a" && x.href === "https://example.org/x"));
 assert(nodes.some(x => x.tag === "table"));
-assert(nodes.some(x => x.tag === "code" && x.className === "math-fallback"));
+assert(nodes.some(x => x.tag === "span" && x.className === "math-inline"));
+assert(nodes.some(x => x.tag === "div" && x.className === "math-block"));
+assert(katexCalls.some(x => x.tex === "x^2" && x.options.displayMode === false));
+assert(katexCalls.some(x => x.tex === "y^2" && x.options.displayMode === false));
+assert(katexCalls.some(x => x.tex === "\\frac{1}{2}" && x.options.displayMode === true));
+assert(katexCalls.some(x => x.tex === "\\sqrt{4}" && x.options.displayMode === true));
+assert(katexCalls.every(x => x.options.trust === false && x.options.throwOnError === false
+  && x.options.maxExpand === 1000 && x.options.maxSize === 20));
+assert(!nodes.some(x => x.className === "math-fallback"));
+const unclosedMath = new Element("root");
+renderer.renderMarkdown(unclosedMath,twoDollar + "\\nnot closed");
+assert(unclosedMath.textContent.includes(twoDollar));
+assert(unclosedMath.textContent.includes("not closed"));
+const oversizedMath = new Element("root");
+renderer.renderRichBlocks(oversizedMath,[{type:"math",tex:"x".repeat(4097)}]);
+assert(all(oversizedMath).some(x => x.tag === "pre" && x.className === "math-fallback"));
+assert(oversizedMath.textContent.includes("[公式过长，未完整渲染]"));
 assert(host.textContent.includes("<svg onload=alert(1)>raw</svg>"));
 assert(host.textContent.includes("<img src=x onerror=alert(1)>"));
 const rich = new Element("root");
@@ -101,6 +124,12 @@ assert(rich.textContent.includes("unknown"));
 assert(rich.textContent.includes("文件附件：缺少有效文件引用"));
 assert(rich.textContent.includes("图片附件：缺少有效文件引用"));
 assert(rich.textContent.includes("此内容暂不支持安全预览"));
+assert(katexCalls.some(x => x.tex === "\\frac{1}{2}" && x.options.displayMode === true));
+const fallbackWindow = {};
+vm.runInNewContext(src, {window:fallbackWindow, document, navigator, URL});
+const fallback = new Element("root");
+fallbackWindow.Chat2APISafeRenderer.renderRichBlocks(fallback,[{type:"math",tex:"x+y"}]);
+assert(all(fallback).some(x => x.tag === "pre" && x.className === "math-fallback"));
 const empty = new Element("root");
 renderer.renderMarkdown(empty, "");
 renderer.renderRichBlocks(empty, null);

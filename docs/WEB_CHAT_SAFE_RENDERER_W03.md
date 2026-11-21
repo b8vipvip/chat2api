@@ -1,8 +1,9 @@
 # W-03 — Web Chat safe renderer v2
 
-Status: **standalone renderer module and security fixtures implemented; not yet
-wired into the production Web Chat page**. The structured rich-block API is an
-allowlisted UI contract only (not yet bound to native-content sidecars).
+Status: **safe renderer is loaded by the production Web Chat page; KaTeX
+0.19.1 is now self-hosted for bounded TeX rendering**. The structured rich-block
+API remains an allowlisted UI contract and is not yet fully bound to every
+native-content sidecar.
 
 ## Implementation
 
@@ -17,8 +18,38 @@ allowlisted UI contract only (not yet bound to native-content sidecars).
   without embedded credentials, use `noopener noreferrer` and disable referrers.
 - Safe Markdown subset: headings, paragraphs, emphasis, inline code, fenced
   code and copy, lists, tables, blockquotes, horizontal rules and links.
-- Math uses a text-only TeX fallback until a reviewed offline typesetting engine
-  is available; it is **not** mathematical formula rendering parity.
+- TeX math is rendered by the pinned KaTeX 0.19.1 browser engine, hosted
+  locally by the Chat2API server with its own CSS and font files. No third-party
+  CDN is contacted at runtime. The renderer supports inline `$...# W-03 — Web Chat safe renderer v2
+
+Status: **safe renderer is loaded by the production Web Chat page; KaTeX
+0.19.1 is now self-hosted for bounded TeX rendering**. The structured rich-block
+API remains an allowlisted UI contract and is not yet fully bound to every
+native-content sidecar.
+
+## Implementation
+
+- `app/chat_renderer_v2.js` contains the standalone allowlist renderer.
+- This PR deliberately does not modify `chat_client_v1.js`, `chat_client_v1.html`,
+  `user_console_v104_patch.py`, or `app.entry:app`: those shared integration
+  points are concurrently owned by the image attachment and storage work.
+- A later integration PR must load the renderer before the client under the
+  existing CSP and fail closed to plain text if the asset cannot load.
+- All output is built with explicit, fixed DOM constructors and `textContent`.
+  Raw upstream text is never interpreted as HTML. Links allow only HTTP(S)
+  without embedded credentials, use `noopener noreferrer` and disable referrers.
+- Safe Markdown subset: headings, paragraphs, emphasis, inline code, fenced
+  code and copy, lists, tables, blockquotes, horizontal rules and links.
+ and
+  `\\(...\\)`, plus display `$...$` and `\\[...\\]` delimiters and
+  structured `math` rich blocks. KaTeX runs with `trust: false`, bounded
+  expansion/size settings and a text-only fallback when its asset is absent.
+  Native MathML snapshots continue through the separate allowlisted MathML
+  renderer; KaTeX is not claimed to cover every LaTeX package or reproduce all
+  ChatGPT-specific UI components.
+- The MIT license is retained with the generated vendor distribution. Docker
+  builds and CI obtain the exact pinned npm package; source checkouts can run
+  `sh scripts/vendor_katex.sh` to generate the same local assets.
 - `renderRichBlocks(host, blocks)` supports safely named presentation types:
   text, code, math, citation, image, file, tool state, and unknown blocks.
   File blocks with a strictly validated `file_...` ID render a same-origin
@@ -33,10 +64,10 @@ allowlisted UI contract only (not yet bound to native-content sidecars).
 
 ## Excluded from this PR
 
-Image attachment upload (#793), authoritative native-rich-block attachment,
-file download, native snapshot finality, SSE resume, tool execution, plugins,
-full LaTeX/MathML, arbitrary HTML, third-party CDN/script loading and any
-change to Mode 2/Broker/Worker requests.
+Complete ChatGPT 1:1 component parity, full coverage of every LaTeX
+package, arbitrary HTML, third-party runtime CDN/script loading, tool execution,
+plugins, and any change to Mode 2/Broker/Worker request semantics. Native
+snapshot finality and durable SSE replay remain separate release gates.
 
 ## Validation
 

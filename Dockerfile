@@ -1,5 +1,18 @@
 # syntax=docker/dockerfile:1.7
 
+# KaTeX is pinned and packaged locally; Web Chat never loads math code/fonts
+# from a third-party CDN at runtime.
+FROM node:22-alpine AS katex-assets
+WORKDIR /tmp/katex
+RUN npm pack --ignore-scripts --silent katex@0.19.1 \
+    && mkdir -p /tmp/package /out/fonts \
+    && tar -xzf katex-0.19.1.tgz -C /tmp/package --strip-components=1 \
+    && cp /tmp/package/dist/katex.min.js /out/katex.min.js \
+    && cp /tmp/package/dist/katex-swap.min.css /out/katex.min.css \
+    && cp -R /tmp/package/dist/fonts/. /out/fonts/ \
+    && cp /tmp/package/LICENSE /out/LICENSE \
+    && printf '0.19.1\\n' > /out/VERSION
+
 FROM python:3.12-slim
 
 WORKDIR /app
@@ -33,6 +46,7 @@ RUN --mount=type=cache,id=chat2api-pip,target=/root/.cache/pip,sharing=locked \
     exit 1
 
 COPY app ./app
+COPY --from=katex-assets /out/ ./app/vendor/katex/
 COPY scripts/bootstrap_linux_worker.sh ./scripts/bootstrap_linux_worker.sh
 
 # Worker hosts no longer clone GitHub. Ship the exact worker payload in the
