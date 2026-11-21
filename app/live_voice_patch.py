@@ -756,10 +756,12 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 registry.busy_clients.discard(selected_client)
             if state is not None:
                 state.completed_mono = state.completed_mono or time.perf_counter()
+                # A completed response remains billable even if the browser
+                # disconnects later in the same live session. Only sessions
+                # with no completed response release their admission hold.
                 terminal_status = (
-                    "cancelled" if error_message == "client-disconnected" else
-                    "error" if error_message else
-                    "completed" if session_ready and observed_response_count else "error"
+                    "completed" if session_ready and observed_response_count else
+                    "cancelled" if error_message == "client-disconnected" else "error"
                 )
                 prompt_text = "\n".join(part for part in observed_prompt_parts if part).strip()
                 completion_text = "\n".join(part for part in observed_completion_parts if part).strip()
