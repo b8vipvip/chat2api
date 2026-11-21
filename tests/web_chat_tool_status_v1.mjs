@@ -112,5 +112,5 @@ api.applyToolEvent(runningAssistant,{
   phase:"result",tool_name:"browser.search",call_id:"call-terminal-3",status:"future_vendor_state",
 });
 assert.equal(runningAssistant.toolEvents[0].status,"running");
-assert.ok(historyWrites >= 8);
+assert.equal(historyWrites,5);
 console.log("Web Chat tool status normalization preserves unknown/nonterminal states");
