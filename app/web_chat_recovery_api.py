@@ -125,6 +125,16 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
             # A prior server process lost its in-memory Broker lease. Keep the
             # same request open briefly for the extension's durable terminal
             # outbox; never POST or dispatch a replacement generation.
+            # Worker deltas and already-delivered chunks are durable even when
+            # the Telemetry provisional projection was not written before the
+            # process exited. Expose them as explicitly unverified partial text
+            # so the reconnecting UI does not appear blank during the grace.
+            recovery_partial_text = str(
+                row.get("response_text_provisional")
+                or journal_snapshot.get("delivered_text")
+                or journal_snapshot.get("worker_partial_text")
+                or ""
+            )[:50_000]
             return {
                 "request_id": request_id,
                 "status": "recovering",
@@ -136,8 +146,9 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                 "last_event_id": last_event_id,
                 "response_text": "",
                 "response_text_available": False,
-                "partial_text": str(row.get("response_text_provisional") or "")[:50_000],
-                "partial_text_available": bool(row.get("response_text_provisional")),
+                "partial_text": recovery_partial_text,
+                "partial_text_available": bool(recovery_partial_text),
+                "partial_text_unverified": bool(recovery_partial_text),
                 "updated_at": updated_at,
             }
 
