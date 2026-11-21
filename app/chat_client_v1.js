@@ -1457,6 +1457,12 @@
       });
       return false;
     }
+    if (eventName === "recovery.partial.snapshot") {
+      if (event.partial_text_unverified === true && typeof event.partial_text === "string") {
+        assistant.content = event.partial_text.slice(0, MAX_MESSAGE_CHARS);
+      }
+      return false;
+    }
     if (eventName === "delivery.completed") {
       assistant.replayTerminalStatus = "completed";
       return true;
