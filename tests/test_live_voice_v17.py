@@ -499,3 +499,40 @@ def test_live_voice_requires_session_start_json_object(tmp_path: Path) -> None:
             response = live.receive_json()
             assert response["code"] == "INVALID_SESSION_START"
             assert response["retryable"] is False
+
+
+
+def test_realtime_session_token_is_invalidated_when_api_key_is_disabled(tmp_path: Path) -> None:
+    with TestClient(app_live(tmp_path)) as client:
+        managed_key = create_managed_key(client)
+        token_response = client.post(
+            "/v1/audio/realtime/sessions",
+            headers={"Authorization": f"Bearer {managed_key}"},
+        )
+        assert token_response.status_code == 200
+        token_path = token_response.json()["websocket_path"]
+
+        key_id = next(
+            key_id for key_id, item in client.app.state.api_keys.keys.items()
+            if item.prefix == managed_key[:20]
+        )
+        client.app.state.api_keys.keys[key_id].enabled = False
+
+        try:
+            with client.websocket_connect(token_path):
+                raise AssertionError("realtime token survived API key disable")
+        except Exception:
+            pass
+
+
+def test_realtime_session_token_issuance_is_bounded_per_api_key(tmp_path: Path) -> None:
+    with TestClient(app_live(tmp_path)) as client:
+        managed_key = create_managed_key(client)
+        headers = {"Authorization": f"Bearer {managed_key}"}
+        responses = [
+            client.post("/v1/audio/realtime/sessions", headers=headers)
+            for _ in range(9)
+        ]
+        assert [response.status_code for response in responses[:8]] == [200] * 8
+        assert responses[8].status_code == 429
+        assert responses[8].json()["detail"]["code"] == "realtime_session_limit"
