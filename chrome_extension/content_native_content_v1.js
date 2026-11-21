@@ -191,25 +191,25 @@
     "mathsize","width","height","depth","lspace","rspace","minsize","maxsize",
     "linethickness","subscriptshift","superscriptshift","minlabelspacing","voffset",
   ]);
-  const mathLength = /^(?:[+-]?(?:\\d{1,4}(?:\\.\\d{1,3})?|\\.\\d{1,3})(?:em|ex|px|pt|pc|in|cm|mm|%)|0)$/;
+  const mathLength = /^(?:[+-]?(?:\d{1,4}(?:\.\d{1,3})?|\.\d{1,3})(?:em|ex|px|pt|pc|in|cm|mm|%)|0)$/;
   const mathSpaceNames = new Set([
     "veryverythinmathspace","verythinmathspace","thinmathspace","mediummathspace",
     "thickmathspace","verythickmathspace","veryverythickmathspace",
   ]);
-  const mathColor = /^(?:#[0-9a-f]{3,8}|rgba?\\([0-9.,\\s%]+\\)|black|white|red|green|blue|gray|grey|transparent|currentColor)$/i;
+  const mathColor = /^(?:#[0-9a-f]{3,8}|rgba?\([0-9.,\s%]+\)|black|white|red|green|blue|gray|grey|transparent|currentColor)$/i;
   const mathAlignList = new Set(["top","bottom","center","baseline","axis","left","right","decimalpoint"]);
   const mathNotation = new Set(["longdiv","actuarial","radical","box","roundedbox","circle",
     "left","right","top","bottom","updiagonalstrike","downdiagonalstrike",
     "verticalstrike","horizontalstrike","madruwb"]);
   function safeMathAttr(tag,key,raw) {
     const local = mathAttrsByTag[tag] || [];
-    if (!mathGlobalAttrs.has(key) && !local.includes(key)) return "";
+    if (!mathGlobalAttrs.has(key) && !local.includes(key)) return null;
     if (typeof raw !== "string" || raw !== raw.trim() || raw.length > 160 ||
-        /[\\u0000-\\u001f\\u007f]/.test(raw)) return null;
+        /[\u0000-\u001f\u007f]/.test(raw)) return null;
     if (mathBooleanAttrs.has(key)) return ["true","false"].includes(raw) ? raw : null;
     if (mathEnums[key]) return mathEnums[key].includes(raw) ? raw : null;
     if (key === "scriptlevel") {
-      if (!/^[+-]?\\d{1,2}$/.test(raw)) return null;
+      if (!/^[+-]?\d{1,2}$/.test(raw)) return null;
       const number = Number(raw);
       return Number.isInteger(number) && number >= -10 && number <= 10 ? raw : null;
     }
@@ -220,26 +220,26 @@
       return mathLength.test(raw) ? raw : null;
     }
     if (["rowspacing","columnspacing","framespacing","columnwidth"].includes(key)) {
-      const tokens = raw.split(/\\s+/);
+      const tokens = raw.split(/\s+/);
       if (tokens.length < 1 || tokens.length > 16) return null;
       return tokens.every(token => token === "auto" || token === "fit" ||
         mathSpaceNames.has(token) || mathLength.test(token)) ? raw : null;
     }
     if (["rowalign","columnalign","groupalign"].includes(key)) {
-      const tokens = raw.split(/\\s+/);
+      const tokens = raw.split(/\s+/);
       return tokens.length <= 16 && tokens.every(token => mathAlignList.has(token)) ? raw : null;
     }
     if (key === "notation") {
-      const tokens = raw.split(/\\s+/);
+      const tokens = raw.split(/\s+/);
       return tokens.length >= 1 && tokens.length <= 8 && tokens.every(token => mathNotation.has(token)) ? raw : null;
     }
     if (key === "rowspan" || key === "columnspan") {
-      if (!/^\\d{1,3}$/.test(raw)) return null;
+      if (!/^\d{1,3}$/.test(raw)) return null;
       const number = Number(raw);
       return number >= 1 && number <= 256 ? raw : null;
     }
     if (key === "open" || key === "close" || key === "separators") {
-      return /^[^<>\\u0000-\\u001f\\u007f]{0,16}$/.test(raw) ? raw : null;
+      return /^[^<>\u0000-\u001f\u007f]{0,16}$/.test(raw) ? raw : null;
     }
     return null;
   }
