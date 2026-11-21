@@ -116,6 +116,12 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
         file_b = client.post("/v1/files", headers={"Authorization": f"Bearer {stranger}"},
                              json={"filename": "private.pdf", "mime_type": "application/pdf",
                                    "data_base64": base64.b64encode(b"fake-pdf").decode()}).json()["id"]
+        extra_files = [
+            client.post("/v1/files", headers={"Authorization": f"Bearer {token}"},
+                        json={"filename": f"extra-{index}.png", "mime_type": "image/png",
+                              "data_base64": base64.b64encode(f"image-{index}".encode()).decode()}).json()["id"]
+            for index in range(5)
+        ]
         request_id = "voicereq_testmultimodal195"
         with client.websocket_connect(f"/ws/extensions/{ext_id}?token={secret}") as ext:
             ext.receive_json()
@@ -153,6 +159,13 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
                 denied = live.receive_json()
                 assert denied["type"] == "error"
                 assert denied["code"] == "MEDIA_ACCESS_DENIED"
+                live.send_json({
+                    "type": "input_media", "text": "too many files",
+                    "attachments": [{"type": "input_file", "file_id": file_id} for file_id in extra_files],
+                })
+                too_many = live.receive_json()
+                assert too_many["type"] == "error"
+                assert too_many["code"] == "INVALID_MEDIA_INPUT"
                 live.send_json({"type": "input_text", "text": "通话仍然在吗？", "item_id": "followup"})
                 after = ext.receive_json()
                 assert after["type"] == "voice.live.text"
@@ -168,4 +181,5 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
         row = app.state.telemetry.get(request_id)
         assert row and row["request_type"] == "voice_call"
         assert row["diagnostics"]["attachments_confirmed"] == 1
+        assert row["input_file_ids"] == [file_a]
         assert row["diagnostics"]["audio_bytes"] == 1600
