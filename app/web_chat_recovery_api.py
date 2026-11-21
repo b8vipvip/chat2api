@@ -302,12 +302,12 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                         )[:50_000]
                         if partial_text:
                             yield (
-                                f"id: {sequence}\\nevent: recovery.partial.snapshot\\ndata: "
+                                f"id: {sequence}\nevent: recovery.partial.snapshot\ndata: "
                                 + json.dumps({
                                     "partial_text": partial_text,
                                     "partial_text_unverified": True,
                                 }, ensure_ascii=False, separators=(",", ":"))
-                                + "\\n\\n"
+                                + "\n\n"
                             )
                         recovery_partial_sent = True
                     if event_type in {"worker.delta", "worker.snapshot", "worker.terminal"}:
