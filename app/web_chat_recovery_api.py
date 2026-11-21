@@ -26,6 +26,15 @@ def _http_error(status_code: int, detail: str) -> None:
     raise HTTPException(status_code=status_code, detail=detail, headers=_PRIVATE_HEADERS)
 
 
+def _best_partial_text(*values: Any) -> str:
+    """Choose the longest bounded unverified candidate without concatenating streams."""
+    candidates = [
+        value[:50_000] for value in values
+        if isinstance(value, str) and value
+    ]
+    return max(candidates, key=len, default="")
+
+
 def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
     if getattr(app.state, "web_chat_recovery_api_installed", False):
         return app
@@ -100,12 +109,11 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
             # so the user can retain work after a process restart.
             partial_text = ""
             if status == "stalled":
-                partial_text = str(
-                    row.get("response_text_provisional")
-                    or journal_snapshot.get("delivered_text")
-                    or journal_snapshot.get("worker_partial_text")
-                    or ""
-                )[:50_000]
+                partial_text = _best_partial_text(
+                    row.get("response_text_provisional"),
+                    journal_snapshot.get("delivered_text"),
+                    journal_snapshot.get("worker_partial_text"),
+                )
             return {
                 "request_id": request_id,
                 "status": status,
@@ -129,12 +137,11 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
             # the Telemetry provisional projection was not written before the
             # process exited. Expose them as explicitly unverified partial text
             # so the reconnecting UI does not appear blank during the grace.
-            recovery_partial_text = str(
-                row.get("response_text_provisional")
-                or journal_snapshot.get("delivered_text")
-                or journal_snapshot.get("worker_partial_text")
-                or ""
-            )[:50_000]
+            recovery_partial_text = _best_partial_text(
+                row.get("response_text_provisional"),
+                journal_snapshot.get("delivered_text"),
+                journal_snapshot.get("worker_partial_text"),
+            )
             return {
                 "request_id": request_id,
                 "status": "recovering",
@@ -262,21 +269,26 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                 last_id = int(page.get("last_event_id") or 0)
                 if first_id is not None and cursor < int(first_id) - 1:
                     snapshot = await journal.snapshot(request_id, key_id)
+                    latest_row = telemetry.get(request_id) or {}
                     status_value = str(snapshot.get("terminal_status") or "")
                     if status_value == "completed":
                         payload = {
                             "status": "completed",
                             "terminal": True,
-                            "response_text": str(snapshot.get("delivered_text") or ""),
+                            "response_text": str(
+                                latest_row.get("response_text")
+                                or snapshot.get("delivered_text") or ""
+                            ),
                         }
                     elif status_value in {"stalled", "error", "cancelled"}:
                         payload = {
                             "status": status_value,
                             "terminal": True,
-                            "partial_text": str(
-                                snapshot.get("delivered_text")
-                                or snapshot.get("worker_partial_text") or ""
-                            )[:50_000],
+                            "partial_text": _best_partial_text(
+                                latest_row.get("response_text_provisional"),
+                                snapshot.get("delivered_text"),
+                                snapshot.get("worker_partial_text"),
+                            ),
                         }
                     else:
                         payload = {"status": "reset", "terminal": False}
@@ -312,10 +324,10 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                         # page so the user sees provisional progress while the
                         # durable Worker terminal outbox is being reconciled.
                         snapshot = await journal.snapshot(request_id, key_id)
-                        partial_text = str(
-                            snapshot.get("delivered_text")
-                            or snapshot.get("worker_partial_text") or ""
-                        )[:50_000]
+                        partial_text = _best_partial_text(
+                            snapshot.get("delivered_text"),
+                            snapshot.get("worker_partial_text"),
+                        )
                         if partial_text:
                             yield (
                                 f"id: {sequence}\nevent: recovery.partial.snapshot\ndata: "
@@ -334,11 +346,11 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                         latest_row = telemetry.get(request_id) or {}
                         payload = {
                             **payload,
-                            "partial_text": str(
-                                latest_row.get("response_text_provisional")
-                                or snapshot.get("delivered_text")
-                                or snapshot.get("worker_partial_text") or ""
-                            )[:50_000],
+                            "partial_text": _best_partial_text(
+                                latest_row.get("response_text_provisional"),
+                                snapshot.get("delivered_text"),
+                                snapshot.get("worker_partial_text"),
+                            ),
                         }
                     yield (
                         f"id: {sequence}\nevent: {event_type}\ndata: "
@@ -368,11 +380,11 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                         payload = {
                             "status": latest_status,
                             "terminal": True,
-                            "partial_text": str(
-                                latest.get("response_text_provisional")
-                                or snapshot.get("delivered_text")
-                                or snapshot.get("worker_partial_text") or ""
-                            )[:50_000],
+                            "partial_text": _best_partial_text(
+                                latest.get("response_text_provisional"),
+                                snapshot.get("delivered_text"),
+                                snapshot.get("worker_partial_text"),
+                            ),
                         }
                     yield (
                         f"id: {int(snapshot.get('last_event_id') or cursor)}"
@@ -385,10 +397,10 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                 state = broker.requests.get(request_id)
                 if latest_status == "running" and state is None:
                     snapshot = await journal.snapshot(request_id, key_id)
-                    partial_text = str(
-                        snapshot.get("delivered_text")
-                        or snapshot.get("worker_partial_text") or ""
-                    )[:50_000]
+                    partial_text = _best_partial_text(
+                        snapshot.get("delivered_text"),
+                        snapshot.get("worker_partial_text"),
+                    )
                     diagnostics = latest.get("diagnostics")
                     diagnostics = dict(diagnostics) if isinstance(diagnostics, dict) else {}
                     diagnostics.update({
