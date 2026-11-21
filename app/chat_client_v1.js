@@ -1338,14 +1338,15 @@
   }
 
   function applyToolEvent(assistant, event) {
-    if (!assistant || !event || !["call","result"].includes(event.phase)) return false;
+    if (!assistant || !event || typeof event !== "object") return false;
     const toolName = safeToolName(event.tool_name);
     const callId = String(event.call_id || "").slice(0,128);
     const resultId = String(event.result_id || "").slice(0,128);
-    if (!callId && !resultId) return false;
+    const validId = value => /^[A-Za-z0-9_.:-]{1,128}$/.test(value);
+    if (!validId(callId) && !validId(resultId)) return false;
     const rows = Array.isArray(assistant.toolEvents) ? assistant.toolEvents : [];
-    let row = rows.find(item => (callId && item.callId === callId)
-      || (resultId && item.resultId === resultId));
+    let row = rows.find(item => (callId && item.callId === callId) ||
+      (resultId && item.resultId === resultId));
     if (!row) {
       row = {
         toolName,callId,resultId:"",
@@ -1354,9 +1355,40 @@
       };
       rows.push(row);
     } else if (["completed","failed","cancelled"].includes(row.status)) {
-      // A terminal tool event is immutable: replayed calls or late retries
-      // must not change its status, output, IDs, or attached references.
-      return false;
+      // A terminal result cannot be reopened or overwritten by a replayed
+      // call/late retry. A first result may still enrich a terminal call event
+      // that carried no result ID/output (the stream sends those separately).
+      if (event.phase !== "result" || (row.resultId && resultId && row.resultId !== resultId)) {
+        return false;
+      }
+      let enriched = false;
+      if (!row.resultId && resultId) {
+        row.resultId = resultId;
+        enriched = true;
+      }
+      if (!row.arguments && typeof event.arguments === "string" && event.arguments) {
+        row.arguments = event.arguments.slice(0,1200);
+        enriched = true;
+      }
+      if (!row.output && typeof event.output === "string" && event.output) {
+        row.output = event.output.slice(0,1200);
+        enriched = true;
+      }
+      const references = normalizeToolReferences(event.references);
+      if (references.length) {
+        const previous = Array.isArray(row.references) ? row.references : [];
+        const merged = normalizeToolReferences([...previous, ...references]);
+        if (merged.length !== previous.length) {
+          row.references = merged;
+          enriched = true;
+        }
+      }
+      if (enriched) {
+        while (rows.length > 6) rows.shift();
+        assistant.toolEvents = rows;
+        saveHistory();
+      }
+      return enriched;
     }
     row.toolName = toolName;
     if (callId) row.callId = callId;
@@ -1374,10 +1406,6 @@
     assistant.toolEvents = rows;
     saveHistory();
     return true;
-  }
-
-  function toolStatusLabel(status) {
-    return ({running:"执行中",completed:"已完成",failed:"失败",cancelled:"已取消",unknown:"状态未知"})[status] || "状态未知";
   }
 
   function renderToolActivity(body, message) {
