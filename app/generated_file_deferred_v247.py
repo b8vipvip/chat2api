@@ -23,7 +23,7 @@ from .generated_files_v196 import (
     MAX_FILE_BYTES, MAX_INLINE_FILE_BYTES, MAX_TOTAL_BYTES,
 )
 
-PENDING_STAGE_PATH = re.compile(r"^pgen_[a-f0-9]{32}\\.(?:bin|part)$")
+PENDING_STAGE_PATH = re.compile(r"^pgen_[a-f0-9]{32}\.(?:bin|part)$")
 
 
 class FileStillProcessing(Exception):
