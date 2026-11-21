@@ -92,3 +92,15 @@ def test_gptauto_workflows_wake_on_review_transition_and_never_merge_draft():
     assert 'PR #$PR_NUMBER is still Draft; merge deferred until ready_for_review' in executor
     assert 'BLOCKED_REASON: ${{ steps.state.outputs.blocked-reason }}' in executor
     assert "pr_draft_waiting_for_review" in executor
+
+
+def test_gptauto_executor_preserves_mainline_repair_without_pr_context():
+    executor = (ROOT / ".github" / "workflows" / "gptauto-executor.yml").read_text(encoding="utf-8")
+
+    no_pr_guard = executor.index('if [[ -z "$PR_NUMBER" ]]; then')
+    pr_comment = executor.index('gh pr comment "$PR_NUMBER"', no_pr_guard)
+    assert no_pr_guard < pr_comment
+    assert 'echo "pr-unavailable=true" >> "$GITHUB_OUTPUT"' in executor
+    assert "gptauto-mainline-repair-${{ steps.state.outputs.task-id }}" in executor
+    assert "steps.state.outputs.pr-number != ''" in executor
+    assert "preserving repair request artifact and keeping the Completion Lease active" in executor
