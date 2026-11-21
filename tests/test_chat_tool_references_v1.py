@@ -52,3 +52,38 @@ def test_normalizes_persisted_references_with_deduplication_and_bounds() -> None
     assert len(references) == 1
     assert references[0]["title"] == "A Source"
     assert len(references[0]["snippet"]) == 420
+
+
+def test_extracts_search_results_references_and_sources_roots() -> None:
+    metadata = {
+        "search_results": [{
+            "title": "Search result",
+            "url": "https://search.example.org/a",
+        }],
+        "references": [{
+            "name": "Reference",
+            "href": "https://docs.example.org/reference",
+        }],
+        "sources": [{
+            "source_name": "Source",
+            "safe_url": "https://source.example.org/item",
+        }],
+    }
+
+    assert extract_tool_references(metadata) == [
+        {
+            "url": "https://search.example.org/a",
+            "title": "Search result",
+            "snippet": "",
+        },
+        {
+            "url": "https://docs.example.org/reference",
+            "title": "Reference",
+            "snippet": "",
+        },
+        {
+            "url": "https://source.example.org/item",
+            "title": "Source",
+            "snippet": "",
+        },
+    ]
