@@ -29,6 +29,7 @@ MAX_REALTIME_SESSION_TOKENS = 4096
 MAX_REALTIME_SESSION_TOKENS_PER_KEY = 8
 LIVE_CAPACITY_WEIGHT = 2
 MAX_LIVE_PCM_FRAME_BYTES = 64 * 1024
+MAX_LIVE_ATTACHMENTS_PER_INPUT = 4
 MAX_LIVE_CONTROL_CHARS = 64 * 1024
 
 
@@ -669,6 +670,10 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     try:
                         file_ids = _media_ids_from_control(control)
                         attachments = attachment_specs(file_store, file_ids, principal)
+                        if len(attachments) > MAX_LIVE_ATTACHMENTS_PER_INPUT:
+                            raise ValueError(
+                                f"A Live media message may attach at most {MAX_LIVE_ATTACHMENTS_PER_INPUT} files"
+                            )
                         for spec in attachments:
                             mime = str(spec.get("mime_type") or "").lower()
                             allowed = (
