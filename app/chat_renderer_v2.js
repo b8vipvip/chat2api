@@ -141,7 +141,8 @@
       link.href = reference.url;
       link.title = reference.title || reference.url;
       link.target = "_blank";
-      link.rel = "noopener noreferrer";
+      link.rel = "noopener noreferrer nofollow";
+      link.referrerPolicy = "no-referrer";
       parent.appendChild(link);
     });
   }
