@@ -293,6 +293,8 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
         observed_prompt_parts: list[str] = []
         observed_completion_parts: list[str] = []
         pending_input_text: dict[str, str] = {}
+        pending_input_media_ids: dict[str, list[str]] = {}
+        confirmed_media_ids: set[str] = set()
         confirmed_input_ids: set[str] = set()
         observed_input_text_ids: set[str] = set()
 
@@ -308,7 +310,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 await websocket.send_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
 
         async def relay_extension_events() -> None:
-            nonlocal finished, observed_audio_bytes, observed_response_count, observed_media_count, input_confirmed, session_ready, error_message
+            nonlocal finished, observed_audio_bytes, observed_response_count, observed_media_count, input_confirmed, session_ready, error_message, observed_media_ids
             assert state is not None
             text_by_response: dict[str, str] = {}
             while not finished:
@@ -368,6 +370,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     })
                 elif event_type == "input.media.sent":
                     item_id = str(event.get("item_id") or "")
+                    confirmed_media_ids.update(pending_input_media_ids.pop(item_id, []))
                     if not item_id or item_id not in confirmed_input_ids:
                         input_confirmed += 1
                         if item_id:
@@ -390,6 +393,31 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 elif event_type == "input.error":
                     failed_item_id = str(event.get("item_id") or "")
                     pending_input_text.pop(failed_item_id, None)
+                    failed_media_ids = pending_input_media_ids.pop(failed_item_id, [])
+                    if failed_media_ids:
+                        remaining_pending_ids = {
+                            file_id
+                            for values in pending_input_media_ids.values()
+                            for file_id in values
+                        }
+                        keep_media_ids = confirmed_media_ids | remaining_pending_ids
+                        updated_media_ids = [
+                            file_id for file_id in observed_media_ids
+                            if file_id in keep_media_ids
+                        ]
+                        if updated_media_ids != observed_media_ids:
+                            observed_media_ids[:] = updated_media_ids
+                            try:
+                                await telemetry.upsert({
+                                    "request_id": request_id,
+                                    "input_file_ids": updated_media_ids,
+                                    "attachments_count": len(updated_media_ids),
+                                })
+                            except Exception as rollback_error:
+                                logger.warning(
+                                    "Live media grant rollback deferred request_id=%s item_id=%s error_type=%s",
+                                    request_id, failed_item_id, type(rollback_error).__name__,
+                                )
                     await send_json({
                         "type": "error", "code": "VOICE_CALL_INPUT_FAILED",
                         "item_id": failed_item_id,
@@ -764,6 +792,10 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                             continue
                         observed_media_ids = next_media_ids
                         attachments = request_scoped_attachments
+                        pending_input_media_ids[item_id] = [
+                            str(spec.get("file_id") or "") for spec in attachments
+                            if spec.get("file_id")
+                        ]
                     pending_input_text[item_id] = input_text
                     await registry.send(selected_client, {
                         "type": "voice.live.multimodal" if attachments else "voice.live.text",
@@ -868,6 +900,11 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 prompt_text = "\n".join(part for part in observed_prompt_parts if part).strip()
                 completion_text = "\n".join(part for part in observed_completion_parts if part).strip()
                 usage_estimate = usage_for(prompt_text, completion_text)
+                confirmed_file_ids = [
+                    file_id for file_id in observed_media_ids
+                    if file_id in confirmed_media_ids
+                ]
+                observed_media_ids[:] = confirmed_file_ids
                 terminal_record = {
                     "request_id": request_id,
                     "response_id": session_id,
@@ -891,6 +928,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         "estimator": usage_estimate.estimator,
                     },
                     "attachments_count": observed_media_count,
+                    "input_file_ids": confirmed_file_ids,
                     "audio_bytes": observed_audio_bytes,
                     "input_audio_bytes": observed_input_audio_bytes,
                     "diagnostics": {
