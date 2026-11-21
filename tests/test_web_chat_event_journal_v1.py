@@ -302,6 +302,21 @@ def test_worker_terminal_outbox_replays_across_two_server_instances(tmp_path):
         assert recovering["status"] == "recovering"
         assert recovering["diagnostics"]["web_chat_request_recovery"] == "awaiting-worker-terminal-replay"
         assert recovering["response_text_provisional"] == "partial before restart"
+        final_text = "full answer from durable Worker terminal outbox " + ("x" * 1_100_000)
+
+        # Model a crash between the completed telemetry append and its
+        # accounting callback. The retry must settle the same request_id once
+        # and only then ACK the durable Worker outbox.
+        original_accounting = app_after_restart.state.telemetry.usage_accounting
+        accounting_failures_remaining = {"count": 2}
+
+        async def fail_first_two_completed_accounting(record):
+            if record.get("status") == "completed" and accounting_failures_remaining["count"] > 0:
+                accounting_failures_remaining["count"] -= 1
+                raise RuntimeError("simulated usage ledger write interruption")
+            await original_accounting(record)
+
+        app_after_restart.state.telemetry.usage_accounting = fail_first_two_completed_accounting
 
         with second_server.websocket_connect(
             f"/ws/extensions/{client_id}?token={worker_token}",
@@ -310,7 +325,7 @@ def test_worker_terminal_outbox_replays_across_two_server_instances(tmp_path):
             worker.send_json({
                 "type": "chat.completed",
                 "request_id": request_id,
-                "text": "full answer from durable Worker terminal outbox",
+                "text": final_text,
                 "diagnostics": {
                     "worker_transport_replayed": True,
                     "worker_transport_recovery": "transport-outbox-v47",
@@ -321,15 +336,15 @@ def test_worker_terminal_outbox_replays_across_two_server_instances(tmp_path):
                 "type": "chat.terminal.ack",
                 "request_id": request_id,
                 "terminal_type": "chat.completed",
-                "accepted": True,
-                "recovered": True,
+                "accepted": False,
+                "reason": "terminal_finalization_retryable",
             }
             # Simulate the first ACK being lost on the network. The durable
             # replay projection must recognize this exact same Worker event.
             worker.send_json({
                 "type": "chat.completed",
                 "request_id": request_id,
-                "text": "full answer from durable Worker terminal outbox",
+                "text": final_text,
                 "diagnostics": {
                     "worker_transport_replayed": True,
                     "worker_transport_recovery": "transport-outbox-v47",
@@ -339,13 +354,15 @@ def test_worker_terminal_outbox_replays_across_two_server_instances(tmp_path):
             assert duplicate_ack["accepted"] is True
             assert duplicate_ack["terminal_type"] == "chat.completed"
             assert duplicate_ack["already_finalized"] is True
+            recovered = app_after_restart.state.telemetry.get(request_id)
             charged = app_after_restart.state.api_keys.keys[key_id].charged_requests
             assert charged[request_id] == recovered["usage"]["total_tokens"]
+            assert accounting_failures_remaining["count"] == 0
 
         recovered = app_after_restart.state.telemetry.get(request_id)
         assert recovered["status"] == "completed"
         assert recovered["response_text_available"] is True
-        assert recovered["response_text"] == "full answer from durable Worker terminal outbox"
+        assert recovered["response_text"] == final_text
         assert recovered["response_text_provisional"] == ""
         assert recovered["diagnostics"]["web_chat_terminal_replay_reconciled"] == "full-finalization"
         assert recovered["usage"]["prompt_tokens"] == 12
@@ -357,4 +374,4 @@ def test_worker_terminal_outbox_replays_across_two_server_instances(tmp_path):
             app_after_restart.state.web_chat_event_journal.snapshot(request_id, key_id)
         )
         assert snapshot["terminal_status"] == "completed"
-        assert snapshot["delivered_text"] == "full answer from durable Worker terminal outbox"
+        assert snapshot["delivered_text"] == final_text
