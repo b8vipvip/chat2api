@@ -275,6 +275,9 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                     cursor = int(first_id) - 1
 
                 events = page.get("events") if isinstance(page.get("events"), list) else []
+                latest_row = telemetry.get(request_id) or {}
+                recovering_after_restart = str(latest_row.get("status") or "").lower() == "recovering"
+                recovery_partial_sent = False
                 for item in events:
                     sequence = int(item.get("id") or 0)
                     if sequence <= cursor:
@@ -282,6 +285,31 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                     cursor = sequence
                     event_type = str(item.get("type") or "")
                     payload = item.get("data") if isinstance(item.get("data"), dict) else {}
+                    if (
+                        recovering_after_restart and not recovery_partial_sent
+                        and event_type in {"worker.delta", "worker.snapshot", "worker.terminal"}
+                    ):
+                        # Worker-side events were intentionally not replayed as
+                        # user-visible content during normal delivery. After a
+                        # process restart, however, the browser has no live
+                        # Broker stream. Send one bounded journal snapshot per
+                        # page so the user sees provisional progress while the
+                        # durable Worker terminal outbox is being reconciled.
+                        snapshot = await journal.snapshot(request_id, key_id)
+                        partial_text = str(
+                            snapshot.get("delivered_text")
+                            or snapshot.get("worker_partial_text") or ""
+                        )[:50_000]
+                        if partial_text:
+                            yield (
+                                f"id: {sequence}\\nevent: recovery.partial.snapshot\\ndata: "
+                                + json.dumps({
+                                    "partial_text": partial_text,
+                                    "partial_text_unverified": True,
+                                }, ensure_ascii=False, separators=(",", ":"))
+                                + "\\n\\n"
+                            )
+                        recovery_partial_sent = True
                     if event_type in {"worker.delta", "worker.snapshot", "worker.terminal"}:
                         event_type = "cursor"
                         payload = {}
