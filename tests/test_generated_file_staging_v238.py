@@ -64,9 +64,9 @@ def test_stage_rejects_incorrect_order_and_bad_digest(tmp_path):
     with pytest.raises(ValueError):
         staging.ingest(**kw,sequence=0)
     with pytest.raises(ValueError):
-        staging.read("req_bad",UPID,"other.xlsx")
+        staging.read("req_bad",UPID,"other.xlsx",owner_key_id="owner")
     with pytest.raises(ValueError):
-        staging.read("req_other",UPID,"budget.xlsx")
+        staging.read("req_other",UPID,"budget.xlsx",owner_key_id="owner")
     with pytest.raises(ValueError):
         push(staging,"req_corrupt",data,digest="0"*64)
 
@@ -120,7 +120,7 @@ def test_restart_promotes_fully_written_stage_and_discards_partial_or_corrupt_fi
 
 def test_startup_does_not_delete_another_process_incomplete_stage(tmp_path):
     first_process = GeneratedFileStaging(tmp_path)
-    payload = b"PK\\x03\\x04" + b"partial-stage" * (MAX_CHUNK_BYTES // 13 + 20)
+    payload = b"PK\x03\x04" + b"partial-stage" * (MAX_CHUNK_BYTES // 13 + 20)
     digest = hashlib.sha256(payload).hexdigest()
     chunks = [payload[i:i + MAX_CHUNK_BYTES] for i in range(0, len(payload), MAX_CHUNK_BYTES)]
     push(first_process, "req_live_upload", payload, complete=False)
