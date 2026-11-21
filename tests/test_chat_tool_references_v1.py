@@ -10,6 +10,7 @@ def test_extracts_bounded_public_citations_from_supported_metadata_roots() -> No
             {
                 "title": "Python library reference",
                 "snippet": "Official language documentation",
+                "ref_id": "turn0search0",
                 "safe_urls": ["https://docs.python.org/3/library/"],
             },
             {"title": "Credential URL", "url": "https://user:secret@example.org/private"},
@@ -21,6 +22,7 @@ def test_extracts_bounded_public_citations_from_supported_metadata_roots() -> No
             "entries": [{
                 "title": "Second source",
                 "url": "https://example.org/reference",
+                "citation_id": "turn0search1",
                 "description": "A public source.",
             }],
         }],
@@ -33,11 +35,13 @@ def test_extracts_bounded_public_citations_from_supported_metadata_roots() -> No
         {
             "url": "https://docs.python.org/3/library/",
             "title": "Python library reference",
+            "id": "turn0search0",
             "snippet": "Official language documentation",
         },
         {
             "url": "https://example.org/reference",
             "title": "Second source",
+            "id": "turn0search1",
             "snippet": "A public source.",
         },
     ]
@@ -45,8 +49,8 @@ def test_extracts_bounded_public_citations_from_supported_metadata_roots() -> No
 
 def test_normalizes_persisted_references_with_deduplication_and_bounds() -> None:
     references = normalize_tool_references([
-        {"url": "https://example.org/a", "title": "  A\nSource  ", "snippet": "x" * 900},
-        {"url": "https://example.org/a", "title": "Duplicate"},
+        {"id": "turn0search0", "url": "https://example.org/a", "title": "  A\nSource  ", "snippet": "x" * 900},
+        {"id": "turn0search0", "url": "https://example.org/duplicate", "title": "Duplicate"},
         {"url": "https://chatgpt.com/c/123456789012", "title": "Session"},
         {"url": "https://192.168.1.10/private", "title": "Private"},
         {"url": "javascript:alert(1)", "title": "Active"},
@@ -54,7 +58,18 @@ def test_normalizes_persisted_references_with_deduplication_and_bounds() -> None
 
     assert len(references) == 1
     assert references[0]["title"] == "A Source"
+    assert references[0]["id"] == "turn0search0"
     assert len(references[0]["snippet"]) == 420
+    invalid_id = normalize_tool_references([{
+        "id": "turn0search0<script>",
+        "url": "https://example.org/source",
+        "title": "Source",
+    }])
+    assert invalid_id == [{
+        "url": "https://example.org/source",
+        "title": "Source",
+        "snippet": "",
+    }]
 
 
 def test_extracts_search_results_references_and_sources_roots() -> None:
@@ -92,12 +107,11 @@ def test_extracts_search_results_references_and_sources_roots() -> None:
     ]
 
 
-def test_mode1_broker_extracts_forwarded_citation_roots_from_tool_metadata() -> None:
+def test_broker_extracts_forwarded_citation_roots_for_web_chat_mode() -> None:
     async def scenario() -> None:
         broker = RequestBroker()
         state = await broker.create("req_tool_refs_123", "worker-client")
         state.mode1_web_chat = True
-        state.mode1_owner_key_id = "key-owner"
 
         accepted = await broker.publish("req_tool_refs_123", {
             "type": "chat.tool.result",
@@ -110,6 +124,7 @@ def test_mode1_broker_extracts_forwarded_citation_roots_from_tool_metadata() -> 
                 "search_results": [{
                     "title": "Search result",
                     "url": "https://search.example.org/a",
+                    "citation_id": "turn0search0",
                 }],
                 "references": [{
                     "name": "Reference",
@@ -129,6 +144,7 @@ def test_mode1_broker_extracts_forwarded_citation_roots_from_tool_metadata() -> 
                 "url": "https://search.example.org/a",
                 "title": "Search result",
                 "snippet": "",
+                "id": "turn0search0",
             },
             {
                 "url": "https://docs.example.org/reference",
@@ -141,5 +157,31 @@ def test_mode1_broker_extracts_forwarded_citation_roots_from_tool_metadata() -> 
                 "snippet": "",
             },
         ]
+
+    asyncio.run(scenario())
+
+
+def test_broker_does_not_forward_web_chat_citations_to_mode2_sdk_events() -> None:
+    async def scenario() -> None:
+        broker = RequestBroker()
+        state = await broker.create("req_tool_refs_mode2", "worker-client")
+        assert state.mode1_web_chat is False
+        accepted = await broker.publish("req_tool_refs_mode2", {
+            "type": "chat.tool.result",
+            "tool_name": "browser.search",
+            "call_id": "call-mode2",
+            "status": "completed",
+            "output": "Found sources",
+            "metadata": {
+                "search_results": [{
+                    "title": "Search result",
+                    "url": "https://search.example.org/a",
+                    "citation_id": "turn0search0",
+                }],
+            },
+        })
+        assert accepted is True
+        event = await state.queue.get()
+        assert "references" not in event
 
     asyncio.run(scenario())

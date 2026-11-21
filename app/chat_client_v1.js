@@ -195,7 +195,10 @@
           || !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(host)) return null;
       if (typeof window !== "undefined" && window.location
           && url.origin === window.location.origin) return null;
+      const rawId = typeof value.id === "string" ? value.id.trim().slice(0,128) : "";
+      const referenceId = /^[A-Za-z0-9_.:-]{1,128}$/.test(rawId) ? rawId : "";
       return {
+        ...(referenceId ? {id:referenceId} : {}),
         url: url.href,
         title: cleanToolReferenceText(value.title, 180) || host,
         snippet: cleanToolReferenceText(value.snippet, 420),
@@ -210,11 +213,20 @@
     const seen = new Set(), rows = [];
     value.slice(0,32).forEach(item => {
       const reference = safeToolReference(item);
-      if (!reference || seen.has(reference.url)) return;
-      seen.add(reference.url);
+      if (!reference) return;
+      const identity = reference.id ? "id:" + reference.id : "url:" + reference.url;
+      if (seen.has(identity)) return;
+      seen.add(identity);
       rows.push(reference);
     });
     return rows.slice(0,8);
+  }
+
+  function referencesForMessage(message) {
+    const events = Array.isArray(message?.toolEvents) ? message.toolEvents : [];
+    return normalizeToolReferences(events.flatMap(item =>
+      Array.isArray(item?.references) ? item.references : []
+    ));
   }
 
   function normalizeToolEvents(value, role) {
@@ -971,7 +983,9 @@
           nativeSnapshot && nativeRenderer.renderNativeSnapshot(body,nativeSnapshot));
         if (!nativeRendered) {
           const renderer = window.Chat2APISafeRenderer;
-          if (renderer && typeof renderer.renderMarkdown === "function") renderer.renderMarkdown(body,message.content);
+          if (renderer && typeof renderer.renderMarkdown === "function") {
+            renderer.renderMarkdown(body,message.content,referencesForMessage(message));
+          }
           else body.textContent = message.content;
         }
       }
@@ -1409,15 +1423,16 @@
   }
 
   function toolStatusLabel(status) {
-    return ({
-      running:"执行中",completed:"已完成",failed:"失败",
-      cancelled:"已取消",unknown:"状态未知",
-    })[status] || "状态未知";
+    return ({running:"执行中",completed:"已完成",failed:"失败",cancelled:"已取消"})[status] || "状态未知";
   }
 
   function renderToolActivity(body, message) {
     const events = Array.isArray(message?.toolEvents) ? message.toolEvents.slice(-6) : [];
     if (!events.length) return;
+    const messageReferences = referencesForMessage(message);
+    const referenceNumbers = new Map(messageReferences.map((reference,index) => [
+      reference.id ? "id:" + reference.id : "url:" + reference.url, index + 1,
+    ]));
     const section = document.createElement("section");
     section.className = "message-tool-events";
     events.forEach(item => {
@@ -1453,7 +1468,10 @@
           link.rel = "noopener noreferrer nofollow";
           link.referrerPolicy = "no-referrer";
           const title = document.createElement("strong");
-          title.textContent = reference.title;
+          const referenceNumber = referenceNumbers.get(
+            reference.id ? "id:" + reference.id : "url:" + reference.url
+          );
+          title.textContent = (referenceNumber ? "[" + referenceNumber + "] " : "") + reference.title;
           link.appendChild(title);
           if (reference.snippet) {
             const snippet = document.createElement("span");

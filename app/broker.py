@@ -657,6 +657,8 @@ class RequestBroker:
             }
             if result_id:
                 normalized["result_id"] = result_id
+            # Citation metadata is attached only to the Web Chat presentation
+            # lane. Ordinary Mode 2 SDK streams must not receive UI-only sources.
             if state.mode1_web_chat:
                 references = extract_tool_references(event.get("metadata"))
                 if references:

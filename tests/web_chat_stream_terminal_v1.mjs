@@ -147,7 +147,7 @@ test("preserves request-scoped tool calls and results as safe presentation state
     phase: "call", tool_name: "browser.search", call_id: "call-123",
     status: "running", arguments: '{"query":"test"}',
     references: [
-      {url:"https://docs.python.org/3/library/",title:"Python docs",snippet:"Official reference"},
+      {id:"turn0search0",url:"https://docs.python.org/3/library/",title:"Python docs",snippet:"Official reference"},
       {url:"javascript:alert(1)",title:"Unsafe"},
       {url:"https://127.0.0.1/private",title:"Private"},
     ],
@@ -155,7 +155,7 @@ test("preserves request-scoped tool calls and results as safe presentation state
   assert.equal(assistant.toolEvents.length, 1);
   assert.equal(assistant.toolEvents[0].status, "running");
   assert.deepEqual(JSON.parse(JSON.stringify(assistant.toolEvents[0].references)), [{
-    url:"https://docs.python.org/3/library/",title:"Python docs",snippet:"Official reference",
+    id:"turn0search0",url:"https://docs.python.org/3/library/",title:"Python docs",snippet:"Official reference",
   }]);
 
   api.consumeSseFrame(frame({
@@ -186,6 +186,7 @@ test("preserves request-scoped tool calls and results as safe presentation state
   assert.ok(referenceBox);
   const referenceLink = referenceBox.children.find(node => node.tag === "a");
   assert.equal(referenceLink.href, "https://docs.python.org/3/library/");
+  assert.equal(referenceLink.children[0].textContent, "[1] Python docs");
   assert.equal(referenceLink.rel, "noopener noreferrer nofollow");
   assert.equal(referenceLink.referrerPolicy, "no-referrer");
 
