@@ -213,12 +213,31 @@ jobs:
           request=".gptauto/repair-requests/$TASK_ID.json"
           jq -n --arg task "$TASK_ID" --arg run "$FAILED_RUN_ID" --arg pr "$PR_NUMBER" \
             '{kind:"repair_request",task_id:$task,run_id:$run,pr_number:$pr,status:"open",repair_owner:"repair_pipeline"}' > "$request"
+          # Main-branch push failures have no PR conversation to comment on.
+          # Preserve the repair request as an artifact and keep the lease alive;
+          # PR-only repair automation must not turn this valid state into a
+          # failed Executor run by calling gh pr comment with an empty number.
+          if [[ -z "$PR_NUMBER" ]]; then
+            echo "pr-unavailable=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::Mainline CI failure has no associated PR; preserving repair request artifact and keeping the Completion Lease active."
+            exit 0
+          fi
+          echo "pr-unavailable=false" >> "$GITHUB_OUTPUT"
           marker="<!-- gptauto-repair:$REPAIR_KEY -->"
           existing="$(gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" --jq '.[].body' 2>/dev/null || true)"
           if ! grep -Fq "$marker" <<<"$existing"; then
             gh pr comment "$PR_NUMBER" --repo "$REPOSITORY" --body "$marker
           GPTAuto three-tier repair cycle is open for task $TASK_ID on current head $HEAD_SHA (latest failed run $FAILED_RUN_ID). Tier 1 deterministic repair runs first, Tier 2 Copilot CLI runs only if Tier 1 produces no patch, and Tier 3 preserves the same repair lease if automation cannot safely repair it."
           fi
+
+      - name: Upload mainline repair request
+        if: \${{ steps.state.outputs.action == 'repair_request' && steps.state.outputs.pr-number == '' && steps.transient-retry.outputs.retried != 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: gptauto-mainline-repair-\${{ steps.state.outputs.task-id }}
+          path: .gptauto/repair-requests/\${{ steps.state.outputs.task-id }}.json
+          retention-days: 30
+          if-no-files-found: error
 
       - name: Check autonomous repair credential
         id: repair-credential
@@ -235,7 +254,7 @@ jobs:
           fi
 
       - name: Publish automation credential user action
-        if: ${{ steps.state.outputs.action == 'repair_request' && steps.transient-retry.outputs.retried != 'true' && steps.repair-credential.outputs.ready != 'true' }}
+        if: ${{ steps.state.outputs.action == 'repair_request' && steps.transient-retry.outputs.retried != 'true' && steps.repair-credential.outputs.ready != 'true' && steps.state.outputs.pr-number != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
@@ -252,7 +271,7 @@ jobs:
 
       - name: Dispatch three-tier repair pipeline
         id: repair-dispatch
-        if: ${{ steps.state.outputs.action == 'repair_request' && steps.transient-retry.outputs.retried != 'true' && steps.repair-credential.outputs.ready == 'true' }}
+        if: ${{ steps.state.outputs.action == 'repair_request' && steps.transient-retry.outputs.retried != 'true' && steps.repair-credential.outputs.ready == 'true' && steps.state.outputs.pr-number != '' }}
         env:
           GH_TOKEN: ${{ secrets.GPTAUTO_GITHUB_TOKEN || secrets.GPTAUTO_EXECUTOR_TOKEN || secrets.GPTAUTO_SYNC_TOKEN }}
           REPOSITORY: ${{ github.repository }}
