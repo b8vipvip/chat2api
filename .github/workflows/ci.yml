@@ -272,6 +272,12 @@ jobs:
           node --check chrome_extension/background_transport_recovery_v47.js
           node tests/background_transport_recovery_v47.mjs
 
+      - name: Native tool citation metadata forwarding v64
+        run: |
+          node --check chrome_extension/native_tool_stream_main_v63.js
+          node tests/native_tool_reference_metadata_v64.mjs
+          pytest -q tests/test_chat_tool_references_v1.py --timeout=30
+
       - name: Multi-turn external reply boundary regression v214
         run: node tests/multiturn_prompt_boundary_v214.mjs
       - name: Worker probe observer regression
