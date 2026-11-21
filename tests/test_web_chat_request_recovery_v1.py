@@ -6,7 +6,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fastapi import Response
 from fastapi.testclient import TestClient
+
+from app.user_commerce import USER_SESSION_COOKIE
 
 from app.config import Settings
 from app.main import create_app
@@ -630,3 +633,49 @@ assert(/^req_[A-Za-z0-9_-]{8,120}$/.test(api.createRequestId({randomUUID:()=>"12
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "recovery-harness-passed" in result.stdout
+
+
+def test_long_lived_replay_revalidates_user_session_and_key_ownership(monkeypatch, tmp_path):
+    app = make_app(tmp_path)
+    request_id = "req_reauthreplay123"
+    with TestClient(app) as client:
+        user_id = register(client, "replay-reauth@example.org")
+        app.state.user_accounts.attach_key(user_id, "key_replay_reauth")
+        remember(app, request_id, "key_replay_reauth", web_chat_mode=True)
+        app.state.broker.requests[request_id] = SimpleNamespace(terminal_event_type=None)
+        cookie = client.cookies.get(USER_SESSION_COOKIE)
+        original_user = app.state.user_accounts.authenticate(cookie)
+        calls = []
+
+        def revoke_after_initial_auth(value):
+            calls.append(value)
+            return original_user if len(calls) == 1 else None
+
+        monkeypatch.setattr(app.state.user_accounts, "authenticate", revoke_after_initial_auth)
+
+        class RequestStub:
+            app = app
+            cookies = {USER_SESSION_COOKIE: cookie}
+
+            async def is_disconnected(self):
+                return False
+
+        route = next(
+            item for item in app.routes
+            if getattr(item, "path", "") == "/api/user/chat/requests/{request_id}/events"
+        )
+        response = asyncio.run(route.endpoint(
+            request_id, RequestStub(), Response(), after=0, last_event_id=None,
+        ))
+
+        async def no_wait(_seconds):
+            return None
+
+        monkeypatch.setattr("app.web_chat_recovery_api.asyncio.sleep", no_wait)
+
+        async def consume():
+            async for _ in response.body_iterator:
+                pass
+
+        asyncio.run(asyncio.wait_for(consume(), timeout=2))
+        assert len(calls) >= 2
