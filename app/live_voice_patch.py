@@ -25,6 +25,8 @@ LIVE_PROTOCOL_VERSION = "chat2api-live-v1"
 SUPPORTED_MODELS = {"gpt-live", "gpt-live-mini"}
 MODEL_ALIASES = {"gpt-live-mini": "gpt-live"}
 REALTIME_SESSION_TTL_SECONDS = 60
+MAX_REALTIME_SESSION_TOKENS = 4096
+MAX_REALTIME_SESSION_TOKENS_PER_KEY = 8
 LIVE_CAPACITY_WEIGHT = 2
 MAX_LIVE_PCM_FRAME_BYTES = 64 * 1024
 MAX_LIVE_CONTROL_CHARS = 64 * 1024
@@ -136,6 +138,26 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
             expired = [key for key, (deadline, _) in realtime_sessions.items() if deadline <= now]
             for key in expired:
                 realtime_sessions.pop(key, None)
+            per_key = sum(
+                1 for _, (_, existing) in realtime_sessions.items()
+                if existing.key_id == principal.key_id
+            )
+            if per_key >= MAX_REALTIME_SESSION_TOKENS_PER_KEY:
+                raise HTTPException(
+                    status_code=429,
+                    detail={
+                        "code": "realtime_session_limit",
+                        "message": "Too many unconsumed realtime session tokens for this API key",
+                    },
+                )
+            if len(realtime_sessions) >= MAX_REALTIME_SESSION_TOKENS:
+                raise HTTPException(
+                    status_code=429,
+                    detail={
+                        "code": "realtime_session_capacity",
+                        "message": "Realtime session token capacity is temporarily full",
+                    },
+                )
             realtime_sessions[digest] = (now + REALTIME_SESSION_TTL_SECONDS, principal)
         return value
 
@@ -149,8 +171,28 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 realtime_sessions.pop(key, None)
         if not item:
             return None
-        deadline, principal = item
-        return principal if deadline > now else None
+        deadline, issued_principal = item
+        if deadline <= now:
+            return None
+
+        # A one-time token must not outlive the API key that minted it.
+        # Re-read the authoritative key record at consumption so revocation,
+        # expiry, scope removal, or quota exhaustion takes effect immediately.
+        key = getattr(api_keys, "keys", {}).get(issued_principal.key_id)
+        if key is None:
+            return None
+        public = key.public() if callable(getattr(key, "public", None)) else {}
+        if not isinstance(public, dict) or not public.get("enabled"):
+            return None
+        scopes = tuple(key.scopes or ["chat", "models", "files", "images", "audio"])
+        if "audio" not in scopes and "chat" not in scopes:
+            return None
+        return ApiPrincipal(
+            key_id=key.key_id,
+            name=key.name,
+            kind="managed",
+            scopes=scopes,
+        )
 
     async def authenticate_websocket(websocket: WebSocket, session_token: str | None) -> ApiPrincipal | None:
         supplied = _bearer(websocket.headers)
