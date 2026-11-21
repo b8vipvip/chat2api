@@ -64,6 +64,10 @@ class MediaArchive:
                 # They stay accessible under length-only legacy validation.
                 conn.execute("ALTER TABLE media ADD COLUMN sha256 TEXT NOT NULL DEFAULT ''")
             conn.execute("CREATE INDEX IF NOT EXISTS media_created_idx ON media(created_at DESC)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS media_request_digest_idx "
+                "ON media(owner, request_id, mime, size, sha256)"
+            )
 
     def _config(self):
         defaults = {"backend": "local", "auto_archive": True, "public_base_url": "",
@@ -238,12 +242,48 @@ class MediaArchive:
                     "Failed to discard unpublished media object"
                 )
 
+    def _find_existing_request_image(
+        self, raw: bytes, mime: str, owner: str, request_id: str, digest: str,
+    ) -> dict | None:
+        """Return a previously archived identical image for this exact request.
+
+        Broker terminal replay can repeat media archival after a process crash.
+        Reusing only an owner/request/MIME/size/SHA-256 match makes that retry
+        idempotent without allowing cross-request or cross-owner media reuse.
+        """
+        with self._db() as conn:
+            row = conn.execute(
+                """SELECT * FROM media
+                   WHERE owner=? AND request_id=? AND mime=? AND size=? AND sha256=?
+                   ORDER BY created_at DESC, id DESC LIMIT 1""",
+                (owner, request_id, mime, len(raw), digest),
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            original, stored_mime = self.load(row["id"], row["token"])
+            thumbnail, thumbnail_mime = self.load(row["id"], row["token"], thumbnail=True)
+        except (KeyError, FileNotFoundError, OSError, ValueError) as exc:
+            raise ValueError("Previously archived image failed integrity verification") from exc
+        if original != raw or stored_mime != mime or not thumbnail or thumbnail_mime != "image/webp":
+            raise ValueError("Previously archived image failed integrity verification")
+        return {
+            "id": row["id"], "token": row["token"], "mime": row["mime"],
+            "bytes": row["size"], "width": row["width"], "height": row["height"],
+            "backend": row["backend"], "sha256": row["sha256"], "_reused": True,
+        }
+
     def store_image(self, raw: bytes, mime: str, owner: str, request_id: str,
                     *, stop=None):
         width, height, preview = self._render_thumbnail(raw, mime)
         cfg = self._config()
         if not cfg["auto_archive"]:
             raise ValueError("Media auto-archiving is disabled; cannot expose inline Base64")
+        digest = hashlib.sha256(raw).hexdigest()
+        existing = self._find_existing_request_image(raw, mime, owner, request_id, digest)
+        if existing is not None:
+            return existing
+
         media_id = "med_" + secrets.token_urlsafe(15).replace("-", "").replace("_", "")
         token = secrets.token_urlsafe(24)
         origin = f"objects/{media_id}"
@@ -259,12 +299,8 @@ class MediaArchive:
             if stop is not None:
                 stop.checkpoint()
             # A provider's successful PUT is not proof of byte-preserving
-            # storage. Generated-file archives already verify their complete
-            # readback before creating a download manifest; image originals
-            # need that same invariant. Otherwise a partial S3/local write
-            # can publish a valid-looking 1:1 image URL backed by WRONG bytes.
-            # Check both full-resolution original and its separate thumbnail
-            # through the exact backend read path used for downloads.
+            # storage. Verify both original and thumbnail through the exact
+            # backend read path used for downloads before publishing a URL.
             for key, expected in ((full_key, raw), (thumb_key, preview)):
                 stored = self._read(cfg, cfg["backend"], key)
                 if (len(stored) != len(expected)
@@ -273,23 +309,44 @@ class MediaArchive:
                     raise ValueError("Media storage readback integrity mismatch")
                 if stop is not None:
                     stop.checkpoint()
+
+            # Serialize the final idempotency check and index insert. Two
+            # processes replaying the same terminal can both stage random
+            # objects, but only one request-scoped digest row is published.
             with self._db() as conn:
-                conn.execute("""INSERT INTO media
-                    (id, token, owner, request_id, mime, size, width, height,
-                     backend, object_key, thumb_key, created_at, sha256)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
-                    media_id, token, owner, request_id, mime, len(raw), width, height,
-                    cfg["backend"], full_key, thumb_key,
-                    datetime.now(timezone.utc).isoformat(),
-                    hashlib.sha256(raw).hexdigest()))
+                conn.execute("BEGIN IMMEDIATE")
+                previous = conn.execute(
+                    """SELECT * FROM media
+                       WHERE owner=? AND request_id=? AND mime=? AND size=? AND sha256=?
+                       ORDER BY created_at DESC, id DESC LIMIT 1""",
+                    (owner, request_id, mime, len(raw), digest),
+                ).fetchone()
+                if previous is None:
+                    conn.execute("""INSERT INTO media
+                        (id, token, owner, request_id, mime, size, width, height,
+                         backend, object_key, thumb_key, created_at, sha256)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+                        media_id, token, owner, request_id, mime, len(raw), width, height,
+                        cfg["backend"], full_key, thumb_key,
+                        datetime.now(timezone.utc).isoformat(), digest))
         except Exception:
-            # The original, thumbnail and index are one logical publication.
-            # Never strand bytes if the second upload or SQLite insert fails.
             self._discard_unpublished_image(cfg, (full_key, thumb_key))
             raise
-        return {"id": media_id, "token": token, "mime": mime, "bytes": len(raw),
-                "width": width, "height": height, "backend": cfg["backend"],
-                "sha256": hashlib.sha256(raw).hexdigest()}
+
+        if previous is not None:
+            # Our unpublished objects lost the race. Remove only those random
+            # keys, then verify and reuse the winner's durable record.
+            self._discard_unpublished_image(cfg, (full_key, thumb_key))
+            reused = self._find_existing_request_image(raw, mime, owner, request_id, digest)
+            if reused is None:
+                raise ValueError("Concurrent media archive winner disappeared")
+            return reused
+
+        return {
+            "id": media_id, "token": token, "mime": mime, "bytes": len(raw),
+            "width": width, "height": height, "backend": cfg["backend"],
+            "sha256": digest, "_reused": False,
+        }
 
     def rewrite_markdown(self, source: str, owner: str, request_id: str,
                          base_url: str, *, stop=None):
@@ -349,7 +406,8 @@ class MediaArchive:
                     # Record immediately, even if late timeout is signaled
                     # while the storage backend was completing a blocking
                     # write. The rollback finally owns this exact media ID.
-                    stored_ids.append(record["id"])
+                    if not record.get("_reused"):
+                        stored_ids.append(record["id"])
                     if stop is not None:
                         stop.checkpoint()
                 except (ValueError, OSError, httpx.HTTPError) as exc:
