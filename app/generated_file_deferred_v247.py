@@ -14,6 +14,7 @@ import re
 import secrets
 import sqlite3
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +25,7 @@ from .generated_files_v196 import (
 )
 
 PENDING_STAGE_PATH = re.compile(r"^pgen_[a-f0-9]{32}\.(?:bin|part)$")
+MAX_ORPHAN_STAGE_AGE_SECONDS = 30 * 60
 
 
 class FileStillProcessing(Exception):
@@ -54,16 +56,23 @@ class DeferredGeneratedFiles:
             # deduplicates by owner/request/name/hash in a SQLite transaction.
             conn.execute("UPDATE deferred_generated_files SET state='pending' WHERE state='processing'")
             rows = conn.execute("SELECT id FROM deferred_generated_files WHERE state='pending'").fetchall()
+            terminal_rows = conn.execute(
+                "SELECT id FROM deferred_generated_files WHERE state IN ('ready','failed')"
+            ).fetchall()
         pending_ids = {str(row["id"]) for row in rows}
-        self._cleanup_staging_files(pending_ids)
+        terminal_ids = {str(row["id"]) for row in terminal_rows}
+        self._cleanup_staging_files(pending_ids, terminal_ids)
         for row in rows:
             self.pool.submit(self._finish, row["id"])
 
-    def _cleanup_staging_files(self, pending_ids: set[str]) -> None:
+    def _cleanup_staging_files(
+        self, pending_ids: set[str], terminal_ids: set[str],
+    ) -> None:
         """Retry cleanup of terminal and orphan staging bytes after a restart.
 
-        Only a .bin referenced by a pending manifest is live work. Ready/failed
-        manifests and files left before their SQLite insert must not accumulate.
+        Only a .bin referenced by a pending manifest is live work. Files with
+        no manifest are retained for a short grace period because another API
+        process may be between its .part/.bin write and SQLite insert.
         """
         try:
             paths = list(self.root.iterdir())
@@ -72,12 +81,27 @@ class DeferredGeneratedFiles:
                 "Could not scan deferred generated-file staging directory"
             )
             return
+        now = time.time()
         for path in paths:
             if not PENDING_STAGE_PATH.fullmatch(path.name):
                 continue
             pending_id = path.stem
-            if path.suffix == ".bin" and pending_id in pending_ids:
-                continue
+            remove_now = (
+                pending_id in terminal_ids
+                or (pending_id in pending_ids and path.suffix != ".bin")
+            )
+            if not remove_now:
+                try:
+                    age = now - path.lstat().st_mtime
+                except FileNotFoundError:
+                    continue
+                except OSError:
+                    logging.getLogger(__name__).exception(
+                        "Could not inspect deferred generated-file staging bytes"
+                    )
+                    continue
+                if age <= MAX_ORPHAN_STAGE_AGE_SECONDS:
+                    continue
             try:
                 # unlink removes a symlink itself rather than following it.
                 path.unlink(missing_ok=True)
