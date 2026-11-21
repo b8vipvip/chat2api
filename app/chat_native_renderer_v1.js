@@ -104,6 +104,32 @@
       return url.href;
     } catch (_) { return ""; }
   }
+  function cleanSourceText(value, limit) {
+    if (typeof value !== "string") return "";
+    return value.replace(/[\u0000-\u001f\u007f]/g," ").replace(/\s+/g," ").trim().slice(0,limit);
+  }
+  function normalizeSourceReferences(value) {
+    if (!Array.isArray(value)) return [];
+    const seen = new Set(), rows = [];
+    for (const item of value.slice(0,32)) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const url = safeExternalLinkUrl(item.url);
+      if (!url) continue;
+      const rawId = cleanSourceText(item.id,128);
+      const id = /^[A-Za-z0-9_.:-]{1,128}$/.test(rawId) ? rawId : "";
+      const identity = id ? "id:" + id : "url:" + url;
+      if (seen.has(identity)) continue;
+      seen.add(identity);
+      const host = new URL(url).hostname;
+      rows.push({
+        url, id,
+        title: cleanSourceText(item.title,180) || host,
+        snippet: cleanSourceText(item.snippet,420),
+      });
+      if (rows.length >= 8) break;
+    }
+    return rows;
+  }
 
   function validSvgAttribute(key,value) {
     if (!SVG_ATTRS.has(key) || typeof value !== "string" || !value || value !== value.trim() ||
@@ -256,7 +282,7 @@
     for (const child of value.children || []) element.appendChild(createNode(child,snapshot,depth+1));
     return element;
   }
-  function renderNativeSnapshot(host,snapshot) {
+  function renderNativeSnapshot(host,snapshot,sourceReferences=[]) {
     if (!host || !validateSnapshot(snapshot)) return false;
     try {
       const state = document.createElement("div");
@@ -296,6 +322,33 @@
       }
       host.replaceChildren(state,root);
       if (files.childNodes.length) host.appendChild(files);
+      const references = normalizeSourceReferences(sourceReferences);
+      if (references.length) {
+        const section = document.createElement("section");
+        section.className = "native-source-references";
+        const heading = document.createElement("div");
+        heading.className = "native-source-references-title";
+        heading.textContent = "引用来源";
+        section.appendChild(heading);
+        references.forEach((reference,index) => {
+          const link = document.createElement("a");
+          link.className = "native-source-reference";
+          link.href = reference.url;
+          link.target = "_blank";
+          link.rel = "noopener noreferrer nofollow";
+          link.referrerPolicy = "no-referrer";
+          const title = document.createElement("strong");
+          title.textContent = "[" + (index + 1) + "] " + reference.title;
+          link.appendChild(title);
+          if (reference.snippet) {
+            const snippet = document.createElement("span");
+            snippet.textContent = reference.snippet;
+            link.appendChild(snippet);
+          }
+          section.appendChild(link);
+        });
+        host.appendChild(section);
+      }
       return true;
     } catch (_) { return false; }
   }
