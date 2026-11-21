@@ -1547,7 +1547,12 @@
     }
     if (eventName === "recovery.partial.snapshot") {
       if (event.partial_text_unverified === true && typeof event.partial_text === "string") {
-        assistant.content = event.partial_text.slice(0, MAX_MESSAGE_CHARS);
+        const candidate = event.partial_text.slice(0, MAX_MESSAGE_CHARS);
+        // Worker and delivery snapshots are unverified candidates. Never let
+        // a shorter replay page overwrite progress already shown to the user.
+        if (candidate.length > String(assistant.content || "").length) {
+          assistant.content = candidate;
+        }
       }
       return false;
     }
