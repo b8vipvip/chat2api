@@ -204,6 +204,12 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
                                "pcm_base64": base64.b64encode(b"\x01\x02" * 800).decode()})
                 assert live.receive_bytes() == b"\x01\x02" * 800
                 live.send_json({"type": "session.finish"})
+                no_response = live.receive_json()
+                assert no_response["type"] == "error"
+                assert no_response["code"] == "GPT_LIVE_NO_COMPLETED_RESPONSE"
+                closed = live.receive_json()
+                assert closed["type"] == "session.closed"
+                assert closed["status"] == "error"
                 assert ext.receive_json()["type"] == "voice.live.stop"
         assert not app.state.broker.requests
         row = app.state.telemetry.get(request_id)
