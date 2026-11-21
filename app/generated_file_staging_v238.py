@@ -294,9 +294,9 @@ class GeneratedFileStaging:
                         if deleted:
                             removed.append((request_id, upload_id, path_name))
             except sqlite3.Error:
-                # Cleanup is best effort; a later request retries it. Upload
+                # Cleanup is best effort; retry on the next interval. Upload
                 # admission and reads must not fail just because pruning is busy.
-                pass
+                self._last_persisted_prune_mono = now_mono
             else:
                 self._last_persisted_prune_mono = now_mono
                 for request_id, upload_id, path_name in removed:
