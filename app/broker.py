@@ -657,11 +657,12 @@ class RequestBroker:
             }
             if result_id:
                 normalized["result_id"] = result_id
-            # Search/citation metadata is part of the Worker tool result
-            # contract in both API and Web Chat flows; it is not Mode 1-specific.
-            references = extract_tool_references(event.get("metadata"))
-            if references:
-                normalized["references"] = references
+            # Citation metadata is attached only to the Web Chat presentation
+            # lane. Ordinary Mode 2 SDK streams must not receive UI-only sources.
+            if state.mode1_web_chat:
+                references = extract_tool_references(event.get("metadata"))
+                if references:
+                    normalized["references"] = references
             event = normalized
         elif event_type == "chat.completed":
             state.terminal_event_type = str(event_type)
