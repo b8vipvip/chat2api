@@ -263,6 +263,31 @@ def test_worker_terminal_outbox_replays_across_two_server_instances(tmp_path):
         )
         assert key_response.status_code == 200, key_response.text
         key_id = key_response.json()["key"]["key_id"]
+        wallet_user = app_before_restart.state.user_accounts.register(
+            "restart-wallet@example.org", "strong-test-password",
+        )
+        wallet_user_id = wallet_user["user_id"]
+        app_before_restart.state.user_accounts.attach_key(wallet_user_id, key_id)
+        billing_before_restart = app_before_restart.state.user_billing
+        billing_before_restart.credit(wallet_user_id, 10_000)
+        price_snapshot = {
+            "model_id": "gpt-5.6",
+            "enabled": True,
+            "input_usd_per_million": 1.0,
+            "cached_input_usd_per_million": 0.2,
+            "output_usd_per_million": 1.0,
+        }
+        billing_before_restart.reserve_for_request(
+            wallet_user_id, request_id,
+            model_id="gpt-5.6",
+            estimated_cny_cents=1_000,
+            input_tokens=12,
+            output_tokens=300_000,
+            price_snapshot=price_snapshot,
+            price_catalog_snapshot={"gpt-5.6": price_snapshot},
+            usd_cny_rate=7.0,
+        )
+        assert billing_before_restart.mark_dispatch_authorized(request_id, wallet_user_id)
         asyncio.run(app_before_restart.state.telemetry.append({
             "request_id": request_id,
             "client_id": client_id,
@@ -308,15 +333,27 @@ def test_worker_terminal_outbox_replays_across_two_server_instances(tmp_path):
         # accounting callback. The retry must settle the same request_id once
         # and only then ACK the durable Worker outbox.
         original_accounting = app_after_restart.state.telemetry.usage_accounting
-        accounting_failures_remaining = {"count": 2}
+        accounting_failures_remaining = {"count": 1}
 
-        async def fail_first_two_completed_accounting(record):
+        async def fail_first_completed_accounting(record):
             if record.get("status") == "completed" and accounting_failures_remaining["count"] > 0:
                 accounting_failures_remaining["count"] -= 1
                 raise RuntimeError("simulated usage ledger write interruption")
             await original_accounting(record)
 
-        app_after_restart.state.telemetry.usage_accounting = fail_first_two_completed_accounting
+        app_after_restart.state.telemetry.usage_accounting = fail_first_completed_accounting
+
+        billing_after_restart = app_after_restart.state.user_billing
+        original_record_charge = billing_after_restart.record_charge
+        wallet_charge_failures_remaining = {"count": 1}
+
+        def fail_first_wallet_charge(user_id, row, pricing):
+            if wallet_charge_failures_remaining["count"] > 0:
+                wallet_charge_failures_remaining["count"] -= 1
+                raise RuntimeError("simulated wallet ledger write interruption")
+            return original_record_charge(user_id, row, pricing)
+
+        billing_after_restart.record_charge = fail_first_wallet_charge
 
         with second_server.websocket_connect(
             f"/ws/extensions/{client_id}?token={worker_token}",
@@ -339,8 +376,23 @@ def test_worker_terminal_outbox_replays_across_two_server_instances(tmp_path):
                 "accepted": False,
                 "reason": "terminal_finalization_retryable",
             }
-            # Simulate the first ACK being lost on the network. The durable
-            # replay projection must recognize this exact same Worker event.
+            # The next replay retries token settlement, which is independently
+            # interrupted once. It must not ACK while either ledger is incomplete.
+            worker.send_json({
+                "type": "chat.completed",
+                "request_id": request_id,
+                "text": final_text,
+                "diagnostics": {
+                    "worker_transport_replayed": True,
+                    "worker_transport_recovery": "transport-outbox-v47",
+                },
+            })
+            accounting_retry_ack = worker.receive_json()
+            assert accounting_retry_ack["accepted"] is False
+            assert accounting_retry_ack["reason"] == "usage_or_delivery_terminal_not_durable"
+
+            # The third exact replay settles API-key usage, reconciles the
+            # admission-time wallet hold, and only then receives a positive ACK.
             worker.send_json({
                 "type": "chat.completed",
                 "request_id": request_id,
@@ -358,6 +410,14 @@ def test_worker_terminal_outbox_replays_across_two_server_instances(tmp_path):
             charged = app_after_restart.state.api_keys.keys[key_id].charged_requests
             assert charged[request_id] == recovered["usage"]["total_tokens"]
             assert accounting_failures_remaining["count"] == 0
+            assert wallet_charge_failures_remaining["count"] == 0
+            wallet_charge = billing_after_restart.charge_for_request(request_id)
+            wallet_reservation = billing_after_restart.reservation_for_request(request_id)
+            assert wallet_charge and wallet_charge["debited"] is True
+            assert wallet_reservation and wallet_reservation["state"] == "settled"
+            assert billing_after_restart.balance_cents(wallet_user_id) == (
+                10_000 - wallet_charge["cost_cny_cents"]
+            )
 
         recovered = app_after_restart.state.telemetry.get(request_id)
         assert recovered["status"] == "completed"

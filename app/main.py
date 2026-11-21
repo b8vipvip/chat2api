@@ -2078,6 +2078,60 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 ):
                     return False
 
+        # Wallet billing is a second durable ledger, separate from API-key
+        # token usage. A telemetry write can succeed while record_charge fails;
+        # on the duplicate Worker replay, retry that exact owner's wallet hold
+        # before acknowledging completion. Never infer or backfill a charge
+        # when no admission-time wallet reservation exists.
+        accounts = getattr(app.state, "user_accounts", None)
+        billing = getattr(app.state, "user_billing", None)
+        owner_for_key = getattr(accounts, "owner_for_key", None)
+        if billing is not None and callable(owner_for_key):
+            wallet_owner = owner_for_key(key_id)
+            if wallet_owner:
+                reservation_reader = getattr(billing, "reservation_for_request", None)
+                charge_reader = getattr(billing, "charge_for_request", None)
+                if not callable(reservation_reader) or not callable(charge_reader):
+                    return False
+                wallet_reservation = reservation_reader(request_id)
+                if wallet_reservation:
+                    if str(wallet_reservation.get("user_id") or "") != wallet_owner:
+                        return False
+                    wallet_state = str(wallet_reservation.get("state") or "")
+                    if wallet_state == "reserved":
+                        reconcile_wallet = getattr(app.state, "wallet_charge_reconciler", None)
+                        if not callable(reconcile_wallet):
+                            return False
+                        await asyncio.to_thread(reconcile_wallet, wallet_owner)
+                        wallet_reservation = reservation_reader(request_id)
+                        wallet_state = str((wallet_reservation or {}).get("state") or "")
+                    if wallet_state == "settled":
+                        wallet_charge = charge_reader(request_id)
+                        if (
+                            not isinstance(wallet_charge, dict)
+                            or str(wallet_charge.get("user_id") or "") != wallet_owner
+                            or wallet_charge.get("debited") is not True
+                        ):
+                            return False
+                    elif wallet_state == "released":
+                        # These are the only legitimate no-charge admission
+                        # markers. A positive hold released before a completed
+                        # response is a conflicting terminal and must not ACK.
+                        if (
+                            type(wallet_reservation.get("reserved_cny_cents")) is not int
+                            or wallet_reservation.get("reserved_cny_cents") != 0
+                            or wallet_reservation.get("release_reason") not in {
+                                "billing_disabled_at_admission", "zero_price_at_admission",
+                            }
+                        ):
+                            return False
+                    else:
+                        return False
+                else:
+                    existing_charge = charge_reader(request_id)
+                    if existing_charge and str(existing_charge.get("user_id") or "") != wallet_owner:
+                        return False
+
         # A failed first finalization may have retained a provisional copy after
         # the completed row was committed. Clear it only after ledger proof.
         await telemetry.upsert({
