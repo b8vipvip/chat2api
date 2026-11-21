@@ -87,7 +87,9 @@ class DeferredGeneratedFiles:
             if match.re is STAGED_MARKER:
                 if not getattr(self.archive, "staging", None):
                     raise ValueError("Generated staged upload transport unavailable")
-                data, mime = self.archive.staging.read(request_id, match.group(2), name)
+                data, mime = self.archive.staging.read(
+                    request_id, match.group(2), name, owner_key_id=owner,
+                )
             else:
                 mime, encoded = match.group(3), match.group(4)
                 if len(encoded) > 4 * ((MAX_INLINE_FILE_BYTES + 2) // 3) + 4:
