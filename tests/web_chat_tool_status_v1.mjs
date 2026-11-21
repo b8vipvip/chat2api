@@ -5,15 +5,20 @@ import {runInNewContext} from "node:vm";
 const source = readFileSync("app/chat_client_v1.js", "utf8");
 const statusMatch = source.match(/function normalizeToolStatus\(value\) \{[\s\S]*?\n  \}/);
 const eventsMatch = source.match(/function normalizeToolEvents\(value, role\) \{[\s\S]*?\n  \}/);
+const applyMatch = source.match(/function applyToolEvent\(assistant, event\) \{[\s\S]*?\n  \}/);
 assert.ok(statusMatch, "production normalizeToolStatus function must remain extractable");
 assert.ok(eventsMatch, "production normalizeToolEvents function must remain extractable");
+assert.ok(applyMatch, "production applyToolEvent function must remain extractable");
 
+let historyWrites = 0;
 const helpers = {
   safeToolName: value => String(value || "tool").slice(0, 80),
   normalizeToolReferences: () => [],
+  saveHistory: () => { historyWrites += 1; },
 };
 const api = runInNewContext(
-  statusMatch[0] + "\n" + eventsMatch[0] + "\n({normalizeToolStatus,normalizeToolEvents})",
+  statusMatch[0] + "\n" + eventsMatch[0] + "\n" + applyMatch[0] +
+    "\n({normalizeToolStatus,normalizeToolEvents,applyToolEvent})",
   helpers,
 );
 
@@ -61,4 +66,45 @@ assert.deepEqual(
   events.map(([, expected]) => expected),
 );
 assert.deepEqual(api.normalizeToolEvents([{callId:"call-1",status:"completed"}], "user"), []);
+
+// Replayed/out-of-order events must not reopen a tool after terminal result.
+const completedAssistant = {toolEvents:[]};
+assert.equal(api.applyToolEvent(completedAssistant,{
+  phase:"call",tool_name:"browser.search",call_id:"call-terminal-1",status:"running",
+}),true);
+assert.equal(completedAssistant.toolEvents[0].status,"running");
+assert.equal(api.applyToolEvent(completedAssistant,{
+  phase:"result",tool_name:"browser.search",call_id:"call-terminal-1",
+  result_id:"result-terminal-1",status:"completed",output:"done",
+}),true);
+assert.equal(completedAssistant.toolEvents[0].status,"completed");
+api.applyToolEvent(completedAssistant,{
+  phase:"call",tool_name:"browser.search",call_id:"call-terminal-1",status:"running",
+});
+assert.equal(completedAssistant.toolEvents[0].status,"completed");
+api.applyToolEvent(completedAssistant,{
+  phase:"result",tool_name:"browser.search",call_id:"call-terminal-1",
+  result_id:"result-terminal-2",status:"failed",output:"late retry",
+});
+assert.equal(completedAssistant.toolEvents[0].status,"completed");
+
+const failedAssistant = {toolEvents:[]};
+api.applyToolEvent(failedAssistant,{
+  phase:"result",tool_name:"browser.search",call_id:"call-terminal-2",
+  result_id:"result-terminal-3",status:"failed",
+});
+api.applyToolEvent(failedAssistant,{
+  phase:"call",tool_name:"browser.search",call_id:"call-terminal-2",status:"running",
+});
+assert.equal(failedAssistant.toolEvents[0].status,"failed");
+
+const runningAssistant = {toolEvents:[]};
+api.applyToolEvent(runningAssistant,{
+  phase:"call",tool_name:"browser.search",call_id:"call-terminal-3",status:"running",
+});
+api.applyToolEvent(runningAssistant,{
+  phase:"result",tool_name:"browser.search",call_id:"call-terminal-3",status:"future_vendor_state",
+});
+assert.equal(runningAssistant.toolEvents[0].status,"running");
+assert.ok(historyWrites >= 8);
 console.log("Web Chat tool status normalization preserves unknown/nonterminal states");
