@@ -374,8 +374,14 @@ def test_recovering_mode1_request_waits_for_worker_terminal_outbox_without_redis
             status="recovering", web_chat_mode=True,
             client_id="ext_worker123",
             response_text="", response_text_available=False,
-            response_text_provisional="saved partial",
+            response_text_provisional="",
             diagnostics={"web_chat_request_recovery":"awaiting-worker-terminal-replay"},
+        )
+        # Simulate Worker deltas durably journaled before the Broker process
+        # restarted, while Telemetry never received its provisional snapshot.
+        app.state.web_chat_event_journal._append_records(
+            request_id, "key_recovering",
+            [("worker.delta", {"delta": "journal partial"})],
         )
         response = client.get(f"/api/user/chat/requests/{request_id}/recovery")
         assert response.status_code == 200
@@ -385,7 +391,9 @@ def test_recovering_mode1_request_waits_for_worker_terminal_outbox_without_redis
         assert payload["recoverable"] is True
         assert payload["active"] is True
         assert payload["phase"] == "reconnecting"
-        assert payload["partial_text"] == "saved partial"
+        assert payload["partial_text"] == "journal partial"
+        assert payload["partial_text_available"] is True
+        assert payload["partial_text_unverified"] is True
         assert payload["response_text"] == ""
         assert payload["response_text_available"] is False
 
