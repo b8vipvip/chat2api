@@ -23,7 +23,7 @@ _CONVERSATION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 _MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 _REQUEST_ID_RE = re.compile(r"^req_[A-Za-z0-9_-]{8,120}$")
 _TOOL_EVENT_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
-_TOOL_EVENT_STATUSES = frozenset({"running", "completed", "failed", "cancelled"})
+_TOOL_EVENT_STATUSES = frozenset({"running", "completed", "failed", "cancelled", "unknown"})
 _MAX_TOOL_EVENTS_PER_MESSAGE = 6
 _MAX_TOOL_EVENT_TEXT = 1200
 _FILE_ID_RE = re.compile(r"^file_[A-Za-z0-9]{8,64}$")
@@ -124,7 +124,7 @@ def _normalize_tool_events(value: Any, role: str) -> list[dict[str, Any]]:
         tool_name = _bounded_string(item.get("toolName", "tool"), "tool name", 80, default="tool")
         call_id = _bounded_string(item.get("callId", ""), "tool call ID", 128)
         result_id = _bounded_string(item.get("resultId", ""), "tool result ID", 128)
-        status = _bounded_string(item.get("status", "completed"), "tool status", 20, default="completed")
+        status = _bounded_string(item.get("status", "unknown"), "tool status", 20, default="unknown")
         arguments = _bounded_string(item.get("arguments", ""), "tool arguments", _MAX_TOOL_EVENT_TEXT)
         output = _bounded_string(item.get("output", ""), "tool output", _MAX_TOOL_EVENT_TEXT)
         if (not tool_name or not (call_id or result_id)

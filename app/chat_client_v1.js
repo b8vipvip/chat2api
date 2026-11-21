@@ -228,8 +228,7 @@
       const callId = validId(callIdRaw) ? callIdRaw : "";
       const resultId = validId(resultIdRaw) ? resultIdRaw : "";
       if (!callId && !resultId) return null;
-      const statuses = ["running","completed","failed","cancelled"];
-      const status = statuses.includes(item.status) ? item.status : "completed";
+      const status = normalizeToolStatus(item.status);
       const normalized = {
         toolName, callId, resultId, status,
         arguments: typeof item.arguments === "string" ? item.arguments.slice(0,1200) : "",
@@ -1327,30 +1326,76 @@
   class StreamResponseError extends Error {}
 
   function normalizeToolStatus(value) {
-    const status = String(value || "").toLowerCase();
-    if (["running","in_progress","pending","streaming"].includes(status)) return "running";
-    if (["failed","error"].includes(status)) return "failed";
-    if (status === "cancelled") return "cancelled";
-    return "completed";
+    const status = String(value ?? "").trim().toLowerCase();
+    if (["running","in_progress","pending","streaming","queued","waiting",
+         "retrying","requires_action"].includes(status)) return "running";
+    if (["failed","error","errored","incomplete","timeout","timed_out",
+         "rejected"].includes(status)) return "failed";
+    if (["cancelled","canceled","aborted"].includes(status)) return "cancelled";
+    if (["completed","complete","succeeded","success","finished","done"].includes(status)) return "completed";
+    // Unknown upstream states must never be presented as successful completion.
+    return "unknown";
   }
 
   function applyToolEvent(assistant, event) {
-    if (!assistant || !event || !["call","result"].includes(event.phase)) return false;
+    if (!assistant || !event || typeof event !== "object") return false;
     const toolName = safeToolName(event.tool_name);
     const callId = String(event.call_id || "").slice(0,128);
     const resultId = String(event.result_id || "").slice(0,128);
-    if (!callId && !resultId) return false;
+    const validId = value => /^[A-Za-z0-9_.:-]{1,128}$/.test(value);
+    if (!validId(callId) && !validId(resultId)) return false;
     const rows = Array.isArray(assistant.toolEvents) ? assistant.toolEvents : [];
-    let row = rows.find(item => (callId && item.callId === callId)
-      || (resultId && item.resultId === resultId));
+    let row = rows.find(item => (callId && item.callId === callId) ||
+      (resultId && item.resultId === resultId));
     if (!row) {
-      row = {toolName,callId,resultId:"",status:"running",arguments:"",output:""};
+      row = {
+        toolName,callId,resultId:"",
+        status:event.phase === "call" ? "running" : "unknown",
+        arguments:"",output:"",
+      };
       rows.push(row);
+    } else if (["completed","failed","cancelled"].includes(row.status)) {
+      // A terminal result cannot be reopened or overwritten by a replayed
+      // call/late retry. A first result may still enrich a terminal call event
+      // that carried no result ID/output (the stream sends those separately).
+      if (event.phase !== "result" || (row.resultId && resultId && row.resultId !== resultId)) {
+        return false;
+      }
+      let enriched = false;
+      if (!row.resultId && resultId) {
+        row.resultId = resultId;
+        enriched = true;
+      }
+      if (!row.arguments && typeof event.arguments === "string" && event.arguments) {
+        row.arguments = event.arguments.slice(0,1200);
+        enriched = true;
+      }
+      if (!row.output && typeof event.output === "string" && event.output) {
+        row.output = event.output.slice(0,1200);
+        enriched = true;
+      }
+      const references = normalizeToolReferences(event.references);
+      if (references.length) {
+        const previous = Array.isArray(row.references) ? row.references : [];
+        const merged = normalizeToolReferences([...previous, ...references]);
+        if (merged.length !== previous.length) {
+          row.references = merged;
+          enriched = true;
+        }
+      }
+      if (enriched) {
+        while (rows.length > 6) rows.shift();
+        assistant.toolEvents = rows;
+        saveHistory();
+      }
+      return enriched;
     }
     row.toolName = toolName;
     if (callId) row.callId = callId;
     if (resultId) row.resultId = resultId;
-    row.status = normalizeToolStatus(event.status);
+    const nextStatus = normalizeToolStatus(event.status);
+    // Unknown metadata cannot regress a known running state or imply success.
+    if (nextStatus !== "unknown") row.status = nextStatus;
     if (typeof event.arguments === "string" && event.arguments) row.arguments = event.arguments.slice(0,1200);
     if (typeof event.output === "string" && event.output) row.output = event.output.slice(0,1200);
     const references = normalizeToolReferences(event.references);
@@ -1364,7 +1409,10 @@
   }
 
   function toolStatusLabel(status) {
-    return ({running:"执行中",completed:"已完成",failed:"失败",cancelled:"已取消"})[status] || "状态未知";
+    return ({
+      running:"执行中",completed:"已完成",failed:"失败",
+      cancelled:"已取消",unknown:"状态未知",
+    })[status] || "状态未知";
   }
 
   function renderToolActivity(body, message) {
