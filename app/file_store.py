@@ -46,6 +46,8 @@ class StoredFile:
     # Only browser-originated Web Chat uploads are eligible for orphan expiry.
     # OpenAI-compatible API uploads remain user-managed by default.
     source: str = "api"
+    # A durable two-phase retention marker makes interrupted cleanup retryable.
+    pending_delete: bool = False
 
     def public(self) -> dict[str, Any]:
         return {
@@ -134,6 +136,7 @@ class FileStore:
                     or Path(item.path).name != item.path
                     or not isinstance(item.purpose, str) or not item.purpose
                     or not isinstance(item.source, str) or item.source not in {"api", "web_chat"}
+                    or type(item.pending_delete) is not bool
                     or not isinstance(item.sha256, str)
                     or (item.sha256 and not re.fullmatch(r"[0-9a-f]{64}", item.sha256))
                 ):
@@ -379,56 +382,81 @@ class FileStore:
         self, referenced_file_ids: set[str], *,
         older_than_seconds: int = 90 * 86400, limit: int = 500,
     ) -> int:
-        """Delete only expired, unreferenced files uploaded by the Web Chat UI.
+        """Delete expired, unreferenced Web Chat uploads with retryable commits.
 
         General API uploads are never auto-expired by this maintenance path.
-        The file index is committed before content unlink, matching delete().
+        A pending-delete marker is committed before unlink, so a failed index
+        write never destroys content and a failed unlink remains retryable.
         """
         cutoff = time.time() - max(86400, int(older_than_seconds))
         bounded_limit = max(1, min(int(limit), 2000))
         referenced = {str(value) for value in referenced_file_ids}
         with self.lock:
-            expired: list[StoredFile] = []
+            candidates: list[StoredFile] = []
+            previous_pending: dict[str, bool] = {}
+            changed = False
             for item in self.items.values():
-                if item.source != "web_chat" or item.file_id in referenced:
+                if item.source != "web_chat":
                     continue
+                if item.file_id in referenced:
+                    if item.pending_delete:
+                        previous_pending[item.file_id] = True
+                        item.pending_delete = False
+                        changed = True
+                    continue
+                if item.pending_delete:
+                    candidates.append(item)
+                else:
+                    try:
+                        created = datetime.fromisoformat(
+                            str(item.created_at).replace("Z", "+00:00")
+                        )
+                        if created.tzinfo is None:
+                            created = created.replace(tzinfo=timezone.utc)
+                        created_at = created.timestamp()
+                    except (TypeError, ValueError, OverflowError):
+                        # Unknown timestamps are not grounds for destructive cleanup.
+                        continue
+                    if created_at > cutoff:
+                        continue
+                    previous_pending[item.file_id] = False
+                    item.pending_delete = True
+                    changed = True
+                    candidates.append(item)
+                if len(candidates) >= bounded_limit:
+                    break
+
+            if changed:
                 try:
-                    created = datetime.fromisoformat(
-                        str(item.created_at).replace("Z", "+00:00")
-                    )
-                    if created.tzinfo is None:
-                        created = created.replace(tzinfo=timezone.utc)
-                    created_at = created.timestamp()
-                except (TypeError, ValueError, OverflowError):
-                    # Unknown timestamps are not grounds for destructive cleanup.
-                    continue
-                if created_at <= cutoff:
-                    expired.append(item)
-                    if len(expired) >= bounded_limit:
-                        break
-            if not expired:
+                    self.save_index()
+                except Exception:
+                    for item in candidates:
+                        if item.file_id in previous_pending:
+                            item.pending_delete = previous_pending[item.file_id]
+                    raise
+            if not candidates:
                 return 0
+
             deleted: list[StoredFile] = []
-            for item in expired:
+            for item in candidates:
                 try:
-                    # Unlink first, then remove the manifest row. If unlink is
-                    # temporarily blocked (e.g. antivirus/file lock on Windows),
-                    # keep the row so a later retention pass can retry it.
                     (self.root / item.path).unlink(missing_ok=True)
                     deleted.append(item)
                 except OSError:
+                    # The durable pending-delete row keeps this unlink retryable.
                     continue
             if not deleted:
                 return 0
+
             for item in deleted:
                 self.items.pop(item.file_id, None)
             try:
                 self.save_index()
             except Exception:
-                # Restore the in-memory rows. The durable index still points
-                # at the now-missing files and a later pass can safely retry
-                # the idempotent missing_ok unlink before pruning those rows.
+                # The durable index still contains pending-delete rows. Restore
+                # them in memory so the next pass can safely retry missing_ok.
                 for item in deleted:
+                    item.pending_delete = True
                     self.items[item.file_id] = item
                 raise
             return len(deleted)
