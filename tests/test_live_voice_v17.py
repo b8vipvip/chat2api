@@ -505,6 +505,47 @@ def test_live_voice_requires_session_start_json_object(tmp_path: Path) -> None:
 
 
 
+def test_active_live_socket_closes_when_managed_key_is_disabled(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("app.live_voice_patch.LIVE_KEY_REVALIDATE_SECONDS", 0.01)
+    with TestClient(app_live(tmp_path)) as client:
+        managed_key = create_managed_key(client)
+        key_id = next(
+            key_id for key_id, item in client.app.state.api_keys.keys.items()
+            if item.prefix == managed_key[:20]
+        )
+        client_id, extension_token = pair_extension(client)
+        with client.websocket_connect(f"/ws/extensions/{client_id}?token={extension_token}") as extension:
+            extension.receive_json()
+            with client.websocket_connect(
+                f"/v1/audio/realtime?client_id={client_id}",
+                headers={"Authorization": f"Bearer {managed_key}"},
+            ) as live:
+                live.send_json({"type": "session.start", "model": "gpt-live"})
+                started = extension.receive_json()
+                extension.send_json({
+                    "type": "image.progress",
+                    "kind": "voice-live",
+                    "request_id": started["request_id"],
+                    "live_event": "session.ready",
+                    "model": "gpt-live",
+                })
+                assert live.receive_json()["type"] == "session.ready"
+
+                # No further client frames are sent: the server-side periodic
+                # revalidation must still notice the disabled key and close.
+                client.app.state.api_keys.keys[key_id].enabled = False
+                error = live.receive_json()
+                assert error["type"] == "error"
+                assert error["code"] == "API_KEY_REVOKED"
+                closed = live.receive_json()
+                assert closed["type"] == "session.closed"
+                assert closed["status"] == "error"
+                assert extension.receive_json()["type"] == "voice.live.stop"
+
+                row = client.app.state.telemetry.get(started["request_id"])
+                assert row["status"] == "error"
+
+
 def test_realtime_session_token_is_invalidated_when_api_key_is_disabled(tmp_path: Path) -> None:
     with TestClient(app_live(tmp_path)) as client:
         managed_key = create_managed_key(client)
