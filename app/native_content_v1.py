@@ -163,7 +163,7 @@ MATH_LENGTH_ATTRS = {
     "minlabelspacing", "voffset",
 }
 MATH_LENGTH = re.compile(
-    r"^(?:[+-]?(?:\\d{1,4}(?:\\.\\d{1,3})?|\\.\\d{1,3})"
+    r"^(?:[+-]?(?:\d{1,4}(?:\.\d{1,3})?|\.\d{1,3})"
     r"(?:em|ex|px|pt|pc|in|cm|mm|%)|0)$"
 )
 MATH_SPACE_NAMES = {
@@ -193,11 +193,11 @@ def _safe_math_attribute(tag: str, key: str, value: object) -> bool:
     if key in MATH_ENUMS:
         return value in MATH_ENUMS[key]
     if key == "scriptlevel":
-        return bool(re.fullmatch(r"[+-]?\\d{1,2}", value)
+        return bool(re.fullmatch(r"[+-]?\d{1,2}", value)
                     and -10 <= int(value) <= 10)
     if key in {"mathcolor", "mathbackground"}:
         return bool(re.fullmatch(
-            r"(?:#[0-9a-fA-F]{3,8}|rgba?\\([0-9.,\\s%]+\\)|"
+            r"(?:#[0-9a-fA-F]{3,8}|rgba?\([0-9.,\s%]+\)|"
             r"black|white|red|green|blue|gray|grey|transparent|currentColor)", value
         ) or MODERN_COLOR.fullmatch(value))
     if key in MATH_LENGTH_ATTRS:
@@ -217,9 +217,9 @@ def _safe_math_attribute(tag: str, key: str, value: object) -> bool:
         tokens = value.split()
         return 1 <= len(tokens) <= 8 and all(token in MATH_NOTATION for token in tokens)
     if key in {"rowspan", "columnspan"}:
-        return bool(re.fullmatch(r"\\d{1,3}", value) and 1 <= int(value) <= 256)
+        return bool(re.fullmatch(r"\d{1,3}", value) and 1 <= int(value) <= 256)
     if key in {"open", "close", "separators"}:
-        return bool(re.fullmatch(r"[^<>\\x00-\\x1f\\x7f]{0,16}", value))
+        return bool(re.fullmatch(r"[^<>\x00-\x1f\x7f]{0,16}", value))
     return False
 
 
