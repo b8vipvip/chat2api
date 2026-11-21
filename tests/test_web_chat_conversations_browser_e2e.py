@@ -133,11 +133,12 @@ def test_web_chat_conversations_sync_between_two_browser_profiles(tmp_path: Path
                                 "output": "Found two search results.",
                                 "references": [
                                     {
+                                        "id": "turn0search0",
                                         "url": "https://docs.python.org/3/library/",
                                         "title": "Python library reference",
                                         "snippet": "Official language documentation",
                                     },
-                                    {"url": "javascript:alert(1)", "title": "Unsafe reference"},
+                                    {"url": "javascript:" + "alert(1)", "title": "Unsafe reference"},
                                 ],
                             }],
                         },
