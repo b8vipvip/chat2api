@@ -10,7 +10,7 @@
 
 当任务涉及 GitHub Actions、CI、测试失败、卡死、排队异常或历史异常 Run 时，AI 必须先：
 
-1. 阅读 [`.github/GPTAUTO_SMART_UPDATE.md`](.github/GITHUB_AGENT.md)。
+1. 阅读 [`.github/GPTAUTO_SMART_UPDATE.md`](.github/GPTAUTO_SMART_UPDATE.md)。
 2. 搜索未关闭的 `[GitHub Agent][AI Repair]` Issue，优先找到与当前 Workflow / Run / 分支对应的问题单。
 3. 阅读问题单指向的完整 Source Run、失败 Job / Step、日志和对应 Commit；Issue 中的日志摘要只用于定位，不能替代完整日志。
 4. 检查源 Commit 是否已经被更新提交或已有修复取代，避免修复过时代码。
