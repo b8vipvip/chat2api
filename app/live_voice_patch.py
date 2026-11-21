@@ -32,6 +32,7 @@ MAX_LIVE_PCM_FRAME_BYTES = 64 * 1024
 MAX_LIVE_ATTACHMENTS_PER_INPUT = 4
 MAX_LIVE_PENDING_INPUTS = 128
 MAX_LIVE_CONTROL_CHARS = 64 * 1024
+LIVE_KEY_REVALIDATE_SECONDS = 5.0
 
 
 def _bearer(headers: Any) -> str:
@@ -195,6 +196,20 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
             kind="managed",
             scopes=scopes,
         )
+
+    def principal_is_active(principal: ApiPrincipal) -> bool:
+        # A successful WebSocket handshake must not turn a managed API key
+        # into a permanent lease. Re-read the authoritative key record so
+        # disable, revocation, expiry, quota exhaustion and scope removal
+        # terminate an already-open Live session as well.
+        key = getattr(api_keys, "keys", {}).get(principal.key_id)
+        if key is None:
+            return False
+        public = key.public() if callable(getattr(key, "public", None)) else {}
+        if not isinstance(public, dict) or not public.get("enabled"):
+            return False
+        scopes = tuple(key.scopes or ["chat", "models", "files", "images", "audio"])
+        return "audio" in scopes or "chat" in scopes
 
     async def authenticate_websocket(websocket: WebSocket, session_token: str | None) -> ApiPrincipal | None:
         supplied = _bearer(websocket.headers)
@@ -568,6 +583,13 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
             if start.get("type") != "session.start":
                 await send_json({"type": "error", "code": "SESSION_START_REQUIRED", "message": "First frame must be session.start"})
                 return
+            if not principal_is_active(principal):
+                await send_json({
+                    "type": "error", "code": "API_KEY_REVOKED",
+                    "message": "The API key is disabled, expired, exhausted or no longer has Live permission",
+                    "retryable": False,
+                })
+                return
             requested_model = str(start.get("model") or "gpt-live").strip().lower()
             if requested_model not in SUPPORTED_MODELS:
                 await send_json({"type": "error", "code": "UNSUPPORTED_MODEL", "message": f"Unsupported Live model: {requested_model}"})
@@ -640,14 +662,27 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
             relay_task = asyncio.create_task(relay_extension_events())
 
             while True:
-                # The Worker relay can terminate first (browser startup
-                # error, fatal live error or remote session.closed). Do not
-                # strand this session waiting indefinitely for another
-                # client frame after the Worker is already finished.
+                # Revalidate periodically even when the client is silent, and
+                # immediately after every received frame. This bounds the
+                # lifetime of a revoked/expired key without delaying Worker
+                # terminal delivery or microphone/audio forwarding.
                 client_receive = asyncio.create_task(websocket.receive())
                 try:
                     completed, _ = await asyncio.wait(
-                        {client_receive, relay_task}, return_when=asyncio.FIRST_COMPLETED)
+                        {client_receive, relay_task},
+                        timeout=LIVE_KEY_REVALIDATE_SECONDS,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if not completed:
+                        if not principal_is_active(principal):
+                            error_message = "Live API key is no longer active"
+                            await send_json({
+                                "type": "error", "code": "API_KEY_REVOKED",
+                                "message": "The API key was disabled, expired, exhausted or lost Live permission",
+                                "retryable": False,
+                            })
+                            break
+                        continue
                     if relay_task in completed:
                         await relay_task  # Surface unexpected relay failures.
                         break
@@ -657,6 +692,14 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         client_receive.cancel()
                         with suppress(asyncio.CancelledError):
                             await client_receive
+                if not principal_is_active(principal):
+                    error_message = "Live API key is no longer active"
+                    await send_json({
+                        "type": "error", "code": "API_KEY_REVOKED",
+                        "message": "The API key was disabled, expired, exhausted or lost Live permission",
+                        "retryable": False,
+                    })
+                    break
                 if message.get("type") == "websocket.disconnect":
                     break
                 payload = message.get("bytes")
