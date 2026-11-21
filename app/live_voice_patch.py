@@ -323,6 +323,11 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
             if finished:
                 return
             async with ws_send_lock:
+                # Another sender may have queued behind the lock just before
+                # the terminal close. Recheck ownership after acquiring it so
+                # no late event can follow session.closed.
+                if finished:
+                    return
                 await websocket.send_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
 
         async def relay_extension_events() -> None:
