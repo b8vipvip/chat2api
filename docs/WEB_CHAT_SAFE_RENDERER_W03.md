@@ -50,6 +50,12 @@ native-content sidecar.
 - The MIT license is retained with the generated vendor distribution. Docker
   builds and CI obtain the exact pinned npm package; source checkouts can run
   `sh scripts/vendor_katex.sh` to generate the same local assets.
+- Inline citation markers of the form `citeturn0search0` are resolved
+  only against bounded Worker tool-reference metadata. Validated reference IDs
+  survive Broker forwarding, server conversation persistence and the durable
+  event journal. Matched markers become numbered HTTPS links; the same numbers
+  appear on the source cards in the tool activity panel. Missing or untrusted
+  references render as an unavailable-source marker rather than a guessed link.
 - `renderRichBlocks(host, blocks)` supports safely named presentation types:
   text, code, math, citation, image, file, tool state, and unknown blocks.
   File blocks with a strictly validated `file_...` ID render a same-origin
