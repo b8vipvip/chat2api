@@ -240,7 +240,23 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
         async def replay():
             cursor = start_cursor
             last_heartbeat = time.monotonic()
+            tick = 0
             while True:
+                tick += 1
+                # This stream may remain open for a long-running generation.
+                # Revalidate the HttpOnly session and API-key ownership just as
+                # the native-content stream does; a logout, revoked session or
+                # detached key must stop further private event delivery.
+                if tick % 40 == 0:
+                    refreshed = accounts.authenticate(
+                        request.cookies.get(USER_SESSION_COOKIE)
+                    )
+                    if (
+                        not refreshed
+                        or str(refreshed.get("user_id") or "") != str(user["user_id"])
+                        or not accounts.owns_key(str(user["user_id"]), key_id)
+                    ):
+                        return
                 page = await journal.events_after(request_id, key_id, cursor, limit=128)
                 first_id = page.get("first_event_id")
                 last_id = int(page.get("last_event_id") or 0)
