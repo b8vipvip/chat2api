@@ -654,8 +654,9 @@ def test_long_lived_replay_revalidates_user_session_and_key_ownership(monkeypatc
         monkeypatch.setattr(app.state.user_accounts, "authenticate", revoke_after_initial_auth)
 
         class RequestStub:
-            app = app
-            cookies = {USER_SESSION_COOKIE: cookie}
+            def __init__(self, application, session_cookie):
+                self.app = application
+                self.cookies = {USER_SESSION_COOKIE: session_cookie}
 
             async def is_disconnected(self):
                 return False
@@ -665,7 +666,7 @@ def test_long_lived_replay_revalidates_user_session_and_key_ownership(monkeypatc
             if getattr(item, "path", "") == "/api/user/chat/requests/{request_id}/events"
         )
         response = asyncio.run(route.endpoint(
-            request_id, RequestStub(), Response(), after=0, last_event_id=None,
+            request_id, RequestStub(app, cookie), Response(), after=0, last_event_id=None,
         ))
 
         async def no_wait(_seconds):
