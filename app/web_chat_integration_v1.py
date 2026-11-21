@@ -31,7 +31,7 @@ def _asset_handler(
     return serve_asset
 
 
-_KATEX_FONT_RE = re.compile(r"^KaTeX_[A-Za-z0-9_-]+\\.(?:woff2|woff|ttf)$")
+_KATEX_FONT_RE = re.compile(r"^KaTeX_[A-Za-z0-9_-]+\.(?:woff2|woff|ttf)$")
 
 
 _REQUEST_ID_RE = re.compile(r"^req_[A-Za-z0-9_-]{8,120}$")
