@@ -124,6 +124,7 @@ assert app.state.quota_reservation_runtime_coverage == [
     "/v1/responses#image_generation (delegated to Images executor)",
     "/v1/audio/speech",
     "/v1/audio/conversations",
+    "/v1/audio/realtime",
 ]
 
 # Startup must release a new-protocol hold that never reached Worker dispatch,

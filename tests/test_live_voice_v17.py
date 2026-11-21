@@ -292,6 +292,27 @@ def test_live_voice_bounds_pcm16_frames_and_keeps_session_after_bad_input(tmp_pa
                 })
                 assert live.receive_json()["type"] == "session.ready"
 
+                live.send_json({"type": "input_text", "text": "请总结今天的天气"})
+                queued = live.receive_json()
+                assert queued["type"] == "input_text.queued"
+                outbound_text = extension.receive_json()
+                assert outbound_text["type"] == "voice.live.text"
+                assert outbound_text["text"] == "请总结今天的天气"
+                extension.send_json({
+                    "type": "image.progress", "kind": "voice-live",
+                    "request_id": request_id, "live_event": "input.text.sent",
+                    "item_id": queued["item_id"], "text": "请总结今天的天气",
+                })
+                assert live.receive_json()["type"] == "input_text.sent"
+                extension.send_json({
+                    "type": "image.progress", "kind": "voice-live",
+                    "request_id": request_id, "live_event": "transcript.final",
+                    "text": "今天天气晴朗",
+                })
+                assert live.receive_json() == {
+                    "type": "transcript.final", "text": "今天天气晴朗",
+                }
+
                 live.send_bytes(b"\x01")
                 malformed = live.receive_json()
                 assert malformed["code"] == "INVALID_INPUT_AUDIO_FRAME"
@@ -329,6 +350,14 @@ def test_live_voice_bounds_pcm16_frames_and_keeps_session_after_bad_input(tmp_pa
         assert row["status"] == "completed"
         assert row["diagnostics"]["input_audio_bytes"] == len(valid_pcm)
         assert row["diagnostics"]["audio_bytes"] == 960
+        assert row["diagnostics"]["audio_usage_provider_verified"] is False
+        assert row["usage"]["prompt_tokens"] > 0
+        assert row["usage"]["completion_tokens"] > 0
+        assert row["usage"]["total_tokens"] == (
+            row["usage"]["prompt_tokens"] + row["usage"]["completion_tokens"]
+        )
+        charged = app.state.api_keys.keys[row["api_key_id"]].charged_requests
+        assert charged[request_id] == row["usage"]["total_tokens"]
 
 
 def test_live_voice_rejects_invalid_output_pcm_frame_and_reclaims_worker(tmp_path: Path) -> None:

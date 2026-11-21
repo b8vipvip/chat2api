@@ -222,3 +222,10 @@ dispatch authorization timestamp are intentionally preserved: the server
 cannot infer whether those requests reached the Worker. This handshake does
 not claim provider-verified usage, multi-host transactions, or payment-provider
 refund support. It closes only the pre-dispatch admission crash window.
+
+
+## 启动恢复顺序
+
+生产入口安装配额运行时后会注册启动恢复钩子。服务开始接收请求前，先从持久化 Telemetry 中恢复 `reserved` / `committing` 状态对应的终态记录，按 `request_id` 重放幂等用量结算；随后用 API Key 的持久化 `charged_requests` 账本核对 `committing` 项，最后才释放已过期且没有终态结算证据的 `reserved` 项。恢复失败会阻止应用启动，避免在账本状态不确定时继续接受新请求。
+
+`/v1/audio/realtime` 使用相同的音频准入预留。当前上游没有可验证的音频 Token 用量，因此只结算确认的文字/转写 Token；零文字音频会话释放准入预留，不伪造音频 Token。钱包计费模型必须明确配置为零费率，正费率保持 fail-closed。

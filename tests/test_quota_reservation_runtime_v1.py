@@ -79,6 +79,7 @@ def test_runtime_reserves_prompt_plus_conservative_output_floor(tmp_path: Path) 
     assert any("image_generation" in value for value in app.state.quota_reservation_runtime_coverage)
     assert "/v1/audio/speech" in app.state.quota_reservation_runtime_coverage
     assert "/v1/audio/conversations" in app.state.quota_reservation_runtime_coverage
+    assert "/v1/audio/realtime" in app.state.quota_reservation_runtime_coverage
     store.close()
 
 
@@ -1037,3 +1038,66 @@ def test_wallet_dispatch_keeps_legacy_unowned_key_without_reservation_compatible
     principal = SimpleNamespace(kind="managed", key_id="legacy-key")
 
     assert authorize_wallet_dispatch(app, "req_legacy_unowned", principal) is False
+
+
+
+def test_runtime_startup_hook_recovers_terminal_usage_before_serving(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    app, store, api_keys = _runtime(tmp_path)
+    request_id = "req_runtime_startup_recovery_0001"
+    asyncio.run(reserve_request_quota(
+        app, request_id, SimpleNamespace(key_id="key-1"), "prompt", 4096,
+    ))
+    terminal = {
+        "request_id": request_id,
+        "api_key_id": "key-1",
+        "status": "completed",
+        "usage": {"prompt_tokens": 5, "completion_tokens": 12, "total_tokens": 17},
+    }
+    app.state.telemetry.get_many_persisted = lambda request_ids: {
+        value: terminal for value in request_ids if value == request_id
+    }
+
+    with TestClient(app):
+        pass
+
+    assert app.state.quota_reservation_recovery_status == "ready"
+    assert app.state.quota_reservation_recovery_result == {
+        "replayed": 1, "reconciled": 0, "expired": 0,
+    }
+    assert store.get(request_id)["state"] == "settled"
+    assert api_keys.keys["key-1"].tokens_used == 17
+    assert api_keys.charged_requests[request_id] == 17
+    store.close()
+
+
+
+@pytest.mark.asyncio
+async def test_live_voice_zero_text_releases_admission_hold_without_fake_audio_charge(tmp_path: Path) -> None:
+    from app.quota_reservation_runtime_v1 import reserve_audio_request_quota
+
+    app, store, api_keys = _runtime(tmp_path)
+    request_id = "req_live_voice_zero_text_0001"
+    reservation = await reserve_audio_request_quota(
+        app, request_id, SimpleNamespace(key_id="key-1", kind="managed"),
+        "", model_id="gpt-live",
+    )
+    assert reservation is not None
+    assert reservation["reserved_tokens"] >= 4096
+
+    await app.state.telemetry.usage_accounting({
+        "request_id": request_id,
+        "api_key_id": "key-1",
+        "request_type": "voice_call",
+        "status": "completed",
+        "usage": {
+            "prompt_tokens": 0, "completion_tokens": 0,
+            "total_tokens": 0, "estimated": True,
+        },
+    })
+
+    assert store.get(request_id)["state"] == "released"
+    assert api_keys.keys["key-1"].tokens_used == 0
+    assert api_keys.charged_requests == {}
+    store.close()

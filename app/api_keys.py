@@ -294,6 +294,11 @@ class ApiKeyStore:
             ledger = item.charged_requests if isinstance(item.charged_requests, dict) else {}
             prior = max(0, int(ledger.get(request_id, 0) or 0))
             if amount <= prior:
+                # The previous attempt may have updated the in-memory ledger
+                # and then failed while persisting it. Re-saving the existing
+                # idempotency entry makes a retry repair that interrupted write
+                # without incrementing tokens_used a second time.
+                await self.save()
                 return
             ledger[request_id] = amount
             item.charged_requests = ledger

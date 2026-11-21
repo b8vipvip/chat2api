@@ -57,7 +57,7 @@ from .native_content_v1 import (NativeContentStore, NativeChunkAssembler, native
 from .native_dom_evidence_v1 import NativeDomEvidenceStore
 from .native_capture_audit_v281 import capture_comparison
 from .native_snapshot_finality_v282 import native_snapshot_finality, native_terminal_view
-from .media_public_origin_v187 import media_base_for_request
+from .media_public_origin_v187 import effective_media_base_url, media_base_for_request
 from .response_history_media_v188 import history_safe_response_text
 from .responses_multimodal_input_v183 import (
     attachment_specs as canonical_attachment_specs,
@@ -1823,8 +1823,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         attachments_count: int = 0,
         media_items: list[dict[str, object]] | None = None,
         file_items: list[dict[str, object]] | None = None,
+        usage_override: dict[str, object] | None = None,
+        prompt_chars_override: int | None = None,
+        timings_override: dict[str, object] | None = None,
+        verify_replayed_usage_settlement: bool = False,
     ) -> tuple[dict[str, int], dict[str, object]]:
-        usage, token_meta = standard_usage(prompt, final_text)
+        if usage_override is None:
+            usage, token_meta = standard_usage(prompt, final_text)
+        else:
+            counts: dict[str, int] = {}
+            for field in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                value = usage_override.get(field)
+                if type(value) is not int or value < 0:
+                    raise ValueError("Recovered usage contains an invalid token count")
+                counts[field] = value
+            if counts["total_tokens"] != counts["prompt_tokens"] + counts["completion_tokens"]:
+                raise ValueError("Recovered usage token totals do not reconcile")
+            usage = counts
+            token_meta = {"estimated": bool(usage_override.get("estimated", True))}
+            estimator = str(usage_override.get("estimator") or "").strip()[:80]
+            if estimator:
+                token_meta["estimator"] = estimator
+        prompt_chars = len(prompt)
+        if prompt_chars_override is not None:
+            if type(prompt_chars_override) is not int or prompt_chars_override < 0:
+                raise ValueError("Recovered prompt character count is invalid")
+            prompt_chars = prompt_chars_override
+        timings = dict(timings_override) if isinstance(timings_override, dict) else state.timings()
         state.diagnostics["server_finalization_stage"] = "request-row-finalized"
         # Diagnostics only: bounded structural evidence for A/B/C/D visual
         # comparisons. Do not export DOM HTML, CSS text, URLs or image bytes.
@@ -1902,7 +1927,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "attachments_count": attachments_count,
                 "stream": stream,
                 "prompt_mode": prompt_mode,
-                "prompt_chars": len(prompt),
+                "prompt_chars": prompt_chars,
                 "completion_chars": len(final_text),
                 "response_media": media_items or [],
                 "response_media_count": len(media_items or []),
@@ -1912,17 +1937,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 **({"response_text": history_safe_response_text(final_text),
                     "response_text_available": bool(final_text)}
                    if final_text or status_value == "completed" else {}),
+                "response_text_provisional": "" if status_value == "completed" else None,
                 "status": status_value,
                 "probe_summary": worker_probes.summary(state.request_id),
                 "probe_capture_status": worker_probes.summary(state.request_id)["capture_status"],
                 "usage": {**usage, **token_meta},
-                "timings": state.timings(),
+                "timings": timings,
                 "diagnostics": dict(state.diagnostics),
                 "error": error,
             }
         )
+        if verify_replayed_usage_settlement:
+            completed_row = telemetry.get(state.request_id) or {}
+            if not await ensure_replayed_usage_settlement(completed_row):
+                raise RuntimeError("Recovered API-key usage settlement was not durably verified")
         # The terminal cursor is appended only after the authoritative
-        # telemetry terminal has been written. A crash between the two leaves
+        # telemetry terminal has been written and replay usage has been verified.
+        # A crash between the two leaves
         # replayable content but cannot falsely turn a running row into success.
         if state.mode1_web_chat and state.mode1_owner_key_id:
             try:
@@ -1966,6 +1997,230 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # are no longer eligible to be attached to a future request.
         await asyncio.to_thread(generated_staging.drop_request, state.request_id)
         return usage, token_meta
+
+    async def ensure_replayed_delivery_terminal(
+        request_id: str, owner: str, final_text: str,
+    ) -> bool:
+        """Repair the durable SSE delivery cursor after telemetry already finalized."""
+        snapshot = await event_journal.snapshot(request_id, owner)
+        terminal_status = str(snapshot.get("terminal_status") or "")
+        delivered = snapshot.get("delivered_text")
+        if not isinstance(delivered, str):
+            return False
+        if terminal_status:
+            return terminal_status == "completed" and delivered == final_text
+        if delivered and not final_text.startswith(delivered):
+            # Never append a second copy over an unrelated or divergent stream.
+            return False
+        remainder = final_text[len(delivered):]
+        if remainder:
+            await event_journal.append_delivery(request_id, owner, remainder)
+        await event_journal.append_delivery_terminal(
+            request_id, owner, len(final_text),
+        )
+        verified = await event_journal.snapshot(request_id, owner)
+        return bool(
+            verified.get("terminal_status") == "completed"
+            and verified.get("delivered_text") == final_text
+        )
+
+    async def ensure_replayed_usage_settlement(record: dict[str, Any]) -> bool:
+        """Retry and prove idempotent usage settlement before ACKing a replay."""
+        if (
+            not isinstance(record, dict)
+            or record.get("status") != "completed"
+            or record.get("web_chat_mode") is not True
+        ):
+            return False
+        request_id = str(record.get("request_id") or "")
+        key_id = str(record.get("api_key_id") or "")
+        usage = record.get("usage") if isinstance(record.get("usage"), dict) else {}
+        counts: dict[str, int] = {}
+        for field in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            value = usage.get(field)
+            if type(value) is not int or value < 0:
+                return False
+            counts[field] = value
+        if counts["total_tokens"] <= 0 or counts["total_tokens"] != (
+            counts["prompt_tokens"] + counts["completion_tokens"]
+        ):
+            return False
+        if not request_id or not key_id or key_id == "master":
+            return False
+        api_key = getattr(api_keys, "keys", {}).get(key_id)
+        accounting = getattr(telemetry, "usage_accounting", None)
+        if api_key is None or not callable(accounting):
+            return False
+
+        # Telemetry is written before its accounting callback. If the callback
+        # was interrupted, a duplicate Worker replay must retry that same
+        # idempotent request_id charge rather than ACKing a merely completed row.
+        await accounting(record)
+        ledger = getattr(api_key, "charged_requests", None)
+        if not isinstance(ledger, dict):
+            ledger = getattr(api_keys, "charged_requests", None)
+        charged = ledger.get(request_id, 0) if isinstance(ledger, dict) else 0
+        if type(charged) is not int or charged < counts["total_tokens"]:
+            return False
+
+        if getattr(app.state, "quota_reservation_runtime_enabled", False):
+            quota_store = getattr(app.state, "quota_reservations", None)
+            reservation = quota_store.get(request_id) if quota_store is not None else None
+            if reservation:
+                if str(reservation.get("key_id") or "") != key_id:
+                    return False
+                reservation_state = str(reservation.get("state") or "")
+                if reservation_state in {"reserved", "committing", "released"}:
+                    return False
+                if (
+                    reservation_state == "settled"
+                    and int(reservation.get("actual_tokens") or 0) < counts["total_tokens"]
+                ):
+                    return False
+
+        # A failed first finalization may have retained a provisional copy after
+        # the completed row was committed. Clear it only after ledger proof.
+        await telemetry.upsert({
+            "request_id": request_id,
+            "response_text_provisional": "",
+        })
+        confirmed = telemetry.get(request_id) or {}
+        return bool(
+            confirmed.get("status") == "completed"
+            and confirmed.get("response_text_available") is True
+            and confirmed.get("response_text_provisional", "") == ""
+        )
+
+    def media_base_for_websocket(websocket: WebSocket) -> str:
+        base_url = str(websocket.base_url)
+        if base_url.startswith("ws://"):
+            base_url = "http://" + base_url[5:]
+        elif base_url.startswith("wss://"):
+            base_url = "https://" + base_url[6:]
+        return effective_media_base_url(
+            base_url,
+            websocket.headers.get("origin"),
+            config.public_url,
+        )
+
+    async def finalize_replayed_chat_completion(
+        websocket: WebSocket, recovered_row: dict[str, Any],
+        message: dict[str, Any], client_id: str,
+    ) -> bool:
+        """Run the normal archive + usage + delivery finalizer for a durable replay."""
+        request_id = str(recovered_row.get("request_id") or message.get("request_id") or "")
+        owner = str(recovered_row.get("api_key_id") or "")
+        candidate = message.get("text")
+        if (
+            not request_id or not owner or owner == "master"
+            or not isinstance(candidate, str) or not candidate
+            or len(candidate) > 8_000_000
+            or "<chat2api-truncated>" in candidate
+            or str(recovered_row.get("status") or "").lower() != "recovering"
+        ):
+            return False
+
+        original_usage = recovered_row.get("usage")
+        original_usage = original_usage if isinstance(original_usage, dict) else {}
+        prompt_tokens = original_usage.get("prompt_tokens")
+        if type(prompt_tokens) is not int or prompt_tokens < 0:
+            return False
+        requested_model = str(recovered_row.get("requested_model") or "").strip()
+        response_id = str(recovered_row.get("response_id") or "").strip()
+        prompt_chars = recovered_row.get("prompt_chars")
+        if (
+            not requested_model or not response_id
+            or type(prompt_chars) is not int or prompt_chars < 0
+        ):
+            return False
+        timings = recovered_row.get("timings")
+        timings = dict(timings) if isinstance(timings, dict) else {}
+        raw_scopes = recovered_row.get("scopes")
+        scopes = (
+            tuple(value for value in raw_scopes if isinstance(value, str))
+            if isinstance(raw_scopes, (list, tuple)) else ("chat",)
+        )
+        if not scopes:
+            scopes = ("chat",)
+
+        state = RequestState(request_id=request_id, client_id=client_id)
+        state.mode1_web_chat = True
+        state.mode1_owner_key_id = owner
+        state.terminal_event_type = "chat.completed"
+        state.completed_mono = time.perf_counter()
+        state.diagnostics = (
+            dict(recovered_row.get("diagnostics"))
+            if isinstance(recovered_row.get("diagnostics"), dict) else {}
+        )
+        state.diagnostics.update({
+            "web_chat_request_recovery": "worker-terminal-replayed-after-broker-restart",
+            "web_chat_terminal_replay_type": "chat.completed",
+            "web_chat_terminal_replay_reconciled": "full-finalization",
+            "web_chat_terminal_replay_received_at": time.time(),
+            "worker_transport_replayed": True,
+            "worker_transport_recovery": "transport-outbox-v47",
+            "server_finalization_recovered_after_restart": True,
+        })
+        native_persisted = _native_snapshot_persist_best_effort(
+            native_content, request_id, owner, state.diagnostics,
+        )
+        state.diagnostics["native_snapshot_persisted"] = bool(
+            native_persisted or state.diagnostics.get("native_snapshot_persisted") is True
+        )
+
+        # A replayed terminal is still Worker-owned completion evidence. Only
+        # after the full text has been archived into request-owned storage may
+        # the API publish completed status and settle quota/wallet reservations.
+        archived_text, media_items, file_items = await archive_verified_terminal(
+            state, candidate, owner, request_id, media_base_for_websocket(websocket),
+        )
+        # The SSE journal retains at most two million final-text characters.
+        # Check after media/file rewriting so large inline Base64 assets can be
+        # archived into compact owned URLs before applying the delivery bound.
+        if len(archived_text) > 2_000_000:
+            raise ValueError("Recovered response exceeds the durable SSE delivery limit")
+        completion_usage, token_meta = standard_usage("", archived_text)
+        completion_tokens = completion_usage.get("completion_tokens")
+        if type(completion_tokens) is not int or completion_tokens < 0:
+            raise ValueError("Recovered completion usage estimate is invalid")
+        usage_override = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+            **token_meta,
+        }
+        principal = ApiPrincipal(
+            key_id=owner,
+            name=str(recovered_row.get("api_key_name") or "Web Chat"),
+            kind=str(recovered_row.get("auth_kind") or "managed"),
+            scopes=scopes,
+        )
+        await record_request(
+            state,
+            requested_model,
+            "",
+            "completed",
+            principal,
+            stream=bool(recovered_row.get("stream", True)),
+            prompt_mode=str(recovered_row.get("prompt_mode") or "auto"),
+            response_id=response_id,
+            final_text=archived_text,
+            request_type=str(recovered_row.get("request_type") or "web_chat"),
+            attachments_count=(
+                recovered_row.get("attachments_count")
+                if type(recovered_row.get("attachments_count")) is int
+                and recovered_row.get("attachments_count") >= 0 else 0
+            ),
+            media_items=media_items,
+            file_items=file_items,
+            usage_override=usage_override,
+            prompt_chars_override=prompt_chars,
+            timings_override=timings,
+            verify_replayed_usage_settlement=True,
+        )
+        if not await ensure_replayed_delivery_terminal(request_id, owner, archived_text):
+            raise RuntimeError("Recovered SSE delivery terminal was not durably journaled")
+        return True
 
     async def record_request_queued(
         *, request_id: str, response_id: str, requested_model: str, prompt: str,
@@ -3578,6 +3833,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 generated_staging.ingest,
                                 request_id=request_id,
                                 upload_id=message.get("upload_id"),
+                                owner_key_id=str((telemetry.get(request_id) or {}).get("api_key_id") or ""),
                                 filename=message.get("filename"),
                                 mime=message.get("mime"),
                                 sequence=message.get("sequence"),
@@ -3724,6 +3980,68 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         recovered_row, message, client_id,
                     ):
                         replay_owner = str(recovered_row.get("api_key_id") or "")
+                        if message_type == "chat.completed" and str(recovered_row.get("status") or "").lower() == "recovering":
+                            try:
+                                # The journal intentionally keeps only a bounded
+                                # terminal summary, never the potentially multi-MiB
+                                # inline media payload. Archive the full Worker text
+                                # before publishing any user-visible completion.
+                                await event_journal.append_worker_event(
+                                    request_id, replay_owner, message,
+                                )
+                                finalized = await finalize_replayed_chat_completion(
+                                    websocket, recovered_row, message, client_id,
+                                )
+                            except Exception as recovery_error:
+                                logger.exception(
+                                    "Replayed Worker completion finalization failed request_id=%s error_type=%s",
+                                    request_id, type(recovery_error).__name__,
+                                )
+                                try:
+                                    diagnostics = (
+                                        dict(recovered_row.get("diagnostics"))
+                                        if isinstance(recovered_row.get("diagnostics"), dict) else {}
+                                    )
+                                    diagnostics.update({
+                                        "web_chat_terminal_replay_reconciled": "retryable-finalization-failure",
+                                        "web_chat_terminal_replay_error": type(recovery_error).__name__,
+                                        "web_chat_terminal_replay_received_at": time.time(),
+                                    })
+                                    await telemetry.upsert({
+                                        "request_id": request_id,
+                                        "response_text_provisional": str(message.get("text") or "")[:50_000],
+                                        "diagnostics": diagnostics,
+                                    })
+                                except Exception:
+                                    logger.exception(
+                                        "Could not persist provisional replay text request_id=%s",
+                                        request_id,
+                                    )
+                                await websocket.send_json({
+                                    "type": "chat.terminal.ack",
+                                    "request_id": request_id,
+                                    "terminal_type": message_type,
+                                    "accepted": False,
+                                    "reason": "terminal_finalization_retryable",
+                                })
+                                continue
+                            if finalized:
+                                logger.info(
+                                    "Fully finalized replayed Worker completion request_id=%s",
+                                    request_id,
+                                )
+                                await websocket.send_json({
+                                    "type": "chat.terminal.ack",
+                                    "request_id": request_id,
+                                    "terminal_type": message_type,
+                                    "accepted": True,
+                                    "recovered": True,
+                                })
+                                continue
+                        # Late replay after the recovery grace period, or a row
+                        # missing the original usage/request identity evidence,
+                        # remains provisional. Never fabricate a successful
+                        # response or charge without the durable admission data.
                         projection = replayed_terminal_projection(recovered_row, message)
                         recovered_status = str(projection["status"])
                         candidate_text = str(projection.get("response_text") or "")
@@ -3785,13 +4103,78 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         and replay_diagnostics.get("worker_transport_recovery") == "transport-outbox-v47"
                     ):
                         if is_already_finalized_worker_terminal(recovered_row, client_id, message_type):
-                            await websocket.send_json({
-                                "type": "chat.terminal.ack",
-                                "request_id": request_id,
-                                "terminal_type": message_type,
-                                "accepted": True,
-                                "already_finalized": True,
-                            })
+                            delivery_durable = True
+                            if (
+                                message_type == "chat.completed"
+                                and recovered_row.get("web_chat_mode") is True
+                                and str(recovered_row.get("status") or "").lower() == "completed"
+                            ):
+                                try:
+                                    delivery_durable = await ensure_replayed_usage_settlement(
+                                        recovered_row,
+                                    )
+                                    if delivery_durable:
+                                        snapshot = await event_journal.snapshot(
+                                            request_id, str(recovered_row.get("api_key_id") or ""),
+                                        )
+                                        if snapshot.get("terminal_status") != "completed":
+                                            final_text = recovered_row.get("response_text")
+                                            delivery_durable = bool(
+                                                isinstance(final_text, str)
+                                                and recovered_row.get("response_text_available") is True
+                                                and await ensure_replayed_delivery_terminal(
+                                                    request_id,
+                                                    str(recovered_row.get("api_key_id") or ""),
+                                                    final_text,
+                                                )
+                                            )
+                                except Exception:
+                                    delivery_durable = False
+                            if delivery_durable:
+                                if (
+                                    message_type == "chat.completed"
+                                    and recovered_row.get("web_chat_mode") is True
+                                ):
+                                    diagnostics = (
+                                        dict(recovered_row.get("diagnostics"))
+                                        if isinstance(recovered_row.get("diagnostics"), dict) else {}
+                                    )
+                                    diagnostics.update({
+                                        "web_chat_terminal_replay_reconciled": "full-finalization",
+                                        "web_chat_terminal_replay_recovered_at": time.time(),
+                                    })
+                                    diagnostics.pop("web_chat_terminal_replay_error", None)
+                                    try:
+                                        await telemetry.upsert({
+                                            "request_id": request_id,
+                                            "diagnostics": diagnostics,
+                                        })
+                                    except Exception:
+                                        delivery_durable = False
+                                if delivery_durable:
+                                    await websocket.send_json({
+                                        "type": "chat.terminal.ack",
+                                        "request_id": request_id,
+                                        "terminal_type": message_type,
+                                        "accepted": True,
+                                        "already_finalized": True,
+                                    })
+                                else:
+                                    await websocket.send_json({
+                                        "type": "chat.terminal.ack",
+                                        "request_id": request_id,
+                                        "terminal_type": message_type,
+                                        "accepted": False,
+                                        "reason": "usage_or_delivery_terminal_not_durable",
+                                    })
+                            else:
+                                await websocket.send_json({
+                                    "type": "chat.terminal.ack",
+                                    "request_id": request_id,
+                                    "terminal_type": message_type,
+                                    "accepted": False,
+                                    "reason": "usage_or_delivery_terminal_not_durable",
+                                })
                         else:
                             await websocket.send_json({
                                 "type": "chat.terminal.ack",

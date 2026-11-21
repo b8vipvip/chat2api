@@ -4,6 +4,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import logging
 import re
 import secrets
 import time
@@ -16,7 +17,10 @@ from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocket
 from .api_keys import ApiPrincipal
 from . import model_capability_routing_patch as model_routing
 from .responses_multimodal_input_v183 import attachment_specs
+from .token_usage import usage_for
+from .quota_reservation_runtime_v1 import authorize_wallet_dispatch, reserve_audio_request_quota
 
+logger = logging.getLogger(__name__)
 LIVE_PROTOCOL_VERSION = "chat2api-live-v1"
 SUPPORTED_MODELS = {"gpt-live", "gpt-live-mini"}
 MODEL_ALIASES = {"gpt-live-mini": "gpt-live"}
@@ -241,6 +245,10 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
         input_confirmed = 0
         session_ready = False
         error_message = ""
+        quota_reservation = None
+        observed_prompt_parts: list[str] = []
+        observed_completion_parts: list[str] = []
+        pending_input_text: dict[str, str] = {}
 
         # Session controls and remote audio are sent from separate coroutines.
         # Serialize WebSocket sends so binary PCM frames cannot collide with
@@ -294,17 +302,25 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     await send_json({"type": "input_audio_buffer.speech_stopped"})
                 elif event_type == "input.text.sent":
                     input_confirmed += 1
+                    item_id = str(event.get("item_id") or "")
+                    confirmed_text = pending_input_text.pop(item_id, "") or str(event.get("text") or "").strip()
+                    if confirmed_text:
+                        observed_prompt_parts.append(confirmed_text)
                     await send_json({
                         "type": "input_text.sent",
-                        "item_id": str(event.get("item_id") or ""),
-                        "text": str(event.get("text") or ""),
+                        "item_id": item_id,
+                        "text": str(event.get("text") or confirmed_text),
                     })
                 elif event_type == "input.media.sent":
                     input_confirmed += 1
                     observed_media_count += int(event.get("attachment_count") or 0)
+                    item_id = str(event.get("item_id") or "")
+                    confirmed_text = pending_input_text.pop(item_id, "") or str(event.get("text") or "").strip()
+                    if confirmed_text:
+                        observed_prompt_parts.append(confirmed_text)
                     await send_json({
                         "type": "input_media.sent",
-                        "item_id": str(event.get("item_id") or ""),
+                        "item_id": item_id,
                         "attachment_count": int(event.get("attachment_count") or 0),
                     })
                 elif event_type == "input.error":
@@ -317,6 +333,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 elif event_type == "transcript.final":
                     text = str(event.get("text") or "").strip()
                     if text:
+                        observed_prompt_parts.append(text)
                         await send_json({"type": "transcript.final", "text": text})
                 elif event_type == "response.created":
                     response_id = str(event.get("response_id") or uuid.uuid4())
@@ -386,10 +403,16 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     response_id = str(event.get("response_id") or "")
                     if response_id:
                         observed_response_count += 1
+                        completed_text = (
+                            text_by_response.pop(response_id, "")
+                            or str(event.get("text") or "")
+                        )
+                        if completed_text:
+                            observed_completion_parts.append(completed_text)
                         await send_json({
                             "type": "response.done",
                             "response_id": response_id,
-                            "text": text_by_response.pop(response_id, str(event.get("text") or "")),
+                            "text": completed_text,
                         })
                 elif event_type == "response.interrupted":
                     response_id = str(event.get("response_id") or "")
@@ -459,6 +482,21 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
             requested_client = str(start.get("client_id") or client_id or "").strip() or None
             selected_client = resolve_idle_client(requested_client, principal, requested_model)
             state = await broker.create(request_id, selected_client)
+            quota_reservation = await reserve_audio_request_quota(
+                app, request_id, principal,
+                str(start.get("instructions") or "")[:12000],
+                model_id=effective_model,
+            )
+            if quota_reservation:
+                state.diagnostics["quota_reservation_v1"] = {
+                    "state": "reserved",
+                    "reserved_tokens": int(quota_reservation.get("reserved_tokens") or 0),
+                    "estimate_policy": "text_input_tokens_plus_4096_audio_admission_floor_v1",
+                    "provider_usage_verified": False,
+                }
+            instructions = str(start.get("instructions") or "").strip()[:12000]
+            if instructions:
+                observed_prompt_parts.append(instructions)
             registry.busy_clients.add(selected_client)
             await telemetry.append({
                 "request_id": request_id,
@@ -475,6 +513,9 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 "status": "running",
                 "diagnostics": {"route": "chatgpt-voice-live", "session_id": session_id},
             })
+            await asyncio.to_thread(
+                authorize_wallet_dispatch, app, request_id, principal,
+            )
             # Mark dispatch intent BEFORE the async send. A delivery can
             # reach the Worker even when the transport raises before ACK;
             # finally must still send the exact-session stop in that case.
@@ -640,6 +681,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         await send_json({"type": "error", "code": "INPUT_TEXT_TOO_LONG", "message": "Live text input is limited to 12000 characters", "retryable": False})
                         continue
                     item_id = str(control.get("item_id") or item.get("id") or f"item_{uuid.uuid4().hex}")[:120]
+                    pending_input_text[item_id] = input_text
                     await registry.send(selected_client, {
                         "type": "voice.live.multimodal" if attachments else "voice.live.text",
                         "request_id": request_id,
@@ -714,37 +756,95 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 registry.busy_clients.discard(selected_client)
             if state is not None:
                 state.completed_mono = state.completed_mono or time.perf_counter()
-                with suppress(Exception):
-                    await telemetry.append({
-                        "request_id": request_id,
-                        "response_id": session_id,
-                        "client_id": selected_client,
-                        "api_key_id": principal.key_id,
-                        "api_key_name": principal.name,
-                        "auth_kind": principal.kind,
-                        "requested_model": effective_model,
-                        "request_type": "voice_call",
-                        "stream": True, "prompt_mode": "voice-call",
-                        "status": "cancelled" if error_message == "client-disconnected" else
-                                  "error" if error_message else
-                                  "completed" if session_ready and observed_response_count else "error",
-                        "attachments_count": observed_media_count,
-                        "audio_bytes": observed_audio_bytes,
-                        "diagnostics": {
-                            # Preserve request-scoped bridge/ICE diagnostics collected
-                            # by broker; this final telemetry record is the sole owner.
-                            **state.diagnostics,
-                            "route": "chatgpt-voice-live", "session_id": session_id,
-                            "session_ready": session_ready, "audio_bytes": observed_audio_bytes,
-                            "input_audio_bytes": observed_input_audio_bytes,
-                            "completed_responses": observed_response_count,
-                            "input_confirmed_turns": input_confirmed,
-                            "attachments_confirmed": observed_media_count,
-                            "browser_startup_error": error_message if error_message and not session_ready else None,
-                        },
-                        "timings": state.timings(),
-                        "error": error_message or None,
-                    })
+                # A completed response remains billable even if the browser
+                # disconnects later in the same live session. Only sessions
+                # with no completed response release their admission hold.
+                terminal_status = (
+                    "completed" if session_ready and observed_response_count else
+                    "cancelled" if error_message == "client-disconnected" else "error"
+                )
+                prompt_text = "\n".join(part for part in observed_prompt_parts if part).strip()
+                completion_text = "\n".join(part for part in observed_completion_parts if part).strip()
+                usage_estimate = usage_for(prompt_text, completion_text)
+                terminal_record = {
+                    "request_id": request_id,
+                    "response_id": session_id,
+                    "client_id": selected_client,
+                    "api_key_id": principal.key_id,
+                    "api_key_name": principal.name,
+                    "auth_kind": principal.kind,
+                    "requested_model": effective_model,
+                    "request_type": "voice_call",
+                    "stream": True, "prompt_mode": "voice-call",
+                    "status": terminal_status,
+                    "prompt_chars": len(prompt_text),
+                    "completion_chars": len(completion_text),
+                    "response_text": completion_text if terminal_status == "completed" else "",
+                    "response_text_available": bool(completion_text) if terminal_status == "completed" else False,
+                    "usage": {
+                        "prompt_tokens": usage_estimate.prompt_tokens,
+                        "completion_tokens": usage_estimate.completion_tokens,
+                        "total_tokens": usage_estimate.total_tokens,
+                        "estimated": usage_estimate.estimated,
+                        "estimator": usage_estimate.estimator,
+                    },
+                    "attachments_count": observed_media_count,
+                    "audio_bytes": observed_audio_bytes,
+                    "input_audio_bytes": observed_input_audio_bytes,
+                    "diagnostics": {
+                        # Preserve request-scoped bridge/ICE diagnostics collected
+                        # by broker; this final telemetry record is the sole owner.
+                        **state.diagnostics,
+                        "route": "chatgpt-voice-live", "session_id": session_id,
+                        "session_ready": session_ready, "audio_bytes": observed_audio_bytes,
+                        "input_audio_bytes": observed_input_audio_bytes,
+                        "completed_responses": observed_response_count,
+                        "input_confirmed_turns": input_confirmed,
+                        "attachments_confirmed": observed_media_count,
+                        "audio_usage_provider_verified": False,
+                        "usage_estimator": usage_estimate.estimator,
+                        "browser_startup_error": error_message if error_message and not session_ready else None,
+                    },
+                    "timings": state.timings(),
+                    "error": error_message or None,
+                }
+                persisted = False
+                for attempt in range(2):
+                    try:
+                        await telemetry.upsert(terminal_record)
+                        persisted = True
+                        break
+                    except Exception as telemetry_error:
+                        # A telemetry append may have succeeded before its
+                        # accounting callback failed. Retry the same request_id
+                        # so quota/key-ledger settlement is idempotent.
+                        logger.warning(
+                            "Live Voice terminal persistence retry request_id=%s attempt=%s error_type=%s",
+                            request_id, attempt + 1, type(telemetry_error).__name__,
+                        )
+                if not persisted and terminal_status == "completed":
+                    # Keep the admission hold for startup reconciliation; never
+                    # release quota after audio/text was already delivered.
+                    pass
+                elif terminal_status != "completed" and quota_reservation:
+                    try:
+                        await asyncio.to_thread(
+                            app.state.quota_reservations.release, request_id, principal.key_id,
+                        )
+                    except Exception:
+                        pass
+                if terminal_status != "completed":
+                    accounts = getattr(app.state, "user_accounts", None)
+                    billing = getattr(app.state, "user_billing", None)
+                    try:
+                        owner = accounts.owner_for_key(principal.key_id) if accounts is not None else None
+                        if owner and billing is not None:
+                            await asyncio.to_thread(
+                                billing.release_reservation, request_id, str(owner),
+                                reason="voice_call_not_completed",
+                            )
+                    except Exception:
+                        pass
                 await broker.release(request_id)
             with suppress(Exception):
                 await websocket.close(code=1000)
