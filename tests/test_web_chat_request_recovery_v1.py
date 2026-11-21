@@ -475,7 +475,9 @@ const updates = [];
 const replies = [
   {status:200, ok:true, json:async()=>({
     request_id:"req_12345678", status:"running", terminal:false,
-    recoverable:true, active:true, phase:"generating", retry_after_ms:250
+    recoverable:true, active:true, phase:"reconnecting", retry_after_ms:250,
+    partial_text_available:true, partial_text_unverified:true,
+    partial_text:"durable partial"
   })},
   {status:200, ok:true, json:async()=>({
     request_id:"req_12345678", status:"completed", terminal:true,
@@ -505,7 +507,7 @@ assert(/^req_[A-Za-z0-9_-]{8,120}$/.test(api.createRequestId({randomUUID:()=>"12
   assert(calls.every(call=>call.method==="GET"));
   assert(calls.every(call=>call.credentials==="same-origin"));
   assert(calls.every(call=>call.url==="/api/user/chat/requests/req_12345678/recovery"));
-  assert(updates.some(value=>value.status==="running"));
+  assert(updates.some(value=>value.status==="running" && value.partial_text==="durable partial" && value.partial_text_unverified===true));
   assert(updates.some(value=>value.status==="completed"));
   const replayWindow = {};
   vm.runInNewContext(src, {
