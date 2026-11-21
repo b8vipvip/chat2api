@@ -83,6 +83,14 @@ assert(katexCalls.some(x => x.tex === "\\sqrt{4}" && x.options.displayMode === t
 assert(katexCalls.every(x => x.options.trust === false && x.options.throwOnError === false
   && x.options.maxExpand === 1000 && x.options.maxSize === 20));
 assert(!nodes.some(x => x.className === "math-fallback"));
+const unclosedMath = new Element("root");
+renderer.renderMarkdown(unclosedMath,twoDollar + "\\nnot closed");
+assert(unclosedMath.textContent.includes(twoDollar));
+assert(unclosedMath.textContent.includes("not closed"));
+const oversizedMath = new Element("root");
+renderer.renderRichBlocks(oversizedMath,[{type:"math",tex:"x".repeat(4097)}]);
+assert(all(oversizedMath).some(x => x.tag === "pre" && x.className === "math-fallback"));
+assert(oversizedMath.textContent.includes("[公式过长，未完整渲染]"));
 assert(host.textContent.includes("<svg onload=alert(1)>raw</svg>"));
 assert(host.textContent.includes("<img src=x onerror=alert(1)>"));
 const rich = new Element("root");
