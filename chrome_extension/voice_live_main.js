@@ -15,6 +15,7 @@
     remoteContext: null,
     remoteSource: null,
     remoteProcessor: null,
+    remoteTrack: null,
     remoteSink: null,
     remoteWatchTimer: null,
     inputQueue: Promise.resolve(),
@@ -184,6 +185,9 @@
   async function attachRemoteStream(stream) {
     if (!live.prepared || live.remoteProcessor || !stream) return;
     const ownerRequestId = live.requestId;
+    const remoteTrack = typeof stream.getAudioTracks === "function"
+      ? stream.getAudioTracks()[0] : stream.tracks?.[0];
+    if (!remoteTrack || remoteTrack.kind !== "audio" || remoteTrack.readyState === "ended") return;
     const context = new AudioContext();
     const source = context.createMediaStreamSource(stream);
     const processor = context.createScriptProcessor(2048, 1, 1);
@@ -194,12 +198,20 @@
     live.remoteContext = context;
     live.remoteSource = source;
     live.remoteProcessor = processor;
+    live.remoteTrack = remoteTrack;
     live.remoteSink = sink;
+    remoteTrack.addEventListener?.("ended", () => {
+      if (live.prepared && live.requestId === ownerRequestId && live.remoteTrack === remoteTrack) {
+        cleanupRemote("track_ended", false);
+      }
+    }, {once:true});
     try { await context.resume(); } catch (_) {}
-    if (!live.prepared || live.requestId !== ownerRequestId) return;
+    if (!live.prepared || live.requestId !== ownerRequestId ||
+        live.remoteProcessor !== processor || live.remoteTrack !== remoteTrack) return;
 
     processor.onaudioprocess = event => {
-      if (!live.prepared || live.requestId !== ownerRequestId) return;
+      if (!live.prepared || live.requestId !== ownerRequestId ||
+          live.remoteProcessor !== processor || live.remoteTrack !== remoteTrack) return;
       const samples = event.inputBuffer.getChannelData(0);
       const rms = rmsOf(samples);
       const now = Date.now();
@@ -230,30 +242,42 @@
   function watchRemoteTrack() {
     clearInterval(live.remoteWatchTimer);
     live.remoteWatchTimer = setInterval(() => {
-      if (!live.prepared || live.remoteProcessor) return;
+      if (!live.prepared) return;
       const state = base();
+      // Track identity can change after WebRTC renegotiation. Keep the current
+      // processor attached only while it owns the current live audio track.
+      const track = state?.requestId === live.requestId ? state.remoteTrack : null;
+      if (live.remoteProcessor) {
+        if (track === live.remoteTrack && track?.readyState !== "ended") return;
+        cleanupRemote(track === live.remoteTrack ? "track_ended" : "track_replaced", false);
+      }
       // The live bridge MUST consume the actual WebRTC remote track.
       // Waiting for state.recorder.stream deadlocks: response-only recording
       // is intentionally never armed during a bidirectional live session.
-      const track = state?.requestId === live.requestId ? state.remoteTrack : null;
       if (!track || track.kind !== "audio" || track.readyState === "ended") return;
       attachRemoteStream(new MediaStream([track]))
         .catch(error => post("voice.live.error", { error: String(error?.message || error) }));
     }, 80);
   }
 
-  function cleanupRemote() {
-    clearInterval(live.remoteWatchTimer);
-    live.remoteWatchTimer = null;
-    try { live.remoteProcessor?.disconnect(); } catch (_) {}
+  function cleanupRemote(reason = "session_stop", stopWatcher = true) {
+    if (stopWatcher) {
+      clearInterval(live.remoteWatchTimer);
+      live.remoteWatchTimer = null;
+    }
+    try {
+      if (live.remoteProcessor) live.remoteProcessor.onaudioprocess = null;
+      live.remoteProcessor?.disconnect();
+    } catch (_) {}
     try { live.remoteSource?.disconnect(); } catch (_) {}
     try { live.remoteSink?.disconnect(); } catch (_) {}
     try { live.remoteContext?.close(); } catch (_) {}
     live.remoteProcessor = null;
     live.remoteSource = null;
+    live.remoteTrack = null;
     live.remoteSink = null;
     live.remoteContext = null;
-    if (live.speaking) endRemoteSpeech("session_stop");
+    if (live.speaking) endRemoteSpeech(reason);
   }
 
   function reset() {
