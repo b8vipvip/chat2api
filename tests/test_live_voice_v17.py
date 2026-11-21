@@ -3,6 +3,7 @@ import subprocess
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from app.config import Settings
 from app.live_voice_patch import install_live_voice_patch
@@ -519,10 +520,12 @@ def test_realtime_session_token_is_invalidated_when_api_key_is_disabled(tmp_path
         client.app.state.api_keys.keys[key_id].enabled = False
 
         try:
-            with client.websocket_connect(token_path):
-                raise AssertionError("realtime token survived API key disable")
-        except Exception:
-            pass
+            with client.websocket_connect(token_path) as socket:
+                socket.receive_json()
+        except WebSocketDisconnect as error:
+            assert error.code == 4401
+        else:
+            raise AssertionError("realtime token survived API key disable")
 
 
 def test_realtime_session_token_issuance_is_bounded_per_api_key(tmp_path: Path) -> None:
