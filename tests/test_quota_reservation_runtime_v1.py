@@ -79,6 +79,7 @@ def test_runtime_reserves_prompt_plus_conservative_output_floor(tmp_path: Path) 
     assert any("image_generation" in value for value in app.state.quota_reservation_runtime_coverage)
     assert "/v1/audio/speech" in app.state.quota_reservation_runtime_coverage
     assert "/v1/audio/conversations" in app.state.quota_reservation_runtime_coverage
+    assert "/v1/audio/realtime" in app.state.quota_reservation_runtime_coverage
     store.close()
 
 
