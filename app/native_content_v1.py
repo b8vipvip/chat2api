@@ -147,9 +147,6 @@ MATH_ENUMS = {
     "numalign": {"left", "center", "right"},
     "denomalign": {"left", "center", "right"},
     "align": {"top", "bottom", "center", "baseline", "axis", "left", "right"},
-    "rowalign": {"top", "bottom", "center", "baseline", "axis"},
-    "columnalign": {"left", "center", "right"},
-    "groupalign": {"left", "center", "right", "decimalpoint"},
     "frame": {"none", "solid", "dashed"},
     "side": {"left", "right"},
     "encoding": {
@@ -171,8 +168,11 @@ MATH_SPACE_NAMES = {
     "mediummathspace", "thickmathspace", "verythickmathspace",
     "veryverythickmathspace",
 }
-MATH_ALIGN_LIST = {"top", "bottom", "center", "baseline", "axis",
-                   "left", "right", "decimalpoint"}
+MATH_ALIGN_VALUES = {
+    "rowalign": {"top", "bottom", "center", "baseline", "axis"},
+    "columnalign": {"left", "center", "right"},
+    "groupalign": {"left", "center", "right", "decimalpoint"},
+}
 MATH_NOTATION = {
     "longdiv", "actuarial", "radical", "box", "roundedbox", "circle",
     "left", "right", "top", "bottom", "updiagonalstrike", "downdiagonalstrike",
@@ -212,7 +212,7 @@ def _safe_math_attribute(tag: str, key: str, value: object) -> bool:
         )
     if key in {"rowalign", "columnalign", "groupalign"}:
         tokens = value.split()
-        return len(tokens) <= 16 and all(token in MATH_ALIGN_LIST for token in tokens)
+        return len(tokens) <= 16 and all(token in MATH_ALIGN_VALUES[key] for token in tokens)
     if key == "notation":
         tokens = value.split()
         return 1 <= len(tokens) <= 8 and all(token in MATH_NOTATION for token in tokens)
