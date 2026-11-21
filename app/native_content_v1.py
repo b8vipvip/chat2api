@@ -104,6 +104,125 @@ SVG_ID = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]{0,80}$")
 SVG_CLIP = re.compile(r"^url\(#([A-Za-z_][A-Za-z0-9_-]{0,80})\)$")
 SVG_RATIO = re.compile(r"^(?:none|x(?:Min|Mid|Max)Y(?:Min|Mid|Max))(?:\s+(?:meet|slice))?$")
 
+
+MATH_GLOBAL_ATTRS = {
+    "mathvariant", "mathsize", "mathcolor", "mathbackground",
+    "displaystyle", "scriptlevel", "dir",
+}
+MATH_ATTRS_BY_TAG = {
+    "math": {"display"},
+    "mo": {"stretchy", "fence", "separator", "symmetric", "largeop",
+           "movablelimits", "accent", "form", "lspace", "rspace", "minsize", "maxsize"},
+    "mfrac": {"linethickness", "numalign", "denomalign", "bevelled"},
+    "msub": {"subscriptshift"}, "msup": {"superscriptshift"},
+    "msubsup": {"subscriptshift", "superscriptshift"},
+    "munder": {"accentunder"}, "mover": {"accent"},
+    "munderover": {"accent", "accentunder"},
+    "mspace": {"width", "height", "depth"},
+    "mfenced": {"open", "close", "separators"},
+    "menclose": {"notation"},
+    "mtable": {"align", "rowalign", "columnalign", "rowspacing", "columnspacing",
+               "frame", "framespacing", "equalrows", "equalcolumns", "side",
+               "minlabelspacing", "columnwidth"},
+    "mtr": {"rowalign", "columnalign", "groupalign"},
+    "mtd": {"rowalign", "columnalign", "groupalign", "rowspan", "columnspan"},
+    "mpadded": {"width", "height", "depth", "lspace", "voffset"},
+    "annotation": {"encoding"},
+}
+MATH_BOOLEAN_ATTRS = {
+    "displaystyle", "stretchy", "fence", "separator", "symmetric", "largeop",
+    "movablelimits", "accent", "accentunder", "bevelled", "equalrows", "equalcolumns",
+}
+MATH_ENUMS = {
+    "mathvariant": {
+        "normal", "bold", "italic", "bold-italic", "double-struck", "bold-fraktur",
+        "script", "bold-script", "fraktur", "sans-serif", "bold-sans-serif",
+        "sans-serif-italic", "sans-serif-bold-italic", "monospace", "initial",
+        "tailed", "looped", "stretched",
+    },
+    "mathsize": {"small", "normal", "big"},
+    "display": {"block", "inline"},
+    "dir": {"ltr", "rtl"},
+    "form": {"prefix", "infix", "postfix"},
+    "numalign": {"left", "center", "right"},
+    "denomalign": {"left", "center", "right"},
+    "align": {"top", "bottom", "center", "baseline", "axis", "left", "right"},
+    "frame": {"none", "solid", "dashed"},
+    "side": {"left", "right"},
+    "encoding": {
+        "application/x-tex", "application/mathml-presentation+xml",
+        "application/mathml-content+xml", "text/plain",
+    },
+}
+MATH_LENGTH_ATTRS = {
+    "mathsize", "width", "height", "depth", "lspace", "rspace", "minsize",
+    "maxsize", "linethickness", "subscriptshift", "superscriptshift",
+    "minlabelspacing", "voffset",
+}
+MATH_LENGTH = re.compile(
+    r"^(?:[+-]?(?:\d{1,4}(?:\.\d{1,3})?|\.\d{1,3})"
+    r"(?:em|ex|px|pt|pc|in|cm|mm|%)|0)$"
+)
+MATH_SPACE_NAMES = {
+    "veryverythinmathspace", "verythinmathspace", "thinmathspace",
+    "mediummathspace", "thickmathspace", "verythickmathspace",
+    "veryverythickmathspace",
+}
+MATH_ALIGN_VALUES = {
+    "rowalign": {"top", "bottom", "center", "baseline", "axis"},
+    "columnalign": {"left", "center", "right"},
+    "groupalign": {"left", "center", "right", "decimalpoint"},
+}
+MATH_NOTATION = {
+    "longdiv", "actuarial", "radical", "box", "roundedbox", "circle",
+    "left", "right", "top", "bottom", "updiagonalstrike", "downdiagonalstrike",
+    "verticalstrike", "horizontalstrike", "madruwb",
+}
+MATH_MULTI_LENGTH_ATTRS = {"rowspacing", "columnspacing", "framespacing", "columnwidth"}
+
+
+def _safe_math_attribute(tag: str, key: str, value: object) -> bool:
+    """Validate a bounded MathML presentation attribute for its element."""
+    if key not in MATH_GLOBAL_ATTRS and key not in MATH_ATTRS_BY_TAG.get(tag, set()):
+        return False
+    if (not isinstance(value, str) or value != value.strip() or len(value) > 160
+            or any(ord(char) < 32 or ord(char) == 127 for char in value)):
+        return False
+    if key in MATH_BOOLEAN_ATTRS:
+        return value in {"true", "false"}
+    if key in MATH_ENUMS:
+        return value in MATH_ENUMS[key]
+    if key == "scriptlevel":
+        return bool(re.fullmatch(r"[+-]?\d{1,2}", value)
+                    and -10 <= int(value) <= 10)
+    if key in {"mathcolor", "mathbackground"}:
+        return bool(re.fullmatch(
+            r"(?:#[0-9a-fA-F]{3,8}|rgba?\([0-9.,\s%]+\)|"
+            r"black|white|red|green|blue|gray|grey|transparent|currentColor)", value
+        ) or MODERN_COLOR.fullmatch(value))
+    if key in MATH_LENGTH_ATTRS:
+        return (value in MATH_SPACE_NAMES
+                or value in {"thin", "medium", "thick", "infinity", "auto", "fit"}
+                or bool(MATH_LENGTH.fullmatch(value)))
+    if key in MATH_MULTI_LENGTH_ATTRS:
+        tokens = value.split()
+        return 1 <= len(tokens) <= 16 and all(
+            token in {"auto", "fit"} or token in MATH_SPACE_NAMES
+            or bool(MATH_LENGTH.fullmatch(token)) for token in tokens
+        )
+    if key in {"rowalign", "columnalign", "groupalign"}:
+        tokens = value.split()
+        return len(tokens) <= 16 and all(token in MATH_ALIGN_VALUES[key] for token in tokens)
+    if key == "notation":
+        tokens = value.split()
+        return 1 <= len(tokens) <= 8 and all(token in MATH_NOTATION for token in tokens)
+    if key in {"rowspan", "columnspan"}:
+        return bool(re.fullmatch(r"\d{1,3}", value) and 1 <= int(value) <= 256)
+    if key in {"open", "close", "separators"}:
+        return bool(re.fullmatch(r"[^<>\x00-\x1f\x7f]{0,16}", value))
+    return False
+
+
 def _safe_external_link(value: object) -> bool:
     """Allow only public HTTPS citation destinations; never session/local URLs."""
     if not isinstance(value, str) or not value or len(value) > 2048:
@@ -241,7 +360,7 @@ def validate_native_snapshot(payload: object) -> dict:
             raise ValueError("Unscoped SVG element")
         if set(value) - {"tag", "text", "children", "style", "media_index",
                           "intrinsic_width", "intrinsic_height", "source_sha256", "attrs",
-                          "col_span", "row_span", "href"}:
+                          "math_attrs", "col_span", "row_span", "href"}:
             raise ValueError("Native element has unsafe attributes")
         result = {"tag": tag}
         if "href" in value:
@@ -270,6 +389,13 @@ def validate_native_snapshot(payload: object) -> dict:
                    for key, val in value["attrs"].items()):
                 raise ValueError("Unsafe SVG attributes")
             result["attrs"] = dict(value["attrs"])
+        if "math_attrs" in value:
+            if tag not in MATH_TAGS or not isinstance(value["math_attrs"], dict) or len(value["math_attrs"]) > 24:
+                raise ValueError("Unsafe MathML attributes")
+            if any(not isinstance(key, str) or not _safe_math_attribute(tag, key, val)
+                   for key, val in value["math_attrs"].items()):
+                raise ValueError("Unsafe MathML attributes")
+            result["math_attrs"] = dict(value["math_attrs"])
         if tag == "img":
             if set(value) - {"tag", "media_index", "style",
                              "intrinsic_width", "intrinsic_height", "source_sha256"}:
@@ -906,7 +1032,7 @@ def native_public_v1_tree(root: dict) -> dict:
     """
     result = {key: value for key,value in root.items()
               if key not in ("intrinsic_width", "intrinsic_height", "source_sha256",
-                             "attrs", "children", "col_span", "row_span")}
+                             "attrs", "math_attrs", "children", "col_span", "row_span")}
     # Older native-v1 clients do not know these newer table layout styles.
     # Keep them only in the authenticated admin native preview.
     if "style" in result:

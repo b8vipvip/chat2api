@@ -3,6 +3,37 @@
   "use strict";
   const HTML_TAGS = new Set(["div","p","span","strong","em","h1","h2","h3","h4","ul","ol","li","blockquote","pre","code","table","thead","tbody","tr","td","th","figure","figcaption","img","hr","br","a"]);
   const MATH_TAGS = new Set(["math","semantics","mrow","mi","mo","mn","msub","mfrac","mtext","annotation","mover","munder","munderover","msup","msubsup","msqrt","mroot","mspace","mstyle","mtable","mtr","mtd","mmultiscripts","mphantom","menclose","mpadded","merror","ms","mfenced","mprescripts","none","mstack","mlongdiv","msgroup","msrow","mscarries","mscarry","msline"]);
+  const MATH_GLOBAL_ATTRS = new Set(["mathvariant","mathsize","mathcolor","mathbackground","displaystyle","scriptlevel","dir"]);
+  const MATH_ATTRS_BY_TAG = {
+    math:["display"],
+    mo:["stretchy","fence","separator","symmetric","largeop","movablelimits","accent","form","lspace","rspace","minsize","maxsize"],
+    mfrac:["linethickness","numalign","denomalign","bevelled"],
+    msub:["subscriptshift"],msup:["superscriptshift"],msubsup:["subscriptshift","superscriptshift"],
+    munder:["accentunder"],mover:["accent"],munderover:["accent","accentunder"],
+    mspace:["width","height","depth"],mfenced:["open","close","separators"],menclose:["notation"],
+    mtable:["align","rowalign","columnalign","rowspacing","columnspacing","frame","framespacing","equalrows","equalcolumns","side","minlabelspacing","columnwidth"],
+    mtr:["rowalign","columnalign","groupalign"],mtd:["rowalign","columnalign","groupalign","rowspan","columnspan"],
+    mpadded:["width","height","depth","lspace","voffset"],annotation:["encoding"]
+  };
+  const MATH_BOOLEAN_ATTRS = new Set(["displaystyle","stretchy","fence","separator","symmetric","largeop","movablelimits","accent","accentunder","bevelled","equalrows","equalcolumns"]);
+  const MATH_ENUMS = {
+    mathvariant:["normal","bold","italic","bold-italic","double-struck","bold-fraktur","script","bold-script","fraktur","sans-serif","bold-sans-serif","sans-serif-italic","sans-serif-bold-italic","monospace","initial","tailed","looped","stretched"],
+    mathsize:["small","normal","big"],display:["block","inline"],dir:["ltr","rtl"],
+    form:["prefix","infix","postfix"],numalign:["left","center","right"],denomalign:["left","center","right"],
+    align:["top","bottom","center","baseline","axis","left","right"],
+    frame:["none","solid","dashed"],side:["left","right"],
+    encoding:["application/x-tex","application/mathml-presentation+xml","application/mathml-content+xml","text/plain"]
+  };
+  const MATH_LENGTH_ATTRS = new Set(["mathsize","width","height","depth","lspace","rspace","minsize","maxsize","linethickness","subscriptshift","superscriptshift","minlabelspacing","voffset"]);
+  const MATH_LENGTH = /^(?:[+-]?(?:\d{1,4}(?:\.\d{1,3})?|\.\d{1,3})(?:em|ex|px|pt|pc|in|cm|mm|%)|0)$/;
+  const MATH_SPACE_NAMES = new Set(["veryverythinmathspace","verythinmathspace","thinmathspace","mediummathspace","thickmathspace","verythickmathspace","veryverythickmathspace"]);
+  const MATH_ALIGN_VALUES = {
+    rowalign:new Set(["top","bottom","center","baseline","axis"]),
+    columnalign:new Set(["left","center","right"]),
+    groupalign:new Set(["left","center","right","decimalpoint"])
+  };
+  const MATH_NOTATION = new Set(["longdiv","actuarial","radical","box","roundedbox","circle","left","right","top","bottom","updiagonalstrike","downdiagonalstrike","verticalstrike","horizontalstrike","madruwb"]);
+  const MATH_MULTI_LENGTH_ATTRS = new Set(["rowspacing","columnspacing","framespacing","columnwidth"]);
   const SVG_TAGS = new Set(["svg","g","path","line","rect","circle","ellipse","polyline","polygon","text","tspan","defs","clippath"]);
   const SAFE_TAGS = new Set([...HTML_TAGS,...MATH_TAGS,...SVG_TAGS]);
   const SVG_ATTRS = new Set(["viewBox","width","height","preserveAspectRatio","x","y","dx","dy","x1","x2","y1","y2","cx","cy","r","rx","ry","d","points","transform","fill","stroke","stroke-width","stroke-linecap","stroke-linejoin","stroke-dasharray","opacity","fill-opacity","stroke-opacity","text-anchor","dominant-baseline","font-size","font-weight","id","clip-path"]);
@@ -102,6 +133,38 @@
     if (COLOR_STYLES.has(key) && value.length <= 96) return HEX_COLOR.test(value) || RGB_COLOR.test(value) || MODERN_COLOR.test(value);
     return false;
   }
+  function validMathAttribute(tag,key,value) {
+    const local = MATH_ATTRS_BY_TAG[tag] || [];
+    if (!MATH_GLOBAL_ATTRS.has(key) && !local.includes(key)) return false;
+    if (typeof value !== "string" || value !== value.trim() || value.length > 160 ||
+        /[\u0000-\u001f\u007f]/.test(value)) return false;
+    if (MATH_BOOLEAN_ATTRS.has(key)) return value === "true" || value === "false";
+    if (MATH_ENUMS[key]) return MATH_ENUMS[key].includes(value);
+    if (key === "scriptlevel") return /^[+-]?\d{1,2}$/.test(value) && Number(value) >= -10 && Number(value) <= 10;
+    if (key === "mathcolor" || key === "mathbackground") {
+      return /^(?:#[0-9a-f]{3,8}|rgba?\([0-9.,\s%]+\)|black|white|red|green|blue|gray|grey|transparent|currentColor)$/i.test(value)
+        || MODERN_COLOR.test(value);
+    }
+    if (MATH_LENGTH_ATTRS.has(key)) {
+      return MATH_SPACE_NAMES.has(value) || ["thin","medium","thick","infinity","auto","fit"].includes(value) || MATH_LENGTH.test(value);
+    }
+    if (MATH_MULTI_LENGTH_ATTRS.has(key)) {
+      const tokens = value.split(/\s+/);
+      return tokens.length >= 1 && tokens.length <= 16 && tokens.every(token =>
+        ["auto","fit"].includes(token) || MATH_SPACE_NAMES.has(token) || MATH_LENGTH.test(token));
+    }
+    if (["rowalign","columnalign","groupalign"].includes(key)) {
+      const tokens = value.split(/\s+/), allowed = MATH_ALIGN_VALUES[key];
+      return tokens.length <= 16 && tokens.every(token => allowed.has(token));
+    }
+    if (key === "notation") {
+      const tokens = value.split(/\s+/);
+      return tokens.length >= 1 && tokens.length <= 8 && tokens.every(token => MATH_NOTATION.has(token));
+    }
+    if (key === "rowspan" || key === "columnspan") return /^\d{1,3}$/.test(value) && Number(value) >= 1 && Number(value) <= 256;
+    if (key === "open" || key === "close" || key === "separators") return /^[^<>\u0000-\u001f\u007f]{0,16}$/.test(value);
+    return false;
+  }
   function validateNode(value,depth,parentTag,counts) {
     if (!value || typeof value !== "object" || Array.isArray(value) || depth > 64 || counts.nodes >= MAX_NODES) return false;
     counts.nodes += 1;
@@ -109,12 +172,17 @@
     if (typeof tag !== "string" || !SAFE_TAGS.has(tag)) return false;
     if (SVG_TAGS.has(parentTag) && !SVG_TAGS.has(tag)) return false;
     if (SVG_TAGS.has(tag) && !SVG_TAGS.has(parentTag) && tag !== "svg") return false;
-    const allowed = new Set(["tag","text","children","style","media_index","intrinsic_width","intrinsic_height","source_sha256","attrs","col_span","row_span","href"]);
+    const allowed = new Set(["tag","text","children","style","media_index","intrinsic_width","intrinsic_height","source_sha256","attrs","math_attrs","col_span","row_span","href"]);
     if (Object.keys(value).some(key => !allowed.has(key))) return false;
     if (value.href !== undefined && (tag !== "a" || !safeExternalLinkUrl(value.href))) return false;
     if (Object.prototype.hasOwnProperty.call(value,"attrs")) {
       if (!SVG_TAGS.has(tag) || !value.attrs || typeof value.attrs !== "object" || Array.isArray(value.attrs) || Object.keys(value.attrs).length > 24) return false;
       if (Object.entries(value.attrs).some(([key,item]) => !validSvgAttribute(key,item))) return false;
+    }
+    if (Object.prototype.hasOwnProperty.call(value,"math_attrs")) {
+      if (!MATH_TAGS.has(tag) || !value.math_attrs || typeof value.math_attrs !== "object" ||
+          Array.isArray(value.math_attrs) || Object.keys(value.math_attrs).length > 24) return false;
+      if (Object.entries(value.math_attrs).some(([key,item]) => !validMathAttribute(tag,key,item))) return false;
     }
     if (tag === "img") {
       if (!Number.isInteger(value.media_index) || value.media_index < 0 || value.media_index >= 40) return false;
@@ -169,6 +237,7 @@
     } else element = document.createElement(tag);
     if (value.style) Object.entries(value.style).forEach(([key,item]) => { if (validStyle(key,item,tag)) element.style[key] = item; });
     if (value.attrs) Object.entries(value.attrs).forEach(([key,item]) => { if (validSvgAttribute(key,item)) element.setAttribute(key,item); });
+    if (value.math_attrs) Object.entries(value.math_attrs).forEach(([key,item]) => { if (validMathAttribute(tag,key,item)) element.setAttribute(key,item); });
     if (value.col_span !== undefined) element.colSpan = value.col_span;
     if (value.row_span !== undefined) element.rowSpan = value.row_span;
     if (tag === "img") {

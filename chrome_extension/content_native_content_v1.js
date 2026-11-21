@@ -144,6 +144,119 @@
     }
     return obj;
   }
+  // MathML presentation attributes carry layout semantics that cannot be
+  // reconstructed from text nodes alone (fraction rules, stretchy operators,
+  // script sizing, matrix alignment and spacing). Capture only a narrow,
+  // tag-aware allowlist; never forward arbitrary DOM attributes.
+  const mathGlobalAttrs = new Set([
+    "mathvariant","mathsize","mathcolor","mathbackground","displaystyle","scriptlevel","dir",
+  ]);
+  const mathAttrsByTag = {
+    math:["display"],
+    mo:["stretchy","fence","separator","symmetric","largeop","movablelimits","accent","form","lspace","rspace","minsize","maxsize"],
+    mfrac:["linethickness","numalign","denomalign","bevelled"],
+    msub:["subscriptshift"],msup:["superscriptshift"],msubsup:["subscriptshift","superscriptshift"],
+    munder:["accentunder"],mover:["accent"],munderover:["accent","accentunder"],
+    mspace:["width","height","depth"],
+    mfenced:["open","close","separators"],
+    menclose:["notation"],
+    mtable:["align","rowalign","columnalign","rowspacing","columnspacing","frame","framespacing","equalrows","equalcolumns","side","minlabelspacing","columnwidth"],
+    mtr:["rowalign","columnalign","groupalign"],
+    mtd:["rowalign","columnalign","groupalign","rowspan","columnspan"],
+    mpadded:["width","height","depth","lspace","voffset"],
+    annotation:["encoding"],
+  };
+  const mathBooleanAttrs = new Set([
+    "displaystyle","stretchy","fence","separator","symmetric","largeop",
+    "movablelimits","accent","accentunder","bevelled","equalrows","equalcolumns",
+  ]);
+  const mathEnums = {
+    mathvariant:["normal","bold","italic","bold-italic","double-struck","bold-fraktur",
+      "script","bold-script","fraktur","sans-serif","bold-sans-serif",
+      "sans-serif-italic","sans-serif-bold-italic","monospace","initial","tailed","looped","stretched"],
+    mathsize:["small","normal","big"],
+    display:["block","inline"],
+    dir:["ltr","rtl"],
+    form:["prefix","infix","postfix"],
+    numalign:["left","center","right"],denomalign:["left","center","right"],
+    align:["top","bottom","center","baseline","axis","left","right"],
+    frame:["none","solid","dashed"],side:["left","right"],
+    encoding:["application/x-tex","application/mathml-presentation+xml",
+      "application/mathml-content+xml","text/plain"],
+  };
+  const mathLengthAttrs = new Set([
+    "mathsize","width","height","depth","lspace","rspace","minsize","maxsize",
+    "linethickness","subscriptshift","superscriptshift","minlabelspacing","voffset",
+  ]);
+  const mathLength = /^(?:[+-]?(?:\d{1,4}(?:\.\d{1,3})?|\.\d{1,3})(?:em|ex|px|pt|pc|in|cm|mm|%)|0)$/;
+  const mathSpaceNames = new Set([
+    "veryverythinmathspace","verythinmathspace","thinmathspace","mediummathspace",
+    "thickmathspace","verythickmathspace","veryverythickmathspace",
+  ]);
+  const mathColor = /^(?:#[0-9a-f]{3,8}|rgba?\([0-9.,\s%]+\)|black|white|red|green|blue|gray|grey|transparent|currentColor)$/i;
+  const mathAlignValues = {
+    rowalign:new Set(["top","bottom","center","baseline","axis"]),
+    columnalign:new Set(["left","center","right"]),
+    groupalign:new Set(["left","center","right","decimalpoint"]),
+  };
+  const mathNotation = new Set(["longdiv","actuarial","radical","box","roundedbox","circle",
+    "left","right","top","bottom","updiagonalstrike","downdiagonalstrike",
+    "verticalstrike","horizontalstrike","madruwb"]);
+  function safeMathAttr(tag,key,raw) {
+    const local = mathAttrsByTag[tag] || [];
+    if (!mathGlobalAttrs.has(key) && !local.includes(key)) return null;
+    if (typeof raw !== "string" || raw !== raw.trim() || raw.length > 160 ||
+        /[\u0000-\u001f\u007f]/.test(raw)) return null;
+    if (mathBooleanAttrs.has(key)) return ["true","false"].includes(raw) ? raw : null;
+    if (mathEnums[key]) return mathEnums[key].includes(raw) ? raw : null;
+    if (key === "scriptlevel") {
+      if (!/^[+-]?\d{1,2}$/.test(raw)) return null;
+      const number = Number(raw);
+      return Number.isInteger(number) && number >= -10 && number <= 10 ? raw : null;
+    }
+    if (key === "mathcolor" || key === "mathbackground") return mathColor.test(raw) || modernColor.test(raw) ? raw : null;
+    if (mathLengthAttrs.has(key)) {
+      if (mathSpaceNames.has(raw) || ["thin","medium","thick","infinity","auto","fit"].includes(raw)) return raw;
+      if (key === "mathsize" && ["small","normal","big"].includes(raw)) return raw;
+      return mathLength.test(raw) ? raw : null;
+    }
+    if (["rowspacing","columnspacing","framespacing","columnwidth"].includes(key)) {
+      const tokens = raw.split(/\s+/);
+      if (tokens.length < 1 || tokens.length > 16) return null;
+      return tokens.every(token => token === "auto" || token === "fit" ||
+        mathSpaceNames.has(token) || mathLength.test(token)) ? raw : null;
+    }
+    if (["rowalign","columnalign","groupalign"].includes(key)) {
+      const tokens = raw.split(/\s+/), allowed = mathAlignValues[key];
+      return tokens.length <= 16 && tokens.every(token => allowed.has(token)) ? raw : null;
+    }
+    if (key === "notation") {
+      const tokens = raw.split(/\s+/);
+      return tokens.length >= 1 && tokens.length <= 8 && tokens.every(token => mathNotation.has(token)) ? raw : null;
+    }
+    if (key === "rowspan" || key === "columnspan") {
+      if (!/^\d{1,3}$/.test(raw)) return null;
+      const number = Number(raw);
+      return number >= 1 && number <= 256 ? raw : null;
+    }
+    if (key === "open" || key === "close" || key === "separators") {
+      return /^[^<>\u0000-\u001f\u007f]{0,16}$/.test(raw) ? raw : null;
+    }
+    return null;
+  }
+  function safeMathAttributes(element) {
+    const tag = String(element.tagName || "").toLowerCase();
+    const result = {};
+    const keys = [...mathGlobalAttrs,...(mathAttrsByTag[tag] || [])];
+    for (const key of keys) {
+      const raw = element.getAttribute?.(key);
+      if (raw === null || raw === undefined) continue;
+      const value = safeMathAttr(tag,key,raw);
+      if (value !== null) result[key] = value;
+    }
+    return result;
+  }
+
   // Width is bounded by the 30k-node and 6 MiB budgets too. A 160-child
   // fanout rejected the final 3a882b reply while a stale 333-node snapshot
   // remained published. Preserve DOM order/layout without synthetic wrappers.
@@ -390,6 +503,10 @@
         }
         chars += raw.length; nodes += 1;
         const out = {tag:mapped,style:safeStyle(element)};
+        if(mathElement){
+          const mathAttrs=safeMathAttributes(element);
+          if(Object.keys(mathAttrs).length)out.math_attrs=mathAttrs;
+        }
         if(svgElement){
           const attributes=svgSafeAttributes(element,computed);
           if(Object.keys(attributes).length)out.attrs=attributes;
@@ -417,6 +534,10 @@
           !(svgElement && ["path","line","rect","circle","ellipse","polyline","polygon"].includes(mapped))) return null;
       nodes += 1;
       const result = {tag:mapped,style:safeStyle(element)};
+      if(mathElement){
+        const mathAttrs=safeMathAttributes(element);
+        if(Object.keys(mathAttrs).length)result.math_attrs=mathAttrs;
+      }
       if (mapped === "a") {
         const href = safeExternalLinkUrl(element.href || element.getAttribute?.("href") || "");
         if (href) result.href = href;

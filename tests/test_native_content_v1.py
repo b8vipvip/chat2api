@@ -721,3 +721,108 @@ def test_extended_mathml_matrix_and_fenced_expression_nodes_are_preserved():
     safe = validate_native_snapshot({"version": 1, "revision": 9, "root": tree})
     assert safe["root"]["children"][0]["tag"] == "mtable"
     assert safe["root"]["children"][1]["tag"] == "mfenced"
+
+
+def test_mathml_presentation_attributes_roundtrip_and_legacy_projection(tmp_path):
+    from app.native_content_v1 import native_public_v1_tree
+
+    document = {
+        "version": 1,
+        "revision": 12,
+        "root": {
+            "tag": "math",
+            "math_attrs": {
+                "display": "block",
+                "displaystyle": "true",
+                "scriptlevel": "0",
+                "mathvariant": "normal",
+            },
+            "children": [
+                {
+                    "tag": "mfrac",
+                    "math_attrs": {"linethickness": "0.08em", "bevelled": "false"},
+                    "children": [
+                        {"tag": "mi", "text": "x"},
+                        {"tag": "mi", "text": "y"},
+                    ],
+                },
+                {
+                    "tag": "mo",
+                    "math_attrs": {
+                        "stretchy": "true", "largeop": "true",
+                        "lspace": "0.2em", "rspace": "0.2em",
+                    },
+                    "text": "∑",
+                },
+                {
+                    "tag": "mtable",
+                    "math_attrs": {
+                        "columnalign": "left center",
+                        "rowspacing": "0.5em 1em",
+                        "columnspacing": "0.7em 0.7em",
+                        "frame": "solid",
+                        "equalrows": "true",
+                        "columnwidth": "auto auto",
+                    },
+                    "children": [{
+                        "tag": "mtr",
+                        "math_attrs": {"rowalign": "center"},
+                        "children": [{
+                            "tag": "mtd",
+                            "math_attrs": {"columnspan": "2", "rowspan": "2", "columnalign": "center"},
+                            "children": [{"tag": "mrow", "children": [{"tag": "mi", "text": "a"}]}],
+                        }],
+                    }],
+                },
+                {
+                    "tag": "mfenced",
+                    "math_attrs": {"open": "(", "close": ")", "separators": ",;"},
+                    "children": [{"tag": "mi", "text": "z"}],
+                },
+                {
+                    "tag": "annotation",
+                    "math_attrs": {"encoding": "application/x-tex"},
+                    "text": r"\frac{x}{y}",
+                },
+            ],
+        },
+    }
+    safe = validate_native_snapshot(document)
+    assert safe == document
+    store = NativeContentStore(tmp_path)
+    assert store.publish("req_mathattrs_12345", "owner", document)
+    assert store.persist("req_mathattrs_12345", "owner")
+    assert NativeContentStore(tmp_path).get("req_mathattrs_12345", "owner") == safe
+
+    public = native_public_v1_tree(safe["root"])
+
+    def assert_no_math_attrs(node):
+        assert "math_attrs" not in node
+        for child in node.get("children", []):
+            assert_no_math_attrs(child)
+
+    assert public["tag"] == "span"
+    assert_no_math_attrs(public)
+
+
+@pytest.mark.parametrize("tag,attrs", [
+    ("math", {"onclick": "alert(1)"}),
+    ("math", {"scriptlevel": "999"}),
+    ("mo", {"stretchy": "yes"}),
+    ("mo", {"lspace": "0.2em;position:fixed"}),
+    ("mfrac", {"linethickness": "0.2em;url(https://evil.invalid)"}),
+    ("mtable", {"columnalign": "left;position:fixed"}),
+    ("mtable", {"columnwidth": "auto url(https://evil.invalid)"}),
+    ("mtd", {"rowspan": "999"}),
+    ("annotation", {"encoding": "text/html"}),
+    ("mfenced", {"open": "<script>"}),
+    ("mi", {"mathcolor": "url(https://evil.invalid/pixel)"}),
+    ("div", {"stretchy": "true"}),
+])
+def test_mathml_presentation_attributes_reject_unsafe_values_and_scopes(tag, attrs):
+    with pytest.raises(ValueError, match="MathML attributes"):
+        validate_native_snapshot({
+            "version": 1,
+            "revision": 1,
+            "root": {"tag": tag, "math_attrs": attrs},
+        })

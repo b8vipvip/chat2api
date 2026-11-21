@@ -34,12 +34,22 @@ const good = {
     {tag:"svg",attrs:{viewBox:"0 0 10 10"},children:[
       {tag:"path",attrs:{d:"M0 0 L10 10",stroke:"#123456"}}
     ]},
-    {tag:"math",children:[
-      {tag:"mrow",children:[{tag:"mi",text:"x"},{tag:"mo",text:"="},{tag:"mn",text:"1"}]},
-      {tag:"mtable",children:[{tag:"mtr",children:[{tag:"mtd",children:[{tag:"mrow",children:[{tag:"mi",text:"a"}]}]}]}]},
-      {tag:"mfenced",children:[{tag:"mphantom",children:[{tag:"mn",text:"0"}]}]},
+    {tag:"math",math_attrs:{display:"block",displaystyle:"true",scriptlevel:"0",mathvariant:"normal"},children:[
+      {tag:"mrow",children:[
+        {tag:"mfrac",math_attrs:{linethickness:"0.08em",bevelled:"false"},
+          children:[{tag:"mi",text:"x"},{tag:"mi",text:"y"}]},
+        {tag:"mo",math_attrs:{stretchy:"true",largeop:"true",lspace:"0.2em"},text:"="},
+        {tag:"mn",text:"1"}
+      ]},
+      {tag:"mtable",math_attrs:{columnalign:"left center",rowspacing:"0.5em 1em",frame:"solid",equalrows:"true"},
+        children:[{tag:"mtr",math_attrs:{rowalign:"center"},children:[
+          {tag:"mtd",math_attrs:{columnspan:"2",rowspan:"2",columnalign:"center"},
+            children:[{tag:"mrow",children:[{tag:"mi",text:"a"}]}]}
+        ]}]},
+      {tag:"mfenced",math_attrs:{open:"(",close:")",separators:",;"},
+        children:[{tag:"mphantom",children:[{tag:"mn",text:"0"}]}]},
       {tag:"semantics",children:[{tag:"mrow",children:[{tag:"mi",text:"x"}]},
-        {tag:"annotation",text:"\\\\frac{x}{y}"}]}
+        {tag:"annotation",math_attrs:{encoding:"application/x-tex"},text:"\\frac{x}{y}"}]}
     ]},
     {tag:"a",href:"https://example.org/citation",children:[{tag:"span",text:"citation"}]}
   ]}
@@ -68,6 +78,17 @@ assert.equal(renderer.validateSnapshot(unsafeLink),false);
 const unsafeHrefOnDiv = structuredClone(good);
 unsafeHrefOnDiv.root.href = "https://example.org";
 assert.equal(renderer.validateSnapshot(unsafeHrefOnDiv),false);
+const unsafeMathAttribute = structuredClone(good);
+unsafeMathAttribute.root.children[1].math_attrs = {onclick:"alert(1)"};
+assert.equal(renderer.validateSnapshot(unsafeMathAttribute),false);
+const unsafeMathValue = structuredClone(good);
+unsafeMathValue.root.children[1].children[0].children[0].math_attrs = {
+  linethickness:"0.08em;position:fixed"
+};
+assert.equal(renderer.validateSnapshot(unsafeMathValue),false);
+const wrongMathAttributeScope = structuredClone(good);
+wrongMathAttributeScope.root.children[1].math_attrs = {stretchy:"true"};
+assert.equal(renderer.validateSnapshot(wrongMathAttributeScope),false);
 
 const renderedHost = new FakeElement("host");
 assert.equal(renderer.renderNativeSnapshot(renderedHost,good),true);
@@ -79,6 +100,27 @@ function findTag(node,tag) {
   }
   return null;
 }
+const renderedMath = findTag(renderedHost,"math");
+const renderedFraction = findTag(renderedHost,"mfrac");
+const renderedOperator = findTag(renderedHost,"mo");
+const renderedTable = findTag(renderedHost,"mtable");
+const renderedCell = findTag(renderedHost,"mtd");
+const renderedFence = findTag(renderedHost,"mfenced");
+const renderedAnnotation = findTag(renderedHost,"annotation");
+assert.equal(renderedMath.attributes.display,"block");
+assert.equal(renderedMath.attributes.displaystyle,"true");
+assert.equal(renderedMath.attributes.scriptlevel,"0");
+assert.equal(renderedFraction.attributes.linethickness,"0.08em");
+assert.equal(renderedFraction.attributes.bevelled,"false");
+assert.equal(renderedOperator.attributes.stretchy,"true");
+assert.equal(renderedOperator.attributes.lspace,"0.2em");
+assert.equal(renderedTable.attributes.columnalign,"left center");
+assert.equal(renderedTable.attributes.rowspacing,"0.5em 1em");
+assert.equal(renderedCell.attributes.columnspan,"2");
+assert.equal(renderedCell.attributes.rowspan,"2");
+assert.equal(renderedFence.attributes.open,"(");
+assert.equal(renderedFence.attributes.close,")");
+assert.equal(renderedAnnotation.attributes.encoding,"application/x-tex");
 const renderedLink = findTag(renderedHost,"a");
 assert.ok(renderedLink);
 assert.equal(renderedLink.href,"https://example.org/citation");
