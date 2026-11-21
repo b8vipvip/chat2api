@@ -471,6 +471,7 @@ def install_quota_reservation_runtime_v1(app: Any) -> Any:
         try:
             replayed = await store.recover_committing(telemetry, api_keys)
             reconciled = store.reconcile(api_keys)
+            expired = store.expire_reservations()
         except Exception as error:
             app.state.quota_reservation_recovery_status = "failed"
             logger.exception("Quota reservation startup recovery failed")
@@ -479,6 +480,7 @@ def install_quota_reservation_runtime_v1(app: Any) -> Any:
         app.state.quota_reservation_recovery_result = {
             "replayed": int(replayed or 0),
             "reconciled": int(reconciled or 0),
+            "expired": int(expired or 0),
         }
 
     app.router.add_event_handler("startup", recover_quota_reservations_on_startup)
