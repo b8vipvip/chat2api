@@ -1936,6 +1936,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 **({"response_text": history_safe_response_text(final_text),
                     "response_text_available": bool(final_text)}
                    if final_text or status_value == "completed" else {}),
+                "response_text_provisional": "" if status_value == "completed" else None,
                 "status": status_value,
                 "probe_summary": worker_probes.summary(state.request_id),
                 "probe_capture_status": worker_probes.summary(state.request_id)["capture_status"],
