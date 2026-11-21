@@ -54,8 +54,13 @@
   }
 
   function renderMath(host, source, displayMode) {
-    const tex = String(source || "").slice(0, MAX_MATH_CHARS);
-    if (!tex.trim()) return;
+    const raw = String(source || "");
+    if (!raw.trim()) return;
+    if (raw.length > MAX_MATH_CHARS) {
+      mathFallback(host, raw.slice(0, MAX_MATH_CHARS) + "\n[公式过长，未完整渲染]", displayMode);
+      return;
+    }
+    const tex = raw;
     const katex = window.katex;
     if (!katex || typeof katex.render !== "function") {
       mathFallback(host, tex, displayMode);
@@ -177,15 +182,14 @@
           continue;
         }
         const close = trimmed === "$$" ? "$$" : "\\]";
-        const math = [];
-        const openingLine = line;
-        i++;
-        while (i < lines.length && lines[i].trim() !== close) math.push(lines[i++]);
-        if (i >= lines.length) {
-          paragraph(host, [openingLine]);
-          continue;
+        let end = i + 1;
+        while (end < lines.length && lines[end].trim() !== close) end++;
+        if (end >= lines.length) {
+          paragraph(host, lines.slice(i));
+          break;
         }
-        i++;
+        const math = lines.slice(i + 1, end);
+        i = end + 1;
         renderMath(host, math.join("\n"), true);
         continue;
       }
