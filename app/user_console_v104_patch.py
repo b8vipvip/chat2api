@@ -161,9 +161,17 @@ def _parse_json_maybe_wrapped(text: str) -> dict[str, Any] | None:
 
 
 def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
-    if getattr(app.state, "user_console_v104_installed", False):
+    # Treat the marker as complete only when every shared store is present.
+    # A partially initialized app (for example after a failed startup hook)
+    # must be safe to finish installing on a later call.
+    required_state = (
+        "user_accounts", "user_pricing", "user_billing", "user_payments",
+        "admin_audit",
+    )
+    if getattr(app.state, "user_console_v104_installed", False) and all(
+        getattr(app.state, name, None) is not None for name in required_state
+    ):
         return app
-    app.state.user_console_v104_installed = True
 
     settings = app.state.settings
     data_dir = Path(settings.data_dir)
@@ -183,6 +191,7 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
     app.state.user_pricing = pricing
     app.state.user_billing = billing
     app.state.user_payments = payments
+    app.state.user_console_v104_installed = True
 
     def admin_ok(request: Request) -> bool:
         if admin_sessions and admin_sessions.authenticate(request.cookies.get(ADMIN_SESSION_COOKIE)):
