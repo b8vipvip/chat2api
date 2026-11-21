@@ -418,6 +418,47 @@ def test_live_voice_rejects_oversized_initial_control_frame(tmp_path: Path) -> N
             assert response["retryable"] is False
 
 
+def test_live_voice_malformed_control_frames_do_not_terminate_session(tmp_path: Path) -> None:
+    app = app_live(tmp_path)
+    with TestClient(app) as client:
+        managed_key = create_managed_key(client)
+        client_id, extension_token = pair_extension(client)
+        with client.websocket_connect(f"/ws/extensions/{client_id}?token={extension_token}") as extension:
+            extension.receive_json()
+            with client.websocket_connect(
+                f"/v1/audio/realtime?client_id={client_id}",
+                headers={"Authorization": f"Bearer {managed_key}"},
+            ) as live:
+                live.send_json({"type": "session.start", "model": "gpt-live"})
+                started = extension.receive_json()
+                request_id = started["request_id"]
+                extension.send_json({
+                    "type": "image.progress", "kind": "voice-live",
+                    "request_id": request_id, "live_event": "session.ready",
+                })
+                assert live.receive_json()["type"] == "session.ready"
+
+                live.send_text("{not-json")
+                malformed_json = live.receive_json()
+                assert malformed_json["code"] == "INVALID_CONTROL_JSON"
+                assert malformed_json["retryable"] is False
+
+                live.send_text("[]")
+                non_object = live.receive_json()
+                assert non_object["code"] == "INVALID_CONTROL_FRAME"
+                assert non_object["retryable"] is False
+
+                live.send_json({"type": "ping", "timestamp": 123})
+                assert live.receive_json() == {"type": "pong", "timestamp": 123}
+
+                live.send_json({"type": "session.finish"})
+                assert extension.receive_json()["type"] == "voice.live.stop"
+
+        row = app.state.telemetry.get(request_id)
+        assert row["status"] == "error"
+        assert row["error"] is None
+
+
 def test_live_voice_requires_session_start_json_object(tmp_path: Path) -> None:
     with TestClient(app_live(tmp_path)) as client:
         managed_key = create_managed_key(client)
