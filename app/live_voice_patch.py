@@ -391,7 +391,8 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     })
                 elif event_type == "input.media.sent":
                     item_id = str(event.get("item_id") or "")
-                    confirmed_media_ids.update(pending_input_media_ids.pop(item_id, []))
+                    confirmed_item_media_ids = pending_input_media_ids.pop(item_id, [])
+                    confirmed_media_ids.update(confirmed_item_media_ids)
                     if not item_id or item_id not in confirmed_input_ids:
                         input_confirmed += 1
                         if item_id:
@@ -399,7 +400,10 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                                 confirmed_input_ids.clear()
                             confirmed_input_ids.add(item_id)
                     if not item_id or item_id not in confirmed_media_item_ids:
-                        observed_media_count += int(event.get("attachment_count") or 0)
+                        # The extension's reported attachment_count is
+                        # diagnostic only. Count only the server-authorized
+                        # file grants pending for this exact item ID.
+                        observed_media_count += len(confirmed_item_media_ids)
                         if item_id:
                             if len(confirmed_media_item_ids) >= 512:
                                 confirmed_media_item_ids.clear()
