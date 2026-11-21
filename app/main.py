@@ -4131,13 +4131,42 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 except Exception:
                                     delivery_durable = False
                             if delivery_durable:
-                                await websocket.send_json({
-                                    "type": "chat.terminal.ack",
-                                    "request_id": request_id,
-                                    "terminal_type": message_type,
-                                    "accepted": True,
-                                    "already_finalized": True,
-                                })
+                                if (
+                                    message_type == "chat.completed"
+                                    and recovered_row.get("web_chat_mode") is True
+                                ):
+                                    diagnostics = (
+                                        dict(recovered_row.get("diagnostics"))
+                                        if isinstance(recovered_row.get("diagnostics"), dict) else {}
+                                    )
+                                    diagnostics.update({
+                                        "web_chat_terminal_replay_reconciled": "full-finalization",
+                                        "web_chat_terminal_replay_recovered_at": time.time(),
+                                    })
+                                    diagnostics.pop("web_chat_terminal_replay_error", None)
+                                    try:
+                                        await telemetry.upsert({
+                                            "request_id": request_id,
+                                            "diagnostics": diagnostics,
+                                        })
+                                    except Exception:
+                                        delivery_durable = False
+                                if delivery_durable:
+                                    await websocket.send_json({
+                                        "type": "chat.terminal.ack",
+                                        "request_id": request_id,
+                                        "terminal_type": message_type,
+                                        "accepted": True,
+                                        "already_finalized": True,
+                                    })
+                                else:
+                                    await websocket.send_json({
+                                        "type": "chat.terminal.ack",
+                                        "request_id": request_id,
+                                        "terminal_type": message_type,
+                                        "accepted": False,
+                                        "reason": "usage_or_delivery_terminal_not_durable",
+                                    })
                             else:
                                 await websocket.send_json({
                                     "type": "chat.terminal.ack",
