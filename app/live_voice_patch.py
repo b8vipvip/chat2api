@@ -552,7 +552,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     continue
                 try:
                     control = json.loads(text)
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, RecursionError):
                     await send_json({
                         "type": "error", "code": "INVALID_CONTROL_JSON",
                         "message": "Live control frame must contain valid JSON",
