@@ -163,27 +163,41 @@
     if (!retained) throw new Error("Live text input could not be retained in the ChatGPT composer");
     assertLiveTurnOwner(active);
 
+    const hasNewUserTurn = () => {
+      const nodes = [...document.querySelectorAll("[data-message-author-role='user']")].filter(visible);
+      return nodes.slice(baselineUsers).some(node =>
+        normalize(node.innerText || node.textContent || "").includes(target));
+    };
     const button = await waitFor(() => {
       const value = sendButton();
       return buttonReady(value) ? value : null;
     }, 5000, 80);
+    let dispatchedEnter = false;
     if (button) button.click();
-    else dispatchEnter(findComposer());
-
-    let sent = await waitFor(() => !composerText(findComposer()), 2500, 80);
-    if (!sent && composerText(findComposer())) {
+    else {
       dispatchEnter(findComposer());
-      sent = await waitFor(() => !composerText(findComposer()), 3500, 80);
+      dispatchedEnter = true;
+    }
+
+    // Do not send a second Enter merely because the composer is slow to clear:
+    // a confirmed user turn is authoritative even while the composer UI lags.
+    let sent = await waitFor(
+      () => !composerText(findComposer()) || hasNewUserTurn(),
+      4000, 100,
+    );
+    if (!sent && !hasNewUserTurn() && !dispatchedEnter) {
+      dispatchEnter(findComposer());
+      dispatchedEnter = true;
+      sent = await waitFor(
+        () => !composerText(findComposer()) || hasNewUserTurn(),
+        4000, 100,
+      );
     }
     if (!sent) throw new Error("ChatGPT Voice did not confirm the live text send action");
 
     // Composer clearing only proves that a UI action happened; require the
     // actual new user turn before acknowledging delivery to the API caller.
-    const confirmed = await waitFor(() => {
-      const nodes = [...document.querySelectorAll("[data-message-author-role='user']")].filter(visible);
-      return nodes.slice(baselineUsers).some(node =>
-        normalize(node.innerText || node.textContent || "").includes(target));
-    }, 10000, 120);
+    const confirmed = hasNewUserTurn() || await waitFor(hasNewUserTurn, 10000, 120);
     if (!confirmed) throw new Error("ChatGPT Voice did not confirm the live text in a user conversation turn");
     assertLiveTurnOwner(active);
 
