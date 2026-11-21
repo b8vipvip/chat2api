@@ -125,6 +125,7 @@ def test_mode1_broker_extracts_forwarded_citation_roots_from_tool_metadata() -> 
                 "search_results": [{
                     "title": "Search result",
                     "url": "https://search.example.org/a",
+                    "citation_id": "turn0search0",
                 }],
                 "references": [{
                     "name": "Reference",
@@ -144,6 +145,7 @@ def test_mode1_broker_extracts_forwarded_citation_roots_from_tool_metadata() -> 
                 "url": "https://search.example.org/a",
                 "title": "Search result",
                 "snippet": "",
+                "id": "turn0search0",
             },
             {
                 "url": "https://docs.example.org/reference",
