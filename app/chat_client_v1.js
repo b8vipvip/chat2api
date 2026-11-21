@@ -224,9 +224,10 @@
 
   function referencesForMessage(message) {
     const events = Array.isArray(message?.toolEvents) ? message.toolEvents : [];
-    return normalizeToolReferences(events.flatMap(item =>
-      Array.isArray(item?.references) ? item.references : []
-    ));
+    return normalizeToolReferences([
+      ...(Array.isArray(message?.references) ? message.references : []),
+      ...events.flatMap(item => Array.isArray(item?.references) ? item.references : []),
+    ]);
   }
 
   function normalizeToolEvents(value, role) {
@@ -259,6 +260,10 @@
       const content = normalizeMessageContent(message.content, message.role);
       const pending = message.pending === true;
       const toolEvents = normalizeToolEvents(message.toolEvents,message.role);
+      const references = message.role === "assistant" ? normalizeToolReferences([
+        ...(Array.isArray(message.references) ? message.references : []),
+        ...toolEvents.flatMap(item => Array.isArray(item.references) ? item.references : []),
+      ]) : [];
       const emptyPendingAssistant = message.role === "assistant" && pending && content === "";
       if ((!content && !emptyPendingAssistant && !toolEvents.length)
           || (message.role === "assistant" && !String(content).trim() && !pending && !toolEvents.length)) return null;
@@ -274,6 +279,7 @@
           ? Math.min(message.lastEventId, Number.MAX_SAFE_INTEGER) : 0,
       };
       if (toolEvents.length) normalized.toolEvents = toolEvents;
+      if (references.length) normalized.references = references;
       return normalized;
     }).filter(Boolean) : [];
     const hasSavedAttachments = messages.some((message) => messageAttachmentIds(message).length);
@@ -1400,6 +1406,12 @@
           row.references = merged;
           enriched = true;
         }
+        const messagePrevious = Array.isArray(assistant.references) ? assistant.references : [];
+        const messageMerged = normalizeToolReferences([...messagePrevious, ...references]);
+        if (messageMerged.length !== messagePrevious.length) {
+          assistant.references = messageMerged;
+          enriched = true;
+        }
       }
       if (enriched) {
         while (rows.length > 6) rows.shift();
@@ -1419,6 +1431,10 @@
     const references = normalizeToolReferences(event.references);
     if (references.length) {
       row.references = normalizeToolReferences([...(Array.isArray(row.references) ? row.references : []), ...references]);
+      assistant.references = normalizeToolReferences([
+        ...(Array.isArray(assistant.references) ? assistant.references : []),
+        ...references,
+      ]);
     }
     while (rows.length > 6) rows.shift();
     assistant.toolEvents = rows;
