@@ -55,3 +55,48 @@ def test_zero_token_quota_disables_immediately(tmp_path):
         assert await store.authenticate(token) is None
 
     asyncio.run(scenario())
+
+
+
+def test_replayed_usage_retry_persists_ledger_after_interrupted_save(tmp_path):
+    async def scenario():
+        store = ApiKeyStore(tmp_path, "quota-retry-secret")
+        key, _ = await store.create("retry")
+        key_id = key["key_id"]
+        original_save = store.save
+        failed = {"once": True}
+
+        async def fail_first_save():
+            if failed["once"]:
+                failed["once"] = False
+                raise OSError("simulated durable ledger write interruption")
+            await original_save()
+
+        store.save = fail_first_save
+        record = {
+            "request_id": "req_usage_retry",
+            "api_key_id": key_id,
+            "status": "completed",
+            "usage": {"total_tokens": 17},
+        }
+        try:
+            await store.account_completed_usage(record)
+        except OSError:
+            pass
+        else:
+            raise AssertionError("the first accounting persistence attempt should fail")
+
+        # The first call mutated memory before the simulated save failure.
+        assert store.keys[key_id].charged_requests["req_usage_retry"] == 17
+        assert store.keys[key_id].tokens_used == 17
+
+        # A duplicate completion must retry persistence without charging twice.
+        await store.account_completed_usage(record)
+        assert store.keys[key_id].tokens_used == 17
+
+        reloaded = ApiKeyStore(tmp_path, "quota-retry-secret")
+        await reloaded.load()
+        assert reloaded.keys[key_id].charged_requests["req_usage_retry"] == 17
+        assert reloaded.keys[key_id].tokens_used == 17
+
+    asyncio.run(scenario())
