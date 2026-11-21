@@ -3877,6 +3877,68 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         recovered_row, message, client_id,
                     ):
                         replay_owner = str(recovered_row.get("api_key_id") or "")
+                        if message_type == "chat.completed" and str(recovered_row.get("status") or "").lower() == "recovering":
+                            try:
+                                await event_journal.append_worker_event(
+                                    request_id, replay_owner,
+                                    {"type": "chat.snapshot", "text": str(message.get("text") or "")},
+                                )
+                                await event_journal.append_worker_event(
+                                    request_id, replay_owner, message,
+                                )
+                                finalized = await finalize_replayed_chat_completion(
+                                    websocket, recovered_row, message, client_id,
+                                )
+                            except Exception as recovery_error:
+                                logger.exception(
+                                    "Replayed Worker completion finalization failed request_id=%s error_type=%s",
+                                    request_id, type(recovery_error).__name__,
+                                )
+                                try:
+                                    diagnostics = (
+                                        dict(recovered_row.get("diagnostics"))
+                                        if isinstance(recovered_row.get("diagnostics"), dict) else {}
+                                    )
+                                    diagnostics.update({
+                                        "web_chat_terminal_replay_reconciled": "retryable-finalization-failure",
+                                        "web_chat_terminal_replay_error": type(recovery_error).__name__,
+                                        "web_chat_terminal_replay_received_at": time.time(),
+                                    })
+                                    await telemetry.upsert({
+                                        "request_id": request_id,
+                                        "response_text_provisional": str(message.get("text") or "")[:50_000],
+                                        "diagnostics": diagnostics,
+                                    })
+                                except Exception:
+                                    logger.exception(
+                                        "Could not persist provisional replay text request_id=%s",
+                                        request_id,
+                                    )
+                                await websocket.send_json({
+                                    "type": "chat.terminal.ack",
+                                    "request_id": request_id,
+                                    "terminal_type": message_type,
+                                    "accepted": False,
+                                    "reason": "terminal_finalization_retryable",
+                                })
+                                continue
+                            if finalized:
+                                logger.info(
+                                    "Fully finalized replayed Worker completion request_id=%s",
+                                    request_id,
+                                )
+                                await websocket.send_json({
+                                    "type": "chat.terminal.ack",
+                                    "request_id": request_id,
+                                    "terminal_type": message_type,
+                                    "accepted": True,
+                                    "recovered": True,
+                                })
+                                continue
+                        # Late replay after the recovery grace period, or a row
+                        # missing the original usage/request identity evidence,
+                        # remains provisional. Never fabricate a successful
+                        # response or charge without the durable admission data.
                         projection = replayed_terminal_projection(recovered_row, message)
                         recovered_status = str(projection["status"])
                         candidate_text = str(projection.get("response_text") or "")
@@ -3938,13 +4000,45 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         and replay_diagnostics.get("worker_transport_recovery") == "transport-outbox-v47"
                     ):
                         if is_already_finalized_worker_terminal(recovered_row, client_id, message_type):
-                            await websocket.send_json({
-                                "type": "chat.terminal.ack",
-                                "request_id": request_id,
-                                "terminal_type": message_type,
-                                "accepted": True,
-                                "already_finalized": True,
-                            })
+                            delivery_durable = True
+                            if (
+                                message_type == "chat.completed"
+                                and recovered_row.get("web_chat_mode") is True
+                                and str(recovered_row.get("status") or "").lower() == "completed"
+                            ):
+                                try:
+                                    snapshot = await event_journal.snapshot(
+                                        request_id, str(recovered_row.get("api_key_id") or ""),
+                                    )
+                                    if snapshot.get("terminal_status") != "completed":
+                                        final_text = recovered_row.get("response_text")
+                                        delivery_durable = bool(
+                                            isinstance(final_text, str)
+                                            and recovered_row.get("response_text_available") is True
+                                            and await ensure_replayed_delivery_terminal(
+                                                request_id,
+                                                str(recovered_row.get("api_key_id") or ""),
+                                                final_text,
+                                            )
+                                        )
+                                except Exception:
+                                    delivery_durable = False
+                            if delivery_durable:
+                                await websocket.send_json({
+                                    "type": "chat.terminal.ack",
+                                    "request_id": request_id,
+                                    "terminal_type": message_type,
+                                    "accepted": True,
+                                    "already_finalized": True,
+                                })
+                            else:
+                                await websocket.send_json({
+                                    "type": "chat.terminal.ack",
+                                    "request_id": request_id,
+                                    "terminal_type": message_type,
+                                    "accepted": False,
+                                    "reason": "delivery_terminal_not_durable",
+                                })
                         else:
                             await websocket.send_json({
                                 "type": "chat.terminal.ack",
