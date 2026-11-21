@@ -69,7 +69,7 @@ const boundedRows = api.normalizeToolEvents(Array.from({length:8},(_,index)=>({
   toolName:"browser.search",callId:"bounded-"+index,status:"running",
 })), "assistant");
 assert.equal(boundedRows.length,6);
-assert.deepEqual(api.normalizeToolEvents([{callId:"call-1",status:"completed"}], "user"), []);
+assert.equal(api.normalizeToolEvents([{callId:"call-1",status:"completed"}], "user").length, 0);
 
 // Replayed/out-of-order events must not reopen a tool after terminal result.
 const completedAssistant = {toolEvents:[]};
