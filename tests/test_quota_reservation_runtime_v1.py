@@ -1060,7 +1060,9 @@ async def test_runtime_startup_hook_recovers_terminal_usage_before_serving(tmp_p
     await app.router.startup()
 
     assert app.state.quota_reservation_recovery_status == "ready"
-    assert app.state.quota_reservation_recovery_result == {"replayed": 1, "reconciled": 0}
+    assert app.state.quota_reservation_recovery_result == {
+        "replayed": 1, "reconciled": 0, "expired": 0,
+    }
     assert store.get(request_id)["state"] == "settled"
     assert api_keys.keys["key-1"].tokens_used == 17
     assert api_keys.charged_requests[request_id] == 17
