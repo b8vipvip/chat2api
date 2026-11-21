@@ -552,7 +552,19 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     continue
                 try:
                     control = json.loads(text)
-                except Exception:
+                except (TypeError, ValueError):
+                    await send_json({
+                        "type": "error", "code": "INVALID_CONTROL_JSON",
+                        "message": "Live control frame must contain valid JSON",
+                        "retryable": False,
+                    })
+                    continue
+                if not isinstance(control, dict):
+                    await send_json({
+                        "type": "error", "code": "INVALID_CONTROL_FRAME",
+                        "message": "Live control frame must be a JSON object",
+                        "retryable": False,
+                    })
                     continue
                 control_type = str(control.get("type") or "")
                 if control_type == "response.cancel":
