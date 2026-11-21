@@ -481,6 +481,6 @@ def install_quota_reservation_runtime_v1(app: Any) -> Any:
             "reconciled": int(reconciled or 0),
         }
 
-    app.add_event_handler("startup", recover_quota_reservations_on_startup)
+    app.router.add_event_handler("startup", recover_quota_reservations_on_startup)
     app.state.quota_reservation_runtime_v1_installed = True
     return app
