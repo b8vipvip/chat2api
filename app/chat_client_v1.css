@@ -141,7 +141,7 @@ a{color:inherit}
 
 .recovery-status{margin-left:8px;color:var(--muted);font-size:10px;font-weight:450}
 .message-actions button.recovery-action{color:var(--accent)}
-.math-fallback{display:inline-block;max-width:100%;overflow:auto;padding:4px 7px;border:1px solid var(--line);border-radius:8px;background:var(--code);white-space:pre-wrap}.math-fallback pre{display:block}.math-inline{display:inline-block;max-width:100%;overflow-x:auto;overflow-y:hidden;vertical-align:middle}.math-block{display:block;max-width:100%;margin:12px 0;padding:4px 0;overflow-x:auto;overflow-y:hidden}.math-block .katex-display{margin:.35em 0}.math-block .katex{max-width:100%}
+.math-fallback{display:inline-block;max-width:100%;overflow:auto;padding:4px 7px;border:1px solid var(--line);border-radius:8px;background:var(--code);white-space:pre-wrap}pre.math-fallback{display:block}.math-inline{display:inline-block;max-width:100%;overflow-x:auto;overflow-y:hidden;vertical-align:middle}.math-block{display:block;max-width:100%;margin:12px 0;padding:4px 0;overflow-x:auto;overflow-y:hidden}.math-block .katex-display{margin:.35em 0}.math-block .katex{max-width:100%}
 .rich-citation,.rich-file-card,.rich-tool-status,.rich-attachment-fallback,.rich-unsupported,.render-truncated{margin:9px 0;padding:9px 11px;border:1px solid var(--line);border-radius:9px;background:var(--panel);font-size:12px}
 .rich-file-download{color:var(--accent);text-decoration:underline;text-underline-offset:2px}
 .rich-image-preview{display:block;max-width:min(100%,680px);max-height:520px;margin:10px 0;border:1px solid var(--line);border-radius:10px;object-fit:contain}
