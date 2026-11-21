@@ -218,3 +218,56 @@ def test_backfill_keeps_original_backend_after_default_storage_changed(tmp_path:
     report = store.repair_thumbnails()
     assert report["repaired"] == 1 and report["failed"] == 0
     assert store.load(row["id"], row["token"], thumbnail=True)[1] == "image/webp"
+
+
+def test_terminal_replay_reuses_same_request_image_without_duplicate_archive_rows(tmp_path):
+    store = MediaArchive(tmp_path, "master")
+    raw = example_image()
+    encoded = base64.b64encode(raw).decode()
+    source = "![Generated image](data:image/png;base64," + encoded + ")"
+
+    first_text, first_rows = store.rewrite_markdown(
+        source, "owner-key", "req-replay", "https://chat2api.example"
+    )
+    second_text, second_rows = store.rewrite_markdown(
+        source, "owner-key", "req-replay", "https://chat2api.example"
+    )
+    assert second_text == first_text
+    assert second_rows[0]["id"] == first_rows[0]["id"]
+    assert second_rows[0]["url"] == first_rows[0]["url"]
+    assert store.public_config()["count"] == 1
+    assert store.load(first_rows[0]["id"], first_rows[0]["url"].split("/")[-1])[0] == raw
+
+    # Identical bytes from another request or owner must not inherit the first
+    # request's opaque media URL or authorization boundary.
+    _, other_request = store.rewrite_markdown(
+        source, "owner-key", "req-other", "https://chat2api.example"
+    )
+    _, other_owner = store.rewrite_markdown(
+        source, "other-owner", "req-replay", "https://chat2api.example"
+    )
+    assert other_request[0]["id"] != first_rows[0]["id"]
+    assert other_owner[0]["id"] != first_rows[0]["id"]
+    assert store.public_config()["count"] == 3
+
+
+def test_failed_replay_does_not_delete_media_reused_from_prior_archive(tmp_path):
+    store = MediaArchive(tmp_path, "master")
+    raw = example_image()
+    encoded = base64.b64encode(raw).decode()
+    valid = "![Generated image](data:image/png;base64," + encoded + ")"
+    _, rows = store.rewrite_markdown(
+        valid, "owner-key", "req-replay-rollback", "https://chat2api.example"
+    )
+    media_id = rows[0]["id"]
+    token = rows[0]["url"].split("/")[-1]
+
+    invalid = "![Broken image](data:image/png;base64,SGVsbG8=)"
+    with pytest.raises(ValueError):
+        store.rewrite_markdown(
+            valid + "\n" + invalid, "owner-key", "req-replay-rollback",
+            "https://chat2api.example",
+        )
+
+    assert store.public_config()["count"] == 1
+    assert store.load(media_id, token)[0] == raw
