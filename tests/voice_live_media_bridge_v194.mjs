@@ -20,14 +20,31 @@ const timers = new Map();
 let timerSequence = 0;
 let realAudioSource = null;
 let remoteProcessor = null;
+const remoteSources = [];
+const remoteProcessors = [];
 const sources = [];
+function makeTrack(name) {
+  const listeners = new Map();
+  return {
+    name, kind:"audio", readyState:"live",
+    addEventListener(type,callback) {
+      if (!listeners.has(type)) listeners.set(type,[]);
+      listeners.get(type).push(callback);
+    },
+    end() {
+      this.readyState = "ended";
+      for (const callback of listeners.get("ended") || []) callback();
+    },
+  };
+}
+const firstTrack = makeTrack("first");
 const window = {
   addEventListener(type, callback) { if (type === "message") listeners.push(callback); },
   postMessage(message) { posted.push(message); },
 };
 const currentVoiceState = {
   requestId: "live-v194",
-  remoteTrack: { kind: "audio", readyState: "live" },
+  remoteTrack: firstTrack,
   recorder: null,
   recorderChunks: [],
   micDestination: { id: "outbound-mic" },
@@ -45,8 +62,8 @@ const currentVoiceState = {
 };
 class FakeAudioContext {
   constructor(){this.state="running";this.sampleRate=48000;this.destination={};}
-  createMediaStreamSource(stream){realAudioSource=stream;return {connect(){},disconnect(){}};}
-  createScriptProcessor(){remoteProcessor={connect(v){return v;},disconnect(){},onaudioprocess:null};return remoteProcessor;}
+  createMediaStreamSource(stream){realAudioSource=stream;remoteSources.push(stream.tracks[0]);return {connect(){},disconnect(){}};}
+  createScriptProcessor(){remoteProcessor={connect(v){return v;},disconnect(){},onaudioprocess:null};remoteProcessors.push(remoteProcessor);return remoteProcessor;}
   createGain(){return {gain:{value:1},connect(){},disconnect(){}};}
   resume(){return Promise.resolve();}
   close(){return Promise.resolve();}
@@ -84,6 +101,18 @@ assert.ok(realAudioSource instanceof FakeMediaStream,
   "live remote source must attach directly to the WebRTC track without MediaRecorder");
 assert.equal(realAudioSource.tracks[0],currentVoiceState.remoteTrack);
 assert.ok(posted.some(x=>x.type==="voice.live.remote.ready"));
+
+// The bridge must detach the old processor and attach a replacement track
+// after WebRTC renegotiation; a stale processor may not emit duplicate PCM.
+const oldProcessor = remoteProcessor;
+firstTrack.end();
+const replacementTrack = makeTrack("replacement");
+currentVoiceState.remoteTrack = replacementTrack;
+tick();await flush();
+assert.equal(remoteSources.length,2);
+assert.equal(remoteSources[1],replacementTrack);
+assert.notEqual(remoteProcessor,oldProcessor);
+assert.equal(oldProcessor.onaudioprocess,null);
 
 const audio = new Float32Array(2048).fill(0.18);
 remoteProcessor.onaudioprocess({inputBuffer:{getChannelData:()=>audio}});
