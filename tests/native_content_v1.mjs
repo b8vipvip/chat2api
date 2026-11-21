@@ -5,10 +5,12 @@ import {runInNewContext} from "node:vm";
 const code = readFileSync("chrome_extension/content_native_content_v1.js","utf8");
 const sent = [];
 class Element {
-  constructor(tagName, children=[]) { this.tagName=tagName; this.childNodes=children;
+  constructor(tagName, children=[], attributes={}) { this.tagName=tagName; this.childNodes=children;
+    this.attributes=attributes;
     this.isConnected=true; this.parentElement=null;
     for(const c of children) if(c instanceof Element)c.parentElement=this;
   }
+  getAttribute(name){return Object.prototype.hasOwnProperty.call(this.attributes,name)?this.attributes[name]:null;}
   getBoundingClientRect(){return {width:100,height:100};}
   matches(s){return false;}
   closest(s){return null;}
@@ -316,8 +318,8 @@ console.log("Native rich observer: bounded capture, no DOM URLs, independent req
 // Actual KaTeX MathML must never become HTML div descendants of <math>.
 // The real regression fixture contains mtext unit labels and overscripts.
 const mathNS="http://www.w3.org/1998/Math/MathML";
-function mathEl(tag,children=[],textValue=null){
-  const el=new Element(tag.toUpperCase(),children);
+function mathEl(tag,children=[],textValue=null,attributes={}){
+  const el=new Element(tag.toUpperCase(),children,attributes);
   el.namespaceURI=mathNS;
   if(textValue!==null)el.textContent=textValue;
   return el;
@@ -347,6 +349,56 @@ assert.equal(units.text,"每炉");
 assert.equal(semantics.children[0].children[2].tag,"mover");
 assert.equal(semantics.children[1].tag,"annotation");
 assert.equal(semantics.children[1].text,"\\frac{x}{y}");
+
+// MathML presentation attributes are part of the captured structure, not
+// optional decoration: dropping them changes fractions, operators and tables.
+const attributedMath=mathEl("math",[
+  mathEl("mfrac",[
+    mathEl("mi",[{nodeType:3,nodeValue:"x"}],"x"),
+    mathEl("mi",[{nodeType:3,nodeValue:"y"}],"y"),
+  ],null,{linethickness:"0.08em",bevelled:"false",onclick:"alert(1)"}),
+  mathEl("mo",[{nodeType:3,nodeValue:"∑"}],"∑",{
+    stretchy:"true",largeop:"true",lspace:"0.2em",rspace:"0.2em",onclick:"alert(1)",
+  }),
+  mathEl("mtable",[
+    mathEl("mtr",[
+      mathEl("mtd",[mathEl("mrow",[mathEl("mi",[{nodeType:3,nodeValue:"a"}],"a")])],
+        null,{columnspan:"2",rowspan:"2",columnalign:"center"}),
+    ],null,{rowalign:"center"}),
+  ],null,{columnalign:"left center",rowspacing:"0.5em 1em",frame:"solid",equalrows:"true"}),
+  mathEl("mfenced",[mathEl("mi",[{nodeType:3,nodeValue:"z"}],"z")],null,
+    {open:"(",close:")",separators:",;"}),
+  mathEl("annotation",[{nodeType:3,nodeValue:"\\frac{x}{y}"}],"\\frac{x}{y}",
+    {encoding:"application/x-tex"}),
+],null,{display:"block",displaystyle:"true",scriptlevel:"0",mathvariant:"normal",onclick:"alert(1)"});
+const attributedReply=capture.snapshot({
+  requestId:"req_mathattrs_native001",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[attributedMath])
+});
+const capturedMath=attributedReply.root.children[0];
+assert.equal(capturedMath.math_attrs.display,"block");
+assert.equal(capturedMath.math_attrs.displaystyle,"true");
+assert.equal(capturedMath.math_attrs.scriptlevel,"0");
+assert.equal(capturedMath.math_attrs.mathvariant,"normal");
+assert.equal(capturedMath.math_attrs.onclick,undefined);
+const capturedFraction=capturedMath.children[0];
+assert.equal(capturedFraction.math_attrs.linethickness,"0.08em");
+assert.equal(capturedFraction.math_attrs.bevelled,"false");
+assert.equal(capturedFraction.math_attrs.onclick,undefined);
+const capturedOperator=capturedMath.children[1];
+assert.equal(capturedOperator.math_attrs.stretchy,"true");
+assert.equal(capturedOperator.math_attrs.largeop,"true");
+assert.equal(capturedOperator.math_attrs.lspace,"0.2em");
+assert.equal(capturedOperator.math_attrs.onclick,undefined);
+const capturedTable=capturedMath.children[2];
+assert.equal(capturedTable.math_attrs.columnalign,"left center");
+assert.equal(capturedTable.math_attrs.rowspacing,"0.5em 1em");
+assert.equal(capturedTable.math_attrs.frame,"solid");
+assert.equal(capturedTable.children[0].math_attrs.rowalign,"center");
+assert.equal(capturedTable.children[0].children[0].math_attrs.columnspan,"2");
+assert.equal(capturedTable.children[0].children[0].math_attrs.rowspan,"2");
+assert.equal(attributedReply.root.children[0].children[3].math_attrs.open,"(");
+assert.equal(attributedReply.root.children[0].children[4].math_attrs.encoding,"application/x-tex");
 const legacyUnit=mathEl("div",[{nodeType:3,nodeValue:"单位"}],"单位");
 const legacyMath=capture.snapshot({
   requestId:"req_legacyunitnative001",submitStartedAt:Date.now(),
