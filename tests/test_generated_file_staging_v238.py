@@ -13,13 +13,13 @@ MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 UPID = "a" * 32
 
 
-def push(staging, request_id, data, digest=None, complete=True):
+def push(staging, request_id, data, digest=None, complete=True, owner_key_id="owner"):
     digest = digest or hashlib.sha256(data).hexdigest()
     chunks = [data[i:i + MAX_CHUNK_BYTES] for i in range(0,len(data),MAX_CHUNK_BYTES)]
     if not complete:
         chunks=chunks[:-1]
     for index,chunk in enumerate(chunks):
-        staging.ingest(request_id=request_id,upload_id=UPID,
+        staging.ingest(request_id=request_id,owner_key_id=owner_key_id,upload_id=UPID,
             filename="budget.xlsx",mime=MIME,sequence=index,
             expected_bytes=len(data),expected_sha256=digest,
             base64_chunk=base64.b64encode(chunk).decode(),
@@ -33,9 +33,11 @@ def test_large_staged_xlsx_is_archived_with_exact_bytes(tmp_path):
     # A fresh instance models the API process restarting before terminal
     # replay; only a fully verified stage is restored.
     staging=GeneratedFileStaging(tmp_path)
-    assert staging.read("req_real",UPID,"budget.xlsx")== (payload,MIME)
+    assert staging.read("req_real",UPID,"budget.xlsx",owner_key_id="owner")== (payload,MIME)
     with pytest.raises(ValueError):
-        staging.read("req_unrelated",UPID,"budget.xlsx")
+        staging.read("req_real",UPID,"budget.xlsx",owner_key_id="other-owner")
+    with pytest.raises(ValueError):
+        staging.read("req_unrelated",UPID,"budget.xlsx",owner_key_id="owner")
     archive=GeneratedFileArchive(MediaArchive(tmp_path,"secret"))
     archive.staging=staging
     text,records=archive.rewrite_markdown(
@@ -46,13 +48,13 @@ def test_large_staged_xlsx_is_archived_with_exact_bytes(tmp_path):
     row=archive.describe(records[0]["id"],"owner")
     assert archive.read(row["id"],row["token"]) == (payload,MIME,"budget.xlsx")
     with pytest.raises(ValueError):
-        staging.read("req_real",UPID,"budget.xlsx")
+        staging.read("req_real",UPID,"budget.xlsx",owner_key_id="owner")
 
 
 def test_stage_rejects_incorrect_order_and_bad_digest(tmp_path):
     staging=GeneratedFileStaging(tmp_path)
     data=b"PK\x03\x04"+b"ab"*1500
-    kw=dict(request_id="req_bad",upload_id=UPID,filename="budget.xlsx",
+    kw=dict(request_id="req_bad",owner_key_id="owner",upload_id=UPID,filename="budget.xlsx",
         mime=MIME,expected_bytes=len(data),
         expected_sha256=hashlib.sha256(data).hexdigest(),
         base64_chunk=base64.b64encode(data).decode(),final=True)
@@ -92,14 +94,16 @@ def test_restart_promotes_fully_written_stage_and_discards_partial_or_corrupt_fi
             ("req_full_before_flag", UPID),
         )
     recovered = GeneratedFileStaging(tmp_path)
-    assert recovered.read("req_full_before_flag", UPID, "budget.xlsx") == (payload, MIME)
+    assert recovered.read(
+        "req_full_before_flag", UPID, "budget.xlsx", owner_key_id="owner",
+    ) == (payload, MIME)
 
     partial = GeneratedFileStaging(tmp_path)
     partial_payload = b"PK\x03\x04" + b"partial" * (MAX_CHUNK_BYTES // 7 + 10)
     push(partial, "req_partial", partial_payload, complete=False)
     partial_recovered = GeneratedFileStaging(tmp_path)
     with pytest.raises(ValueError, match="not verified"):
-        partial_recovered.read("req_partial", UPID, "budget.xlsx")
+        partial_recovered.read("req_partial", UPID, "budget.xlsx", owner_key_id="owner")
 
     corrupt = GeneratedFileStaging(tmp_path)
     corrupt_payload = b"PK\x03\x04" + b"verified"
@@ -108,5 +112,34 @@ def test_restart_promotes_fully_written_stage_and_discards_partial_or_corrupt_fi
     corrupt_path.write_bytes(b"tampered")
     corrupt_recovered = GeneratedFileStaging(tmp_path)
     with pytest.raises(ValueError, match="not verified"):
-        corrupt_recovered.read("req_corrupt_restart", UPID, "budget.xlsx")
+        corrupt_recovered.read(
+            "req_corrupt_restart", UPID, "budget.xlsx", owner_key_id="owner",
+        )
     assert not corrupt_path.exists()
+
+
+def test_startup_does_not_delete_another_process_incomplete_stage(tmp_path):
+    first_process = GeneratedFileStaging(tmp_path)
+    payload = b"PK\\x03\\x04" + b"partial-stage" * (MAX_CHUNK_BYTES // 13 + 20)
+    digest = hashlib.sha256(payload).hexdigest()
+    chunks = [payload[i:i + MAX_CHUNK_BYTES] for i in range(0, len(payload), MAX_CHUNK_BYTES)]
+    push(first_process, "req_live_upload", payload, complete=False)
+    stage_path = first_process.entries[("req_live_upload", UPID)].path
+
+    # A second process startup must not delete an upload still owned by the
+    # first process. It does not restore partial bytes into its own memory.
+    second_process = GeneratedFileStaging(tmp_path)
+    assert stage_path.exists()
+    with pytest.raises(ValueError):
+        second_process.read("req_live_upload", UPID, "budget.xlsx", owner_key_id="owner")
+
+    last = chunks[-1]
+    first_process.ingest(
+        request_id="req_live_upload", owner_key_id="owner", upload_id=UPID,
+        filename="budget.xlsx", mime=MIME, sequence=len(chunks) - 1,
+        expected_bytes=len(payload), expected_sha256=digest,
+        base64_chunk=base64.b64encode(last).decode(), final=True,
+    )
+    assert first_process.read(
+        "req_live_upload", UPID, "budget.xlsx", owner_key_id="owner",
+    ) == (payload, MIME)
