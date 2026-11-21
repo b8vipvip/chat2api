@@ -30,6 +30,7 @@ MAX_REALTIME_SESSION_TOKENS_PER_KEY = 8
 LIVE_CAPACITY_WEIGHT = 2
 MAX_LIVE_PCM_FRAME_BYTES = 64 * 1024
 MAX_LIVE_ATTACHMENTS_PER_INPUT = 4
+MAX_LIVE_PENDING_INPUTS = 128
 MAX_LIVE_CONTROL_CHARS = 64 * 1024
 
 
@@ -292,6 +293,8 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
         observed_prompt_parts: list[str] = []
         observed_completion_parts: list[str] = []
         pending_input_text: dict[str, str] = {}
+        confirmed_input_ids: set[str] = set()
+        observed_input_text_ids: set[str] = set()
 
         # Session controls and remote audio are sent from separate coroutines.
         # Serialize WebSocket sends so binary PCM frames cannot collide with
@@ -344,32 +347,52 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 elif event_type == "input.speech_stopped":
                     await send_json({"type": "input_audio_buffer.speech_stopped"})
                 elif event_type == "input.text.sent":
-                    input_confirmed += 1
                     item_id = str(event.get("item_id") or "")
+                    if not item_id or item_id not in confirmed_input_ids:
+                        input_confirmed += 1
+                        if item_id:
+                            if len(confirmed_input_ids) >= 512:
+                                confirmed_input_ids.clear()
+                            confirmed_input_ids.add(item_id)
                     confirmed_text = pending_input_text.pop(item_id, "") or str(event.get("text") or "").strip()
-                    if confirmed_text:
+                    if confirmed_text and (not item_id or item_id not in observed_input_text_ids):
                         observed_prompt_parts.append(confirmed_text)
+                        if item_id:
+                            if len(observed_input_text_ids) >= 512:
+                                observed_input_text_ids.clear()
+                            observed_input_text_ids.add(item_id)
                     await send_json({
                         "type": "input_text.sent",
                         "item_id": item_id,
                         "text": str(event.get("text") or confirmed_text),
                     })
                 elif event_type == "input.media.sent":
-                    input_confirmed += 1
-                    observed_media_count += int(event.get("attachment_count") or 0)
                     item_id = str(event.get("item_id") or "")
+                    if not item_id or item_id not in confirmed_input_ids:
+                        input_confirmed += 1
+                        if item_id:
+                            if len(confirmed_input_ids) >= 512:
+                                confirmed_input_ids.clear()
+                            confirmed_input_ids.add(item_id)
+                    observed_media_count += int(event.get("attachment_count") or 0)
                     confirmed_text = pending_input_text.pop(item_id, "") or str(event.get("text") or "").strip()
-                    if confirmed_text:
+                    if confirmed_text and (not item_id or item_id not in observed_input_text_ids):
                         observed_prompt_parts.append(confirmed_text)
+                        if item_id:
+                            if len(observed_input_text_ids) >= 512:
+                                observed_input_text_ids.clear()
+                            observed_input_text_ids.add(item_id)
                     await send_json({
                         "type": "input_media.sent",
                         "item_id": item_id,
                         "attachment_count": int(event.get("attachment_count") or 0),
                     })
                 elif event_type == "input.error":
+                    failed_item_id = str(event.get("item_id") or "")
+                    pending_input_text.pop(failed_item_id, None)
                     await send_json({
                         "type": "error", "code": "VOICE_CALL_INPUT_FAILED",
-                        "item_id": str(event.get("item_id") or ""),
+                        "item_id": failed_item_id,
                         "message": str(event.get("message") or "Media input was not accepted by the ChatGPT Voice composer"),
                         "retryable": True,
                     })
@@ -667,6 +690,22 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         if control_type == "input_media"
                         else _input_text_from_control(control)
                     )
+                    item_id = str(control.get("item_id") or item.get("id") or f"item_{uuid.uuid4().hex}")[:120]
+                    if item_id in pending_input_text:
+                        await send_json({
+                            "type": "error", "code": "DUPLICATE_INPUT_ITEM_ID",
+                            "item_id": item_id,
+                            "message": "An input item with this ID is already awaiting Worker confirmation",
+                            "retryable": False,
+                        })
+                        continue
+                    if len(pending_input_text) >= MAX_LIVE_PENDING_INPUTS:
+                        await send_json({
+                            "type": "error", "code": "LIVE_INPUT_QUEUE_FULL",
+                            "message": "Too many unconfirmed live inputs; wait for the Worker before sending more",
+                            "retryable": True,
+                        })
+                        continue
                     try:
                         file_ids = _media_ids_from_control(control)
                         attachments = attachment_specs(file_store, file_ids, principal)
@@ -685,6 +724,10 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                             )
                             if not allowed:
                                 raise ValueError("Live image/file MIME is not supported; send PCM as binary microphone frames")
+                        if not input_text and not attachments:
+                            raise ValueError("Provide text, image or file")
+                        if len(input_text) > 12000:
+                            raise ValueError("Live text input is limited to 12000 characters")
                         request_scoped_attachments = [
                             {**spec, "request_id": request_id} for spec in attachments
                         ]
@@ -721,13 +764,6 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                             continue
                         observed_media_ids = next_media_ids
                         attachments = request_scoped_attachments
-                    if not input_text and not attachments:
-                        await send_json({"type": "error", "code": "EMPTY_INPUT", "message": "Provide text, image or file", "retryable": False})
-                        continue
-                    if len(input_text) > 12000:
-                        await send_json({"type": "error", "code": "INPUT_TEXT_TOO_LONG", "message": "Live text input is limited to 12000 characters", "retryable": False})
-                        continue
-                    item_id = str(control.get("item_id") or item.get("id") or f"item_{uuid.uuid4().hex}")[:120]
                     pending_input_text[item_id] = input_text
                     await registry.send(selected_client, {
                         "type": "voice.live.multimodal" if attachments else "voice.live.text",
