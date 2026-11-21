@@ -255,6 +255,47 @@ class GeneratedFileStaging:
                 path.unlink(missing_ok=True)
 
     def _prune(self) -> None:
+        # A second API process deliberately does not restore another process's
+        # incomplete upload. Those rows are therefore absent from self.entries;
+        # prune their durable index and bytes here once the shared TTL expires.
+        cutoff = time.time() - MAX_STAGE_AGE_SECONDS
+        removed: list[tuple[str, str, str]] = []
+        with self._db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                """SELECT request_id, upload_id, path_name, created_at
+                   FROM generated_file_stages
+                   WHERE created_at<=?
+                   ORDER BY created_at ASC LIMIT 500""",
+                (cutoff,),
+            ).fetchall()
+            for raw in rows:
+                request_id = str(raw["request_id"] or "")
+                upload_id = str(raw["upload_id"] or "")
+                path_name = str(raw["path_name"] or "")
+                if STAGE_PATH.fullmatch(path_name):
+                    try:
+                        # unlink removes a symlink itself; it never follows it.
+                        (self.root / path_name).unlink(missing_ok=True)
+                    except OSError:
+                        # Keep the durable row so a later prune can retry.
+                        continue
+                deleted = conn.execute(
+                    """DELETE FROM generated_file_stages
+                       WHERE request_id=? AND upload_id=? AND path_name=? AND created_at=?""",
+                    (request_id, upload_id, path_name, raw["created_at"]),
+                ).rowcount
+                if deleted:
+                    removed.append((request_id, upload_id, path_name))
+
+        for request_id, upload_id, path_name in removed:
+            key = (request_id, upload_id)
+            entry = self.entries.get(key)
+            if entry is not None and entry.path.name == path_name:
+                self.entries.pop(key, None)
+
+        # Keep the monotonic-clock guard for in-memory entries if the wall
+        # clock moved backwards or a legacy index row is missing.
         expired = [
             key for key, row in self.entries.items()
             if time.monotonic() - row.created_at > MAX_STAGE_AGE_SECONDS
@@ -262,6 +303,10 @@ class GeneratedFileStaging:
         for request_id, upload_id in expired:
             row = self.entries.pop((request_id, upload_id), None)
             if row is not None:
+                try:
+                    row.path.unlink(missing_ok=True)
+                except OSError:
+                    pass
                 self._delete_persisted(request_id, upload_id, row.path)
 
     def ingest(
