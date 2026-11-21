@@ -107,11 +107,11 @@ def test_extracts_search_results_references_and_sources_roots() -> None:
     ]
 
 
-def test_broker_extracts_forwarded_citation_roots_in_api_and_web_chat_modes() -> None:
+def test_broker_extracts_forwarded_citation_roots_for_web_chat_mode() -> None:
     async def scenario() -> None:
         broker = RequestBroker()
         state = await broker.create("req_tool_refs_123", "worker-client")
-        assert state.mode1_web_chat is False
+        state.mode1_web_chat = True
 
         accepted = await broker.publish("req_tool_refs_123", {
             "type": "chat.tool.result",
@@ -157,5 +157,31 @@ def test_broker_extracts_forwarded_citation_roots_in_api_and_web_chat_modes() ->
                 "snippet": "",
             },
         ]
+
+    asyncio.run(scenario())
+
+
+def test_broker_does_not_forward_web_chat_citations_to_mode2_sdk_events() -> None:
+    async def scenario() -> None:
+        broker = RequestBroker()
+        state = await broker.create("req_tool_refs_mode2", "worker-client")
+        assert state.mode1_web_chat is False
+        accepted = await broker.publish("req_tool_refs_mode2", {
+            "type": "chat.tool.result",
+            "tool_name": "browser.search",
+            "call_id": "call-mode2",
+            "status": "completed",
+            "output": "Found sources",
+            "metadata": {
+                "search_results": [{
+                    "title": "Search result",
+                    "url": "https://search.example.org/a",
+                    "citation_id": "turn0search0",
+                }],
+            },
+        })
+        assert accepted is True
+        event = await state.queue.get()
+        assert "references" not in event
 
     asyncio.run(scenario())
