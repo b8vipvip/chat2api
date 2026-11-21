@@ -13,6 +13,8 @@ assert.ok(liveContent.includes('voice.live.remote.ready'), "ready only after PCM
 assert.ok(liveContent.includes('voice.mic.synthetic'), "ready only after microphone acquisition");
 assert.ok(!liveContent.includes("ready when you are"), "generic body text is not Voice UI readiness");
 assert.ok(liveText.includes("baselineUsers"), "text receipt needs a real new ChatGPT user turn");
+assert.ok(liveText.includes("assertComposerDraftSafe"), "live input must not overwrite a user-owned composer draft");
+assert.ok(liveText.includes("refusing to overwrite it"), "draft conflicts must fail closed");
 assert.ok(liveText.includes("const hasNewUserTurn = () =>"), "composer lag must be checked against the new user turn");
 assert.ok(liveText.includes("if (!sent && !hasNewUserTurn() && !dispatchedEnter)"),
   "a second Enter must never be sent after ChatGPT already accepted the turn");
