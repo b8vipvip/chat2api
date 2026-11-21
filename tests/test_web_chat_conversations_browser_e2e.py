@@ -113,11 +113,17 @@ def test_web_chat_conversations_sync_between_two_browser_profiles(tmp_path: Path
                         {
                             "id": "message_browser_tool_01",
                             "role": "assistant",
-                            "content": "",
+                            "content": "Sources: \\uE200cite\\uE202turn0search1\\uE201 and \\uE200cite\\uE202turn0search0\\uE201",
                             "createdAt": created_at,
                             "requestId": "",
                             "pending": False,
                             "recoveryStatus": "completed",
+                            "references": [{
+                                "id": "turn0search1",
+                                "url": "https://docs.python.org/3/library/asyncio.html",
+                                "title": "Python asyncio documentation",
+                                "snippet": "Async I/O library documentation",
+                            }],
                             "toolEvents": [{
                                 "toolName": "browser.search",
                                 "callId": "call-browser-search-01",
@@ -177,7 +183,13 @@ def test_web_chat_conversations_sync_between_two_browser_profiles(tmp_path: Path
                 citation_links = page_b.locator(".message-tool-reference")
                 assert citation_links.count() == 1
                 assert citation_links.first.get_attribute("href") == "https://docs.python.org/3/library/"
-                assert citation_links.first.inner_text().startswith("[1] Python library reference")
+                assert citation_links.first.inner_text().startswith("[2] Python library reference")
+                inline_citations = page_b.locator(".inline-citation")
+                assert inline_citations.count() == 2
+                assert inline_citations.nth(0).get_attribute("href") == "https://docs.python.org/3/library/asyncio.html"
+                assert inline_citations.nth(0).inner_text() == "[1]"
+                assert inline_citations.nth(1).get_attribute("href") == "https://docs.python.org/3/library/"
+                assert inline_citations.nth(1).inner_text() == "[2]"
 
                 # Both browser profiles write against revision 1. Exactly one
                 # optimistic update may win; the other must receive a conflict.
