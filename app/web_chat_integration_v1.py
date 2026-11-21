@@ -14,19 +14,24 @@ from .native_content_v1 import native_delivery_fingerprint
 from .user_commerce import USER_SESSION_COOKIE
 
 
-def _asset_handler(asset_path: Path, media_type: str):
+def _asset_handler(
+    asset_path: Path, media_type: str, cache_control: str = "no-store",
+):
     async def serve_asset() -> Response:
         return Response(
             asset_path.read_bytes(),
             media_type=media_type,
             headers={
-                "Cache-Control": "no-store",
+                "Cache-Control": cache_control,
                 "X-Content-Type-Options": "nosniff",
                 "Cross-Origin-Resource-Policy": "same-origin",
                 "Referrer-Policy": "no-referrer",
             },
         )
     return serve_asset
+
+
+_KATEX_FONT_RE = re.compile(r"^KaTeX_[A-Za-z0-9_-]+\\.(?:woff2|woff|ttf)$")
 
 
 _REQUEST_ID_RE = re.compile(r"^req_[A-Za-z0-9_-]{8,120}$")
@@ -154,14 +159,53 @@ def install_web_chat_features_v1(app: Any) -> Any:
         "/assets/chat2api-chat-renderer-v2.js": ("chat_renderer_v2.js", "application/javascript"),
         "/assets/chat2api-chat-native-renderer-v1.js": ("chat_native_renderer_v1.js", "application/javascript"),
         "/assets/chat2api-chat-stream-recovery-v1.js": ("chat_stream_recovery_v1.js", "application/javascript"),
+        "/assets/katex/0.19.1/katex.min.js": (
+            "vendor/katex/katex.min.js", "application/javascript",
+            "public, max-age=31536000, immutable",
+        ),
+        "/assets/katex/0.19.1/katex.min.css": (
+            "vendor/katex/katex.min.css", "text/css",
+            "public, max-age=31536000, immutable",
+        ),
     }
-    for route_path, (filename, media_type) in assets.items():
-        asset_path = Path(__file__).with_name(filename)
+    for route_path, spec in assets.items():
+        filename, media_type = spec[:2]
+        cache_control = spec[2] if len(spec) > 2 else "no-store"
+        asset_path = Path(__file__).parent / filename
         if not asset_path.is_file():
+            if route_path.startswith("/assets/katex/"):
+                # Source checkouts may omit generated vendor files; rendering
+                # fails closed to the text fallback. Production Docker images
+                # always package the pinned local distribution.
+                continue
             raise RuntimeError("Required Web Chat asset is missing: " + filename)
         app.add_api_route(
-            route_path, _asset_handler(asset_path, media_type),
+            route_path, _asset_handler(asset_path, media_type, cache_control),
             methods=["GET"], include_in_schema=False,
+        )
+
+    @app.get("/assets/katex/0.19.1/fonts/{font_name}", include_in_schema=False)
+    async def serve_katex_font(font_name: str) -> Response:
+        if not _KATEX_FONT_RE.fullmatch(font_name):
+            raise HTTPException(status_code=404, detail="font not found")
+        asset_path = Path(__file__).parent / "vendor" / "katex" / "fonts" / font_name
+        if not asset_path.is_file():
+            raise HTTPException(status_code=404, detail="font not found")
+        suffix = asset_path.suffix.lower()
+        media_type = {
+            ".woff2": "font/woff2",
+            ".woff": "font/woff",
+            ".ttf": "font/ttf",
+        }[suffix]
+        return Response(
+            asset_path.read_bytes(),
+            media_type=media_type,
+            headers={
+                "Cache-Control": "public, max-age=31536000, immutable",
+                "X-Content-Type-Options": "nosniff",
+                "Cross-Origin-Resource-Policy": "same-origin",
+                "Referrer-Policy": "no-referrer",
+            },
         )
 
     @app.middleware("http")
