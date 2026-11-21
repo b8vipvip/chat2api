@@ -9,6 +9,9 @@
   const MAX_MATH_CHARS = 4096;
   const TICK = String.fromCharCode(96);
   const FENCE = TICK.repeat(3);
+  const CITE_OPEN = String.fromCharCode(0xE200) + "cite" + String.fromCharCode(0xE202);
+  const CITE_SEPARATOR = String.fromCharCode(0xE202);
+  const CITE_CLOSE = String.fromCharCode(0xE201);
 
   function node(tag, css, value) {
     const element = document.createElement(tag);
@@ -84,10 +87,53 @@
     }
   }
 
-  function inline(parent, raw) {
+  function normalizeCitationReferences(value) {
+    if (!Array.isArray(value)) return [];
+    const result = [];
+    const seen = new Set();
+    for (const item of value.slice(0, 32)) {
+      if (!item || typeof item !== "object") continue;
+      const id = String(item.id || "").trim().slice(0, 128);
+      if (!/^[A-Za-z0-9_.:-]{1,128}$/.test(id) || seen.has(id)) continue;
+      const url = safeUrl(item.url);
+      if (!url || !url.startsWith("https://")) continue;
+      seen.add(id);
+      result.push({
+        id,
+        url,
+        title: String(item.title || "").slice(0, 180),
+      });
+    }
+    return result;
+  }
+
+  function appendCitationMarker(parent, token, references) {
+    const ids = token.slice(CITE_OPEN.length, -1).split(CITE_SEPARATOR)
+      .filter(id => /^[A-Za-z0-9_.:-]{1,128}$/.test(id));
+    const matches = ids.map(id => references.find(item => item.id === id)).filter(Boolean);
+    if (!matches.length) {
+      const unavailable = node("span", "citation-unresolved", "[引用来源不可用]");
+      unavailable.title = "无法关联到已验证的搜索来源";
+      parent.appendChild(unavailable);
+      return;
+    }
+    matches.forEach((reference, index) => {
+      if (index) parent.appendChild(document.createTextNode(" "));
+      const number = references.findIndex(item => item.id === reference.id) + 1;
+      const link = node("a", "inline-citation", "[" + number + "]");
+      link.href = reference.url;
+      link.title = reference.title || reference.url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      parent.appendChild(link);
+    });
+  }
+
+  function inline(parent, raw, references = []) {
     const text = String(raw || "");
     const pattern = new RegExp(
       "(" + TICK + "[^" + TICK + "\\n]+" + TICK +
+      "|" + CITE_OPEN + "[^" + CITE_CLOSE + "]{1,512}" + CITE_CLOSE +
       "|\\\\\\([^\\n]+?\\\\\\)" +
       "|\\$(?!\\$)[^$\\n]+\\$(?!\\$)" +
       "|\\[[^\\]\\n]{1,160}\\]\\([^\\s)]+\\)" +
@@ -102,6 +148,8 @@
       }
       if (token.startsWith(TICK)) {
         parent.appendChild(node("code", "", token.slice(1, -1)));
+      } else if (token.startsWith(CITE_OPEN)) {
+        appendCitationMarker(parent, token, references);
       } else if (token.startsWith("\\(")) {
         renderMath(parent, token.slice(2, -2), false);
       } else if (token.startsWith("$")) {
@@ -121,11 +169,11 @@
     if (last < text.length) parent.appendChild(document.createTextNode(text.slice(last)));
   }
 
-  function paragraph(host, lines) {
+  function paragraph(host, lines, references = []) {
     const p = node("p");
     lines.forEach((line, index) => {
       if (index) p.appendChild(node("br"));
-      inline(p, line);
+      inline(p, line, references);
     });
     host.appendChild(p);
   }
@@ -156,7 +204,8 @@
     host.appendChild(wrapper);
   }
 
-  function renderMarkdown(host, source) {
+  function renderMarkdown(host, source, sourceReferences = []) {
+    const references = normalizeCitationReferences(sourceReferences);
     const input = String(source || "");
     const lines = input.slice(0, MAX_TEXT).replace(/\r\n/g, "\n").split("\n");
     let i = 0;
@@ -185,7 +234,7 @@
         let end = i + 1;
         while (end < lines.length && lines[end].trim() !== close) end++;
         if (end >= lines.length) {
-          paragraph(host, lines.slice(i));
+          paragraph(host, lines.slice(i), references);
           break;
         }
         const math = lines.slice(i + 1, end);
@@ -196,7 +245,7 @@
       const heading = line.match(/^(#{1,4})\s+(.+)$/);
       if (heading) {
         const h = node("h" + heading[1].length);
-        inline(h, heading[2]);
+        inline(h, heading[2], references);
         host.appendChild(h);
         i++;
         continue;
@@ -212,7 +261,7 @@
           quotes.push(lines[i++].replace(/^>\s?/, ""));
         }
         const quote = node("blockquote");
-        paragraph(quote, quotes);
+        paragraph(quote, quotes, references);
         host.appendChild(quote);
         continue;
       }
@@ -223,7 +272,7 @@
           const match = lines[i].match(/^\s*(?:[-*+] |\d+\. )(.*)$/);
           if (!match) break;
           const item = node("li");
-          inline(item, match[1]);
+          inline(item, match[1], references);
           list.appendChild(item);
           i++;
         }
@@ -239,7 +288,7 @@
         const headerRow = node("tr");
         headers.forEach(value => {
           const th = node("th");
-          inline(th, value);
+          inline(th, value, references);
           headerRow.appendChild(th);
         });
         thead.appendChild(headerRow);
@@ -250,7 +299,7 @@
           const tr = node("tr");
           headers.forEach((_, index) => {
             const cell = node("td");
-            inline(cell, values[index] || "");
+            inline(cell, values[index] || "", references);
             tr.appendChild(cell);
           });
           tbody.appendChild(tr);
@@ -272,7 +321,7 @@
             /^\s*([-*_])\1\1+\s*$/.test(lines[i]))) break;
         body.push(lines[i++]);
       }
-      if (body.length) paragraph(host, body);
+      if (body.length) paragraph(host, body, references);
       else i++;
     }
     if (input.length > MAX_TEXT) {
@@ -280,7 +329,7 @@
     }
   }
 
-  function renderRichBlocks(host, blocks) {
+  function renderRichBlocks(host, blocks, sourceReferences = []) {
     // Only display evidence supplied by an authorized API; this method does
     // not fetch external media, execute tools or claim any request is final.
     if (!Array.isArray(blocks)) return;
