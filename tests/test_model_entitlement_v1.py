@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 from app.admin_audit import AdminAuditError
 from app.admin_auth import AdminSessionStore
-from app.api_keys import ApiPrincipal
+from app.api_keys import ApiPrincipal, ManagedApiKey
 from app.models import ChatCompletionRequest
 from app.live_voice_patch import install_live_voice_patch
 from app.voice_patch import install_voice_patch
@@ -119,6 +119,18 @@ class FakeTenantMemberships:
 
 
 class FakeApiKeys:
+    def __init__(self):
+        self.keys = {
+            "key_1": ManagedApiKey(
+                key_id="key_1",
+                name="voice-test",
+                token_hash="test-hash",
+                prefix="voice-test",
+                created_at="2026-01-01T00:00:00+00:00",
+                scopes=["audio"],
+            )
+        }
+
     async def authenticate(self, token):
         if token == "voice-token":
             return ApiPrincipal(
