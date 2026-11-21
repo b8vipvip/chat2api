@@ -717,3 +717,34 @@ def test_recovery_prefers_longest_unverified_partial_across_worker_and_delivery_
         assert '"partial_text":"worker partial response is longer"' in replay.text
         assert "event: recovery.partial.snapshot" in replay.text
         assert "event: delivery.stalled" in replay.text
+
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is needed for the Web Chat renderer harness")
+def test_recovery_partial_snapshot_never_regresses_displayed_client_text():
+    harness = r"""
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const source = fs.readFileSync('app/chat_client_v1.js', 'utf8');
+const start = source.indexOf('  function appendDelta(');
+const end = source.indexOf('  function recoveryStatusLabel(', start);
+assert.ok(start >= 0 && end > start);
+const context = vm.createContext({MAX_MESSAGE_CHARS: 200000});
+const api = vm.runInContext(source.slice(start, end) + '\n({consumeSseFrame})', context);
+const assistant = {content:'longer worker progress', lastEventId:8};
+const frame = text => [
+  'id: 9',
+  'event: recovery.partial.snapshot',
+  'data: ' + JSON.stringify({partial_text:text,partial_text_unverified:true}),
+].join('\n');
+api.consumeSseFrame(frame('short'), assistant);
+assert.equal(assistant.content, 'longer worker progress');
+api.consumeSseFrame(frame('longer worker progress plus new text'), assistant);
+assert.equal(assistant.content, 'longer worker progress plus new text');
+""";
+    result = subprocess.run(
+        ["node", "-e", harness], cwd=ROOT,
+        check=False, capture_output=True, text=True, timeout=15,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
