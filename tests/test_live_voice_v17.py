@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import subprocess
 from pathlib import Path
@@ -6,7 +7,7 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from app.config import Settings
-from app.live_voice_patch import install_live_voice_patch
+from app.live_voice_patch import _send_live_audio_frame, install_live_voice_patch
 from app.main import create_app
 from app.voice_patch import install_voice_patch
 
@@ -584,3 +585,36 @@ def test_realtime_session_token_issuance_is_bounded_per_api_key(tmp_path: Path) 
         error = responses[8].json()["error"]
         assert error["code"] == "realtime_session_limit"
         assert error["type"] == "rate_limit_error"
+
+
+
+def test_live_voice_drops_pcm_frame_queued_before_terminal_close():
+    class FakeWebSocket:
+        def __init__(self):
+            self.sent = []
+
+        async def send_bytes(self, payload):
+            self.sent.append(payload)
+
+    async def scenario():
+        websocket = FakeWebSocket()
+        send_lock = asyncio.Lock()
+        await send_lock.acquire()
+        finished = False
+        pending = asyncio.create_task(
+            _send_live_audio_frame(websocket, send_lock, b"late-pcm", lambda: finished)
+        )
+        await asyncio.sleep(0)
+        finished = True
+        send_lock.release()
+
+        assert await pending is False
+        assert websocket.sent == []
+
+        finished = False
+        assert await _send_live_audio_frame(
+            websocket, send_lock, b"current-pcm", lambda: finished,
+        ) is True
+        assert websocket.sent == [b"current-pcm"]
+
+    asyncio.run(scenario())
