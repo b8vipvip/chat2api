@@ -158,7 +158,7 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
                 assert live.receive_json()["type"] == "input_media.sent"
                 ext.send_json({"type": "image.progress", "kind": "voice-live", "request_id": request_id,
                                "live_event": "input.media.sent", "item_id": "media195",
-                               "attachment_count": 1, "text": "看看这张图，用语音告诉我"})
+                               "attachment_count": 999, "text": "看看这张图，用语音告诉我"})
                 assert live.receive_json()["type"] == "input_media.sent"
                 # Invalid cross-key file must produce a per-input error, NOT
                 # a voice.live.stop or WebSocket disconnect.
