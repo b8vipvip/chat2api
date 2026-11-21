@@ -1991,6 +1991,135 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await asyncio.to_thread(generated_staging.drop_request, state.request_id)
         return usage, token_meta
 
+    async def ensure_replayed_delivery_terminal(
+        request_id: str, owner: str, final_text: str,
+    ) -> bool:
+        """Repair the durable SSE delivery cursor after telemetry already finalized."""
+        snapshot = await event_journal.snapshot(request_id, owner)
+        terminal_status = str(snapshot.get("terminal_status") or "")
+        delivered = snapshot.get("delivered_text")
+        if not isinstance(delivered, str):
+            return False
+        if terminal_status:
+            return terminal_status == "completed" and delivered == final_text
+        if delivered and not final_text.startswith(delivered):
+            # Never append a second copy over an unrelated or divergent stream.
+            return False
+        remainder = final_text[len(delivered):]
+        if remainder:
+            await event_journal.append_delivery(request_id, owner, remainder)
+        await event_journal.append_delivery_terminal(
+            request_id, owner, len(final_text),
+        )
+        verified = await event_journal.snapshot(request_id, owner)
+        return bool(
+            verified.get("terminal_status") == "completed"
+            and verified.get("delivered_text") == final_text
+        )
+
+    async def finalize_replayed_chat_completion(
+        websocket: WebSocket, recovered_row: dict[str, Any],
+        message: dict[str, Any], client_id: str,
+    ) -> bool:
+        """Run the normal archive + usage + delivery finalizer for a durable replay."""
+        request_id = str(recovered_row.get("request_id") or message.get("request_id") or "")
+        owner = str(recovered_row.get("api_key_id") or "")
+        candidate = message.get("text")
+        if (
+            not request_id or not owner or owner == "master"
+            or not isinstance(candidate, str) or not candidate
+            or len(candidate) > 1_000_000
+            or "<chat2api-truncated>" in candidate
+            or str(recovered_row.get("status") or "").lower() != "recovering"
+        ):
+            return False
+
+        original_usage = recovered_row.get("usage")
+        original_usage = original_usage if isinstance(original_usage, dict) else {}
+        prompt_tokens = original_usage.get("prompt_tokens")
+        if type(prompt_tokens) is not int or prompt_tokens < 0:
+            return False
+        requested_model = str(recovered_row.get("requested_model") or "").strip()
+        response_id = str(recovered_row.get("response_id") or "").strip()
+        if not requested_model or not response_id:
+            return False
+
+        state = RequestState(request_id=request_id, client_id=client_id)
+        state.mode1_web_chat = True
+        state.mode1_owner_key_id = owner
+        state.terminal_event_type = "chat.completed"
+        state.completed_mono = time.perf_counter()
+        state.diagnostics = (
+            dict(recovered_row.get("diagnostics"))
+            if isinstance(recovered_row.get("diagnostics"), dict) else {}
+        )
+        state.diagnostics.update({
+            "web_chat_request_recovery": "worker-terminal-replayed-after-broker-restart",
+            "web_chat_terminal_replay_type": "chat.completed",
+            "web_chat_terminal_replay_reconciled": "full-finalization",
+            "web_chat_terminal_replay_received_at": time.time(),
+            "worker_transport_replayed": True,
+            "worker_transport_recovery": "transport-outbox-v47",
+            "server_finalization_recovered_after_restart": True,
+        })
+        state.diagnostics["native_snapshot_persisted"] = _native_snapshot_persist_best_effort(
+            native_content, request_id, owner, state.diagnostics,
+        )
+
+        # A replayed terminal is still Worker-owned completion evidence. Only
+        # after the full text has been archived into request-owned storage may
+        # the API publish completed status and settle quota/wallet reservations.
+        archived_text, media_items, file_items = await archive_verified_terminal(
+            state, candidate, owner, request_id, media_base_for_request(websocket),
+        )
+        completion_usage, token_meta = standard_usage("", archived_text)
+        completion_tokens = completion_usage.get("completion_tokens")
+        if type(completion_tokens) is not int or completion_tokens < 0:
+            raise ValueError("Recovered completion usage estimate is invalid")
+        usage_override = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+            **token_meta,
+        }
+        prompt_chars = recovered_row.get("prompt_chars")
+        if type(prompt_chars) is not int or prompt_chars < 0:
+            return False
+        timings = recovered_row.get("timings")
+        timings = dict(timings) if isinstance(timings, dict) else {}
+
+        principal = ApiPrincipal(
+            key_id=owner,
+            name=str(recovered_row.get("api_key_name") or "Web Chat"),
+            kind=str(recovered_row.get("auth_kind") or "managed"),
+            scopes=tuple(recovered_row.get("scopes") or ("chat",)),
+        )
+        await record_request(
+            state,
+            requested_model,
+            "",
+            "completed",
+            principal,
+            stream=bool(recovered_row.get("stream", True)),
+            prompt_mode=str(recovered_row.get("prompt_mode") or "auto"),
+            response_id=response_id,
+            final_text=archived_text,
+            request_type=str(recovered_row.get("request_type") or "web_chat"),
+            attachments_count=(
+                recovered_row.get("attachments_count")
+                if type(recovered_row.get("attachments_count")) is int
+                and recovered_row.get("attachments_count") >= 0 else 0
+            ),
+            media_items=media_items,
+            file_items=file_items,
+            usage_override=usage_override,
+            prompt_chars_override=prompt_chars,
+            timings_override=timings,
+        )
+        if not await ensure_replayed_delivery_terminal(request_id, owner, archived_text):
+            raise RuntimeError("Recovered SSE delivery terminal was not durably journaled")
+        return True
+
     async def record_request_queued(
         *, request_id: str, response_id: str, requested_model: str, prompt: str,
         principal: ApiPrincipal, stream: bool, prompt_mode: str,
