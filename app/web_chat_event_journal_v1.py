@@ -181,7 +181,9 @@ class WebChatEventJournal:
             self._append_records, request_id, owner_key_id,
             [("delivery.completed", {"text_chars": max(0, int(text_chars))})],
         )
-        return rows[0]
+        # A prior terminal (including this same completion) may already
+        # own the journal. Zero means no new terminal event was appended.
+        return rows[0] if rows else 0
 
     async def append_terminal(
         self, request_id: str, owner_key_id: str, status: str, message: str = "",
@@ -220,6 +222,12 @@ class WebChatEventJournal:
             if state is not None and str(state["owner_key_id"]) != owner_key_id:
                 connection.rollback()
                 raise PermissionError("Web Chat event request owner mismatch")
+            if state is not None and str(state["terminal_status"] or ""):
+                # The first durable delivery terminal is absorbing. Do not
+                # append late Worker retries, delivery chunks, or competing
+                # terminal markers after a client may have observed finality.
+                connection.rollback()
+                return []
             if state is None:
                 connection.execute(
                     """
