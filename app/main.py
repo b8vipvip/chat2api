@@ -2041,8 +2041,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return False
         requested_model = str(recovered_row.get("requested_model") or "").strip()
         response_id = str(recovered_row.get("response_id") or "").strip()
-        if not requested_model or not response_id:
+        prompt_chars = recovered_row.get("prompt_chars")
+        if (
+            not requested_model or not response_id
+            or type(prompt_chars) is not int or prompt_chars < 0
+        ):
             return False
+        timings = recovered_row.get("timings")
+        timings = dict(timings) if isinstance(timings, dict) else {}
+        raw_scopes = recovered_row.get("scopes")
+        scopes = (
+            tuple(value for value in raw_scopes if isinstance(value, str))
+            if isinstance(raw_scopes, (list, tuple)) else ("chat",)
+        )
+        if not scopes:
+            scopes = ("chat",)
 
         state = RequestState(request_id=request_id, client_id=client_id)
         state.mode1_web_chat = True
@@ -2062,8 +2075,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "worker_transport_recovery": "transport-outbox-v47",
             "server_finalization_recovered_after_restart": True,
         })
-        state.diagnostics["native_snapshot_persisted"] = _native_snapshot_persist_best_effort(
+        native_persisted = _native_snapshot_persist_best_effort(
             native_content, request_id, owner, state.diagnostics,
+        )
+        state.diagnostics["native_snapshot_persisted"] = bool(
+            native_persisted or state.diagnostics.get("native_snapshot_persisted") is True
         )
 
         # A replayed terminal is still Worker-owned completion evidence. Only
@@ -2082,17 +2098,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "total_tokens": prompt_tokens + completion_tokens,
             **token_meta,
         }
-        prompt_chars = recovered_row.get("prompt_chars")
-        if type(prompt_chars) is not int or prompt_chars < 0:
-            return False
-        timings = recovered_row.get("timings")
-        timings = dict(timings) if isinstance(timings, dict) else {}
-
         principal = ApiPrincipal(
             key_id=owner,
             name=str(recovered_row.get("api_key_name") or "Web Chat"),
             kind=str(recovered_row.get("auth_kind") or "managed"),
-            scopes=tuple(recovered_row.get("scopes") or ("chat",)),
+            scopes=scopes,
         )
         await record_request(
             state,
