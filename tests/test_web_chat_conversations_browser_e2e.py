@@ -177,7 +177,7 @@ def test_web_chat_conversations_sync_between_two_browser_profiles(tmp_path: Path
                 citation_links = page_b.locator(".message-tool-reference")
                 assert citation_links.count() == 1
                 assert citation_links.first.get_attribute("href") == "https://docs.python.org/3/library/"
-                assert citation_links.first.inner_text().startswith("Python library reference")
+                assert citation_links.first.inner_text().startswith("[1] Python library reference")
 
                 # Both browser profiles write against revision 1. Exactly one
                 # optimistic update may win; the other must receive a conflict.
