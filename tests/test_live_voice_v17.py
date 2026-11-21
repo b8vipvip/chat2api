@@ -201,10 +201,12 @@ def test_browser_webapp_can_use_one_time_realtime_session_token(tmp_path: Path) 
                 assert extension.receive_json()["type"] == "voice.live.stop"
 
         try:
-            with client.websocket_connect(token_payload["websocket_path"]):
-                raise AssertionError("one-time realtime token unexpectedly reused")
-        except Exception:
-            pass
+            with client.websocket_connect(token_payload["websocket_path"]) as socket:
+                socket.receive_json()
+        except WebSocketDisconnect as error:
+            assert error.code == 4401
+        else:
+            raise AssertionError("one-time realtime token unexpectedly reused")
 
 
 def test_live_voice_rejects_legacy_master_key_and_wrong_key(tmp_path: Path) -> None:
