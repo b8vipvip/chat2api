@@ -278,14 +278,13 @@ jobs:
           node tests/native_tool_reference_metadata_v64.mjs
           pytest -q tests/test_chat_tool_references_v1.py --timeout=30
 
+      - name: Multi-turn external reply boundary regression v214
+        run: node tests/multiturn_prompt_boundary_v214.mjs
+
       - name: Web Chat tool status normalization v66
         run: |
           node --check app/chat_client_v1.js
           node tests/web_chat_tool_status_v1.mjs
-
-
-      - name: Multi-turn external reply boundary regression v214
-        run: node tests/multiturn_prompt_boundary_v214.mjs
       - name: Worker probe observer regression
         run: node tests/worker_probe_supervisor_v1.mjs
 
