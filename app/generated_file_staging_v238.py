@@ -37,6 +37,7 @@ STAGE_PATH = re.compile(r"^stg_[a-f0-9]{48}\.part$")
 class _Stage:
     request_id: str
     upload_id: str
+    owner_key_id: str
     filename: str
     mime: str
     expected_bytes: int
@@ -52,14 +53,26 @@ class _Stage:
 class GeneratedFileStaging:
     def __init__(self, storage_root: Path):
         self.root = Path(storage_root) / "generated-file-staging"
-        self.root.mkdir(parents=True, exist_ok=True)
+        if self.root.is_symlink():
+            raise ValueError("Generated staging root must not be a symlink")
+        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(self.root, 0o700)
         self.db_path = self.root / "index.sqlite3"
+        if self.db_path.is_symlink():
+            raise ValueError("Generated staging index must not be a symlink")
         self.lock = threading.RLock()
         self.entries: dict[tuple[str, str], _Stage] = {}
         self._init_db()
+        os.chmod(self.db_path, 0o600)
+        for suffix in ("-wal", "-shm"):
+            sidecar = Path(str(self.db_path) + suffix)
+            if sidecar.exists() and not sidecar.is_symlink():
+                os.chmod(sidecar, 0o600)
         self._restore_completed()
 
     def _db(self):
+        if self.db_path.is_symlink():
+            raise ValueError("Generated staging index must not be a symlink")
         conn = sqlite3.connect(self.db_path, timeout=20)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA synchronous=FULL")
@@ -70,6 +83,7 @@ class GeneratedFileStaging:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("""CREATE TABLE IF NOT EXISTS generated_file_stages (
                 request_id TEXT NOT NULL,
+                owner_key_id TEXT NOT NULL DEFAULT '',
                 upload_id TEXT NOT NULL,
                 filename TEXT NOT NULL,
                 mime TEXT NOT NULL,
@@ -83,6 +97,15 @@ class GeneratedFileStaging:
                 PRIMARY KEY(request_id, upload_id),
                 UNIQUE(path_name)
             )""")
+            columns = {
+                str(row["name"])
+                for row in conn.execute("PRAGMA table_info(generated_file_stages)")
+            }
+            if "owner_key_id" not in columns:
+                conn.execute(
+                    "ALTER TABLE generated_file_stages "
+                    "ADD COLUMN owner_key_id TEXT NOT NULL DEFAULT ''"
+                )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS generated_file_stages_created_idx "
                 "ON generated_file_stages(created_at)"
@@ -114,11 +137,12 @@ class GeneratedFileStaging:
                 "SELECT * FROM generated_file_stages ORDER BY created_at, request_id, upload_id"
             ).fetchall()
 
-        restored_paths: set[str] = set()
+        retained_paths: set[str] = set()
         request_counts: dict[str, int] = {}
         request_bytes: dict[str, int] = {}
         for raw in rows:
             request_id = str(raw["request_id"] or "")
+            owner_key_id = str(raw["owner_key_id"] or "")
             upload_id = str(raw["upload_id"] or "")
             filename = str(raw["filename"] or "")
             mime = str(raw["mime"] or "").strip().lower()
@@ -139,6 +163,8 @@ class GeneratedFileStaging:
             valid = (
                 0 < len(request_id) <= 128
                 and not any(ord(char) < 32 or ord(char) == 127 for char in request_id)
+                and 0 < len(owner_key_id) <= 160
+                and not any(ord(char) < 32 or ord(char) == 127 for char in owner_key_id)
                 and bool(UPLOAD_ID.fullmatch(upload_id))
                 and bool(STAGE_PATH.fullmatch(path_name))
                 and safe_name(filename) == filename
@@ -158,8 +184,12 @@ class GeneratedFileStaging:
 
             path = self.root / path_name
             try:
-                if path.resolve().parent != self.root.resolve() or not path.is_file():
-                    raise ValueError("staged file missing")
+                if (
+                    path.is_symlink()
+                    or path.resolve().parent != self.root.resolve()
+                    or not path.is_file()
+                ):
+                    raise ValueError("staged file missing or unsafe")
                 payload = path.read_bytes()
             except (OSError, ValueError):
                 self._delete_persisted(request_id, upload_id, path)
@@ -173,6 +203,13 @@ class GeneratedFileStaging:
                 and hashlib.sha256(payload).hexdigest() == expected_sha256
             )
             if not complete:
+                # Another API process may still be appending this fresh stage.
+                # Do not let a concurrent process startup destroy its bytes;
+                # incomplete entries are never restored or exposed, and the
+                # normal TTL/drop_request cleanup remains responsible for them.
+                if not bool(raw["finished"]):
+                    retained_paths.add(path_name)
+                    continue
                 self._delete_persisted(request_id, upload_id, path)
                 continue
 
@@ -187,6 +224,7 @@ class GeneratedFileStaging:
             stage = _Stage(
                 request_id=request_id,
                 upload_id=upload_id,
+                owner_key_id=owner_key_id,
                 filename=filename,
                 mime=mime,
                 expected_bytes=expected,
@@ -199,7 +237,7 @@ class GeneratedFileStaging:
                 finished=True,
             )
             self.entries[(request_id, upload_id)] = stage
-            restored_paths.add(path_name)
+            retained_paths.add(path_name)
             request_counts[request_id] = count + 1
             request_bytes[request_id] = total + expected
             with self._db() as conn:
@@ -213,7 +251,7 @@ class GeneratedFileStaging:
         # Remove orphan files created before a metadata insert or left by a
         # crash during rollback. The SQLite index is the only restore authority.
         for path in self.root.glob("stg_*.part"):
-            if path.name not in restored_paths:
+            if path.name not in retained_paths:
                 path.unlink(missing_ok=True)
 
     def _prune(self) -> None:
@@ -227,14 +265,17 @@ class GeneratedFileStaging:
                 self._delete_persisted(request_id, upload_id, row.path)
 
     def ingest(
-        self, *, request_id: str, upload_id: str, filename: str,
+        self, *, request_id: str, owner_key_id: str, upload_id: str, filename: str,
         mime: str, sequence: int, expected_bytes: int,
         expected_sha256: str, base64_chunk: str, final: bool,
     ) -> dict[str, object]:
         request_id = str(request_id or "")
+        owner_key_id = str(owner_key_id or "")
         if (
             not request_id or len(request_id) > 128
             or any(ord(char) < 32 or ord(char) == 127 for char in request_id)
+            or not owner_key_id or len(owner_key_id) > 160
+            or any(ord(char) < 32 or ord(char) == 127 for char in owner_key_id)
             or not UPLOAD_ID.fullmatch(str(upload_id or ""))
             or not SHA256_HEX.fullmatch(str(expected_sha256 or ""))
             or type(sequence) is not int or sequence < 0 or sequence > 256
@@ -274,20 +315,21 @@ class GeneratedFileStaging:
                     raise ValueError("staged-file-total-budget-exceeded")
                 path_name = "stg_" + secrets.token_hex(24) + ".part"
                 path = self.root / path_name
-                path.touch(exist_ok=False)
+                path.touch(mode=0o600, exist_ok=False)
+                os.chmod(path, 0o600)
                 row = _Stage(
-                    request_id, upload_id, name, canonical, expected_bytes,
+                    request_id, upload_id, owner_key_id, name, canonical, expected_bytes,
                     expected_sha256, path, time.monotonic(), hashlib.sha256(),
                 )
                 try:
                     with self._db() as conn:
                         conn.execute(
                             """INSERT INTO generated_file_stages
-                               (request_id, upload_id, filename, mime, expected_bytes,
+                               (request_id, owner_key_id, upload_id, filename, mime, expected_bytes,
                                 expected_sha256, path_name, created_at, size, sequence, finished)
-                               VALUES (?,?,?,?,?,?,?,?,?,?,0)""",
+                               VALUES (?,?,?,?,?,?,?,?,?,?,?,0)""",
                             (
-                                request_id, upload_id, name, canonical, expected_bytes,
+                                request_id, owner_key_id, upload_id, name, canonical, expected_bytes,
                                 expected_sha256, path_name, time.time(), 0, 0,
                             ),
                         )
@@ -297,7 +339,8 @@ class GeneratedFileStaging:
                 self.entries[key] = row
 
             if (
-                row.finished or sequence != row.sequence
+                row.finished or row.owner_key_id != owner_key_id
+                or sequence != row.sequence
                 or row.filename != name or row.mime != canonical
                 or row.expected_bytes != expected_bytes
                 or row.expected_sha256 != expected_sha256
@@ -308,6 +351,8 @@ class GeneratedFileStaging:
 
             previous_size = row.size
             try:
+                if row.path.is_symlink() or row.path.resolve().parent != self.root.resolve():
+                    raise ValueError("staged file path changed")
                 with row.path.open("ab") as sink:
                     sink.write(chunk)
                     sink.flush()
@@ -351,14 +396,22 @@ class GeneratedFileStaging:
                 "sequence": row.sequence,
             }
 
-    def read(self, request_id: str, upload_id: str, filename: str) -> tuple[bytes, str]:
+    def read(
+        self, request_id: str, upload_id: str, filename: str, *, owner_key_id: str,
+    ) -> tuple[bytes, str]:
         key = (str(request_id or ""), str(upload_id or ""))
+        owner_key_id = str(owner_key_id or "")
         with self.lock:
             self._prune()
             row = self.entries.get(key)
-            if not row or not row.finished or row.filename != filename:
+            if (
+                not row or not row.finished or row.filename != filename
+                or not owner_key_id or row.owner_key_id != owner_key_id
+            ):
                 raise ValueError("Generated staged file was not verified")
             try:
+                if row.path.is_symlink() or row.path.resolve().parent != self.root.resolve():
+                    raise ValueError("staged file path changed")
                 payload = row.path.read_bytes()
             except OSError as exc:
                 self.entries.pop(key, None)
