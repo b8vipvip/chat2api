@@ -96,6 +96,20 @@ jobs:
           ci_success_id="$(success_id "CI")"
           smoke_success_id="$(success_id "Production image smoke")"
 
+          is_validation_failure() {
+            case "$1" in
+              completed:failure|completed:timed_out|completed:startup_failure)
+                return 0
+                ;;
+              *)
+                # cancelled, skipped, stale, neutral and action_required are
+                # not successful release evidence, but are not code failures.
+                # A newer exact-SHA validation may still provide the proof.
+                return 1
+                ;;
+            esac
+          }
+
           # Smart path classification may skip the costly image build. An
           # overall green workflow with a skipped build is NOT production
           # image evidence and must never authorize an automatic Release.
@@ -113,11 +127,11 @@ jobs:
           # A completed success is durable evidence for this immutable SHA.
           # Only surface a terminal validation failure when no success evidence
           # exists for that workflow at all.
-          if [[ -z "$ci_success_id" && "$ci_latest" == completed:* && "$ci_latest" != "completed:success" ]]; then
+          if [[ -z "$ci_success_id" ]] && is_validation_failure "$ci_latest"; then
             echo "required post-merge validation CI failed without any success evidence: ${ci_latest}" >&2
             exit 1
           fi
-          if [[ -z "$smoke_success_id" && "$smoke_latest" == completed:* && "$smoke_latest" != "completed:success" ]]; then
+          if [[ -z "$smoke_success_id" ]] && is_validation_failure "$smoke_latest"; then
             echo "required post-merge validation Production image smoke failed without any success evidence: ${smoke_latest}" >&2
             exit 1
           fi
