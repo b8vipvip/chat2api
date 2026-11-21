@@ -336,6 +336,10 @@ install_native_page_diagnostics(app)
 # after user accounts, Worker/model routing and the legacy admin auth stack exist.
 install_control_plane_features_v1(app)
 install_quota_reservation_runtime_v1(app)
+# Voice routes consume the shared quota/wallet runtime and the same Worker
+# routing authority as Chat. Keep them installed only after those services exist.
+install_voice_patch(app)
+install_live_voice_patch(app)
 install_web_chat_features_v1(app)
 # The transport-only SSE guard is the final ASGI middleware installation, after
 # every patch that can register a BaseHTTPMiddleware wrapper. The trailing
