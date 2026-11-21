@@ -369,7 +369,7 @@ def test_worker_terminal_outbox_replays_across_two_server_instances(tmp_path):
         # accounting callback. The retry must settle the same request_id once
         # and only then ACK the durable Worker outbox.
         original_accounting = app_after_restart.state.telemetry.usage_accounting
-        accounting_failures_remaining = {"count": 1}
+        accounting_failures_remaining = {"count": 2}
 
         async def fail_first_completed_accounting(record):
             if record.get("status") == "completed" and accounting_failures_remaining["count"] > 0:
