@@ -540,4 +540,6 @@ def test_realtime_session_token_issuance_is_bounded_per_api_key(tmp_path: Path) 
         ]
         assert [response.status_code for response in responses[:8]] == [200] * 8
         assert responses[8].status_code == 429
-        assert responses[8].json()["detail"]["code"] == "realtime_session_limit"
+        error = responses[8].json()["error"]
+        assert error["code"] == "realtime_session_limit"
+        assert error["type"] == "rate_limit_error"
