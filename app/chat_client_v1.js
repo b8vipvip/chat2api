@@ -979,17 +979,20 @@
       } else {
         const nativeRenderer = window.Chat2APINativeRendererV1;
         const nativeSnapshot = message.requestId ? state.nativeSnapshots.get(message.requestId) : null;
+        const messageReferences = referencesForMessage(message);
         const nativeRendered = Boolean(nativeRenderer && typeof nativeRenderer.renderNativeSnapshot === "function" &&
-          nativeSnapshot && nativeRenderer.renderNativeSnapshot(body,nativeSnapshot));
+          nativeSnapshot && nativeRenderer.renderNativeSnapshot(body,nativeSnapshot,messageReferences));
         if (!nativeRendered) {
           const renderer = window.Chat2APISafeRenderer;
           if (renderer && typeof renderer.renderMarkdown === "function") {
-            renderer.renderMarkdown(body,message.content,referencesForMessage(message));
+            renderer.renderMarkdown(body,message.content,messageReferences);
           }
           else body.textContent = message.content;
         }
       }
-      if (message.role === "assistant") renderToolActivity(body,message);
+      if (message.role === "assistant") {
+        renderToolActivity(body,message,{includeReferences: !nativeRendered});
+      }
       if (state.streaming && message.id === state.streamingMessageId) {
         const caret = document.createElement("span");
         caret.className = "streaming-caret";
@@ -1426,10 +1429,11 @@
     return ({running:"执行中",completed:"已完成",failed:"失败",cancelled:"已取消"})[status] || "状态未知";
   }
 
-  function renderToolActivity(body, message) {
+  function renderToolActivity(body, message, options = {}) {
     const events = Array.isArray(message?.toolEvents) ? message.toolEvents.slice(-6) : [];
     if (!events.length) return;
-    const messageReferences = referencesForMessage(message);
+    const includeReferences = options.includeReferences !== false;
+    const messageReferences = includeReferences ? referencesForMessage(message) : [];
     const referenceNumbers = new Map(messageReferences.map((reference,index) => [
       reference.id ? "id:" + reference.id : "url:" + reference.url, index + 1,
     ]));
@@ -1438,7 +1442,8 @@
     events.forEach(item => {
       const details = document.createElement("details");
       details.className = "message-tool-event";
-      details.open = item.status === "running" || normalizeToolReferences(item.references).length > 0;
+      const itemReferences = normalizeToolReferences(item.references);
+      details.open = item.status === "running" || (includeReferences && itemReferences.length > 0);
       const summary = document.createElement("summary");
       summary.textContent = String(item.toolName || "tool").slice(0,80) + " · " + toolStatusLabel(item.status);
       details.appendChild(summary);
@@ -1452,7 +1457,7 @@
         pre.textContent = value;
         details.append(heading,pre);
       }
-      const references = normalizeToolReferences(item.references);
+      const references = includeReferences ? itemReferences : [];
       if (references.length) {
         const referenceBox = document.createElement("div");
         referenceBox.className = "message-tool-references";
