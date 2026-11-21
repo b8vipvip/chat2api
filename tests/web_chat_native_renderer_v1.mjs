@@ -49,7 +49,7 @@ const good = {
       {tag:"mfenced",math_attrs:{open:"(",close:")",separators:",;"},
         children:[{tag:"mphantom",children:[{tag:"mn",text:"0"}]}]},
       {tag:"semantics",children:[{tag:"mrow",children:[{tag:"mi",text:"x"}]},
-        {tag:"annotation",math_attrs:{encoding:"application/x-tex"},text:"\\\\frac{x}{y}"}]}
+        {tag:"annotation",math_attrs:{encoding:"application/x-tex"},text:"\\frac{x}{y}"}]}
     ]},
     {tag:"a",href:"https://example.org/citation",children:[{tag:"span",text:"citation"}]}
   ]}
