@@ -114,6 +114,15 @@ def test_web_chat_conversation_api_auth_ownership_sync_and_conflicts(tmp_path: P
         conversation = _conversation(conversation_id)
         conversation["apiKeyId"] = key_id
         conversation["messages"][1]["lastEventId"] = 42
+        conversation["messages"][1]["references"] = [
+            {
+                "id": f"turn0search{index}",
+                "url": f"https://docs{index}.python.org/reference/",
+                "title": f"Python source {index}",
+                "snippet": f"Reference snippet {index}",
+            }
+            for index in range(8)
+        ] + [{"id": "unsafe", "url": "javascript:alert(1)", "title": "Unsafe"}]
         conversation["messages"][1]["toolEvents"] = [{
             "toolName": "browser.search", "callId": "call-123",
             "resultId": "result-123", "status": "completed",
@@ -137,6 +146,11 @@ def test_web_chat_conversation_api_auth_ownership_sync_and_conflicts(tmp_path: P
         assert created.json()["conversation"]["messages"][1]["toolEvents"][0]["references"][0]["id"] == "turn0search0"
         assert created.json()["conversation"]["messages"][1]["toolEvents"][0]["references"][0]["url"] == "https://docs.python.org/3/library/"
         assert created.json()["conversation"]["messages"][1]["lastEventId"] == 42
+        persisted_references = created.json()["conversation"]["messages"][1]["references"]
+        assert len(persisted_references) == 8
+        assert persisted_references[0]["id"] == "turn0search0"
+        assert persisted_references[-1]["id"] == "turn0search7"
+        assert all(reference["url"].startswith("https://") for reference in persisted_references)
         assert created.headers["cache-control"] == "private, no-store"
         assert "cookie" in {value.strip().lower() for value in created.headers["vary"].split(",")}
 
