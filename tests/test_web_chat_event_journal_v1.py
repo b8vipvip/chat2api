@@ -1,11 +1,18 @@
 import asyncio
+import base64
+import hashlib
+import io
+import re
+import time
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from app.config import Settings
 from app.main import create_app
 from app.telemetry import TelemetryStore
+from app.user_console_v104_patch import install_user_console_v104_patch
 from app.web_chat_event_journal_v1 import WebChatEventJournal
 
 
@@ -240,6 +247,7 @@ def test_worker_terminal_outbox_replays_across_two_server_instances(tmp_path):
     )
     request_id = "req_brokerrestart123"
     app_before_restart = create_app(settings)
+    install_user_console_v104_patch(app_before_restart)
 
     with TestClient(app_before_restart) as first_server:
         paired = first_server.post(
@@ -288,6 +296,25 @@ def test_worker_terminal_outbox_replays_across_two_server_instances(tmp_path):
             usd_cny_rate=7.0,
         )
         assert billing_before_restart.mark_dispatch_authorized(request_id, wallet_user_id)
+
+        # A complete generated file is durably staged before the API process
+        # exits. The terminal outbox replay must restore this exact request/
+        # owner-bound stage and archive it, not silently drop the attachment.
+        file_bytes = b"Generated notes survive the API restart.\\n"
+        upload_id = "a" * 32
+        staged = app_before_restart.state.generated_staging.ingest(
+            request_id=request_id,
+            owner_key_id=key_id,
+            upload_id=upload_id,
+            filename="notes.txt",
+            mime="text/plain",
+            sequence=0,
+            expected_bytes=len(file_bytes),
+            expected_sha256=hashlib.sha256(file_bytes).hexdigest(),
+            base64_chunk=base64.b64encode(file_bytes).decode("ascii"),
+            final=True,
+        )
+        assert staged["finished"] is True
         asyncio.run(app_before_restart.state.telemetry.append({
             "request_id": request_id,
             "client_id": client_id,
@@ -322,12 +349,21 @@ def test_worker_terminal_outbox_replays_across_two_server_instances(tmp_path):
     # process restart: in-memory Broker state is gone, SQLite and Worker
     # extension credentials/outbox identity remain durable.
     app_after_restart = create_app(settings)
+    install_user_console_v104_patch(app_after_restart)
     with TestClient(app_after_restart) as second_server:
         recovering = app_after_restart.state.telemetry.get(request_id)
         assert recovering["status"] == "recovering"
         assert recovering["diagnostics"]["web_chat_request_recovery"] == "awaiting-worker-terminal-replay"
         assert recovering["response_text_provisional"] == "partial before restart"
-        final_text = "full answer from durable Worker terminal outbox " + ("x" * 1_100_000)
+        image_buffer = io.BytesIO()
+        Image.new("RGB", (1, 1), (255, 0, 0)).save(image_buffer, format="PNG")
+        image_base64 = base64.b64encode(image_buffer.getvalue()).decode("ascii")
+        final_text = (
+            "full answer from durable Worker terminal outbox\\n"
+            + f"![generated image](data:image/png;base64,{image_base64})\\n"
+            + f"![📎 notes.txt](chat2api-staged:{upload_id})\\n"
+            + ("x" * 1_100_000)
+        )
 
         # Model a crash between the completed telemetry append and its
         # accounting callback. The retry must settle the same request_id once
@@ -422,9 +458,51 @@ def test_worker_terminal_outbox_replays_across_two_server_instances(tmp_path):
         recovered = app_after_restart.state.telemetry.get(request_id)
         assert recovered["status"] == "completed"
         assert recovered["response_text_available"] is True
-        assert recovered["response_text"] == final_text
+        assert "data:image/png;base64," not in recovered["response_text"]
+        assert "chat2api-staged:" not in recovered["response_text"]
+        assert "/api/media/" in recovered["response_text"]
+        assert "/api/generated-files/pending/" in recovered["response_text"]
         assert recovered["response_text_provisional"] == ""
         assert recovered["diagnostics"]["web_chat_terminal_replay_reconciled"] == "full-finalization"
+
+        # The full-resolution image and the generated document must both be
+        # independently downloadable after restart, with the original bytes.
+        media_items = recovered.get("response_media") or []
+        assert len(media_items) == 1
+        media_record = app_after_restart.state.media_archive.describe(
+            media_items[0]["id"], key_id,
+        )
+        archived_image, archived_mime = app_after_restart.state.media_archive.load(
+            media_record["id"], media_record["token"],
+        )
+        assert archived_mime == "image/png"
+        assert archived_image == image_buffer.getvalue()
+
+        deadline = time.monotonic() + 3.0
+        staged_files = []
+        while time.monotonic() < deadline:
+            staged_files = app_after_restart.state.deferred_generated_files.list_for_request(
+                request_id, key_id,
+            )
+            if staged_files and staged_files[0]["status"] in {"ready", "failed"}:
+                break
+            time.sleep(0.01)
+        assert len(staged_files) == 1
+        assert staged_files[0]["status"] == "ready"
+        pending_match = re.search(
+            r"/api/generated-files/pending/(pgen_[A-Za-z0-9]+)/([A-Za-z0-9_-]+)",
+            recovered["response_text"],
+        )
+        assert pending_match
+        archived_file, archived_file_mime, archived_file_name = (
+            app_after_restart.state.deferred_generated_files.read(
+                pending_match.group(1), pending_match.group(2),
+            )
+        )
+        assert archived_file == file_bytes
+        assert archived_file_mime == "text/plain"
+        assert archived_file_name == "notes.txt"
+
         assert recovered["usage"]["prompt_tokens"] == 12
         assert recovered["usage"]["completion_tokens"] > 0
         assert recovered["usage"]["total_tokens"] == (
