@@ -403,8 +403,9 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     response_id = str(event.get("response_id") or "")
                     if response_id:
                         observed_response_count += 1
-                        completed_text = text_by_response.pop(
-                            response_id, str(event.get("text") or ""),
+                        completed_text = (
+                            text_by_response.pop(response_id, "")
+                            or str(event.get("text") or "")
                         )
                         if completed_text:
                             observed_completion_parts.append(completed_text)
