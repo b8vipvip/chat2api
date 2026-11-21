@@ -823,6 +823,25 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 # Require the browser's response.done signal before marking
                 # the live session successful, even if partial PCM was heard.
                 error_message = "GPT-Live session ended without a completed response"
+                with suppress(Exception):
+                    await send_json({
+                        "type": "error",
+                        "code": "GPT_LIVE_NO_COMPLETED_RESPONSE",
+                        "message": error_message,
+                        "retryable": True,
+                    })
+            terminal_status = (
+                "completed" if session_ready and observed_response_count else
+                "cancelled" if error_message == "client-disconnected" else "error"
+            )
+            if error_message != "client-disconnected":
+                with suppress(Exception):
+                    await send_json({
+                        "type": "session.closed",
+                        "session_id": session_id,
+                        "status": terminal_status,
+                        "error": error_message or None,
+                    })
             finished = True
             if started and selected_client:
                 with suppress(Exception):
