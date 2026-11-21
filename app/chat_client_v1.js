@@ -195,7 +195,10 @@
           || !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(host)) return null;
       if (typeof window !== "undefined" && window.location
           && url.origin === window.location.origin) return null;
+      const rawId = typeof value.id === "string" ? value.id.trim().slice(0,128) : "";
+      const referenceId = /^[A-Za-z0-9_.:-]{1,128}$/.test(rawId) ? rawId : "";
       return {
+        ...(referenceId ? {id:referenceId} : {}),
         url: url.href,
         title: cleanToolReferenceText(value.title, 180) || host,
         snippet: cleanToolReferenceText(value.snippet, 420),
@@ -210,11 +213,20 @@
     const seen = new Set(), rows = [];
     value.slice(0,32).forEach(item => {
       const reference = safeToolReference(item);
-      if (!reference || seen.has(reference.url)) return;
-      seen.add(reference.url);
+      if (!reference) return;
+      const identity = reference.id ? "id:" + reference.id : "url:" + reference.url;
+      if (seen.has(identity)) return;
+      seen.add(identity);
       rows.push(reference);
     });
     return rows.slice(0,8);
+  }
+
+  function referencesForMessage(message) {
+    const events = Array.isArray(message?.toolEvents) ? message.toolEvents : [];
+    return normalizeToolReferences(events.flatMap(item =>
+      Array.isArray(item?.references) ? item.references : []
+    ));
   }
 
   function normalizeToolEvents(value, role) {
@@ -228,7 +240,8 @@
       const callId = validId(callIdRaw) ? callIdRaw : "";
       const resultId = validId(resultIdRaw) ? resultIdRaw : "";
       if (!callId && !resultId) return null;
-      const status = normalizeToolStatus(item.status);
+      const statuses = ["running","completed","failed","cancelled"];
+      const status = statuses.includes(item.status) ? item.status : "completed";
       const normalized = {
         toolName, callId, resultId, status,
         arguments: typeof item.arguments === "string" ? item.arguments.slice(0,1200) : "",
@@ -971,7 +984,9 @@
           nativeSnapshot && nativeRenderer.renderNativeSnapshot(body,nativeSnapshot));
         if (!nativeRendered) {
           const renderer = window.Chat2APISafeRenderer;
-          if (renderer && typeof renderer.renderMarkdown === "function") renderer.renderMarkdown(body,message.content);
+          if (renderer && typeof renderer.renderMarkdown === "function") {
+            renderer.renderMarkdown(body,message.content,referencesForMessage(message));
+          }
           else body.textContent = message.content;
         }
       }
@@ -1326,15 +1341,11 @@
   class StreamResponseError extends Error {}
 
   function normalizeToolStatus(value) {
-    const status = String(value ?? "").trim().toLowerCase();
-    if (["running","in_progress","pending","streaming","queued","waiting",
-         "retrying","requires_action"].includes(status)) return "running";
-    if (["failed","error","errored","incomplete","timeout","timed_out",
-         "rejected"].includes(status)) return "failed";
-    if (["cancelled","canceled","aborted"].includes(status)) return "cancelled";
-    if (["completed","complete","succeeded","success","finished","done"].includes(status)) return "completed";
-    // Unknown upstream states must never be presented as successful completion.
-    return "unknown";
+    const status = String(value || "").toLowerCase();
+    if (["running","in_progress","pending","streaming"].includes(status)) return "running";
+    if (["failed","error"].includes(status)) return "failed";
+    if (status === "cancelled") return "cancelled";
+    return "completed";
   }
 
   function applyToolEvent(assistant, event) {
@@ -1409,15 +1420,16 @@
   }
 
   function toolStatusLabel(status) {
-    return ({
-      running:"执行中",completed:"已完成",failed:"失败",
-      cancelled:"已取消",unknown:"状态未知",
-    })[status] || "状态未知";
+    return ({running:"执行中",completed:"已完成",failed:"失败",cancelled:"已取消"})[status] || "状态未知";
   }
 
   function renderToolActivity(body, message) {
     const events = Array.isArray(message?.toolEvents) ? message.toolEvents.slice(-6) : [];
     if (!events.length) return;
+    const messageReferences = referencesForMessage(message);
+    const referenceNumbers = new Map(messageReferences.map((reference,index) => [
+      reference.id ? "id:" + reference.id : "url:" + reference.url, index + 1,
+    ]));
     const section = document.createElement("section");
     section.className = "message-tool-events";
     events.forEach(item => {
@@ -1453,7 +1465,10 @@
           link.rel = "noopener noreferrer nofollow";
           link.referrerPolicy = "no-referrer";
           const title = document.createElement("strong");
-          title.textContent = reference.title;
+          const referenceNumber = referenceNumbers.get(
+            reference.id ? "id:" + reference.id : "url:" + reference.url
+          );
+          title.textContent = (referenceNumber ? "[" + referenceNumber + "] " : "") + reference.title;
           link.appendChild(title);
           if (reference.snippet) {
             const snippet = document.createElement("span");
