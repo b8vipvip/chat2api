@@ -22,16 +22,12 @@ const metadata = {
 const forwarded = JSON.parse(JSON.stringify(safeToolMetadata(metadata)));
 
 assert.deepEqual(forwarded, {
-  search_model_queries: undefined,
   search_result_groups: metadata.search_result_groups,
   search_results: metadata.search_results,
   citations: metadata.citations,
   content_references: metadata.content_references,
   references: metadata.references,
   sources: metadata.sources,
-  tool_icons: undefined,
-  reasoning_title: undefined,
-  reasoning_status: undefined,
 });
 assert.deepEqual(JSON.parse(JSON.stringify(safeToolMetadata(null))), {});
 console.log("Native tool metadata forwards every server-supported citation root and excludes unrelated metadata");
