@@ -473,3 +473,33 @@ def test_conversation_attachment_reference_migration_backfills_legacy_rows(tmp_p
     assert migrated.referenced_file_ids() == {file_id}
     with sqlite3.connect(database) as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+
+
+def test_conversation_tool_events_preserve_unknown_and_missing_status_as_unknown() -> None:
+    from app.web_chat_conversations_v1 import _normalize_tool_events
+
+    unknown = _normalize_tool_events([{
+        "toolName": "browser.search",
+        "callId": "call-unknown-1",
+        "status": "unknown",
+        "arguments": "",
+        "output": "",
+    }], "assistant")
+    assert unknown[0]["status"] == "unknown"
+
+    missing = _normalize_tool_events([{
+        "toolName": "browser.search",
+        "callId": "call-unknown-2",
+        "arguments": "",
+        "output": "",
+    }], "assistant")
+    assert missing[0]["status"] == "unknown"
+
+    for invalid in ("success-ish", "mystery", "future_untrusted_state"):
+        import pytest
+        with pytest.raises(ValueError, match="fields are invalid"):
+            _normalize_tool_events([{
+                "toolName": "browser.search",
+                "callId": "call-invalid-1",
+                "status": invalid,
+            }], "assistant")
