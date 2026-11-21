@@ -180,6 +180,10 @@
             phase:String(payload.phase || ""),
             terminal:false,
             active:true,
+            ...(payload.partial_text_available === true &&
+                payload.partial_text_unverified === true &&
+                typeof payload.partial_text === "string" && payload.partial_text
+              ? {partial_text:payload.partial_text, partial_text_unverified:true} : {}),
             last_event_id:Number.isSafeInteger(payload.last_event_id) ? payload.last_event_id : 0,
           });
           const requestedDelay = Number(payload.retry_after_ms);
