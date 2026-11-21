@@ -1037,3 +1037,32 @@ def test_wallet_dispatch_keeps_legacy_unowned_key_without_reservation_compatible
     principal = SimpleNamespace(kind="managed", key_id="legacy-key")
 
     assert authorize_wallet_dispatch(app, "req_legacy_unowned", principal) is False
+
+
+
+@pytest.mark.asyncio
+async def test_runtime_startup_hook_recovers_terminal_usage_before_serving(tmp_path: Path) -> None:
+    app, store, api_keys = _runtime(tmp_path)
+    request_id = "req_runtime_startup_recovery_0001"
+    await reserve_request_quota(
+        app, request_id, SimpleNamespace(key_id="key-1"), "prompt", 4096,
+    )
+    terminal = {
+        "request_id": request_id,
+        "api_key_id": "key-1",
+        "status": "completed",
+        "usage": {"prompt_tokens": 5, "completion_tokens": 12, "total_tokens": 17},
+    }
+    app.state.telemetry.get_many_persisted = lambda request_ids: {
+        value: terminal for value in request_ids if value == request_id
+    }
+
+    await app.router.startup()
+
+    assert app.state.quota_reservation_recovery_status == "ready"
+    assert app.state.quota_reservation_recovery_result == {"replayed": 1, "reconciled": 0}
+    assert store.get(request_id)["state"] == "settled"
+    assert api_keys.keys["key-1"].tokens_used == 17
+    assert api_keys.charged_requests[request_id] == 17
+    await app.router.shutdown()
+    store.close()
