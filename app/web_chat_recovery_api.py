@@ -215,8 +215,68 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                 "updated_at": updated_at,
             }
 
-        # A running telemetry row with no Broker state is not safe to replay.
-        # This can happen after a process restart or retention/lease boundary.
+        # A stalled journal terminal may already be durable while the
+        # corresponding telemetry projection failed. Retry that exact
+        # fail-closed projection here so the browser's polling fallback can
+        # finish recovery after a nonterminal recovery.pending SSE frame.
+        if status == "running" and state is None and journal_snapshot.get("terminal_status") == "stalled":
+            partial_text = _best_partial_text(
+                row.get("response_text_provisional"),
+                journal_snapshot.get("delivered_text"),
+                journal_snapshot.get("worker_partial_text"),
+            )
+            diagnostics = row.get("diagnostics")
+            diagnostics = dict(diagnostics) if isinstance(diagnostics, dict) else {}
+            diagnostics.update({
+                "web_chat_request_recovery": "broker-state-lost-during-replay",
+                "web_chat_event_replay_available": bool(last_event_id),
+                "web_chat_partial_text_unverified": bool(partial_text),
+            })
+            try:
+                await telemetry.upsert({
+                    **row,
+                    "status": "stalled",
+                    "response_text": partial_text,
+                    "response_text_available": False,
+                    "error": "The active Web Chat Broker lease is unavailable; no generation was redispatched",
+                    "diagnostics": diagnostics,
+                })
+            except Exception:
+                logger.exception(
+                    "Unable to reconcile stalled Web Chat recovery request_id=%s",
+                    request_id,
+                )
+                return {
+                    "request_id": request_id,
+                    "status": "recovering",
+                    "terminal": False,
+                    "recoverable": True,
+                    "active": True,
+                    "phase": "persisting_terminal",
+                    "retry_after_ms": 500,
+                    "partial_text": partial_text,
+                    "partial_text_available": bool(partial_text),
+                    "partial_text_unverified": bool(partial_text),
+                    "last_event_id": last_event_id,
+                    "updated_at": updated_at,
+                }
+            return {
+                "request_id": request_id,
+                "status": "stalled",
+                "terminal": True,
+                "recoverable": False,
+                "active": False,
+                "response_text": "",
+                "response_text_available": False,
+                "partial_text": partial_text,
+                "partial_text_available": bool(partial_text),
+                "last_event_id": last_event_id,
+                "error_code": "request_stalled",
+                "updated_at": updated_at,
+            }
+
+        # A running telemetry row with no Broker state and no durable stalled
+        # terminal is not safe to replay.
         return {
             "request_id": request_id,
             "status": "unknown",
