@@ -43,7 +43,7 @@ class RequestState:
     # Mode 1 may expose bounded public citation cards in its Web Chat UI.
     mode1_web_chat: bool = False
     mode1_owner_key_id: str = ""
-    references: list[dict[str, str]] = field(default_factory=list)
+    references: list[dict[str, Any]] = field(default_factory=list)
     last_event_id: int = 0
     delivery_event_ids: list[int] = field(default_factory=list)
     delivery_terminal_event_id: int = 0
