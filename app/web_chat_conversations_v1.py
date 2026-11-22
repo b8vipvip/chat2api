@@ -296,24 +296,42 @@ def normalize_conversation(
 class WebChatConversationStoreV1:
     """SQLite-backed conversation rows with per-user ownership and optimistic revisions."""
 
-    def __init__(self, data_dir: Path) -> None:
-        self.path = Path(data_dir) / "web_chat_conversations_v1.sqlite3"
-        self.lock = threading.RLock()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        if self.path.is_symlink():
-            raise RuntimeError("Web Chat conversation database cannot be a symbolic link")
-        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
-        fd = os.open(self.path, flags, 0o600)
+    @staticmethod
+    def _secure_regular_file(path: Path, *, create: bool = False) -> None:
+        """Reject linked/non-regular SQLite files and keep them owner-private."""
+        if path.is_symlink():
+            raise RuntimeError("Web Chat conversation database files cannot be symbolic links")
+        flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        if create:
+            flags |= os.O_CREAT
+        try:
+            fd = os.open(path, flags, 0o600)
+        except FileNotFoundError:
+            if create:
+                raise
+            return
         try:
             metadata = os.fstat(fd)
             if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
-                raise RuntimeError("Web Chat conversation database must be a private regular file")
+                raise RuntimeError("Web Chat conversation database files must be private regular files")
             if os.name != "nt" and hasattr(os, "fchmod"):
                 os.fchmod(fd, 0o600)
         finally:
             os.close(fd)
+
+    def _secure_sqlite_files(self, *, create_database: bool = False) -> None:
+        self._secure_regular_file(self.path, create=create_database)
+        for suffix in ("-wal", "-shm", "-journal"):
+            self._secure_regular_file(Path(str(self.path) + suffix))
+
+    def __init__(self, data_dir: Path) -> None:
+        self.path = Path(data_dir) / "web_chat_conversations_v1.sqlite3"
+        self.lock = threading.RLock()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._secure_sqlite_files(create_database=True)
         with closing(self._connect()) as connection:
             connection.execute("PRAGMA journal_mode=WAL")
+            self._secure_sqlite_files()
             version = int(connection.execute("PRAGMA user_version").fetchone()[0])
             if version > 3:
                 raise RuntimeError("Web Chat conversation database version is newer than this application")
@@ -419,11 +437,17 @@ class WebChatConversationStoreV1:
             connection.execute("PRAGMA user_version=3")
 
     def _connect(self) -> sqlite3.Connection:
+        self._secure_sqlite_files(create_database=True)
         connection = sqlite3.connect(self.path, timeout=10, isolation_level=None)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA busy_timeout=10000")
-        connection.execute("PRAGMA foreign_keys=ON")
-        connection.execute("PRAGMA synchronous=FULL")
+        try:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA busy_timeout=10000")
+            connection.execute("PRAGMA foreign_keys=ON")
+            connection.execute("PRAGMA synchronous=FULL")
+            self._secure_sqlite_files()
+        except Exception:
+            connection.close()
+            raise
         return connection
 
     @staticmethod
