@@ -8,7 +8,7 @@ import sqlite3
 import stat
 import threading
 from contextlib import closing, contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +48,7 @@ _MAX_CONVERSATION_BYTES = 512 * 1024
 _MAX_SEARCH_QUERY_CHARS = 120
 _MAX_SEARCH_RESULTS = 100
 _CONVERSATION_EXPORT_FORMAT = "chat2api.web-chat-conversation"
+_MAX_RETENTION_DAYS = 3650
 
 
 def _now() -> str:
@@ -299,7 +300,7 @@ class WebChatConversationStoreV1:
         with closing(self._connect()) as connection:
             connection.execute("PRAGMA journal_mode=WAL")
             version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-            if version > 2:
+            if version > 3:
                 raise RuntimeError("Web Chat conversation database version is newer than this application")
             connection.execute("""
                 CREATE TABLE IF NOT EXISTS web_chat_conversations (
@@ -387,6 +388,20 @@ class WebChatConversationStoreV1:
                     raise
             else:
                 connection.execute("PRAGMA user_version=2")
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS web_chat_policy (
+                    policy_id INTEGER PRIMARY KEY CHECK (policy_id = 1),
+                    retention_days INTEGER NOT NULL DEFAULT 0
+                        CHECK (retention_days BETWEEN 0 AND 3650),
+                    updated_at TEXT NOT NULL
+                )
+            """)
+            connection.execute(
+                "INSERT OR IGNORE INTO web_chat_policy(policy_id, retention_days, updated_at) "
+                "VALUES (1, 0, ?)",
+                (_now(),),
+            )
+            connection.execute("PRAGMA user_version=3")
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=10, isolation_level=None)
@@ -425,6 +440,86 @@ class WebChatConversationStoreV1:
                 (user_id, _MAX_CONVERSATIONS_RETURNED),
             ).fetchall()
             return [self._decode(row) for row in rows if row is not None]
+
+    def retention_policy(self) -> dict[str, Any]:
+        with self.lock, closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT retention_days, updated_at FROM web_chat_policy WHERE policy_id=1"
+            ).fetchone()
+            return {
+                "retention_days": int(row["retention_days"]) if row else 0,
+                "updated_at": str(row["updated_at"]) if row else _now(),
+                "tombstones_retained": True,
+            }
+
+    def set_retention_days(self, retention_days: int) -> dict[str, Any]:
+        if type(retention_days) is not int or not 0 <= retention_days <= _MAX_RETENTION_DAYS:
+            raise ValueError("retention_days must be an integer between 0 and 3650")
+        now = _now()
+        with self.lock, closing(self._connect()) as connection:
+            connection.execute(
+                """INSERT INTO web_chat_policy(policy_id, retention_days, updated_at)
+                   VALUES (1, ?, ?)
+                   ON CONFLICT(policy_id) DO UPDATE SET
+                       retention_days=excluded.retention_days,
+                       updated_at=excluded.updated_at""",
+                (retention_days, now),
+            )
+        return self.retention_policy()
+
+    def expire_old_conversations(self, limit: int = 500) -> int:
+        if type(limit) is not int or not 1 <= limit <= 5000:
+            raise ValueError("retention batch limit is invalid")
+        policy = self.retention_policy()
+        days = int(policy["retention_days"])
+        if days == 0:
+            return 0
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat().replace("+00:00", "Z")
+        expired = 0
+        with self.lock, closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                """SELECT user_id, conversation_id, revision, payload
+                   FROM web_chat_conversations
+                   WHERE deleted=0 AND updated_at<?
+                   ORDER BY updated_at ASC, user_id ASC, conversation_id ASC
+                   LIMIT ?""",
+                (cutoff, limit),
+            ).fetchall()
+            for stored in rows:
+                current = self._decode(stored)
+                if current is None or current.get("deleted"):
+                    continue
+                user_id = str(stored["user_id"] or "")
+                conversation_id = str(stored["conversation_id"] or "")
+                now = _now()
+                self._adjust_file_references(
+                    connection, user_id, self._file_ids(current), set(), now,
+                )
+                tombstone = {
+                    "id": conversation_id,
+                    "title": "",
+                    "model": "",
+                    "apiKeyId": "",
+                    "createdAt": str(current.get("createdAt") or now),
+                    "updatedAt": now,
+                    "messages": [],
+                }
+                changed = connection.execute(
+                    """UPDATE web_chat_conversations
+                       SET revision=revision+1, updated_at=?, deleted=1, payload=?
+                       WHERE user_id=? AND conversation_id=? AND revision=? AND deleted=0""",
+                    (
+                        now,
+                        json.dumps(tombstone, ensure_ascii=False, separators=(",", ":")),
+                        user_id,
+                        conversation_id,
+                        int(stored["revision"]),
+                    ),
+                ).rowcount
+                expired += int(changed == 1)
+            connection.commit()
+        return expired
 
     def get_for_user(self, user_id: str, conversation_id: str) -> dict[str, Any] | None:
         with self.lock, closing(self._connect()) as connection:
