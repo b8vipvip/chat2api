@@ -116,6 +116,10 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
         file_b = client.post("/v1/files", headers={"Authorization": f"Bearer {stranger}"},
                              json={"filename": "private.pdf", "mime_type": "application/pdf",
                                    "data_base64": base64.b64encode(b"fake-pdf").decode()}).json()["id"]
+        own_pdf = client.post("/v1/files", headers={"Authorization": f"Bearer {token}"},
+                              json={"filename": "frame-not-image.pdf", "mime_type": "application/pdf",
+                                    "purpose": "assistants",
+                                    "data_base64": base64.b64encode(b"fake-pdf").decode()}).json()["id"]
         extra_files = [
             client.post("/v1/files", headers={"Authorization": f"Bearer {token}"},
                         json={"filename": f"extra-{index}.png", "mime_type": "image/png",
@@ -219,6 +223,15 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
                 out_of_order_video = live.receive_json()
                 assert out_of_order_video["type"] == "error"
                 assert out_of_order_video["code"] == "INVALID_VIDEO_FRAME"
+                live.send_json({
+                    "type": "input_video.frame",
+                    "sequence": 1,
+                    "timestamp_ms": 2000,
+                    "file_id": own_pdf,
+                })
+                non_image_video = live.receive_json()
+                assert non_image_video["type"] == "error"
+                assert non_image_video["code"] == "INVALID_MEDIA_INPUT"
                 # Invalid cross-key file must produce a per-input error, NOT
                 # a voice.live.stop or WebSocket disconnect.
                 live.send_json({"type": "input_media", "text": "私密文件", "attachments": [
