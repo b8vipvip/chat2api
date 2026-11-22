@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .private_storage import open_private_regular_file
+from .private_storage import open_private_regular_file, private_file_lock
 
 
 class AdminAuditError(RuntimeError):
@@ -154,7 +154,7 @@ class AdminAuditStore:
         request_id: str = "",
         details: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        with self._lock:
+        with self._lock, private_file_lock(self.data_dir / ".admin_audit.lock"):
             events = self._read_events_locked()
             payload = {
                 "event_id": "aud_" + secrets.token_hex(12),
@@ -205,7 +205,7 @@ class AdminAuditStore:
     def recent(self, limit: int = 100) -> list[dict[str, Any]]:
         if type(limit) is not int or limit < 1 or limit > 200:
             raise ValueError("Audit limit must be between 1 and 200")
-        with self._lock:
+        with self._lock, private_file_lock(self.data_dir / ".admin_audit.lock"):
             rows = list(reversed(self._read_events_locked()[-limit:]))
             projected: list[dict[str, Any]] = []
             for row in rows:
