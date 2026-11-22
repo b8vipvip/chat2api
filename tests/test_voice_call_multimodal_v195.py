@@ -185,6 +185,15 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
                 assert video_queued["type"] == "input_video.frame.queued"
                 assert video_queued["sequence"] == 0
                 assert video_queued["timestamp_ms"] == 1000
+                live.send_json({
+                    "type": "input_video.frame",
+                    "sequence": 1,
+                    "timestamp_ms": 2000,
+                    "file_id": extra_files[2],
+                })
+                backpressure = live.receive_json()
+                assert backpressure["type"] == "error"
+                assert backpressure["code"] == "LIVE_VIDEO_FRAME_BACKPRESSURE"
                 ext.send_json({
                     "type": "image.progress", "kind": "voice-live",
                     "request_id": request_id, "live_event": "input.text.sent",
