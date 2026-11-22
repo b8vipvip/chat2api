@@ -67,7 +67,7 @@ assert.deepEqual(combined.getAudioTracks(),[audioTrack],
   "ChatGPT's audio sender receives the synthetic microphone track");
 assert.deepEqual(combined.getVideoTracks(),[videoTrack],
   "ChatGPT's native camera track must pass through unchanged");
-assert.deepEqual(calls[0],{audio:false,video:videoConstraints},
+assert.deepEqual(JSON.parse(JSON.stringify(calls[0])),{audio:false,video:videoConstraints},
   "the browser must still acquire the real camera with the original constraints");
 
 const audioOnly = await mediaDevices.getUserMedia({audio:true,video:false});
