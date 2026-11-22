@@ -18,12 +18,28 @@ _ROOT_KEYS = (
     "search_results",
     "references",
     "sources",
+    # Responses-style annotations and the current web-search metadata envelope.
+    "annotations",
+    "citation_annotations",
+    "url_citation",
+    "web_search_results",
+    "source_references",
+    "tool_references",
 )
-_URL_KEYS = ("url", "href", "safe_url", "source_url", "web_url", "link_url")
+_URL_KEYS = (
+    "url", "href", "safe_url", "source_url", "web_url", "link_url",
+    "canonical_url", "resolved_url", "target_url",
+)
 _URL_LIST_KEYS = ("safe_urls", "urls")
-_TITLE_KEYS = ("title", "display_title", "name", "label", "source_name")
+_TITLE_KEYS = (
+    "title", "display_title", "name", "label", "source_name",
+    "source_title", "site_name", "publisher",
+)
 _SNIPPET_KEYS = ("snippet", "description", "excerpt", "summary", "matched_text")
-_ID_KEYS = ("ref_id", "citation_id", "reference_id", "source_id", "result_id", "id")
+_ID_KEYS = (
+    "ref_id", "citation_id", "reference_id", "source_id", "result_id",
+    "annotation_id", "source_ref", "id",
+)
 _REFERENCE_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 
 
