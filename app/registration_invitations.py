@@ -8,7 +8,6 @@ registration and require a new admin-issued invitation.
 from __future__ import annotations
 
 import hashlib
-import os
 import re
 import secrets
 import sqlite3
@@ -17,6 +16,8 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
+
+from .private_storage import secure_private_sqlite_files
 
 
 EMAIL_RE = re.compile(r"^[^@\s]{1,64}@[^@\s.]+(?:\.[^@\s.]+)+$")
@@ -34,12 +35,11 @@ class InvitationStore:
         root = Path(data_dir)
         root.mkdir(parents=True, exist_ok=True)
         self.path = root / "registration_invitations_v1.sqlite3"
-        if self.path.is_symlink():
-            raise InvitationError("Invitation database cannot be a symbolic link")
         self.lock = threading.RLock()
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
+        secure_private_sqlite_files(self.path, create_database=True)
         conn = sqlite3.connect(self.path, timeout=10, isolation_level=None)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA busy_timeout=10000")
@@ -71,10 +71,7 @@ class InvitationStore:
                 conn.execute("CREATE INDEX IF NOT EXISTS invitations_reservation_lease_idx ON invitations(status, reserved_at)")
             finally:
                 conn.close()
-        try:
-            os.chmod(self.path, 0o600)
-        except OSError:
-            pass
+            secure_private_sqlite_files(self.path)
 
     @staticmethod
     def _email(value: str) -> str:
