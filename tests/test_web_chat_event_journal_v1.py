@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from app.config import Settings
-from app.main import create_app
+from app.main import create_app, web_chat_delivery_text
 from app.telemetry import TelemetryStore
 from app.user_console_v104_patch import install_user_console_v104_patch
 from app.web_chat_event_journal_v1 import WebChatEventJournal
@@ -579,3 +579,63 @@ def test_final_message_citation_metadata_is_durable_in_worker_and_terminal_recor
         assert page["events"][1]["data"]["message_id"] == "assistant-final"
 
     asyncio.run(scenario())
+
+
+
+def test_durable_delivery_journal_stores_the_exact_native_citation_projection(tmp_path):
+    async def scenario():
+        journal = WebChatEventJournal(tmp_path)
+        await journal.open()
+        text = "Read the docs"
+        terminal = {
+            "diagnostics": {
+                "native_citation_text_match": True,
+                "response_boundary_prompt_echo_removed": False,
+            },
+            "metadata": {
+                "annotations": [{
+                    "type": "url_citation",
+                    "start_index": 0,
+                    "end_index": len(text),
+                    "url_citation": {
+                        "url": "https://docs.example.org/",
+                        "title": "Documentation",
+                        "ref_id": "turn0search0",
+                    },
+                }],
+            },
+        }
+        display_text = web_chat_delivery_text(text, text, terminal)
+        await journal.append_worker_event(
+            "req_citation_delivery", "key-citation-delivery",
+            {"type": "chat.completed", "text": text, "metadata": terminal["metadata"]},
+        )
+        delivery = await journal.append_delivery(
+            "req_citation_delivery", "key-citation-delivery", display_text,
+        )
+        terminal_id = await journal.append_delivery_terminal(
+            "req_citation_delivery", "key-citation-delivery", len(display_text),
+        )
+        snapshot = await journal.snapshot(
+            "req_citation_delivery", "key-citation-delivery",
+        )
+        page = await journal.events_after(
+            "req_citation_delivery", "key-citation-delivery", 0,
+        )
+        assert delivery["text_chars"] == len(display_text)
+        assert terminal_id > 0
+        assert snapshot["delivered_text"] == display_text
+        assert page["events"][-2]["data"]["delta"] == display_text
+        assert page["events"][-1]["data"]["text_chars"] == len(display_text)
+
+    asyncio.run(scenario())
+
+
+def test_main_wires_projected_text_to_live_and_replayed_delivery_journals():
+    from pathlib import Path
+    import app.main as main_module
+
+    source = Path(main_module.__file__).read_text(encoding="utf-8")
+    assert "delivery_text=display_final_text" in source
+    assert "delivery_text=display_text" in source
+    assert "ensure_replayed_delivery_terminal(request_id, owner, display_text)" in source
