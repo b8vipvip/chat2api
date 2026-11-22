@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 import os
 import stat
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,6 +17,10 @@ from app.diagnostics import DiagnosticStore, configure_file_logging
 from app.media_archive_v173 import MediaArchive
 from app.registry import ClientRegistry
 from app.pairing import PairingStore
+from app.payment_channels_v106_patch import (
+    PaymentChannelsStore, _payment_channels_secret_candidate, _persist_payment_channels_secret,
+)
+from app.prompt_config import PromptConfigStore, default_config
 from app.plugin_registry import PluginRegistry
 from app.quota_reservations import QuotaReservationStore
 from app.test_runs import TestRunStore
@@ -429,3 +434,58 @@ def test_plugin_and_quota_sqlite_files_are_private_and_reject_sidecar_links(tmp_
     with pytest.raises(RuntimeError, match="symbolic link"):
         QuotaReservationStore(tmp_path / "quota")
     assert quota_target.read_text(encoding="utf-8") == "must remain untouched"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission and symlink assertions")
+def test_payment_credentials_and_prompt_config_use_private_files(tmp_path: Path) -> None:
+    payment_root = tmp_path / "payment"
+    payment = PaymentChannelsStore(payment_root, "payment-secret")
+    assert stat.S_IMODE(payment.path.stat().st_mode) == 0o600
+    _persist_payment_channels_secret(payment_root, "payment-data-secret")
+    secret_path = payment_root / ".chat2api_data_secret"
+    assert stat.S_IMODE(secret_path.stat().st_mode) == 0o600
+
+    prompt_root = tmp_path / "prompts"
+    prompt = PromptConfigStore(prompt_root)
+    prompt.save(default_config())
+    assert stat.S_IMODE(prompt.path.stat().st_mode) == 0o600
+
+    outside = tmp_path / "outside-prompt-temp"
+    outside.write_text("must remain untouched", encoding="utf-8")
+    prompt.path.with_suffix(".tmp").symlink_to(outside)
+    prompt.save(default_config())
+    assert outside.read_text(encoding="utf-8") == "must remain untouched"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink assertions")
+def test_payment_secret_and_prompt_config_loaders_reject_symlinks(tmp_path: Path) -> None:
+    payment_root = tmp_path / "linked-payment"
+    payment_root.mkdir()
+    outside_secret = tmp_path / "outside-payment-secret"
+    outside_secret.write_text("must remain untouched", encoding="utf-8")
+    (payment_root / ".chat2api_data_secret").symlink_to(outside_secret)
+    with pytest.raises(RuntimeError, match="safely"):
+        _payment_channels_secret_candidate(payment_root, SimpleNamespace(api_key="legacy"))
+
+    prompt_root = tmp_path / "linked-prompt"
+    prompt_root.mkdir()
+    outside_prompt = tmp_path / "outside-prompt.json"
+    outside_prompt.write_text('{"prefix":"must not be loaded"}', encoding="utf-8")
+    (prompt_root / "prompt_config.json").symlink_to(outside_prompt)
+    prompt = PromptConfigStore(prompt_root)
+    assert prompt.last_error
+    assert prompt.config["prefix"] == ""
+    with pytest.raises(RuntimeError, match="symbolic link"):
+        prompt.save(default_config())
+    assert outside_prompt.read_text(encoding="utf-8") == '{"prefix":"must not be loaded"}'
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink assertions")
+def test_payment_configuration_rejects_symlinked_credentials_file(tmp_path: Path) -> None:
+    target = tmp_path / "outside-payment-config.json"
+    target.write_text('{"aggregate":{},"direct":{}}', encoding="utf-8")
+    path = tmp_path / "user_payment_channels_v106.json"
+    path.symlink_to(target)
+    with pytest.raises(RuntimeError):
+        PaymentChannelsStore(tmp_path, "payment-secret")
+    assert target.read_text(encoding="utf-8") == '{"aggregate":{},"direct":{}}'
