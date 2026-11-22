@@ -181,6 +181,18 @@ def test_update_scripts_and_ui_parse():
         )
         assert result.returncode == 0, result.stderr
 
+    py = subprocess.run(
+        [
+            sys.executable, "-m", "py_compile",
+            str(ROOT / "scripts" / "chat2api_update_storage.py"),
+            str(ROOT / "scripts" / "chat2api_update_reconcile.py"),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert py.returncode == 0, py.stderr
+
     js = subprocess.run(
         ["node", "--check", str(ROOT / "app" / "admin_server_update.js")],
         capture_output=True,
