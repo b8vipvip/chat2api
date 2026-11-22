@@ -6,7 +6,6 @@ It is a single-instance SQLite authority until the D/P multi-instance migration.
 """
 from __future__ import annotations
 
-import os
 import re
 import secrets
 import sqlite3
@@ -14,6 +13,8 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from .private_storage import secure_private_sqlite_files
 
 
 PLAN_ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
@@ -48,9 +49,8 @@ class UserSubscriptionStore:
     def __init__(self, data_dir: Path | str) -> None:
         self.path = Path(data_dir) / "user_subscriptions_v1.sqlite3"
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        if self.path.is_symlink():
-            raise UserSubscriptionError("Subscription store cannot be a symbolic link")
         self.lock = threading.RLock()
+        secure_private_sqlite_files(self.path, create_database=True)
         self.db = sqlite3.connect(
             str(self.path), timeout=10, check_same_thread=False, isolation_level=None
         )
@@ -78,7 +78,7 @@ class UserSubscriptionStore:
             CREATE INDEX IF NOT EXISTS user_subscriptions_current_idx
               ON user_subscriptions(user_id,status,starts_at,expires_at);
         """)
-        os.chmod(self.path, 0o600)
+        secure_private_sqlite_files(self.path)
         self._ensure_default_plan()
 
     def _ensure_default_plan(self) -> None:
