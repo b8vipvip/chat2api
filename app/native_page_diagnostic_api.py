@@ -10,6 +10,7 @@ import base64
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import re
 import secrets
@@ -26,6 +27,7 @@ from .native_page_windows_bridge import WindowsNativePageBridge
 from .windows_native_page_tool_release import (
     WindowsCollectorReleaseSource, WindowsCollectorReleaseUnavailable,
 )
+from .private_storage import ensure_private_directory, open_private_regular_file, write_private_bytes_atomic
 from .native_page_tool_release import (
     DiagnosticReleaseSource, DiagnosticReleaseUnavailable,
     RELEASE_BRANCH,
@@ -42,8 +44,7 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
     if getattr(app.state,"native_page_diagnostics_installed",False):return app
     app.state.native_page_diagnostics_installed=True
     root=Path(app.state.settings.data_dir)/"native_page_diagnostics"
-    root.mkdir(parents=True,exist_ok=True,mode=0o700)
-    root.chmod(0o700)
+    ensure_private_directory(root)
     jobs:dict[str,asyncio.Task]={}
     locks:dict[str,str]={}
     releases = DiagnosticReleaseSource()
@@ -65,14 +66,19 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
 
     def read(job_id):
         path=jobpath(job_id)
-        if not path.is_file():raise HTTPException(404,"Diagnosis job not found")
-        return json.loads(path.read_text(encoding="utf8"))
+        try:
+            fd=open_private_regular_file(path,os.O_RDONLY)
+        except FileNotFoundError:
+            raise HTTPException(404,"Diagnosis job not found")
+        except (OSError,RuntimeError):
+            raise HTTPException(404,"Diagnosis job not found")
+        with os.fdopen(fd,"r",encoding="utf8") as handle:
+            return json.load(handle)
 
     def write(job):
         path=jobpath(job["job_id"])
-        tmp=path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(job,ensure_ascii=False),encoding="utf8")
-        tmp.replace(path)
+        payload=json.dumps(job,ensure_ascii=False,separators=(",",":")).encode("utf8")
+        write_private_bytes_atomic(path,payload)
 
     def public(job):
         visible={key:job.get(key) for key in ("job_id","worker_id","target_type",
@@ -250,7 +256,7 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
                     manifest.get("request_binding")!="url-only-unbound"):
                     raise RuntimeError("url_only_evidence_provenance_invalid")
             out=root/(job_id+".zip")
-            out.write_bytes(data);out.chmod(0o600)
+            write_private_bytes_atomic(out,data)
             record.update({"status":"completed","stage":"complete","percent":100,
                 "size":size,"sha256":expected,"error":None,"updated_at":int(time.time())})
             write(record)
@@ -328,7 +334,7 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
                     "no source image bytes, no live API request binding.\n")
             data=buffer.getvalue()
             if not 0<len(data)<=MAX_ARCHIVE:raise RuntimeError("windows_evidence_zip_budget")
-            out=root/(job_id+".zip");out.write_bytes(data);out.chmod(0o600)
+            out=root/(job_id+".zip");write_private_bytes_atomic(out,data)
             record.update({"status":"completed","stage":"complete","percent":100,
                 "size":len(data),"sha256":hashlib.sha256(data).hexdigest(),
                 "counts":report.get("counts") or {},"page_probe":report.get("probe") or {},
@@ -374,9 +380,23 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
     async def list_jobs(request:Request,limit:int=40):
         authorize(request)
         records=[]
-        for p in sorted(root.glob("*.json"),key=lambda p:p.stat().st_mtime,reverse=True)[:min(100,max(1,limit))]:
+        candidates=[]
+        for path in root.glob("*.json"):
             try:
-                item=json.loads(p.read_text(encoding="utf8"))
+                fd=open_private_regular_file(path,os.O_RDONLY)
+            except (OSError,RuntimeError):
+                continue
+            try:
+                modified=os.fstat(fd).st_mtime
+            finally:
+                os.close(fd)
+            candidates.append((modified,path))
+        candidates.sort(key=lambda item:item[0],reverse=True)
+        for _,path in candidates[:min(100,max(1,limit))]:
+            try:
+                fd=open_private_regular_file(path,os.O_RDONLY)
+                with os.fdopen(fd,"r",encoding="utf8") as handle:
+                    item=json.load(handle)
                 # A server restart cancels in-process pollers. Do not leave
                 # stale tasks eternally appearing as running.
                 if (item.get("status")=="running" and item.get("job_id") not in jobs
@@ -386,7 +406,8 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
                         "updated_at":int(time.time())})
                     write(item)
                 records.append(public(item))
-            except (ValueError,OSError,KeyError):pass
+            except (ValueError,OSError,RuntimeError,KeyError):
+                continue
         data=(Path(__file__).parents[1]/"scripts"/"native_page_diagnostic_v1.py").read_bytes()
         match=re.search(rb'(?m)^VERSION\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"',data)
         version=match.group(1).decode("ascii") if match else "unknown"
@@ -536,9 +557,20 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
         authorize(request)
         job=read(job_id)
         path=root/(job_id+".zip")
-        if job.get("status")!="completed" or not path.is_file():
+        if job.get("status")!="completed":
             raise HTTPException(409,"Diagnosis archive not ready")
-        return Response(path.read_bytes(),media_type="application/zip",
+        try:
+            fd=open_private_regular_file(path,os.O_RDONLY)
+        except (OSError,RuntimeError):
+            raise HTTPException(409,"Diagnosis archive not ready")
+        with os.fdopen(fd,"rb") as handle:
+            metadata=os.fstat(handle.fileno())
+            if metadata.st_size>MAX_ARCHIVE:
+                raise HTTPException(409,"Diagnosis archive exceeds the safety limit")
+            archive_bytes=handle.read(MAX_ARCHIVE+1)
+        if len(archive_bytes)>MAX_ARCHIVE:
+            raise HTTPException(409,"Diagnosis archive exceeds the safety limit")
+        return Response(archive_bytes,media_type="application/zip",
             headers={"Cache-Control":"no-store","Content-Disposition":
                 f'attachment; filename="native-page-{job.get("original_request_id") or "history-url"}-{job_id[:8]}-v{job["tool_version"]}.zip"'})
 
