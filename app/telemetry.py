@@ -13,6 +13,7 @@ from typing import Any
 
 from .diagnostics import current_trace_id
 from .jsonl_tail import iter_recent_jsonl
+from .private_storage import read_private_bytes
 from .runtime_code_identity import runtime_code_sha
 from .timezone_utils import beijing_now_iso, to_beijing_iso
 
@@ -69,12 +70,15 @@ def current_deployment_start(data_dir: Path, expected_sha: str) -> datetime | No
     active successful deployment is an additional inclusive lower bound.
     """
     try:
-        state = json.loads((data_dir / "admin-update-status.json").read_text(encoding="utf-8"))
+        stored = read_private_bytes(data_dir / "admin-update-status.json")
+        if stored is None:
+            return None
+        state = json.loads(stored.decode("utf-8"))
         if state.get("status") not in ("succeeded", "success") or state.get("deployed_commit") != expected_sha:
             return None
         completed = datetime.fromisoformat(str(state["completed_at"]).replace("Z", "+00:00"))
         return completed.astimezone(timezone.utc) if completed.tzinfo else None
-    except (OSError, ValueError, TypeError, KeyError):
+    except (OSError, ValueError, TypeError, KeyError, RuntimeError):
         return None
 
 
