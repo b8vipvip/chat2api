@@ -5,6 +5,7 @@ import base64
 import hashlib
 import json
 import secrets
+import time
 from dataclasses import asdict, dataclass
 
 # A missing quota means unlimited; 0 means exhausted immediately.
@@ -47,14 +48,27 @@ def load_or_create_data_secret(data_dir: Path) -> str:
     """Return a server-local encryption secret independent of admin credentials."""
     data_dir.mkdir(parents=True, exist_ok=True)
     path = data_dir / "data_secret.key"
-    stored = read_private_bytes(path)
-    if stored:
-        value = stored.decode("utf-8").strip()
-        if value:
-            return value
-    value = secrets.token_urlsafe(48)
-    write_private_bytes_atomic(path, value.encode("utf-8"))
-    return value
+    lock_path = data_dir / ".data_secret.lock"
+    deadline = time.monotonic() + 10.0
+    while True:
+        try:
+            lock_path.mkdir(mode=0o700)
+            break
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Timed out waiting for the data-secret creation lock")
+            time.sleep(0.05)
+    try:
+        stored = read_private_bytes(path)
+        if stored:
+            value = stored.decode("utf-8").strip()
+            if value:
+                return value
+        value = secrets.token_urlsafe(48)
+        write_private_bytes_atomic(path, value.encode("utf-8"))
+        return value
+    finally:
+        lock_path.rmdir()
 
 
 @dataclass(slots=True)
