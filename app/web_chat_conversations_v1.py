@@ -479,7 +479,7 @@ class WebChatConversationStoreV1:
         with self.lock, closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             rows = connection.execute(
-                """SELECT user_id, conversation_id, revision, payload
+                """SELECT user_id, conversation_id, revision, deleted, payload
                    FROM web_chat_conversations
                    WHERE deleted=0 AND updated_at<?
                    ORDER BY updated_at ASC, user_id ASC, conversation_id ASC
