@@ -110,7 +110,7 @@ class TelemetryStore:
         if self.path.is_symlink():
             raise RuntimeError("Telemetry history cannot be a symbolic link")
         flags = (os.O_WRONLY | os.O_APPEND) if append else os.O_RDONLY
-        flags |= getattr(os, "O_NOFOLLOW", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
         if create:
             flags |= os.O_CREAT
         fd = os.open(self.path, flags, 0o600)
