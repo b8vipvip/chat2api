@@ -236,3 +236,12 @@ def test_generated_file_staging_storage_is_private_and_rejects_linked_bytes(tmp_
     with pytest.raises(ValueError, match="not verified"):
         staging.read(hardlink_request, UPID, "budget.xlsx", owner_key_id="owner")
     assert hardlink.read_bytes() == before
+
+    sidecar_target = tmp_path / "outside-staging-wal"
+    sidecar_target.write_text("must remain untouched", encoding="utf-8")
+    sidecar = Path(str(staging.db_path) + "-wal")
+    sidecar.unlink(missing_ok=True)
+    sidecar.symlink_to(sidecar_target)
+    with pytest.raises(RuntimeError, match="symbolic link"):
+        GeneratedFileStaging(tmp_path)
+    assert sidecar_target.read_text(encoding="utf-8") == "must remain untouched"
