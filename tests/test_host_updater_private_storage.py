@@ -105,7 +105,7 @@ def test_log_tee_appends_safely_and_mirrors_output(tmp_path):
 def test_updater_cli_validates_request_id_and_prepares_nontruncating_lock(tmp_path):
     request = tmp_path / "request.json"
     storage.write_json_atomic(request, {
-        "request_id": "upd_0123456789abcdef0123",
+        "request_id": "upd_0123456789abcdef01",
         "use_build_cache": False,
     })
     request_id = subprocess.run(
@@ -116,7 +116,7 @@ def test_updater_cli_validates_request_id_and_prepares_nontruncating_lock(tmp_pa
         [sys.executable, str(HELPER), "read-build-cache", str(request)],
         capture_output=True, text=True, check=True, timeout=10,
     )
-    assert request_id.stdout.strip() == "upd_0123456789abcdef0123"
+    assert request_id.stdout.strip() == "upd_0123456789abcdef01"
     assert use_cache.stdout.strip() == "false"
 
     storage.write_json_atomic(request, {"request_id": "../../etc/passwd"})
