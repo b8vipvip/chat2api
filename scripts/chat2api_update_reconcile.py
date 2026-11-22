@@ -6,13 +6,15 @@ deployment or rollback succeeded just because its subprocess was killed.
 """
 from __future__ import annotations
 
-import json
 import os
-import shutil
 import sys
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+
+from chat2api_update_storage import (
+    read_bytes, read_json, validate_directory, write_bytes_atomic,
+    write_json_atomic,
+)
 
 
 def reconcile(status_path: Path, *, service_result: str, exit_status: str = "") -> bool:
@@ -21,24 +23,25 @@ def reconcile(status_path: Path, *, service_result: str, exit_status: str = "") 
     compose_backup = data_dir / ".admin-update-docker-compose.backup"
     compose_target = app_dir / "docker-compose.yml"
 
-    # The updater preserves a locally customized compose file across its hard
-    # checkout. ExecStopPost is the final recovery boundary if systemd kills the
-    # updater before Bash can run its EXIT trap.
-    if compose_backup.is_file():
-        try:
-            if service_result == "success":
-                compose_backup.unlink()
-            else:
-                shutil.copy2(compose_backup, compose_target)
-                compose_backup.unlink()
-        except OSError:
-            pass
+    validate_directory(data_dir)
+    validate_directory(app_dir)
 
-    if service_result in {"", "success"} or not status_path.is_file():
+    # The updater preserves a locally customized compose file across its hard
+    # checkout. Read it through a no-follow, single-link descriptor and restore
+    # it atomically; never copy through a symlink or a hard-linked target.
+    backup_bytes = read_bytes(compose_backup, max_bytes=4 * 1024 * 1024)
+    if backup_bytes is not None:
+        if service_result == "success":
+            compose_backup.unlink()
+        else:
+            write_bytes_atomic(compose_target, backup_bytes, mode=0o644)
+            compose_backup.unlink()
+
+    if service_result in {"", "success"}:
         return False
     try:
-        current = json.loads(status_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        current = read_json(status_path)
+    except (OSError, ValueError, RuntimeError):
         return False
     if not isinstance(current, dict) or current.get("status") not in {"running", "queued"}:
         return False
@@ -56,18 +59,7 @@ def reconcile(status_path: Path, *, service_result: str, exit_status: str = "") 
         "completed_at": now,
         "rollback_succeeded": False,
     })
-    fd, temp_name = tempfile.mkstemp(prefix=".admin-update-terminal.",
-                                     dir=str(status_path.parent), text=True)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(current, handle, ensure_ascii=False, indent=2)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temp_name, status_path)
-    finally:
-        if os.path.exists(temp_name):
-            os.unlink(temp_name)
+    write_json_atomic(status_path, current)
     return True
 
 
