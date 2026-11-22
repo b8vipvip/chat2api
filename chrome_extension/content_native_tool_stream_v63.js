@@ -54,6 +54,10 @@
     try { signature = JSON.stringify(metadata).slice(0, 2048); } catch (_) { return; }
     if (!signature || state.finalReferenceSignatures.get(messageId) === signature) return;
     state.finalReferenceSignatures.set(messageId, signature);
+    const requestState = globalThis.__CHAT2API_REQUEST_CONTENT_V6__?.active;
+    if (requestState?.requestId === requestId) {
+      requestState.nativeCitationMetadata = metadata;
+    }
     if (state.finalReferenceSignatures.size > 32) {
       const oldest = state.finalReferenceSignatures.keys().next().value;
       state.finalReferenceSignatures.delete(oldest);
