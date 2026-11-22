@@ -2691,6 +2691,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     )
                     recorded = True
                     state.diagnostics["server_stream_terminal_stage"] = "persisted-before-sse"
+                    if (request.scope.get("chat2api_mode1_web_chat") is True
+                            and isinstance(event.get("references"), list)
+                            and event["references"]):
+                        reference_delta = {"chat2api_references": event["references"]}
+                        if isinstance(event.get("event_id"), int):
+                            reference_delta["chat2api_event_id"] = event["event_id"]
+                        yield "data: " + json.dumps(
+                            chunk_payload(response_id, model, reference_delta),
+                            ensure_ascii=False,
+                        ) + "\\n\\n"
                     # The final same-request Worker terminal is the one owner
                     # of assistant content, regardless of provisional snapshots.
                     # Emit the *whole* authoritative text in bounded SSE chunks
