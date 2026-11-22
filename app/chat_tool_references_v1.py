@@ -208,7 +208,7 @@ def apply_inline_citation_markers(
     """Insert the renderer's inert citation marker after validated annotation spans."""
     if not isinstance(text, str) or not text or len(text) > 1_000_000:
         return text if isinstance(text, str) else ""
-    if "\\uE200cite\\uE202" in text:
+    if "\uE200cite\uE202" in text:
         # Preserve native markers already embedded upstream; never double-link.
         return text
     rows = normalize_tool_references(references)
