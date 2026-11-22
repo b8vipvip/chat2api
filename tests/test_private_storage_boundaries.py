@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from concurrent.futures import ThreadPoolExecutor
 import os
 import stat
 from pathlib import Path
 
 import pytest
 
+from app.api_keys import ApiKeyStore, load_or_create_data_secret
 from app.diagnostics import DiagnosticStore, configure_file_logging
 from app.media_archive_v173 import MediaArchive
+from app.registry import ClientRegistry
 from app.test_runs import TestRunStore
 from app.telemetry import TelemetryStore
 from app.web_chat_conversations_v1 import WebChatConversationStoreV1
@@ -276,3 +279,64 @@ def test_worker_probe_policy_writer_ignores_predictable_temp_symlink(tmp_path: P
     assert outside.read_text(encoding="utf-8") == "must remain untouched"
     assert store.policy_path.is_file()
     assert not store.policy_path.is_symlink()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission and symlink assertions")
+def test_api_key_and_registry_files_are_private_and_reject_symlinks(tmp_path: Path) -> None:
+    api_store = ApiKeyStore(tmp_path / "api")
+    asyncio.run(api_store.save())
+    assert stat.S_IMODE(api_store.path.stat().st_mode) == 0o600
+
+    registry = ClientRegistry(tmp_path / "registry")
+    asyncio.run(registry.save())
+    assert stat.S_IMODE(registry.path.stat().st_mode) == 0o600
+
+    for filename, factory, load in (
+        ("api_keys.json", ApiKeyStore, lambda store: asyncio.run(store.load())),
+        ("clients.json", ClientRegistry, lambda store: asyncio.run(store.load())),
+    ):
+        linked_root = tmp_path / f"linked-{filename}"
+        linked_root.mkdir()
+        target = tmp_path / f"outside-{filename}"
+        target.write_text("must remain untouched", encoding="utf-8")
+        (linked_root / filename).symlink_to(target)
+        store = factory(linked_root)
+        with pytest.raises(RuntimeError, match="symbolic link"):
+            load(store)
+        assert target.read_text(encoding="utf-8") == "must remain untouched"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission and symlink assertions")
+def test_data_secret_is_private_and_initialization_is_serialized(tmp_path: Path) -> None:
+    secret = load_or_create_data_secret(tmp_path)
+    assert stat.S_IMODE((tmp_path / "data_secret.key").stat().st_mode) == 0o600
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        concurrent = list(pool.map(lambda _: load_or_create_data_secret(tmp_path), range(16)))
+    assert set(concurrent) == {secret}
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink assertions")
+def test_api_key_and_registry_atomic_writes_ignore_predictable_temp_symlinks(tmp_path: Path) -> None:
+    for filename, factory, save in (
+        ("api_keys.json", ApiKeyStore, lambda store: asyncio.run(store.save())),
+        ("clients.json", ClientRegistry, lambda store: asyncio.run(store.save())),
+    ):
+        root = tmp_path / f"atomic-{filename}"
+        root.mkdir()
+        outside = tmp_path / f"outside-{filename}-temp"
+        outside.write_text("must remain untouched", encoding="utf-8")
+        (root / filename).with_suffix(".tmp").symlink_to(outside)
+        store = factory(root)
+        save(store)
+        assert outside.read_text(encoding="utf-8") == "must remain untouched"
+        assert stat.S_IMODE((root / filename).stat().st_mode) == 0o600
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink assertions")
+def test_data_secret_rejects_symlink_without_reading_target(tmp_path: Path) -> None:
+    target = tmp_path / "outside-secret"
+    target.write_text("not the application secret", encoding="utf-8")
+    (tmp_path / "data_secret.key").symlink_to(target)
+    with pytest.raises(RuntimeError, match="symbolic link"):
+        load_or_create_data_secret(tmp_path)
+    assert target.read_text(encoding="utf-8") == "not the application secret"
