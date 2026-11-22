@@ -268,6 +268,8 @@ def test_final_assistant_message_annotations_attach_to_canonical_terminal_for_we
             "title": "API reference",
             "snippet": "",
             "id": "turn0search0",
+            "start_index": 0,
+            "end_index": 26,
         }]
         assert state.references == event["references"]
         assert state.terminal_event_type == "chat.completed"
