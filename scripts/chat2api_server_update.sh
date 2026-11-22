@@ -12,7 +12,7 @@ STATUS_FILE="${DATA_DIR}/admin-update-status.json"
 LOG_FILE="${DATA_DIR}/admin-update.log"
 DEPLOYMENT_FILE="${DATA_DIR}/deployment.json"
 LOCK_FILE="${DATA_DIR}/.admin-update.lock"
-GITHUB_KNOWN_HOSTS_FILE="/run/chat2api-github-known-hosts"
+GITHUB_KNOWN_HOSTS_FILE=""
 CURRENT_STAGE="starting"
 CURRENT_PERCENT="2"
 CURRENT_MESSAGE="正在启动更新任务"
@@ -153,13 +153,13 @@ wait_health() {
 
 prepare_github_known_hosts() {
   # Pin GitHub's published Ed25519 host key instead of accepting an unknown
-  # host interactively. The same published fingerprint is used by GitHub's
-  # ssh.github.com endpoint on port 443.
+  # host interactively. mktemp creates an exclusive owner-private file so a
+  # stale /run path cannot redirect this privileged write.
+  GITHUB_KNOWN_HOSTS_FILE="$(mktemp /run/chat2api-github-known-hosts.XXXXXX)"
   cat >"$GITHUB_KNOWN_HOSTS_FILE" <<'EOF'
 github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
 ssh.github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
 EOF
-  chmod 600 "$GITHUB_KNOWN_HOSTS_FILE"
 }
 
 fetch_refspec() {
@@ -415,7 +415,7 @@ cleanup() {
   if [[ "$REQUEST_CONSUMED" == "true" ]]; then
     rm -f -- "$REQUEST_FILE" || true
   fi
-  rm -f -- "$GITHUB_KNOWN_HOSTS_FILE" || true
+  [[ -n "$GITHUB_KNOWN_HOSTS_FILE" ]] && rm -f -- "$GITHUB_KNOWN_HOSTS_FILE" || true
   [[ -n "$LOCAL_COMPOSE_MERGED_FILE" ]] && rm -f -- "$LOCAL_COMPOSE_MERGED_FILE" || true
   [[ -n "$LOCAL_COMPOSE_BASE_FILE" ]] && rm -f -- "$LOCAL_COMPOSE_BASE_FILE" || true
   [[ -n "$LOCAL_COMPOSE_REMOTE_FILE" ]] && rm -f -- "$LOCAL_COMPOSE_REMOTE_FILE" || true
