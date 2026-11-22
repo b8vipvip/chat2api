@@ -169,6 +169,8 @@ def test_update_console_and_host_scripts_use_narrow_systemd_boundary():
     assert 'mktemp /run/chat2api-github-known-hosts.XXXXXX' in updater
     assert 'LOCAL_COMPOSE_BACKUP_CREATED="true"' in updater
     assert 'LOCAL_COMPOSE_BACKUP_RESTORED="true"' in updater
+    assert 'ENV_BACKUP_RESTORED="false"' in updater
+    assert 'LOCAL_COMPOSE_BACKUP_RESTORED="false"' in updater
     assert 'preserving docker-compose backup because restoration was not confirmed' in updater
     assert 'preserved docker-compose backup is missing; refusing to claim restoration' in updater
     assert 'preserved .env backup is missing; refusing to claim restoration' in updater
