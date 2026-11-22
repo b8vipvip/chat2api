@@ -327,7 +327,7 @@ def test_inline_citation_markers_use_utf16_offsets_and_preserve_multiple_mention
         },
     ]
 
-    marker = "\\uE200cite\\uE202turn0search0\\uE201"
+    marker = "\uE200cite\uE202turn0search0\uE201"
     assert apply_inline_citation_markers(text, references) == (
         "A😀" + marker + "BC and D" + marker
     )
