@@ -104,6 +104,12 @@
     } catch { return ""; }
   }
 
+  function safeCitationText(value, limit) {
+    if (typeof value !== "string") return "";
+    return value.replace(/[\u0000-\u001f\u007f]/g, " ")
+      .replace(/\s+/g, " ").trim().slice(0, limit);
+  }
+
   function normalizeCitationReferences(value) {
     if (!Array.isArray(value)) return [];
     const result = [];
@@ -118,7 +124,8 @@
       result.push({
         id,
         url,
-        title: String(item.title || "").slice(0, 180),
+        title: safeCitationText(item.title, 180),
+        snippet: safeCitationText(item.snippet, 420),
       });
     }
     return result;
@@ -139,7 +146,15 @@
       const number = references.findIndex(item => item.id === reference.id) + 1;
       const link = node("a", "inline-citation", "[" + number + "]");
       link.href = reference.url;
-      link.title = reference.title || reference.url;
+      const host = new URL(reference.url).hostname;
+      const title = reference.title || host;
+      const snippet = reference.snippet || "";
+      link.title = [title, snippet].filter(Boolean).join("\n");
+      link.setAttribute("data-preview", [title, host, snippet].filter(Boolean).join("\n").slice(0, 700));
+      link.setAttribute(
+        "aria-label",
+        ("引用来源 " + number + ": " + title + (snippet ? "。 " + snippet : "")).slice(0, 700),
+      );
       link.target = "_blank";
       link.rel = "noopener noreferrer nofollow";
       link.referrerPolicy = "no-referrer";
