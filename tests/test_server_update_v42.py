@@ -159,6 +159,14 @@ def test_update_console_and_host_scripts_use_narrow_systemd_boundary():
     assert 'tee-log "$LOG_FILE"' in updater
     assert 'read-request-id "$REQUEST_FILE"' in updater
     assert 'read-build-cache "$REQUEST_FILE"' in updater
+    assert 'copy-file "$APP_DIR/docker-compose.yml"' in updater
+    assert 'copy-file "$LOCAL_COMPOSE_MERGED_FILE"' in updater
+    assert 'mktemp /tmp/chat2api-update-version.XXXXXX' in updater
+    assert 'mktemp -d /tmp/chat2api-env.XXXXXX' in updater
+    assert 'mktemp /run/chat2api-github-known-hosts.XXXXXX' in updater
+    assert 'LOCAL_COMPOSE_BACKUP_CREATED="true"' in updater
+    assert 'REQUEST_CONSUMED="true"' in updater
+    assert 'trap - EXIT' in updater
     assert ': > "$LOG_FILE"' not in updater
     assert 'tee -a "$LOG_FILE"' not in updater
     assert "path.read_text(" not in updater
