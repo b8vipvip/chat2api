@@ -46,27 +46,41 @@ class MediaArchive:
         self._init_db()
 
     @staticmethod
-    def _secure_regular_file(path: Path, *, create: bool = False) -> None:
-        """Reject linked archive files and enforce owner-only POSIX access."""
+    def _open_private_file(path: Path, flags: int, *, mode: int = 0o600) -> int:
+        """Open one private regular file without following links or blocking on FIFOs."""
         if path.is_symlink():
             raise RuntimeError("Media archive files cannot be symbolic links")
-        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
-        if create:
-            flags |= os.O_CREAT
-        try:
-            fd = os.open(path, flags, 0o600)
-        except FileNotFoundError:
-            if create:
-                raise
-            return
+        safe_flags = flags | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        fd = os.open(path, safe_flags, mode)
         try:
             metadata = os.fstat(fd)
             if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
                 raise RuntimeError("Media archive files must be private regular files")
             if os.name != "nt" and hasattr(os, "fchmod"):
                 os.fchmod(fd, 0o600)
-        finally:
+            return fd
+        except Exception:
             os.close(fd)
+            raise
+
+    @classmethod
+    def _secure_regular_file(cls, path: Path, *, create: bool = False) -> None:
+        flags = os.O_RDWR | (os.O_CREAT if create else 0)
+        try:
+            fd = cls._open_private_file(path, flags)
+        except FileNotFoundError:
+            if create:
+                raise
+            return
+        os.close(fd)
+
+    def _read_settings(self) -> bytes | None:
+        try:
+            fd = self._open_private_file(self.settings_path, os.O_RDONLY)
+        except FileNotFoundError:
+            return None
+        with os.fdopen(fd, "rb") as stream:
+            return stream.read()
 
     def _local_path(self, key: str) -> Path:
         if not isinstance(key, str) or not key or len(key) > 512:
@@ -74,6 +88,13 @@ class MediaArchive:
         relative = Path(key)
         if relative.is_absolute() or relative.drive or relative.root or ".." in relative.parts:
             raise ValueError("Invalid local media object key")
+        parent = self.root
+        for component in relative.parts[:-1]:
+            parent = parent / component
+            if parent.is_symlink():
+                raise RuntimeError("Media archive object directories cannot be symbolic links")
+            if parent.exists() and not parent.is_dir():
+                raise RuntimeError("Media archive object parent must be a directory")
         return self.root / relative
 
     def _db(self):
@@ -118,9 +139,10 @@ class MediaArchive:
         defaults = {"backend": "local", "auto_archive": True, "public_base_url": "",
                     "s3": {"bucket": "", "region": "us-east-1", "endpoint": "",
                            "access_key_id": "", "secret_access_key": ""}}
-        if self.settings_path.exists():
+        encrypted_settings = self._read_settings()
+        if encrypted_settings is not None:
             try:
-                decoded = self._cipher.decrypt(self.settings_path.read_bytes())
+                decoded = self._cipher.decrypt(encrypted_settings)
                 data = json.loads(decoded)
                 if isinstance(data, dict):
                     defaults.update({k: v for k, v in data.items() if k in defaults})
@@ -170,11 +192,27 @@ class MediaArchive:
         cfg.update({"backend": backend, "auto_archive": bool(incoming.get("auto_archive", cfg["auto_archive"])),
                     "public_base_url": base, "s3": s3})
         payload = self._cipher.encrypt(json.dumps(cfg, ensure_ascii=False).encode())
-        tmp = self.settings_path.with_suffix(".tmp")
-        with open(tmp, "wb") as stream:
-            os.fchmod(stream.fileno(), 0o600)
-            stream.write(payload)
-        os.replace(tmp, self.settings_path)
+        tmp = self.settings_path.with_name(
+            f".{self.settings_path.name}.{secrets.token_hex(8)}.tmp"
+        )
+        fd = -1
+        try:
+            fd = self._open_private_file(
+                tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            )
+            with os.fdopen(fd, "wb") as stream:
+                fd = -1
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+            # Reject a replaced/symlinked settings target rather than reading
+            # through it or silently normalizing a tampered archive directory.
+            self._secure_regular_file(self.settings_path)
+            os.replace(tmp, self.settings_path)
+        finally:
+            if fd >= 0:
+                os.close(fd)
+            tmp.unlink(missing_ok=True)
         return self.public_config()
 
     def _s3(self, cfg):

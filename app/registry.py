@@ -15,6 +15,7 @@ from fastapi import WebSocket
 
 from .timezone_utils import beijing_now_iso, to_beijing_iso
 from .login_readiness import chatgpt_routing_ready
+from .private_storage import read_private_bytes, write_private_bytes_atomic
 
 
 def utc_now() -> str:
@@ -68,10 +69,11 @@ class ClientRegistry:
 
     async def load(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)
-        if not self.path.exists():
+        stored = read_private_bytes(self.path)
+        if stored is None:
             return
         try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
+            payload = json.loads(stored.decode("utf-8"))
             for raw in payload.get("clients", []):
                 if not isinstance(raw, dict):
                     continue
@@ -99,9 +101,8 @@ class ClientRegistry:
             "clients": [vars(item) for item in self.clients.values()],
             "api_key_routes": dict(self.api_key_routes),
         }
-        temporary = self.path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        temporary.replace(self.path)
+        serialized = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+        write_private_bytes_atomic(self.path, serialized)
 
     def set_routing_key(self, key_id: str | None) -> None:
         self.routing_key_context.set(str(key_id) if key_id else None)

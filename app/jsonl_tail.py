@@ -12,64 +12,78 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, BinaryIO, Iterator
 
 
-def _tail_lines(
-    path: Path,
+def _tail_lines_from_handle(
+    handle: BinaryIO,
     *,
     scan_limit_bytes: int,
     line_limit_bytes: int,
     block_size: int = 64 * 1024,
 ) -> Iterator[bytes]:
-    """Yield complete lines from newest to oldest, without reading the full file.
+    """Yield complete lines newest-first from an already-open binary file."""
+    handle.seek(0, 2)
+    position = handle.tell()
+    scanned = 0
+    pending = b""
+    pending_too_large = False
 
-    If the scan limit cuts through a line, the incomplete oldest line is
-    discarded. Likewise, any single line exceeding line_limit_bytes is
-    discarded rather than accumulated in memory.
-    """
+    while position > 0 and scanned < scan_limit_bytes:
+        count = min(block_size, position, scan_limit_bytes - scanned)
+        position -= count
+        handle.seek(position)
+        block = handle.read(count)
+        scanned += len(block)
+        parts = block.split(b"\n")
+
+        if len(parts) == 1:
+            if not pending_too_large:
+                if len(parts[0]) + len(pending) <= line_limit_bytes:
+                    pending = parts[0] + pending
+                else:
+                    pending = b""
+                    pending_too_large = True
+            continue
+
+        newest = parts[-1]
+        if not pending_too_large and len(newest) + len(pending) <= line_limit_bytes:
+            yield newest + pending
+        for complete in reversed(parts[1:-1]):
+            if len(complete) <= line_limit_bytes:
+                yield complete
+
+        oldest = parts[0]
+        pending_too_large = len(oldest) > line_limit_bytes
+        pending = b"" if pending_too_large else oldest
+
+    if position == 0 and not pending_too_large:
+        yield pending
+
+
+def _tail_lines(
+    path: Path | BinaryIO,
+    *,
+    scan_limit_bytes: int,
+    line_limit_bytes: int,
+    block_size: int = 64 * 1024,
+) -> Iterator[bytes]:
+    """Yield a bounded tail from a path or caller-owned, already-open file."""
+    if hasattr(path, "read") and hasattr(path, "seek"):
+        yield from _tail_lines_from_handle(
+            path, scan_limit_bytes=scan_limit_bytes,
+            line_limit_bytes=line_limit_bytes, block_size=block_size,
+        )
+        return
     with path.open("rb") as handle:
-        handle.seek(0, 2)
-        position = handle.tell()
-        scanned = 0
-        pending = b""
-        pending_too_large = False
-
-        while position > 0 and scanned < scan_limit_bytes:
-            count = min(block_size, position, scan_limit_bytes - scanned)
-            position -= count
-            handle.seek(position)
-            block = handle.read(count)
-            scanned += len(block)
-            parts = block.split(b"\n")
-
-            if len(parts) == 1:
-                if not pending_too_large:
-                    if len(parts[0]) + len(pending) <= line_limit_bytes:
-                        pending = parts[0] + pending
-                    else:
-                        pending = b""
-                        pending_too_large = True
-                continue
-
-            newest = parts[-1]
-            if not pending_too_large and len(newest) + len(pending) <= line_limit_bytes:
-                yield newest + pending
-            for complete in reversed(parts[1:-1]):
-                if len(complete) <= line_limit_bytes:
-                    yield complete
-
-            oldest = parts[0]
-            pending_too_large = len(oldest) > line_limit_bytes
-            pending = b"" if pending_too_large else oldest
-
-        # Only a scan that reaches the file beginning has a complete oldest line.
-        if position == 0 and not pending_too_large:
-            yield pending
+        yield from _tail_lines_from_handle(
+            handle, scan_limit_bytes=scan_limit_bytes,
+            line_limit_bytes=line_limit_bytes, block_size=block_size,
+        )
 
 
 def iter_recent_jsonl(
-    path: Path,
+    path: Path | BinaryIO,
     *,
     scan_limit_bytes: int = 64 * 1024 * 1024,
     line_limit_bytes: int = 4 * 1024 * 1024,

@@ -5,6 +5,7 @@ import base64
 import hashlib
 import json
 import secrets
+import time
 from dataclasses import asdict, dataclass
 
 # A missing quota means unlimited; 0 means exhausted immediately.
@@ -15,6 +16,7 @@ from typing import Any
 from cryptography.fernet import Fernet, InvalidToken
 
 from .timezone_utils import beijing_now, beijing_now_iso, parse_datetime, to_beijing_iso
+from .private_storage import read_private_bytes, write_private_bytes_atomic
 
 
 def utc_now() -> str:
@@ -46,19 +48,27 @@ def load_or_create_data_secret(data_dir: Path) -> str:
     """Return a server-local encryption secret independent of admin credentials."""
     data_dir.mkdir(parents=True, exist_ok=True)
     path = data_dir / "data_secret.key"
-    if path.exists():
-        value = path.read_text(encoding="utf-8").strip()
-        if value:
-            return value
-    value = secrets.token_urlsafe(48)
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(value, encoding="utf-8")
-    temporary.replace(path)
+    lock_path = data_dir / ".data_secret.lock"
+    deadline = time.monotonic() + 10.0
+    while True:
+        try:
+            lock_path.mkdir(mode=0o700)
+            break
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Timed out waiting for the data-secret creation lock")
+            time.sleep(0.05)
     try:
-        path.chmod(0o600)
-    except OSError:
-        pass
-    return value
+        stored = read_private_bytes(path)
+        if stored:
+            value = stored.decode("utf-8").strip()
+            if value:
+                return value
+        value = secrets.token_urlsafe(48)
+        write_private_bytes_atomic(path, value.encode("utf-8"))
+        return value
+    finally:
+        lock_path.rmdir()
 
 
 @dataclass(slots=True)
@@ -130,10 +140,11 @@ class ApiKeyStore:
 
     async def load(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        if not self.path.exists():
+        stored = read_private_bytes(self.path)
+        if stored is None:
             return
         try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
+            payload = json.loads(stored.decode("utf-8"))
             loaded: dict[str, ManagedApiKey] = {}
             for raw in payload.get("keys", []):
                 if not isinstance(raw, dict):
@@ -147,9 +158,8 @@ class ApiKeyStore:
     async def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = {"keys": [asdict(item) for item in self.keys.values()]}
-        temporary = self.path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        temporary.replace(self.path)
+        serialized = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+        write_private_bytes_atomic(self.path, serialized)
 
     async def migrate_cipher_from(self, legacy_secret: str) -> int:
         """Re-encrypt legacy CHAT2API_API_KEY ciphertext with the data secret.

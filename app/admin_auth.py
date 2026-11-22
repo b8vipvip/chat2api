@@ -7,10 +7,11 @@ import os
 import secrets
 import threading
 import time
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
+
+from .private_storage import read_private_bytes, write_private_bytes_atomic
 
 
 def same_origin_admin_request(request) -> bool:
@@ -271,10 +272,13 @@ class AdminSessionStore:
 
     def _load(self) -> None:
         path = self.storage_path
-        if path is None or not path.exists():
+        if path is None:
             return
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            stored = read_private_bytes(path)
+            if stored is None:
+                return
+            payload = json.loads(stored.decode("utf-8"))
             rows = payload.get("sessions") if isinstance(payload, dict) else None
             if not isinstance(rows, list):
                 return
@@ -294,7 +298,7 @@ class AdminSessionStore:
                 loaded[digest] = AdminSession(token_hash=digest, expires_at=expires_at, username=str(row.get("username") or self.username))
             self.sessions.update(loaded)
             self.last_persistence_error = ""
-        except (OSError, json.JSONDecodeError) as exc:
+        except (OSError, ValueError, RuntimeError) as exc:
             self.last_persistence_error = str(exc)
             logger.warning("Unable to load persisted administrator sessions from %s: %s", path, exc)
 
@@ -309,24 +313,10 @@ class AdminSessionStore:
                 for item in sorted(self.sessions.values(), key=lambda value: value.expires_at)
             ],
         }
-        tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-            try:
-                os.chmod(tmp, 0o600)
-            except OSError:
-                pass
-            os.replace(tmp, path)
-            try:
-                os.chmod(path, 0o600)
-            except OSError:
-                pass
+            serialized = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+            write_private_bytes_atomic(path, serialized)
             self.last_persistence_error = ""
-        except OSError as exc:
+        except (OSError, RuntimeError) as exc:
             self.last_persistence_error = str(exc)
             logger.warning("Unable to persist administrator sessions to %s: %s", path, exc)
-            try:
-                tmp.unlink(missing_ok=True)
-            except OSError:
-                pass

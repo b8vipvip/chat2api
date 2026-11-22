@@ -9,7 +9,9 @@ import asyncio
 import hashlib
 import io
 import json
+import os
 import re
+import stat
 import secrets
 import zipfile
 from collections import Counter
@@ -18,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from .timezone_utils import beijing_now_iso
+from .private_storage import ensure_private_directory, open_private_regular_file
 
 TOOL_CATALOG = (
     {"id": "media_delivery_v1", "name": "图片交付探针", "version": "1.0.0",
@@ -166,11 +169,11 @@ def _sanitize_facts(value: Any) -> dict[str, str | bool | int | float | None]:
 
 class WorkerProbeStore:
     def __init__(self, data_dir: Path):
-        self.root = data_dir / "worker_probes"
-        self.root.mkdir(parents=True, exist_ok=True)
+        self.root = Path(data_dir) / "worker_probes"
+        ensure_private_directory(self.root)
         self.policy_path = self.root / "policies.json"
         self.events_root = self.root / "events"
-        self.events_root.mkdir(exist_ok=True)
+        ensure_private_directory(self.events_root)
         self.lock = asyncio.Lock()
         self.policies: dict[str, dict[str, Any]] = {}
         self.load()
@@ -183,7 +186,12 @@ class WorkerProbeStore:
         removed = 0
         for path in self.events_root.glob("*.jsonl"):
             try:
-                if path.stat().st_mtime < cutoff:
+                metadata = path.lstat()
+                if (
+                    stat.S_ISREG(metadata.st_mode)
+                    and metadata.st_nlink == 1
+                    and metadata.st_mtime < cutoff
+                ):
                     path.unlink()
                     removed += 1
             except OSError:
@@ -191,10 +199,13 @@ class WorkerProbeStore:
         return removed
 
     def load(self) -> None:
-        if not self.policy_path.exists():
+        try:
+            fd = open_private_regular_file(self.policy_path, os.O_RDONLY)
+        except FileNotFoundError:
             return
         try:
-            value = json.loads(self.policy_path.read_text(encoding="utf-8"))
+            with os.fdopen(fd, "r", encoding="utf-8") as handle:
+                value = json.load(handle)
             if isinstance(value, dict):
                 self.policies = {k: v for k, v in value.items() if isinstance(v, dict)}
         except (OSError, ValueError):
@@ -254,9 +265,21 @@ class WorkerProbeStore:
                           "revision": expected_revision + 1, "tools": validated,
                           "updated_at": beijing_now_iso()}
             payload = {**self.policies, scope_id: next_value}
-            temp = self.policy_path.with_suffix(".tmp")
-            temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-            temp.replace(self.policy_path)
+            temp = self.root / f".policies.{secrets.token_hex(8)}.tmp"
+            fd = open_private_regular_file(
+                temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            )
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    handle.write(json.dumps(payload, ensure_ascii=False, indent=2))
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                if self.policy_path.exists() or self.policy_path.is_symlink():
+                    check_fd = open_private_regular_file(self.policy_path, os.O_RDONLY)
+                    os.close(check_fd)
+                os.replace(temp, self.policy_path)
+            finally:
+                temp.unlink(missing_ok=True)
             self.policies = payload
             return next_value
 
@@ -322,21 +345,33 @@ class WorkerProbeStore:
         }
         path = self._file(request_id)
         async with self.lock:
-            lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+            try:
+                read_fd = open_private_regular_file(path, os.O_RDONLY)
+            except FileNotFoundError:
+                lines = []
+            else:
+                with os.fdopen(read_fd, "r", encoding="utf-8") as handle:
+                    lines = handle.read().splitlines()
             if len(lines) >= MAX_EVENTS_PER_REQUEST:
                 return {"accepted": False, "reason": "evidence-limit-reached"}
             if any((lambda item: item.get("tool_id") == tool_id and item.get("sequence") == seq)(
                 json.loads(line)) for line in lines):
                 return {"accepted": True, "deduplicated": True}
-            with path.open("a", encoding="utf-8") as file:
-                file.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
+            write_fd = open_private_regular_file(
+                path, os.O_WRONLY | os.O_APPEND | os.O_CREAT,
+            )
+            with os.fdopen(write_fd, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
         return {"accepted": True}
 
     def events(self, request_id: str) -> list[dict[str, Any]]:
         path = self._file(request_id)
-        if not path.exists():
+        try:
+            fd = open_private_regular_file(path, os.O_RDONLY)
+        except FileNotFoundError:
             return []
-        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+        with os.fdopen(fd, "r", encoding="utf-8") as handle:
+            return [json.loads(line) for line in handle.read().splitlines() if line]
 
     def summary(self, request_id: str) -> dict[str, Any]:
         events = self.events(request_id)
@@ -353,9 +388,16 @@ class WorkerProbeStore:
         }
 
     def runs(self, limit: int = 50) -> list[dict[str, Any]]:
-        paths = sorted(self.events_root.glob("*.jsonl"),
-                       key=lambda path: path.stat().st_mtime, reverse=True)
-        return [self.summary(path.stem) for path in paths[:max(1, min(limit, 100))]]
+        paths: list[tuple[float, Path]] = []
+        for path in self.events_root.glob("*.jsonl"):
+            try:
+                metadata = path.lstat()
+                if stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1:
+                    paths.append((metadata.st_mtime, path))
+            except OSError:
+                continue
+        paths.sort(key=lambda item: item[0], reverse=True)
+        return [self.summary(path.stem) for _, path in paths[:max(1, min(limit, 100))]]
 
     def archive(self, request_id: str, request_summary: dict[str, Any] | None = None,
                 native_snapshot: dict[str, Any] | None = None,

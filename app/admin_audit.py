@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .private_storage import open_private_regular_file, private_file_lock
+
 
 class AdminAuditError(RuntimeError):
     """Raised when the append-only administrator audit log is unsafe or invalid."""
@@ -100,20 +102,18 @@ class AdminAuditStore:
         ).encode("utf-8")
 
     def _read_events_locked(self) -> list[dict[str, Any]]:
-        if self.path.is_symlink():
-            raise AdminAuditError("Administrator audit log must not be a symbolic link")
-        if not self.path.exists():
-            return []
-        if not self.path.is_file():
-            raise AdminAuditError("Administrator audit log is not a regular file")
         try:
-            if self.path.stat().st_mode & 0o777 != 0o600:
-                os.chmod(self.path, 0o600)
-                if self.path.stat().st_mode & 0o777 != 0o600:
-                    raise OSError("administrator audit permissions could not be restricted")
-            if self.path.stat().st_size > self.MAX_BYTES:
-                raise AdminAuditError("Administrator audit log reached its safety size limit")
-            raw_lines = self.path.read_text(encoding="utf-8").splitlines()
+            fd = open_private_regular_file(self.path, os.O_RDONLY)
+        except FileNotFoundError:
+            return []
+        except (OSError, RuntimeError) as error:
+            raise AdminAuditError("Administrator audit log cannot be opened safely") from error
+        try:
+            with os.fdopen(fd, "rb") as handle:
+                metadata = os.fstat(handle.fileno())
+                if metadata.st_size > self.MAX_BYTES:
+                    raise AdminAuditError("Administrator audit log reached its safety size limit")
+                raw_lines = handle.read().decode("utf-8").splitlines()
         except (OSError, UnicodeError) as error:
             raise AdminAuditError("Administrator audit log cannot be read") from error
 
@@ -154,7 +154,7 @@ class AdminAuditStore:
         request_id: str = "",
         details: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        with self._lock:
+        with self._lock, private_file_lock(self.data_dir / ".admin_audit.lock"):
             events = self._read_events_locked()
             payload = {
                 "event_id": "aud_" + secrets.token_hex(12),
@@ -173,13 +173,11 @@ class AdminAuditStore:
             row = {**payload, "event_hash": event_hash}
             line = json.dumps(row, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n"
             self.data_dir.mkdir(parents=True, exist_ok=True)
-            if self.path.is_symlink():
-                raise AdminAuditError("Administrator audit log must not be a symbolic link")
-            flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
             try:
-                fd = os.open(self.path, flags, 0o600)
+                fd = open_private_regular_file(
+                    self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT,
+                )
                 try:
-                    os.fchmod(fd, 0o600)
                     view = memoryview(line)
                     while view:
                         written = os.write(fd, view)
@@ -200,14 +198,14 @@ class AdminAuditStore:
                         pass
                     finally:
                         os.close(directory_fd)
-            except OSError as error:
+            except (OSError, RuntimeError) as error:
                 raise AdminAuditError("Unable to persist administrator audit event") from error
             return row
 
     def recent(self, limit: int = 100) -> list[dict[str, Any]]:
         if type(limit) is not int or limit < 1 or limit > 200:
             raise ValueError("Audit limit must be between 1 and 200")
-        with self._lock:
+        with self._lock, private_file_lock(self.data_dir / ".admin_audit.lock"):
             rows = list(reversed(self._read_events_locked()[-limit:]))
             projected: list[dict[str, Any]] = []
             for row in rows:

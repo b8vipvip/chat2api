@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from collections import deque
 from pathlib import Path
 from typing import Any
 
 from .jsonl_tail import iter_recent_jsonl
+from .private_storage import open_private_regular_file
 from .timezone_utils import beijing_now_iso, to_beijing_iso
 
 
@@ -38,25 +40,31 @@ class TestRunStore:
 
     def _write_snapshot(self, row: dict[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", encoding="utf-8") as handle:
+        fd = open_private_regular_file(
+            self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT,
+        )
+        with os.fdopen(fd, "a", encoding="utf-8") as handle:
             handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
 
     async def load(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        if not self.path.exists():
+        try:
+            fd = open_private_regular_file(self.path, os.O_RDONLY)
+        except FileNotFoundError:
             return
         try:
             latest: dict[tuple[str, str], dict[str, Any]] = {}
             order: list[tuple[str, str]] = []
-            for line_number, row in enumerate(iter_recent_jsonl(self.path)):
-                run_id = str(row.get("run_id") or "")
-                record_key = ("run", run_id) if run_id else ("legacy-line", str(line_number))
-                if record_key in latest:
-                    continue
-                latest[record_key] = normalize_times(row)
-                order.append(record_key)
-                if len(order) >= (self.items.maxlen or 300):
-                    break
+            with os.fdopen(fd, "rb") as handle:
+                for line_number, row in enumerate(iter_recent_jsonl(handle)):
+                    run_id = str(row.get("run_id") or "")
+                    record_key = ("run", run_id) if run_id else ("legacy-line", str(line_number))
+                    if record_key in latest:
+                        continue
+                    latest[record_key] = normalize_times(row)
+                    order.append(record_key)
+                    if len(order) >= (self.items.maxlen or 300):
+                        break
             for record_key in reversed(order):
                 self._remember(latest[record_key])
         except (OSError, ValueError, TypeError):

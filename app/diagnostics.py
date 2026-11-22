@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import time
 import traceback
@@ -15,6 +16,7 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
 from .jsonl_tail import iter_recent_jsonl
+from .private_storage import open_private_regular_file
 
 
 current_trace_id: ContextVar[str | None] = ContextVar("chat2api_trace_id", default=None)
@@ -224,21 +226,28 @@ class DiagnosticStore:
         self.items: deque[dict[str, Any]] = deque(maxlen=max_items)
         self.lock = asyncio.Lock()
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        if self.path.exists():
-            try:
-                for item in iter_recent_jsonl(self.path):
+        try:
+            fd = open_private_regular_file(self.path, os.O_RDONLY)
+        except FileNotFoundError:
+            return
+        try:
+            with os.fdopen(fd, "rb") as handle:
+                for item in iter_recent_jsonl(handle):
                     self.items.appendleft(item)
                     if len(self.items) >= max_items:
                         break
-            except Exception:
-                self.items.clear()
+        except Exception:
+            self.items.clear()
 
     async def append(self, item: dict[str, Any]) -> None:
         record = _redact_value(dict(item))
         record.setdefault("recorded_at", utc_stamp())
         async with self.lock:
             self.items.append(record)
-            with self.path.open("a", encoding="utf-8") as handle:
+            fd = open_private_regular_file(
+                self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT,
+            )
+            with os.fdopen(fd, "a", encoding="utf-8") as handle:
                 handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
 
     def recent(self, limit: int = 200) -> list[dict[str, Any]]:
@@ -259,7 +268,17 @@ def configure_file_logging(data_dir: Path) -> Path:
     resolved = str(path.resolve())
     already = any(getattr(handler, "baseFilename", None) == resolved for handler in logger.handlers)
     if not already:
-        handler = RotatingFileHandler(path, maxBytes=2_000_000, backupCount=3, encoding="utf-8")
+        class PrivateRotatingFileHandler(RotatingFileHandler):
+            def _open(self):
+                fd = open_private_regular_file(
+                    Path(self.baseFilename),
+                    os.O_WRONLY | os.O_APPEND | os.O_CREAT,
+                )
+                return os.fdopen(fd, self.mode, encoding=self.encoding, errors=self.errors)
+
+        handler = PrivateRotatingFileHandler(
+            path, maxBytes=2_000_000, backupCount=3, encoding="utf-8",
+        )
         handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
         logger.addHandler(handler)
     return path
