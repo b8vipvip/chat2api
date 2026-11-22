@@ -86,12 +86,28 @@ def secure_private_sqlite_files(path: Path, *, create_database: bool = False) ->
     else:
         os.close(fd)
     for suffix in ("-wal", "-shm", "-journal"):
-        try:
-            fd = open_private_regular_file(Path(str(path) + suffix), os.O_RDWR)
-        except FileNotFoundError:
-            continue
-        else:
-            os.close(fd)
+        sidecar = Path(str(path) + suffix)
+        # SQLite may unlink a rollback journal immediately after another
+        # connection opens it. A descriptor can therefore report st_nlink=0
+        # even though the path is already gone and no linked file is exposed.
+        # Retry if SQLite replaced the sidecar during validation; tolerate only
+        # a genuinely vanished path. Persistent symlinks, hard links and special
+        # files still fail closed through open_private_regular_file.
+        for attempt in range(3):
+            try:
+                fd = open_private_regular_file(sidecar, os.O_RDWR)
+            except FileNotFoundError:
+                break
+            except RuntimeError:
+                try:
+                    sidecar.lstat()
+                except FileNotFoundError:
+                    break
+                if attempt == 2:
+                    raise
+            else:
+                os.close(fd)
+                break
 
 
 @contextmanager
