@@ -121,11 +121,11 @@ def test_diagnostic_and_test_run_histories_are_private_and_reject_symlinks(tmp_p
         target = tmp_path / f"outside-{filename}"
         target.write_text("must remain untouched", encoding="utf-8")
         (linked_root / filename).symlink_to(target)
-        store = factory(linked_root)
-        if isinstance(store, DiagnosticStore):
+        if factory is DiagnosticStore:
             with pytest.raises(RuntimeError, match="symbolic link"):
-                store.append({"trace_id": "trace_linked_1"})
+                factory(linked_root)
         else:
+            store = factory(linked_root)
             with pytest.raises(RuntimeError, match="symbolic link"):
                 asyncio.run(store.load())
         assert target.read_text(encoding="utf-8") == "must remain untouched"
