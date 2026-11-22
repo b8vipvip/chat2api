@@ -13,6 +13,7 @@ from cryptography.fernet import Fernet, InvalidToken
 
 from .api_keys import load_or_create_data_secret
 from .timezone_utils import beijing_now_iso, to_beijing_iso
+from .private_storage import read_private_bytes, write_private_bytes_atomic
 
 
 def _hash(value: str) -> str:
@@ -71,11 +72,12 @@ class PairingStore:
 
     async def load(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        if not self.path.exists():
+        stored = read_private_bytes(self.path)
+        if stored is None:
             self.loaded = True
             return
         try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
+            payload = json.loads(stored.decode("utf-8"))
             loaded: dict[str, PairingCode] = {}
             for raw in payload.get("pairing_codes", []):
                 if not isinstance(raw, dict):
@@ -94,9 +96,8 @@ class PairingStore:
     async def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = {"pairing_codes": [asdict(item) for item in self.items.values()]}
-        temp = self.path.with_suffix(".tmp")
-        temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        temp.replace(self.path)
+        serialized = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+        write_private_bytes_atomic(self.path, serialized)
 
     def _encrypt(self, raw: str) -> str:
         return self.cipher.encrypt(raw.encode("utf-8")).decode("ascii")
