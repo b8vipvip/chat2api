@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import stat
 import subprocess
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -120,6 +121,7 @@ def test_update_console_and_host_scripts_use_narrow_systemd_boundary():
     updater = (ROOT / "scripts" / "chat2api_server_update.sh").read_text(encoding="utf-8")
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
+    updater_commands = " ".join(updater.replace(chr(92) + "\n", " ").split())
 
     for token in (
         "版本更新",
@@ -144,10 +146,34 @@ def test_update_console_and_host_scripts_use_narrow_systemd_boundary():
     assert "chat2api-admin-update.service" in installer
     assert 'chmod 0644 "$UPDATER_SCRIPT"' in installer
     assert 'chmod 755 "$UPDATER_SCRIPT"' not in installer
+    assert 'ensure-dir "$DATA_DIR"' in installer
+    assert "write_json_atomic" in installer
     assert "git -C \"$APP_DIR\" config http.version HTTP/1.1" in updater
     assert "fetch_main" in updater
     assert "normalize_legacy_updater_mode" in updater
     assert "read_use_build_cache" in updater
+    assert 'LOCK_FILE="${DATA_DIR}/.admin-update.lock"' in updater
+    assert 'exec 9<>"$LOCK_FILE"' in updater
+    assert "chat2api_update_storage.py" in updater
+    assert 'ensure-dir "$DATA_DIR"' in updater
+    assert 'truncate-log "$LOG_FILE"' in updater
+    assert 'tee-log "$LOG_FILE"' in updater
+    assert updater.index('exec 9<>"$LOCK_FILE"') < updater.index('truncate-log "$LOG_FILE"')
+    assert 'if ! REQUEST_ID="$(read_request_id)" || ! USE_BUILD_CACHE="$(read_use_build_cache)"; then' in updater
+    assert 'read-request-id "$REQUEST_FILE"' in updater
+    assert 'read-build-cache "$REQUEST_FILE"' in updater
+    assert 'copy-file "$APP_DIR/docker-compose.yml" "$LOCAL_COMPOSE_BACKUP_FILE" --mode 0600' in updater_commands
+    assert 'copy-file "$LOCAL_COMPOSE_MERGED_FILE" "$APP_DIR/docker-compose.yml" --mode 0644' in updater_commands
+    assert 'mktemp /tmp/chat2api-update-version.XXXXXX' in updater
+    assert 'mktemp -d /tmp/chat2api-env.XXXXXX' in updater
+    assert 'mktemp /run/chat2api-github-known-hosts.XXXXXX' in updater
+    assert 'LOCAL_COMPOSE_BACKUP_CREATED="true"' in updater
+    assert 'REQUEST_CONSUMED="true"' in updater
+    assert 'trap - EXIT' in updater
+    assert ': > "$LOG_FILE"' not in updater
+    assert 'tee -a "$LOG_FILE"' not in updater
+    assert "path.read_text(" not in updater
+    assert "temp.write_text(" not in updater
     assert "DOCKER_BUILDKIT=1 docker compose build" in updater
     assert "docker compose build --no-cache" in updater
     assert "rollback()" in updater
@@ -167,6 +193,18 @@ def test_update_scripts_and_ui_parse():
         )
         assert result.returncode == 0, result.stderr
 
+    py = subprocess.run(
+        [
+            sys.executable, "-m", "py_compile",
+            str(ROOT / "scripts" / "chat2api_update_storage.py"),
+            str(ROOT / "scripts" / "chat2api_update_reconcile.py"),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert py.returncode == 0, py.stderr
+
     js = subprocess.run(
         ["node", "--check", str(ROOT / "app" / "admin_server_update.js")],
         capture_output=True,
@@ -184,7 +222,8 @@ def test_update_preserves_only_docker_compose_local_override_and_recovers_it_aft
     assert 'git -C "$APP_DIR" merge-file -p -q' in updater
     assert "reapplied merged local docker-compose.yml" in updater
     assert 'if [[ "$path" != "docker-compose.yml" ]]' in updater
-    assert 'shutil.copy2(compose_backup, compose_target)' in reconcile
+    assert "read_bytes, read_json, validate_directory, write_bytes_atomic" in reconcile
+    assert "write_bytes_atomic(compose_target, backup_bytes, mode=0o644)" in reconcile
 
 
 def test_update_state_and_log_helpers_reject_symlinked_files(tmp_path):

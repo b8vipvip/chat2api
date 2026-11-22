@@ -18,6 +18,9 @@ import time
 import urllib.request
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+from chat2api_update_storage import read_json, validate_directory, write_json_atomic
+
 try:
     from .smart_update import plan_for_git, _metadata_only
 except ImportError:
@@ -111,18 +114,21 @@ def image_runtime_sha(container: dict, key: str) -> str:
 
 def verify_current_container(container_id: str, from_sha: str,
                              state_path: Path, image: str, env_key: str) -> None:
-    if state_path.is_file():
-        state = json.loads(state_path.read_text(encoding="utf-8"))
-        if (state.get("deployed_sha") == from_sha and
-            state.get("container_id") == container_id and
-            state.get("image_id") == image):
-            try:
-                stamp = run("docker", "exec", container_id,
-                            "cat", "/app/.gptauto-runtime-sha")
-            except subprocess.CalledProcessError:
-                stamp = ""
-            if stamp == from_sha:
-                return
+    try:
+        state = read_json(state_path)
+    except (OSError, ValueError, RuntimeError):
+        # A linked, malformed or oversized state file is not deployment proof.
+        state = {}
+    if (state.get("deployed_sha") == from_sha and
+        state.get("container_id") == container_id and
+        state.get("image_id") == image):
+        try:
+            stamp = run("docker", "exec", container_id,
+                        "cat", "/app/.gptauto-runtime-sha")
+        except subprocess.CalledProcessError:
+            stamp = ""
+        if stamp == from_sha:
+            return
     info = json.loads(run("docker", "inspect", container_id))[0]
     if image_runtime_sha(info, env_key) != from_sha:
         raise HotfixError(
@@ -192,7 +198,7 @@ def apply_hotfix(repo: str, checkout: Path, from_sha: str, target_sha: str,
             raise HotfixError("Live file does not match old Git content: " + file)
         paths.append((file, host, destination, expected))
 
-    state_file.parent.mkdir(parents=True, exist_ok=True)
+    validate_directory(state_file.parent, create=True, mode=0o755)
     backup_dir = Path(tempfile.mkdtemp(
         prefix="gptauto-hotfix-", dir=str(state_file.parent)))
     touched = []
@@ -234,9 +240,7 @@ def apply_hotfix(repo: str, checkout: Path, from_sha: str, target_sha: str,
             "source": PROVIDER[repo], "changed_files": list(plan.changed_files),
             "backup": str(backup_dir),
         }
-        temp = state_file.with_suffix(".tmp")
-        temp.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
-        os.replace(temp, state_file)
+        write_json_atomic(state_file, metadata)
         return metadata
     except Exception as exc:
         failures = []

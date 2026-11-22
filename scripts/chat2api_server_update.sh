@@ -11,12 +11,13 @@ REQUEST_FILE="${DATA_DIR}/admin-update-request.json"
 STATUS_FILE="${DATA_DIR}/admin-update-status.json"
 LOG_FILE="${DATA_DIR}/admin-update.log"
 DEPLOYMENT_FILE="${DATA_DIR}/deployment.json"
-LOCK_FILE="/run/lock/chat2api-admin-update.lock"
-GITHUB_KNOWN_HOSTS_FILE="/run/chat2api-github-known-hosts"
+LOCK_FILE="${DATA_DIR}/.admin-update.lock"
+GITHUB_KNOWN_HOSTS_FILE=""
 CURRENT_STAGE="starting"
 CURRENT_PERCENT="2"
 CURRENT_MESSAGE="正在启动更新任务"
 REQUEST_ID=""
+REQUEST_CONSUMED="false"
 USE_BUILD_CACHE="true"
 SMART_UPDATE_MODE="verified-image"
 SMART_HOTFIX_ATTEMPTED="false"
@@ -26,9 +27,13 @@ ROLLBACK_COMMIT=""
 ROLLBACK_SUCCEEDED="false"
 CODE_SWITCHED="false"
 LOCAL_COMPOSE_OVERRIDE="false"
+LOCAL_COMPOSE_BACKUP_CREATED="false"
 LOCAL_COMPOSE_BACKUP_FILE="${DATA_DIR}/.admin-update-docker-compose.backup"
-LOCAL_COMPOSE_MERGED_FILE="${DATA_DIR}/.admin-update-docker-compose.merged"
+LOCAL_COMPOSE_MERGED_FILE=""
+LOCAL_COMPOSE_BASE_FILE=""
+LOCAL_COMPOSE_REMOTE_FILE=""
 ENV_BACKUP=""
+ENV_BACKUP_DIR=""
 FETCH_TRANSPORT=""
 FETCH_ELAPSED_MS=""
 FETCH_ATTEMPTS="0"
@@ -47,40 +52,30 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
-mkdir -p "$DATA_DIR" /run/lock
-chmod 755 "$DATA_DIR"
-: > "$LOG_FILE"
-chmod 640 "$LOG_FILE"
-exec > >(tee -a "$LOG_FILE") 2>&1
+python3 "$APP_DIR/scripts/chat2api_update_storage.py" ensure-dir "$DATA_DIR"
+python3 "$APP_DIR/scripts/chat2api_update_storage.py" prepare-lock "$LOCK_FILE"
+# Acquire the cross-process lock before truncating or opening the shared log.
+# A duplicate systemd start must not erase the active updater's log or status.
+exec 9<>"$LOCK_FILE"
+if ! flock -n 9; then
+  echo "another host updater already holds the deployment lock; leaving its request and status untouched" >&2
+  exit 75
+fi
+python3 "$APP_DIR/scripts/chat2api_update_storage.py" truncate-log "$LOG_FILE"
+# The log sink validates the opened descriptor (regular file, one hard link,
+# no symlink following) before appending and mirrors output to the journal.
+exec > >(python3 "$APP_DIR/scripts/chat2api_update_storage.py" tee-log "$LOG_FILE") 2>&1
 
 log() {
   printf '%s [chat2api-update] %s\n' "$(date -Is)" "$*"
 }
 
 read_request_id() {
-  python3 - "$REQUEST_FILE" <<'PY'
-import json, sys
-from pathlib import Path
-path = Path(sys.argv[1])
-try:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-except Exception:
-    payload = {}
-print(str(payload.get("request_id") or ""))
-PY
+  python3 "$APP_DIR/scripts/chat2api_update_storage.py" read-request-id "$REQUEST_FILE"
 }
 
 read_use_build_cache() {
-  python3 - "$REQUEST_FILE" <<'PY'
-import json, sys
-from pathlib import Path
-path = Path(sys.argv[1])
-try:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-except Exception:
-    payload = {}
-print("false" if payload.get("use_build_cache") is False else "true")
-PY
+  python3 "$APP_DIR/scripts/chat2api_update_storage.py" read-build-cache "$REQUEST_FILE"
 }
 
 write_status() {
@@ -90,19 +85,19 @@ write_status() {
   CURRENT_MESSAGE="$message"
   python3 - "$STATUS_FILE" "$status" "$stage" "$percent" "$message" "$REQUEST_ID" "$FROM_COMMIT" "$TARGET_COMMIT" "$ROLLBACK_COMMIT" "$ROLLBACK_SUCCEEDED" "$FETCH_TRANSPORT" "$FETCH_ELAPSED_MS" "$FETCH_ATTEMPTS" <<'PY'
 from __future__ import annotations
-import json, os, sys, tempfile
+import json, os, sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(os.environ.get("APP_DIR", "/opt/chat2api")) / "scripts"))
+from chat2api_update_storage import read_json, write_json_atomic
 
 path = Path(sys.argv[1])
 status, stage, percent, message = sys.argv[2:6]
 request_id, from_commit, target_commit, rollback_commit, rollback_succeeded = sys.argv[6:11]
 fetch_transport, fetch_elapsed_ms, fetch_attempts = sys.argv[11:14]
 now = datetime.now(timezone.utc).isoformat()
-try:
-    old = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-except Exception:
-    old = {}
+old = read_json(path)
 started = str(old.get("started_at") or now)
 if status == "running" and stage == "starting":
     started = now
@@ -124,23 +119,13 @@ payload = {
     "fetch_elapsed_ms": int(fetch_elapsed_ms) if fetch_elapsed_ms.isdigit() else int(old.get("fetch_elapsed_ms") or 0),
     "fetch_attempts": int(fetch_attempts) if fetch_attempts.isdigit() else int(old.get("fetch_attempts") or 0),
 }
-path.parent.mkdir(parents=True, exist_ok=True)
-fd, tmp = tempfile.mkstemp(prefix=".admin-update-status.", dir=str(path.parent), text=True)
-try:
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, ensure_ascii=False, indent=2)
-        handle.write("\n")
-        handle.flush(); os.fsync(handle.fileno())
-    os.replace(tmp, path)
-finally:
-    if os.path.exists(tmp):
-        os.unlink(tmp)
+write_json_atomic(path, payload)
 PY
   log "status=${status} stage=${stage} percent=${percent} message=${message}"
 }
 
 restore_env() {
-  if [[ -n "$ENV_BACKUP" && -f "$ENV_BACKUP" ]]; then
+  if [[ -n "$ENV_BACKUP" && ( -f "$ENV_BACKUP" || -L "$ENV_BACKUP" ) ]]; then
     cp -a "$ENV_BACKUP" "$APP_DIR/.env"
   fi
 }
@@ -159,27 +144,29 @@ health_port() {
 wait_health() {
   local port="$1"
   local attempts="${2:-60}"
+  local response_file
+  response_file="$(mktemp /tmp/chat2api-update-version.XXXXXX)"
   for ((i=1; i<=attempts; i++)); do
-    if curl -fsS --connect-timeout 2 --max-time 5 "http://127.0.0.1:${port}/version" >/tmp/chat2api-update-version.json 2>/dev/null; then
-      python3 -m json.tool /tmp/chat2api-update-version.json || true
-      rm -f /tmp/chat2api-update-version.json
+    if curl -fsS --connect-timeout 2 --max-time 5 "http://127.0.0.1:${port}/version" >"$response_file" 2>/dev/null; then
+      python3 -m json.tool "$response_file" || true
+      rm -f -- "$response_file"
       return 0
     fi
     sleep 1
   done
-  rm -f /tmp/chat2api-update-version.json
+  rm -f -- "$response_file"
   return 1
 }
 
 prepare_github_known_hosts() {
   # Pin GitHub's published Ed25519 host key instead of accepting an unknown
-  # host interactively. The same published fingerprint is used by GitHub's
-  # ssh.github.com endpoint on port 443.
+  # host interactively. mktemp creates an exclusive owner-private file so a
+  # stale /run path cannot redirect this privileged write.
+  GITHUB_KNOWN_HOSTS_FILE="$(mktemp /run/chat2api-github-known-hosts.XXXXXX)"
   cat >"$GITHUB_KNOWN_HOSTS_FILE" <<'EOF'
 github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
 ssh.github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
 EOF
-  chmod 600 "$GITHUB_KNOWN_HOSTS_FILE"
 }
 
 fetch_refspec() {
@@ -370,8 +357,9 @@ rollback() {
 }
 
 restore_local_compose_backup() {
-  if [[ -f "$LOCAL_COMPOSE_BACKUP_FILE" ]]; then
-    cp -a "$LOCAL_COMPOSE_BACKUP_FILE" "$APP_DIR/docker-compose.yml"
+  if [[ -f "$LOCAL_COMPOSE_BACKUP_FILE" || -L "$LOCAL_COMPOSE_BACKUP_FILE" ]]; then
+    python3 "$APP_DIR/scripts/chat2api_update_storage.py" copy-file \
+      "$LOCAL_COMPOSE_BACKUP_FILE" "$APP_DIR/docker-compose.yml" --mode 0644
     log "restored preserved local docker-compose.yml"
   fi
 }
@@ -389,8 +377,14 @@ prepare_local_compose_override() {
       return 1
     fi
   done
-  [[ -f "$APP_DIR/docker-compose.yml" ]] || return 1
-  cp -a "$APP_DIR/docker-compose.yml" "$LOCAL_COMPOSE_BACKUP_FILE"
+  [[ -f "$APP_DIR/docker-compose.yml" && ! -L "$APP_DIR/docker-compose.yml" ]] || return 1
+  if [[ -e "$LOCAL_COMPOSE_BACKUP_FILE" || -L "$LOCAL_COMPOSE_BACKUP_FILE" ]]; then
+    log "stale local compose backup exists; refusing to overwrite recovery evidence"
+    return 1
+  fi
+  python3 "$APP_DIR/scripts/chat2api_update_storage.py" copy-file \
+    "$APP_DIR/docker-compose.yml" "$LOCAL_COMPOSE_BACKUP_FILE" --mode 0600
+  LOCAL_COMPOSE_BACKUP_CREATED="true"
   LOCAL_COMPOSE_OVERRIDE="true"
   log "detected local docker-compose.yml override; it will be three-way merged into the target release"
   return 0
@@ -398,21 +392,24 @@ prepare_local_compose_override() {
 
 merge_local_compose_override() {
   [[ "$LOCAL_COMPOSE_OVERRIDE" == "true" ]] || return 0
-  local base_file="${DATA_DIR}/.admin-update-docker-compose.base"
-  local remote_file="${DATA_DIR}/.admin-update-docker-compose.remote"
-  git -C "$APP_DIR" show "${FROM_COMMIT}:docker-compose.yml" >"$base_file"
-  git -C "$APP_DIR" show "${TARGET_COMMIT}:docker-compose.yml" >"$remote_file"
+  LOCAL_COMPOSE_BASE_FILE="$(mktemp "${DATA_DIR}/.admin-update-compose-base.XXXXXX")"
+  LOCAL_COMPOSE_REMOTE_FILE="$(mktemp "${DATA_DIR}/.admin-update-compose-remote.XXXXXX")"
+  LOCAL_COMPOSE_MERGED_FILE="$(mktemp "${DATA_DIR}/.admin-update-compose-merged.XXXXXX")"
+  git -C "$APP_DIR" show "${FROM_COMMIT}:docker-compose.yml" >"$LOCAL_COMPOSE_BASE_FILE"
+  git -C "$APP_DIR" show "${TARGET_COMMIT}:docker-compose.yml" >"$LOCAL_COMPOSE_REMOTE_FILE"
   local merge_rc=0
   set +e
   git -C "$APP_DIR" merge-file -p -q \
     -L "local docker-compose.yml" \
     -L "base ${FROM_COMMIT:0:12}" \
     -L "remote ${TARGET_COMMIT:0:12}" \
-    "$LOCAL_COMPOSE_BACKUP_FILE" "$base_file" "$remote_file" \
+    "$LOCAL_COMPOSE_BACKUP_FILE" "$LOCAL_COMPOSE_BASE_FILE" "$LOCAL_COMPOSE_REMOTE_FILE" \
     >"$LOCAL_COMPOSE_MERGED_FILE"
   merge_rc=$?
   set -e
-  rm -f "$base_file" "$remote_file"
+  rm -f -- "$LOCAL_COMPOSE_BASE_FILE" "$LOCAL_COMPOSE_REMOTE_FILE"
+  LOCAL_COMPOSE_BASE_FILE=""
+  LOCAL_COMPOSE_REMOTE_FILE=""
   if (( merge_rc != 0 )); then
     log "local docker-compose.yml cannot be merged cleanly with target ${TARGET_COMMIT:0:12}; update remains non-destructive"
     return 1
@@ -421,11 +418,17 @@ merge_local_compose_override() {
 }
 
 cleanup() {
-  [[ -n "$ENV_BACKUP" ]] && rm -f "$ENV_BACKUP" || true
-  rm -f "$REQUEST_FILE" || true
-  rm -f "$GITHUB_KNOWN_HOSTS_FILE" || true
-  rm -f "$LOCAL_COMPOSE_MERGED_FILE" "${DATA_DIR}/.admin-update-docker-compose.base" "${DATA_DIR}/.admin-update-docker-compose.remote" || true
-  rm -f "$LOCAL_COMPOSE_BACKUP_FILE" || true
+  [[ -n "$ENV_BACKUP_DIR" ]] && rm -rf -- "$ENV_BACKUP_DIR" || true
+  if [[ "$REQUEST_CONSUMED" == "true" ]]; then
+    rm -f -- "$REQUEST_FILE" || true
+  fi
+  [[ -n "$GITHUB_KNOWN_HOSTS_FILE" ]] && rm -f -- "$GITHUB_KNOWN_HOSTS_FILE" || true
+  [[ -n "$LOCAL_COMPOSE_MERGED_FILE" ]] && rm -f -- "$LOCAL_COMPOSE_MERGED_FILE" || true
+  [[ -n "$LOCAL_COMPOSE_BASE_FILE" ]] && rm -f -- "$LOCAL_COMPOSE_BASE_FILE" || true
+  [[ -n "$LOCAL_COMPOSE_REMOTE_FILE" ]] && rm -f -- "$LOCAL_COMPOSE_REMOTE_FILE" || true
+  if [[ "$LOCAL_COMPOSE_BACKUP_CREATED" == "true" ]]; then
+    rm -f -- "$LOCAL_COMPOSE_BACKUP_FILE" || true
+  fi
 }
 
 on_exit() {
@@ -443,16 +446,18 @@ on_exit() {
 }
 trap on_exit EXIT
 
-exec 9>"$LOCK_FILE"
-if ! flock -n 9; then
-  REQUEST_ID="$(read_request_id)"
-  write_status "failed" "starting" "1" "已有更新任务持有主机更新锁"
-  exit 75
+if ! REQUEST_ID="$(read_request_id)" || ! USE_BUILD_CACHE="$(read_use_build_cache)"; then
+  log "updater request file failed private-storage validation; discarding only the request path"
+  rm -f -- "$REQUEST_FILE"
+  REQUEST_CONSUMED="true"
+  exit 74
 fi
-
-REQUEST_ID="$(read_request_id)"
-USE_BUILD_CACHE="$(read_use_build_cache)"
-rm -f "$REQUEST_FILE"
+REQUEST_CONSUMED="true"
+rm -f -- "$REQUEST_FILE"
+if [[ -e "$LOCAL_COMPOSE_BACKUP_FILE" || -L "$LOCAL_COMPOSE_BACKUP_FILE" ]]; then
+  log "unreconciled local compose backup exists; refusing to start a second update"
+  exit 73
+fi
 write_status "running" "starting" "2" "主机更新助手已接管任务"
 
 write_status "running" "preflight" "8" "正在检查 Git、Docker Compose 与工作区"
@@ -480,8 +485,9 @@ if [[ -n "$tracked_dirty" ]]; then
   fi
 fi
 write_status "running" "backup" "14" "正在备份 .env 并记录当前提交 ${FROM_COMMIT:0:12}"
-if [[ -f "$APP_DIR/.env" ]]; then
-  ENV_BACKUP="$(mktemp /tmp/chat2api-env.XXXXXX)"
+if [[ -f "$APP_DIR/.env" || -L "$APP_DIR/.env" ]]; then
+  ENV_BACKUP_DIR="$(mktemp -d /tmp/chat2api-env.XXXXXX)"
+  ENV_BACKUP="${ENV_BACKUP_DIR}/.env"
   cp -a "$APP_DIR/.env" "$ENV_BACKUP"
 fi
 
@@ -519,15 +525,14 @@ fi
 if [[ "$TARGET_COMMIT" == "$FROM_COMMIT" && "$RUNTIME_SHA" == "$TARGET_COMMIT" ]]; then
   write_status "succeeded" "completed" "100" "当前已经是 GitHub main 最新提交 ${TARGET_COMMIT:0:12}"
   python3 - "$DEPLOYMENT_FILE" "$TARGET_COMMIT" <<'PY'
-import json, os, sys, tempfile
+import os, sys
 from datetime import datetime, timezone
 from pathlib import Path
+sys.path.insert(0, str(Path(os.environ.get("APP_DIR", "/opt/chat2api")) / "scripts"))
+from chat2api_update_storage import write_json_atomic
 path = Path(sys.argv[1]); sha = sys.argv[2]
 payload = {"commit": sha, "branch": "main", "repository": "b8vipvip/chat2api", "updated_at": datetime.now(timezone.utc).isoformat()}
-fd, tmp = tempfile.mkstemp(prefix=".deployment.", dir=str(path.parent), text=True)
-with os.fdopen(fd, "w", encoding="utf-8") as f:
-    json.dump(payload, f, ensure_ascii=False, indent=2); f.write("\n"); f.flush(); os.fsync(f.fileno())
-os.replace(tmp, path)
+write_json_atomic(path, payload)
 PY
   trap - EXIT
   cleanup
@@ -539,7 +544,8 @@ git -C "$APP_DIR" checkout "$BRANCH"
 git -C "$APP_DIR" reset --hard "$TARGET_COMMIT"
 CODE_SWITCHED="true"
 if [[ "$LOCAL_COMPOSE_OVERRIDE" == "true" ]]; then
-  cp -a "$LOCAL_COMPOSE_MERGED_FILE" "$APP_DIR/docker-compose.yml"
+  python3 "$APP_DIR/scripts/chat2api_update_storage.py" copy-file \
+    "$LOCAL_COMPOSE_MERGED_FILE" "$APP_DIR/docker-compose.yml" --mode 0644
   log "reapplied merged local docker-compose.yml after source checkout"
 fi
 restore_env
@@ -561,11 +567,13 @@ fi
 if [[ "$SMART_UPDATE_MODE" == "checks-only" ]]; then
   write_status "running" "verify" "85" "智能判断：只修改文档/测试，跳过 Docker 构建和容器重启"
   python3 - "$DEPLOYMENT_FILE" "$TARGET_COMMIT" "$FROM_COMMIT" <<'PY'
-import json, os, sys
+import os, sys
 from pathlib import Path
+sys.path.insert(0, str(Path(os.environ.get("APP_DIR", "/opt/chat2api")) / "scripts"))
+from chat2api_update_storage import write_json_atomic
 p=Path(sys.argv[1]); record={"commit":sys.argv[2],"previous_commit":sys.argv[3],
 "repository":"b8vipvip/chat2api","update_mode":"checks-only"}
-temp=p.with_suffix(".tmp");temp.write_text(json.dumps(record),encoding="utf-8");os.replace(temp,p)
+write_json_atomic(p, record)
 PY
   write_status "succeeded" "completed" "100" "GPTAuto 智能更新：无运行时代码变更，跳过构建"
   trap - EXIT
@@ -604,11 +612,13 @@ if [[ "$SMART_UPDATE_MODE" == "runtime-hotfix" && -f "$SMART_APPLY_TOOL" ]]; the
     exit 9
   fi
   python3 - "$DEPLOYMENT_FILE" "$TARGET_COMMIT" "$FROM_COMMIT" <<'PY'
-import json, os, sys
+import os, sys
 from pathlib import Path
+sys.path.insert(0, str(Path(os.environ.get("APP_DIR", "/opt/chat2api")) / "scripts"))
+from chat2api_update_storage import write_json_atomic
 p=Path(sys.argv[1]); record={"commit":sys.argv[2],"previous_commit":sys.argv[3],
 "repository":"b8vipvip/chat2api","update_mode":"runtime-hotfix"}
-temp=p.with_suffix(".tmp");temp.write_text(json.dumps(record),encoding="utf-8");os.replace(temp,p)
+write_json_atomic(p, record)
 PY
   write_status "succeeded" "completed" "100" "GPTAuto 智能热修复成功：精确 CI、文件校验和健康检查通过"
   trap - EXIT
@@ -646,9 +656,11 @@ if ! wait_health "$port" 60; then
 fi
 
 python3 - "$DEPLOYMENT_FILE" "$TARGET_COMMIT" "$FROM_COMMIT" <<'PY'
-import json, os, sys, tempfile
+import os, sys
 from datetime import datetime, timezone
 from pathlib import Path
+sys.path.insert(0, str(Path(os.environ.get("APP_DIR", "/opt/chat2api")) / "scripts"))
+from chat2api_update_storage import write_json_atomic
 path = Path(sys.argv[1]); sha = sys.argv[2]; previous = sys.argv[3]
 payload = {
     "commit": sha,
@@ -657,10 +669,7 @@ payload = {
     "repository": "b8vipvip/chat2api",
     "updated_at": datetime.now(timezone.utc).isoformat(),
 }
-fd, tmp = tempfile.mkstemp(prefix=".deployment.", dir=str(path.parent), text=True)
-with os.fdopen(fd, "w", encoding="utf-8") as f:
-    json.dump(payload, f, ensure_ascii=False, indent=2); f.write("\n"); f.flush(); os.fsync(f.fileno())
-os.replace(tmp, path)
+write_json_atomic(path, payload)
 PY
 
 write_status "succeeded" "completed" "100" "服务端更新完成：${FROM_COMMIT:0:12} → ${TARGET_COMMIT:0:12}"

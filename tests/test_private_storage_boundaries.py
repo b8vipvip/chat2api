@@ -23,7 +23,7 @@ from app.payment_channels_v106_patch import (
     _persist_payment_channels_secret,
 )
 from app.prompt_config import PromptConfigStore, default_config
-from app.private_storage import private_file_lock
+from app.private_storage import private_file_lock, secure_private_sqlite_files
 from app.plugin_registry import PluginRegistry
 from app.quota_reservations import QuotaReservationStore
 from app.test_runs import TestRunStore
@@ -649,3 +649,42 @@ def test_runtime_log_rotation_preserves_private_modes(tmp_path: Path, monkeypatc
     current = tmp_path / "runtime_logs" / "chat2api-runtime.ndjson"
     assert stat.S_IMODE(rotated.stat().st_mode) == 0o600
     assert stat.S_IMODE(current.stat().st_mode) == 0o600
+
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX SQLite sidecar link assertions")
+def test_sqlite_sidecar_hard_links_are_rejected(tmp_path: Path) -> None:
+    database = tmp_path / "state.sqlite3"
+    database.write_bytes(b"database")
+    sidecar = Path(str(database) + "-journal")
+    sidecar.write_bytes(b"journal")
+    outside = tmp_path / "outside-journal"
+    os.link(sidecar, outside)
+
+    with pytest.raises(RuntimeError, match="single-link regular files"):
+        secure_private_sqlite_files(database)
+    assert outside.read_bytes() == b"journal"
+
+
+def test_sqlite_sidecar_disappearance_during_validation_is_tolerated(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    import app.private_storage as private_storage
+
+    database = tmp_path / "state.sqlite3"
+    database.write_bytes(b"database")
+    sidecar = Path(str(database) + "-journal")
+    sidecar.write_bytes(b"journal")
+    original_open = private_storage.open_private_regular_file
+
+    def unlink_during_validation(path, flags, *, mode=0o600):
+        fd = original_open(path, flags, mode=mode)
+        if Path(path) == sidecar:
+            os.close(fd)
+            sidecar.unlink()
+            raise RuntimeError("Private storage files must be single-link regular files")
+        return fd
+
+    monkeypatch.setattr(private_storage, "open_private_regular_file", unlink_during_validation)
+    secure_private_sqlite_files(database)
+    assert not sidecar.exists()
