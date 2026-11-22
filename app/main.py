@@ -2713,6 +2713,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     if (request.scope.get("chat2api_mode1_web_chat") is True
                             and final_text == raw_final
                             and terminal_diagnostics.get("response_boundary_prompt_echo_removed") is not True
+                            and terminal_diagnostics.get("native_citation_text_match") is True
                             and isinstance(event.get("references"), list)):
                         # Annotation offsets are validated against the archived
                         # terminal text. Only the Web Chat projection receives
