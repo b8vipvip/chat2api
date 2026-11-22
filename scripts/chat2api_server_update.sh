@@ -27,8 +27,11 @@ ROLLBACK_SUCCEEDED="false"
 CODE_SWITCHED="false"
 LOCAL_COMPOSE_OVERRIDE="false"
 LOCAL_COMPOSE_BACKUP_FILE="${DATA_DIR}/.admin-update-docker-compose.backup"
-LOCAL_COMPOSE_MERGED_FILE="${DATA_DIR}/.admin-update-docker-compose.merged"
+LOCAL_COMPOSE_MERGED_FILE=""
+LOCAL_COMPOSE_BASE_FILE=""
+LOCAL_COMPOSE_REMOTE_FILE=""
 ENV_BACKUP=""
+ENV_BACKUP_DIR=""
 FETCH_TRANSPORT=""
 FETCH_ELAPSED_MS=""
 FETCH_ATTEMPTS="0"
@@ -113,7 +116,7 @@ PY
 }
 
 restore_env() {
-  if [[ -n "$ENV_BACKUP" && -f "$ENV_BACKUP" ]]; then
+  if [[ -n "$ENV_BACKUP" && ( -f "$ENV_BACKUP" || -L "$ENV_BACKUP" ) ]]; then
     cp -a "$ENV_BACKUP" "$APP_DIR/.env"
   fi
 }
@@ -132,15 +135,17 @@ health_port() {
 wait_health() {
   local port="$1"
   local attempts="${2:-60}"
+  local response_file
+  response_file="$(mktemp /tmp/chat2api-update-version.XXXXXX)"
   for ((i=1; i<=attempts; i++)); do
-    if curl -fsS --connect-timeout 2 --max-time 5 "http://127.0.0.1:${port}/version" >/tmp/chat2api-update-version.json 2>/dev/null; then
-      python3 -m json.tool /tmp/chat2api-update-version.json || true
-      rm -f /tmp/chat2api-update-version.json
+    if curl -fsS --connect-timeout 2 --max-time 5 "http://127.0.0.1:${port}/version" >"$response_file" 2>/dev/null; then
+      python3 -m json.tool "$response_file" || true
+      rm -f -- "$response_file"
       return 0
     fi
     sleep 1
   done
-  rm -f /tmp/chat2api-update-version.json
+  rm -f -- "$response_file"
   return 1
 }
 
@@ -343,8 +348,9 @@ rollback() {
 }
 
 restore_local_compose_backup() {
-  if [[ -f "$LOCAL_COMPOSE_BACKUP_FILE" ]]; then
-    cp -a "$LOCAL_COMPOSE_BACKUP_FILE" "$APP_DIR/docker-compose.yml"
+  if [[ -f "$LOCAL_COMPOSE_BACKUP_FILE" || -L "$LOCAL_COMPOSE_BACKUP_FILE" ]]; then
+    python3 "$APP_DIR/scripts/chat2api_update_storage.py" copy-file \
+      "$LOCAL_COMPOSE_BACKUP_FILE" "$APP_DIR/docker-compose.yml" --mode 0644
     log "restored preserved local docker-compose.yml"
   fi
 }
@@ -362,8 +368,13 @@ prepare_local_compose_override() {
       return 1
     fi
   done
-  [[ -f "$APP_DIR/docker-compose.yml" ]] || return 1
-  cp -a "$APP_DIR/docker-compose.yml" "$LOCAL_COMPOSE_BACKUP_FILE"
+  [[ -f "$APP_DIR/docker-compose.yml" && ! -L "$APP_DIR/docker-compose.yml" ]] || return 1
+  if [[ -e "$LOCAL_COMPOSE_BACKUP_FILE" || -L "$LOCAL_COMPOSE_BACKUP_FILE" ]]; then
+    log "stale local compose backup exists; refusing to overwrite recovery evidence"
+    return 1
+  fi
+  python3 "$APP_DIR/scripts/chat2api_update_storage.py" copy-file \
+    "$APP_DIR/docker-compose.yml" "$LOCAL_COMPOSE_BACKUP_FILE" --mode 0600
   LOCAL_COMPOSE_OVERRIDE="true"
   log "detected local docker-compose.yml override; it will be three-way merged into the target release"
   return 0
@@ -371,21 +382,24 @@ prepare_local_compose_override() {
 
 merge_local_compose_override() {
   [[ "$LOCAL_COMPOSE_OVERRIDE" == "true" ]] || return 0
-  local base_file="${DATA_DIR}/.admin-update-docker-compose.base"
-  local remote_file="${DATA_DIR}/.admin-update-docker-compose.remote"
-  git -C "$APP_DIR" show "${FROM_COMMIT}:docker-compose.yml" >"$base_file"
-  git -C "$APP_DIR" show "${TARGET_COMMIT}:docker-compose.yml" >"$remote_file"
+  LOCAL_COMPOSE_BASE_FILE="$(mktemp "${DATA_DIR}/.admin-update-compose-base.XXXXXX")"
+  LOCAL_COMPOSE_REMOTE_FILE="$(mktemp "${DATA_DIR}/.admin-update-compose-remote.XXXXXX")"
+  LOCAL_COMPOSE_MERGED_FILE="$(mktemp "${DATA_DIR}/.admin-update-compose-merged.XXXXXX")"
+  git -C "$APP_DIR" show "${FROM_COMMIT}:docker-compose.yml" >"$LOCAL_COMPOSE_BASE_FILE"
+  git -C "$APP_DIR" show "${TARGET_COMMIT}:docker-compose.yml" >"$LOCAL_COMPOSE_REMOTE_FILE"
   local merge_rc=0
   set +e
   git -C "$APP_DIR" merge-file -p -q \
     -L "local docker-compose.yml" \
     -L "base ${FROM_COMMIT:0:12}" \
     -L "remote ${TARGET_COMMIT:0:12}" \
-    "$LOCAL_COMPOSE_BACKUP_FILE" "$base_file" "$remote_file" \
+    "$LOCAL_COMPOSE_BACKUP_FILE" "$LOCAL_COMPOSE_BASE_FILE" "$LOCAL_COMPOSE_REMOTE_FILE" \
     >"$LOCAL_COMPOSE_MERGED_FILE"
   merge_rc=$?
   set -e
-  rm -f "$base_file" "$remote_file"
+  rm -f -- "$LOCAL_COMPOSE_BASE_FILE" "$LOCAL_COMPOSE_REMOTE_FILE"
+  LOCAL_COMPOSE_BASE_FILE=""
+  LOCAL_COMPOSE_REMOTE_FILE=""
   if (( merge_rc != 0 )); then
     log "local docker-compose.yml cannot be merged cleanly with target ${TARGET_COMMIT:0:12}; update remains non-destructive"
     return 1
@@ -394,11 +408,13 @@ merge_local_compose_override() {
 }
 
 cleanup() {
-  [[ -n "$ENV_BACKUP" ]] && rm -f "$ENV_BACKUP" || true
+  [[ -n "$ENV_BACKUP_DIR" ]] && rm -rf -- "$ENV_BACKUP_DIR" || true
   rm -f "$REQUEST_FILE" || true
   rm -f "$GITHUB_KNOWN_HOSTS_FILE" || true
-  rm -f "$LOCAL_COMPOSE_MERGED_FILE" "${DATA_DIR}/.admin-update-docker-compose.base" "${DATA_DIR}/.admin-update-docker-compose.remote" || true
-  rm -f "$LOCAL_COMPOSE_BACKUP_FILE" || true
+  [[ -n "$LOCAL_COMPOSE_MERGED_FILE" ]] && rm -f -- "$LOCAL_COMPOSE_MERGED_FILE" || true
+  [[ -n "$LOCAL_COMPOSE_BASE_FILE" ]] && rm -f -- "$LOCAL_COMPOSE_BASE_FILE" || true
+  [[ -n "$LOCAL_COMPOSE_REMOTE_FILE" ]] && rm -f -- "$LOCAL_COMPOSE_REMOTE_FILE" || true
+  rm -f -- "$LOCAL_COMPOSE_BACKUP_FILE" || true
 }
 
 on_exit() {
@@ -453,8 +469,9 @@ if [[ -n "$tracked_dirty" ]]; then
   fi
 fi
 write_status "running" "backup" "14" "正在备份 .env 并记录当前提交 ${FROM_COMMIT:0:12}"
-if [[ -f "$APP_DIR/.env" ]]; then
-  ENV_BACKUP="$(mktemp /tmp/chat2api-env.XXXXXX)"
+if [[ -f "$APP_DIR/.env" || -L "$APP_DIR/.env" ]]; then
+  ENV_BACKUP_DIR="$(mktemp -d /tmp/chat2api-env.XXXXXX)"
+  ENV_BACKUP="${ENV_BACKUP_DIR}/.env"
   cp -a "$APP_DIR/.env" "$ENV_BACKUP"
 fi
 
@@ -511,7 +528,8 @@ git -C "$APP_DIR" checkout "$BRANCH"
 git -C "$APP_DIR" reset --hard "$TARGET_COMMIT"
 CODE_SWITCHED="true"
 if [[ "$LOCAL_COMPOSE_OVERRIDE" == "true" ]]; then
-  cp -a "$LOCAL_COMPOSE_MERGED_FILE" "$APP_DIR/docker-compose.yml"
+  python3 "$APP_DIR/scripts/chat2api_update_storage.py" copy-file \
+    "$LOCAL_COMPOSE_MERGED_FILE" "$APP_DIR/docker-compose.yml" --mode 0644
   log "reapplied merged local docker-compose.yml after source checkout"
 fi
 restore_env
