@@ -215,16 +215,38 @@
 
   function normalizeToolReferences(value) {
     if (!Array.isArray(value)) return [];
-    const seen = new Set(), rows = [];
+    const positions = new Map(), rows = [];
     value.slice(0,32).forEach(item => {
       const reference = safeToolReference(item);
       if (!reference) return;
       const identity = reference.id ? "id:" + reference.id : "url:" + reference.url;
-      if (seen.has(identity)) return;
-      seen.add(identity);
+      const existingIndex = positions.get(identity);
+      if (existingIndex !== undefined) {
+        const existing = rows[existingIndex];
+        rows[existingIndex] = {
+          ...existing,
+          title: reference.title || existing.title,
+          snippet: reference.snippet || existing.snippet,
+          start_index: existing.start_index ?? reference.start_index,
+          end_index: existing.end_index ?? reference.end_index,
+        };
+        return;
+      }
+      positions.set(identity, rows.length);
       rows.push(reference);
     });
     return rows.slice(0,8);
+  }
+
+  function toolReferencesEqual(left, right) {
+    const a = Array.isArray(left) ? left : [];
+    const b = Array.isArray(right) ? right : [];
+    if (a.length !== b.length) return false;
+    return a.every((item,index) => {
+      const other = b[index] || {};
+      return ["id","url","title","snippet","start_index","end_index"]
+        .every(key => item?.[key] === other[key]);
+    });
   }
 
   function referencesForMessage(message) {
@@ -238,9 +260,10 @@
   function citationTextForMessage(message) {
     const text = messageText(message);
     const references = referencesForMessage(message);
-    const numberById = new Map(
-      references.filter(item => item.id).map((item,index) => [item.id,index + 1])
-    );
+    const numberById = new Map();
+    references.forEach((item,index) => {
+      if (item.id && !numberById.has(item.id)) numberById.set(item.id,index + 1);
+    });
     return text.replace(
       /\uE200cite\uE202([A-Za-z0-9_.:-]{1,128}(?:\uE202[A-Za-z0-9_.:-]{1,128})*)\uE201/g,
       (_marker, encodedIds) => {
@@ -1547,13 +1570,13 @@
       if (references.length) {
         const previous = Array.isArray(row.references) ? row.references : [];
         const merged = normalizeToolReferences([...previous, ...references]);
-        if (merged.length !== previous.length) {
+        if (!toolReferencesEqual(merged, previous)) {
           row.references = merged;
           enriched = true;
         }
         const messagePrevious = Array.isArray(assistant.references) ? assistant.references : [];
         const messageMerged = normalizeToolReferences([...messagePrevious, ...references]);
-        if (messageMerged.length !== messagePrevious.length) {
+        if (!toolReferencesEqual(messageMerged, messagePrevious)) {
           assistant.references = messageMerged;
           enriched = true;
         }
@@ -1593,8 +1616,7 @@
     if (!incoming.length) return false;
     const previous = Array.isArray(assistant.references) ? assistant.references : [];
     const merged = normalizeToolReferences([...previous, ...incoming]);
-    const changed = merged.length !== previous.length ||
-      merged.some((item,index) => item.id !== previous[index]?.id || item.url !== previous[index]?.url);
+    const changed = !toolReferencesEqual(merged, previous);
     if (!changed) return false;
     assistant.references = merged;
     saveHistory();
