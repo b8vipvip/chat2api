@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
+import stat
 import time
 from datetime import datetime, timedelta, timezone
 from collections import deque
@@ -103,6 +105,26 @@ class TelemetryStore:
         self.lock = asyncio.Lock()
         self.usage_accounting = None  # Installed by create_app; one owner of quota deduction.
 
+    def _open_history_file(self, *, append: bool = False, create: bool = False) -> int:
+        """Open private telemetry without following links or accepting shared files."""
+        if self.path.is_symlink():
+            raise RuntimeError("Telemetry history cannot be a symbolic link")
+        flags = (os.O_WRONLY | os.O_APPEND) if append else os.O_RDONLY
+        flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        if create:
+            flags |= os.O_CREAT
+        fd = os.open(self.path, flags, 0o600)
+        try:
+            metadata = os.fstat(fd)
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                raise RuntimeError("Telemetry history must be a private regular file")
+            if os.name != "nt" and hasattr(os, "fchmod"):
+                os.fchmod(fd, 0o600)
+            return fd
+        except Exception:
+            os.close(fd)
+            raise
+
     def _remember(self, record: dict[str, Any]) -> None:
         request_id = str(record.get("request_id") or "")
         if request_id:
@@ -112,8 +134,12 @@ class TelemetryStore:
 
     async def load(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        if self.path.is_symlink():
+            raise RuntimeError("Telemetry history cannot be a symbolic link")
         if not self.path.exists():
             return
+        fd = self._open_history_file()
+        os.close(fd)
         try:
             latest: dict[tuple[str, str], dict[str, Any]] = {}
             order: list[tuple[str, str]] = []
@@ -429,7 +455,8 @@ class TelemetryStore:
             record = _normalize_record_time(record)
             self._remember(record)
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            with self.path.open("a", encoding="utf-8") as handle:
+            fd = self._open_history_file(append=True, create=True)
+            with os.fdopen(fd, "a", encoding="utf-8") as handle:
                 handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
         if self.usage_accounting is not None:
             await self.usage_accounting(record)

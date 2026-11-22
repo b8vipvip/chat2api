@@ -13,6 +13,7 @@ import os
 import re
 import secrets
 import sqlite3
+import stat
 from pathlib import Path
 from urllib.parse import urlsplit
 import httpx
@@ -32,16 +33,60 @@ Image.MAX_IMAGE_PIXELS = 36_000_000
 class MediaArchive:
     def __init__(self, data_dir: Path, master_secret: str):
         self.root = Path(data_dir) / "media_archive"
-        self.root.mkdir(parents=True, exist_ok=True)
+        if self.root.is_symlink():
+            raise RuntimeError("Media archive root cannot be a symbolic link")
+        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if not self.root.is_dir() or self.root.is_symlink():
+            raise RuntimeError("Media archive root must be a private directory")
+        os.chmod(self.root, 0o700)
         self.db_path = self.root / "index.sqlite3"
         self.settings_path = self.root / "settings.enc"
         secret_key = hashlib.sha256(("chat2api:media:settings:v1:" + master_secret).encode()).digest()
         self._cipher = Fernet(base64.urlsafe_b64encode(secret_key))
         self._init_db()
 
+    @staticmethod
+    def _secure_regular_file(path: Path, *, create: bool = False) -> None:
+        """Reject linked archive files and enforce owner-only POSIX access."""
+        if path.is_symlink():
+            raise RuntimeError("Media archive files cannot be symbolic links")
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        if create:
+            flags |= os.O_CREAT
+        try:
+            fd = os.open(path, flags, 0o600)
+        except FileNotFoundError:
+            if create:
+                raise
+            return
+        try:
+            metadata = os.fstat(fd)
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                raise RuntimeError("Media archive files must be private regular files")
+            if os.name != "nt" and hasattr(os, "fchmod"):
+                os.fchmod(fd, 0o600)
+        finally:
+            os.close(fd)
+
+    def _local_path(self, key: str) -> Path:
+        if not isinstance(key, str) or not key or len(key) > 512:
+            raise ValueError("Invalid local media object key")
+        relative = Path(key)
+        if relative.is_absolute() or relative.drive or relative.root or ".." in relative.parts:
+            raise ValueError("Invalid local media object key")
+        return self.root / relative
+
     def _db(self):
+        self._secure_regular_file(self.db_path, create=True)
         conn = sqlite3.connect(self.db_path, timeout=20)
-        conn.row_factory = sqlite3.Row
+        try:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA busy_timeout=10000")
+            conn.execute("PRAGMA synchronous=FULL")
+            self._secure_regular_file(self.db_path)
+        except Exception:
+            conn.close()
+            raise
         return conn
 
     def _init_db(self):
@@ -148,13 +193,36 @@ class MediaArchive:
 
     def _write(self, cfg, key: str, content: bytes, mime: str):
         if cfg["backend"] == "local":
-            filename = self.root / key
-            filename.parent.mkdir(parents=True, exist_ok=True)
+            filename = self._local_path(key)
+            filename.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            if filename.parent.is_symlink():
+                raise RuntimeError("Media archive object directory cannot be a symbolic link")
+            os.chmod(filename.parent, 0o700)
             temp = filename.with_suffix(".part")
+            fd = -1
             try:
-                temp.write_bytes(content)
+                # A stale single-link temp file from a prior crash can be
+                # replaced; symlinks and hard links are rejected before unlink.
+                if temp.exists() or temp.is_symlink():
+                    self._secure_regular_file(temp)
+                    temp.unlink()
+                flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+                fd = os.open(temp, flags, 0o600)
+                metadata = os.fstat(fd)
+                if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                    raise RuntimeError("Media archive staging file must be a private regular file")
+                if os.name != "nt" and hasattr(os, "fchmod"):
+                    os.fchmod(fd, 0o600)
+                stream = os.fdopen(fd, "wb")
+                fd = -1
+                with stream:
+                    stream.write(content)
+                    stream.flush()
+                    os.fsync(stream.fileno())
                 os.replace(temp, filename)
             except Exception:
+                if fd >= 0:
+                    os.close(fd)
                 # A failed local write must not leave unpublished .part files.
                 temp.unlink(missing_ok=True)
                 raise
@@ -164,7 +232,24 @@ class MediaArchive:
 
     def _read(self, cfg, backend: str, key: str):
         if backend == "local":
-            return (self.root / key).read_bytes()
+            path = self._local_path(key)
+            if path.is_symlink():
+                raise RuntimeError("Media archive objects cannot be symbolic links")
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+            fd = os.open(path, flags)
+            try:
+                metadata = os.fstat(fd)
+                if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                    raise RuntimeError("Media archive objects must be private regular files")
+                if os.name != "nt" and hasattr(os, "fchmod"):
+                    os.fchmod(fd, 0o600)
+                stream = os.fdopen(fd, "rb")
+                fd = -1
+                with stream:
+                    return stream.read()
+            finally:
+                if fd >= 0:
+                    os.close(fd)
         if not all(cfg.get("s3", {}).get(k) for k in ("bucket", "access_key_id", "secret_access_key")):
             raise FileNotFoundError("S3 provider credentials are not configured")
         return self._s3(cfg).get_object(Bucket=cfg["s3"]["bucket"], Key=key)["Body"].read()
