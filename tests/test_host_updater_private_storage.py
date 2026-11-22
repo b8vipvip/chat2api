@@ -137,3 +137,23 @@ def test_updater_json_reader_enforces_bounded_input(tmp_path):
     path.write_bytes(b" " * (storage.MAX_JSON_BYTES + 1))
     with pytest.raises(ValueError, match="size limit"):
         storage.read_json(path)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink and permission assertions")
+def test_atomic_copy_rejects_linked_sources_and_keeps_source_mode(tmp_path):
+    source = tmp_path / "compose.source"
+    source.write_text("services: {}\\n", encoding="utf-8")
+    source.chmod(0o644)
+    destination = tmp_path / "compose.backup"
+    storage.copy_file_atomic(source, destination, mode=0o600)
+    assert destination.read_text(encoding="utf-8") == "services: {}\\n"
+    assert stat.S_IMODE(source.stat().st_mode) == 0o644
+    assert stat.S_IMODE(destination.stat().st_mode) == 0o600
+
+    outside = tmp_path / "outside-compose"
+    outside.write_text("keep", encoding="utf-8")
+    linked = tmp_path / "linked-compose"
+    linked.symlink_to(outside)
+    with pytest.raises(RuntimeError, match="symlinks"):
+        storage.copy_file_atomic(linked, tmp_path / "copy")
+    assert outside.read_text(encoding="utf-8") == "keep"
