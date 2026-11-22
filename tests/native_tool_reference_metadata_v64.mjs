@@ -46,7 +46,7 @@ console.log("Native tool metadata forwards every server-supported citation root 
 
 
 // Final assistant messages can carry citation metadata independently of tool events.
-const finalMatch = source.match(/function maybeEmitFinal\\(message\\) \\{[\\s\\S]*?\\n  \\}/);
+const finalMatch = source.match(/function maybeEmitFinal\(message\) \{[\s\S]*?\n  \}/);
 assert.ok(finalMatch, "production maybeEmitFinal function must remain extractable");
 const finalEvents = [];
 const finalState = {final_snapshots:0, final_completions:0};
