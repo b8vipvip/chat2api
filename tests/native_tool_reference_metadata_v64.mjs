@@ -43,3 +43,35 @@ assert.deepEqual(forwarded, {
 });
 assert.deepEqual(JSON.parse(JSON.stringify(safeToolMetadata(null))), {});
 console.log("Native tool metadata forwards every server-supported citation root and excludes unrelated metadata");
+
+
+// Final assistant messages can carry citation metadata independently of tool events.
+const finalMatch = source.match(/function maybeEmitFinal\\(message\\) \\{[\\s\\S]*?\\n  \\}/);
+assert.ok(finalMatch, "production maybeEmitFinal function must remain extractable");
+const finalEvents = [];
+const finalState = {final_snapshots:0, final_completions:0};
+const finalEmitted = new Map();
+const maybeEmitFinal = runInNewContext("(" + finalMatch[0] + ")", {
+  state: finalState,
+  emitted: finalEmitted,
+  contentText: value => typeof value === "string" ? value : (value?.text || ""),
+  safeToolMetadata,
+  post: value => finalEvents.push(value),
+});
+maybeEmitFinal({
+  id:"assistant-final-1",
+  author:{role:"assistant"},
+  channel:"final",
+  status:"completed",
+  content:"The API is documented here.",
+  metadata:{annotations:[{
+    type:"url_citation",
+    start_index:0,
+    end_index:26,
+    url_citation:{url:"https://docs.example.org/api",title:"API reference",ref_id:"turn0search0"},
+  }]},
+});
+assert.equal(finalEvents.length, 2);
+assert.equal(finalEvents[0].phase, "final-snapshot");
+assert.equal(finalEvents[1].phase, "final-complete");
+assert.equal(finalEvents[1].metadata.annotations[0].url_citation.ref_id, "turn0search0");
