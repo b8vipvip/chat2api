@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse, Response
 from .admin_auth import SESSION_COOKIE
 from .runtime_contract import CHROME_BRIDGE_BUNDLE_VERSION, CHROME_BRIDGE_VERSION, SERVER_RUNTIME_VERSION
 from .runtime_code_identity import runtime_code_sha as active_runtime_code_sha
+from .private_storage import open_private_regular_file, private_file_lock, read_private_bytes, write_private_bytes_atomic
 
 
 ASSET_PATH = "/assets/chat2api-server-update.js"
@@ -47,22 +48,30 @@ async def _response_bytes(response: Response) -> bytes:
 
 def _read_json(path: Path) -> dict[str, Any]:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        stored = read_private_bytes(path)
+        if stored is None:
+            return {}
+        payload = json.loads(stored.decode("utf-8"))
+    except (OSError, ValueError, RuntimeError):
         return {}
     return payload if isinstance(payload, dict) else {}
 
 
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
+    encoded = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    write_private_bytes_atomic(path, encoded)
 
 
 def _tail_log(path: Path, max_lines: int = 180, max_chars: int = 120_000) -> list[str]:
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")[-max_chars:]
+        fd = open_private_regular_file(path, os.O_RDONLY)
+    except (OSError, RuntimeError):
+        return []
+    try:
+        with os.fdopen(fd, "rb") as handle:
+            metadata = os.fstat(handle.fileno())
+            handle.seek(max(0, metadata.st_size - max_chars * 4))
+            text = handle.read(max_chars * 4).decode("utf-8", errors="replace")[-max_chars:]
     except OSError:
         return []
     return [line.rstrip() for line in text.splitlines() if line.strip()][-max_lines:]
@@ -256,13 +265,7 @@ def install_server_update_patch(app: FastAPI) -> FastAPI:
     async def server_update_start(request: Request) -> JSONResponse:
         admin(request)
         data_dir = _data_dir(app)
-        marker = _read_json(data_dir / UPDATER_MARKER_NAME)
-        if not marker.get("installed"):
-            raise HTTPException(409, "主机更新助手尚未安装，请先执行控制台显示的一次性安装命令")
-        current = _status_payload(app)
-        if current.get("status") in {"queued", "running"}:
-            raise HTTPException(409, "已有服务端更新任务正在执行")
-
+        data_dir.mkdir(parents=True, exist_ok=True)
         try:
             body = await request.json()
         except Exception:
@@ -271,31 +274,42 @@ def install_server_update_patch(app: FastAPI) -> FastAPI:
             body = {}
         use_build_cache = body.get("use_build_cache") is not False
 
-        request_id = f"upd_{uuid.uuid4().hex[:18]}"
-        now = datetime.now(timezone.utc).isoformat()
-        _write_json_atomic(
-            data_dir / UPDATE_STATUS_NAME,
-            {
-                "status": "queued",
-                "stage": "queued",
-                "percent": 1,
-                "message": "更新请求已提交，等待主机 systemd 更新助手接管",
-                "request_id": request_id,
-                "started_at": now,
-                "updated_at": now,
-                "completed_at": "",
-            },
-        )
-        _write_json_atomic(
-            data_dir / UPDATE_REQUEST_NAME,
-            {
-                "request_id": request_id,
-                "requested_at": now,
-                "repository": GITHUB_REPOSITORY,
-                "branch": "main",
-                "use_build_cache": use_build_cache,
-            },
-        )
+        # Multiple API workers must share one admission decision. The OS
+        # releases this lock descriptor after process exit, avoiding stale
+        # mkdir locks that could block all later update requests.
+        with private_file_lock(data_dir / ".server_update.lockfile"):
+            marker = _read_json(data_dir / UPDATER_MARKER_NAME)
+            if not marker.get("installed"):
+                raise HTTPException(409, "主机更新助手尚未安装，请先执行控制台显示的一次性安装命令")
+            current = _status_payload(app)
+            if current.get("status") in {"queued", "running"}:
+                raise HTTPException(409, "已有服务端更新任务正在执行")
+
+            request_id = f"upd_{uuid.uuid4().hex[:18]}"
+            now = datetime.now(timezone.utc).isoformat()
+            _write_json_atomic(
+                data_dir / UPDATE_STATUS_NAME,
+                {
+                    "status": "queued",
+                    "stage": "queued",
+                    "percent": 1,
+                    "message": "更新请求已提交，等待主机 systemd 更新助手接管",
+                    "request_id": request_id,
+                    "started_at": now,
+                    "updated_at": now,
+                    "completed_at": "",
+                },
+            )
+            _write_json_atomic(
+                data_dir / UPDATE_REQUEST_NAME,
+                {
+                    "request_id": request_id,
+                    "requested_at": now,
+                    "repository": GITHUB_REPOSITORY,
+                    "branch": "main",
+                    "use_build_cache": use_build_cache,
+                },
+            )
         return JSONResponse(
             {"ok": True, "request_id": request_id, "status": "queued", "use_build_cache": use_build_cache},
             status_code=202,
