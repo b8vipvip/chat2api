@@ -50,7 +50,7 @@ class MediaArchive:
         """Reject linked archive files and enforce owner-only POSIX access."""
         if path.is_symlink():
             raise RuntimeError("Media archive files cannot be symbolic links")
-        flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+        flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
         if create:
             flags |= os.O_CREAT
         try:
