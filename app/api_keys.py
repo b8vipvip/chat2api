@@ -5,7 +5,6 @@ import base64
 import hashlib
 import json
 import secrets
-import time
 from dataclasses import asdict, dataclass
 
 # A missing quota means unlimited; 0 means exhausted immediately.
@@ -16,7 +15,7 @@ from typing import Any
 from cryptography.fernet import Fernet, InvalidToken
 
 from .timezone_utils import beijing_now, beijing_now_iso, parse_datetime, to_beijing_iso
-from .private_storage import read_private_bytes, write_private_bytes_atomic
+from .private_storage import private_file_lock, read_private_bytes, write_private_bytes_atomic
 
 
 def utc_now() -> str:
@@ -48,17 +47,9 @@ def load_or_create_data_secret(data_dir: Path) -> str:
     """Return a server-local encryption secret independent of admin credentials."""
     data_dir.mkdir(parents=True, exist_ok=True)
     path = data_dir / "data_secret.key"
-    lock_path = data_dir / ".data_secret.lock"
-    deadline = time.monotonic() + 10.0
-    while True:
-        try:
-            lock_path.mkdir(mode=0o700)
-            break
-        except FileExistsError:
-            if time.monotonic() >= deadline:
-                raise RuntimeError("Timed out waiting for the data-secret creation lock")
-            time.sleep(0.05)
-    try:
+    # Use a distinct lock-file name so a stale directory lock from an older
+    # release cannot block startup after that process crashed while holding it.
+    with private_file_lock(data_dir / ".data_secret.lockfile"):
         stored = read_private_bytes(path)
         if stored:
             value = stored.decode("utf-8").strip()
@@ -67,8 +58,6 @@ def load_or_create_data_secret(data_dir: Path) -> str:
         value = secrets.token_urlsafe(48)
         write_private_bytes_atomic(path, value.encode("utf-8"))
         return value
-    finally:
-        lock_path.rmdir()
 
 
 @dataclass(slots=True)
