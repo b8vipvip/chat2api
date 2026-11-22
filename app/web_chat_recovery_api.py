@@ -114,6 +114,7 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                 "active": False,
                 "response_text": final_text if available else "",
                 "response_text_available": available,
+                "references": journal_snapshot.get("references") if isinstance(journal_snapshot.get("references"), list) else [],
                 "last_event_id": last_event_id,
                 "updated_at": updated_at,
             }
@@ -171,6 +172,7 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                 "partial_text": recovery_partial_text,
                 "partial_text_available": bool(recovery_partial_text),
                 "partial_text_unverified": bool(recovery_partial_text),
+                "references": journal_snapshot.get("references") if isinstance(journal_snapshot.get("references"), list) else [],
                 "updated_at": updated_at,
             }
 
@@ -291,6 +293,7 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                             "status": "completed",
                             "terminal": True,
                             "response_text": _completed_delivery_text(latest_row, snapshot),
+                            "references": snapshot.get("references") if isinstance(snapshot.get("references"), list) else [],
                         }
                     elif status_value in {"stalled", "error", "cancelled"}:
                         payload = {
@@ -346,8 +349,14 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                                 "partial_text": partial_text,
                                 "partial_text_unverified": True,
                             }
+                            snapshot_references = snapshot.get("references")
                             terminal_references = payload.get("references")
-                            if event_type == "worker.terminal" and isinstance(terminal_references, list) and terminal_references:
+                            if isinstance(snapshot_references, list) and snapshot_references:
+                                partial_payload["references"] = snapshot_references
+                                if event_type == "worker.terminal":
+                                    partial_payload["message_id"] = str(payload.get("message_id") or "")[:128]
+                                references_in_partial_snapshot = True
+                            elif event_type == "worker.terminal" and isinstance(terminal_references, list) and terminal_references:
                                 partial_payload["references"] = terminal_references
                                 partial_payload["message_id"] = str(payload.get("message_id") or "")[:128]
                                 references_in_partial_snapshot = True
@@ -404,6 +413,7 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                             "status": "completed",
                             "terminal": True,
                             "response_text": _completed_delivery_text(latest, snapshot),
+                            "references": snapshot.get("references") if isinstance(snapshot.get("references"), list) else [],
                         }
                     else:
                         payload = {
