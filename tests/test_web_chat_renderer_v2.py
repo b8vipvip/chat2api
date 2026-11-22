@@ -40,6 +40,7 @@ class Element {
   get textContent() { return this._value + this.children.map(x => x.textContent).join(""); }
   appendChild(child) { this.children.push(child); return child; }
   append(...children) { children.forEach(x => this.appendChild(x)); }
+  setAttribute(name, value) { this[name] = String(value); }
   addEventListener() {}
 }
 const document = {
@@ -90,8 +91,8 @@ const citationHost = new Element("root");
 renderer.renderMarkdown(citationHost,
   "Sources " + citeOpen + "turn0search0" + citeSep + "turn0search1" + citeClose,
   [
-    {id:"turn0search0",url:"https://docs.python.org/3/",title:"Python docs"},
-    {id:"turn0search1",url:"https://example.org/second",title:"Second source"},
+    {id:"turn0search0",url:"https://docs.python.org/3/",title:"Python docs",snippet:"Official Python language documentation."},
+    {id:"turn0search1",url:"https://example.org/second",title:"Second source",snippet:"A second verified reference."},
     {id:"bad<script>",url:"https://evil.example/source",title:"Invalid ID"},
     {id:"turn0http",url:"http://example.org/insecure",title:"Insecure"},
     {id:"turn0private",url:"https://127.0.0.1/private",title:"Private"},
@@ -102,7 +103,9 @@ assert.deepEqual(citationLinks.map(x => x.href),[
   "https://docs.python.org/3/","https://example.org/second",
 ]);
 assert.deepEqual(citationLinks.map(x => x.textContent),["[1]","[2]"]);
-assert.equal(citationLinks[0].title,"Python docs");
+assert.equal(citationLinks[0].title,"Python docs\nOfficial Python language documentation.");
+assert.match(citationLinks[0]["data-preview"],/docs\.python\.org[\s\S]*Official Python language documentation/);
+assert.match(citationLinks[0]["aria-label"],/Python docs.*Official Python language documentation/);
 assert.equal(citationLinks[0].rel,"noopener noreferrer nofollow");
 assert.equal(citationLinks[0].referrerPolicy,"no-referrer");
 assert(!citationHost.textContent.includes(citeOpen));
