@@ -11,15 +11,17 @@ generated media under the configured data directory.
   mode `0600`.
 - API-key ciphertext, client registry state and the server-local data secret
   use owner-private `0600` files, no-follow reads and unique exclusive atomic
-  writes. Data-secret initialization is serialized across local processes.
+  writes. Data-secret initialization is serialized with an OS-released lock file,
+  so process crashes cannot leave a permanent startup-blocking directory lock.
 - Administrator session hashes, encrypted Worker pairing codes and the
   hash-chained audit log use the same no-follow, single-link private-file
   boundary; pairing/session data is never written through predictable temp names.
 - Payment-provider ciphertext/secrets, prompt configuration, plugin catalog and
   quota-reservation SQLite state use private files/databases with no-follow
   reads and validated SQLite sidecars. Legacy payment-secret initialization is
-  serialized across local API workers so different workers cannot encrypt with
-  competing first-start keys.
+  serialized across local API workers with an OS-released lock file, so a worker
+  crash cannot leave a permanent startup-blocking directory lock or competing
+  first-start encryption keys.
 - Telemetry, diagnostics and test-run startup readers retain the validated file
   descriptor while reading the bounded JSONL tail; they do not validate a path
   and then reopen it.
