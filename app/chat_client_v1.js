@@ -1623,6 +1623,9 @@
       return false;
     }
     if (eventName === "recovery.partial.snapshot") {
+      if (Array.isArray(event.references)) {
+        applyMessageReferences(assistant, event.references);
+      }
       if (event.partial_text_unverified === true && typeof event.partial_text === "string") {
         const candidate = event.partial_text.slice(0, MAX_MESSAGE_CHARS);
         // Worker and delivery snapshots are unverified candidates. Never let
