@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import multiprocessing
 from concurrent.futures import ThreadPoolExecutor
 import os
 import stat
@@ -22,6 +23,7 @@ from app.payment_channels_v106_patch import (
     _persist_payment_channels_secret,
 )
 from app.prompt_config import PromptConfigStore, default_config
+from app.private_storage import private_file_lock
 from app.plugin_registry import PluginRegistry
 from app.quota_reservations import QuotaReservationStore
 from app.test_runs import TestRunStore
@@ -318,6 +320,8 @@ def test_api_key_and_registry_files_are_private_and_reject_symlinks(tmp_path: Pa
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX permission and symlink assertions")
 def test_data_secret_is_private_and_initialization_is_serialized(tmp_path: Path) -> None:
+    # A stale mkdir lock from an older release must not block the new lock file.
+    (tmp_path / ".data_secret.lock").mkdir()
     secret = load_or_create_data_secret(tmp_path)
     assert stat.S_IMODE((tmp_path / "data_secret.key").stat().st_mode) == 0o600
     with ThreadPoolExecutor(max_workers=8) as pool:
@@ -494,6 +498,9 @@ def test_payment_configuration_rejects_symlinked_credentials_file(tmp_path: Path
 @pytest.mark.skipif(os.name == "nt", reason="POSIX permission assertions")
 def test_payment_secret_initialization_is_serialized_across_workers(tmp_path: Path) -> None:
     root = tmp_path / "concurrent-payment"
+    root.mkdir()
+    # An abandoned legacy directory lock must not block the lock-file version.
+    (root / ".payment_channels_secret.lock").mkdir()
 
     def initialize(_: int) -> str:
         with _payment_channels_secret_lock(root):
@@ -529,3 +536,26 @@ def test_admin_audit_hash_chain_is_serialized_across_store_instances(tmp_path: P
     assert len(rows) == 80
     assert len({row["event_id"] for row in rows}) == 80
     assert rows[-1]["previous_hash"] == AdminAuditStore.ZERO_HASH
+
+
+def _crash_while_holding_private_lock(path: str) -> None:
+    with private_file_lock(Path(path)):
+        os._exit(23)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX flock crash-recovery assertion")
+def test_private_file_lock_is_released_by_os_after_process_crash(tmp_path: Path) -> None:
+    lock_path = tmp_path / ".crash-recovery.lock"
+    process = multiprocessing.get_context("fork").Process(
+        target=_crash_while_holding_private_lock,
+        args=(str(lock_path),),
+    )
+    process.start()
+    process.join(timeout=10)
+    assert not process.is_alive()
+    assert process.exitcode == 23
+
+    # flock ownership is tied to the open descriptor, so the kernel releases it
+    # even though the child bypassed Python's finally/context-manager cleanup.
+    with private_file_lock(lock_path):
+        assert stat.S_IMODE(lock_path.stat().st_mode) == 0o600
