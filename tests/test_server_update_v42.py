@@ -157,6 +157,8 @@ def test_update_console_and_host_scripts_use_narrow_systemd_boundary():
     assert 'ensure-dir "$DATA_DIR"' in updater
     assert 'truncate-log "$LOG_FILE"' in updater
     assert 'tee-log "$LOG_FILE"' in updater
+    assert updater.index('exec 9<>"$LOCK_FILE"') < updater.index('truncate-log "$LOG_FILE"')
+    assert 'if ! REQUEST_ID="$(read_request_id)" || ! USE_BUILD_CACHE="$(read_use_build_cache)"; then' in updater
     assert 'read-request-id "$REQUEST_FILE"' in updater
     assert 'read-build-cache "$REQUEST_FILE"' in updater
     assert 'copy-file "$APP_DIR/docker-compose.yml"' in updater
