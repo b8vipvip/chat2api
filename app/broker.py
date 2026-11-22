@@ -688,6 +688,7 @@ class RequestBroker:
                     state.references = normalize_tool_references([
                         *state.references, *terminal_references,
                     ])
+                if state.references:
                     event = {**event, "references": state.references}
             state.terminal_event_type = str(event_type)
             state.completed_mono = now
