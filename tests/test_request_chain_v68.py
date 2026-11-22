@@ -372,3 +372,5 @@ def test_final_citation_metadata_is_attached_by_the_single_request_v6_terminal_o
     assert 'event?.type === "chat.completed" && active?.nativeCitationMetadata' in request
     assert "metadata: {" in request
     assert "...active.nativeCitationMetadata" in request
+    assert "nativeCitationTextMatch" in request
+    assert "native_citation_text_match: nativeCitationTextMatch" in request
