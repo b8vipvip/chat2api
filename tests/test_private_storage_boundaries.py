@@ -30,6 +30,9 @@ from app.test_runs import TestRunStore
 from app.telemetry import TelemetryStore
 from app.web_chat_conversations_v1 import WebChatConversationStoreV1
 from app.worker_probe_store import WorkerProbeStore
+from app.registration_invitations import InvitationStore
+from app.tenant_membership import TenantMembershipStore
+from app.user_subscriptions import UserSubscriptionStore
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX permission and symlink assertions")
@@ -559,3 +562,35 @@ def test_private_file_lock_is_released_by_os_after_process_crash(tmp_path: Path)
     # even though the child bypassed Python's finally/context-manager cleanup.
     with private_file_lock(lock_path):
         assert stat.S_IMODE(lock_path.stat().st_mode) == 0o600
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission, symlink and hard-link assertions")
+def test_invitation_tenant_and_subscription_sqlite_stores_reject_linked_sidecars(tmp_path: Path) -> None:
+    factories = (
+        ("invitations", InvitationStore),
+        ("tenants", TenantMembershipStore),
+        ("subscriptions", UserSubscriptionStore),
+    )
+    for name, factory in factories:
+        root = tmp_path / name
+        store = factory(root)
+        database = store.path
+        connection = getattr(store, "db", None)
+        if connection is not None:
+            connection.close()
+        assert stat.S_IMODE(database.stat().st_mode) == 0o600
+
+        sidecar_target = tmp_path / f"outside-{name}-wal"
+        sidecar_target.write_text("must remain untouched", encoding="utf-8")
+        sidecar = Path(str(database) + "-wal")
+        sidecar.symlink_to(sidecar_target)
+        with pytest.raises(RuntimeError, match="symbolic link"):
+            factory(root)
+        assert sidecar_target.read_text(encoding="utf-8") == "must remain untouched"
+        sidecar.unlink()
+
+        hardlink = tmp_path / f"outside-{name}-database"
+        os.link(database, hardlink)
+        with pytest.raises(RuntimeError, match="single-link regular files"):
+            factory(root)
+        assert database.exists() and hardlink.exists()
