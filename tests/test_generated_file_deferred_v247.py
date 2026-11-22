@@ -371,12 +371,17 @@ def test_disappeared_pending_row_after_original_store_is_compensated(tmp_path, m
         deferred.status(fid, token)
 
 
-def test_deferred_generated_bytes_are_private_and_symlink_targets_are_never_read(tmp_path):
+def test_deferred_generated_bytes_are_private_and_symlink_targets_are_never_read(
+    tmp_path, monkeypatch,
+):
     import stat
 
     gate = threading.Event()
     archive = FakeArchive(tmp_path, gate)
     deferred = DeferredGeneratedFiles(archive)
+    # Keep the background job queued so the test can replace the path before
+    # _finish opens it; this avoids a timing race with the worker thread.
+    monkeypatch.setattr(deferred.pool, "submit", lambda *args, **kwargs: None)
     raw = b'{"private":true}'
     _, files = deferred.rewrite(
         _marker(raw), "owner", "req-private-stage", "https://example.test",
@@ -391,7 +396,7 @@ def test_deferred_generated_bytes_are_private_and_symlink_targets_are_never_read
     outside.write_bytes(b"must remain untouched")
     staged.unlink()
     staged.symlink_to(outside)
-    gate.set()
+    deferred._finish(pending_id)
     deferred.pool.shutdown(wait=True)
     assert deferred.status(pending_id, token)["status"] == "failed"
     assert outside.read_bytes() == b"must remain untouched"
