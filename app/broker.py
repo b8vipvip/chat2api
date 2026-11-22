@@ -676,11 +676,14 @@ class RequestBroker:
             state.references = normalize_tool_references([
                 *state.references, *references,
             ])
+            reference_event_id = event.get("event_id")
             event = {
                 "type": "chat.references",
                 "message_id": str(event.get("message_id") or "")[:128],
                 "references": state.references,
             }
+            if isinstance(reference_event_id, int) and reference_event_id > 0:
+                event["event_id"] = reference_event_id
         elif event_type == "chat.completed":
             if state.mode1_web_chat:
                 terminal_references = extract_tool_references(event.get("metadata"))
