@@ -836,3 +836,41 @@ def test_completed_sse_replay_surfaces_terminal_citations_without_recovery_snaps
         assert '"id":"turn0search0"' in replay.text
         assert "event: delivery.completed" in replay.text
         assert "event: recovery.partial.snapshot" not in replay.text
+
+
+def test_completed_recovery_prefers_exact_delivery_projection_over_telemetry_text(tmp_path):
+    app = make_app(tmp_path)
+    request_id = "req_citation_delivery123"
+    raw_text = "Read the docs"
+    marker = "\uE200cite\uE202turn0search0\uE201"
+    delivered_text = raw_text + marker
+
+    with TestClient(app) as client:
+        user_id = register(client, "citation-delivery@example.org")
+        app.state.user_accounts.attach_key(user_id, "key_citation_delivery")
+        remember(
+            app, request_id, "key_citation_delivery",
+            status="completed",
+            response_text=raw_text,
+            response_text_available=True,
+        )
+        asyncio.run(app.state.web_chat_event_journal.append_delivery(
+            request_id, "key_citation_delivery", delivered_text,
+        ))
+        asyncio.run(app.state.web_chat_event_journal.append_delivery_terminal(
+            request_id, "key_citation_delivery", len(delivered_text),
+        ))
+
+        recovery = client.get(f"/api/user/chat/requests/{request_id}/recovery")
+        assert recovery.status_code == 200
+        assert recovery.json()["response_text"] == delivered_text
+
+        snapshot = asyncio.run(app.state.web_chat_event_journal.snapshot(
+            request_id, "key_citation_delivery",
+        ))
+        replay = client.get(
+            f"/api/user/chat/requests/{request_id}/events?after={snapshot['last_event_id']}"
+        )
+        assert replay.status_code == 200
+        assert "event: recovery.terminal" in replay.text
+        assert delivered_text in replay.text
