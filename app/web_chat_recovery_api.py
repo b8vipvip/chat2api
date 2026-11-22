@@ -338,7 +338,18 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                                 + "\n\n"
                             )
                         recovery_partial_sent = True
-                    if event_type in {"worker.delta", "worker.snapshot", "worker.terminal"}:
+                    if event_type == "worker.terminal":
+                        references = payload.get("references")
+                        if isinstance(references, list) and references:
+                            event_type = "chat.references"
+                            payload = {
+                                "message_id": str(payload.get("message_id") or "")[:128],
+                                "references": references,
+                            }
+                        else:
+                            event_type = "cursor"
+                            payload = {}
+                    elif event_type in {"worker.delta", "worker.snapshot"}:
                         event_type = "cursor"
                         payload = {}
                     elif event_type == "delivery.stalled" and not payload.get("partial_text"):
