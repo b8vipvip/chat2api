@@ -9,6 +9,9 @@ generated media under the configured data directory.
 - Sensitive append-only JSONL histories and the rotating application log are
   opened as single-link regular files, reject symlinks/FIFOs, and use POSIX
   mode `0600`.
+- API-key ciphertext, client registry state and the server-local data secret
+  use owner-private `0600` files, no-follow reads and unique exclusive atomic
+  writes. Data-secret initialization is serialized across local processes.
 - Telemetry, diagnostics and test-run startup readers retain the validated file
   descriptor while reading the bounded JSONL tail; they do not validate a path
   and then reopen it.
