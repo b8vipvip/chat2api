@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocket
 
 from .api_keys import ApiPrincipal
 from . import model_capability_routing_patch as model_routing
-from .responses_multimodal_input_v183 import attachment_specs
+from .responses_multimodal_input_v183 import attachment_specs, validate_image_file
 from .token_usage import usage_for
 from .quota_reservation_runtime_v1 import authorize_wallet_dispatch, reserve_audio_request_quota
 
@@ -894,6 +894,13 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                             )
                             if not allowed:
                                 raise ValueError("Live image/file MIME is not supported; send PCM as binary microphone frames")
+                        if control_type == "input_video.frame":
+                            # MIME labels are not proof of raster content. Require
+                            # a real, API-Key-owned vision image before relaying it
+                            # into the live camera track path.
+                            await asyncio.to_thread(
+                                validate_image_file, file_store, file_ids[0], principal,
+                            )
                         if not input_text and not attachments:
                             raise ValueError("Provide text, image or file")
                         if len(input_text) > 12000:
