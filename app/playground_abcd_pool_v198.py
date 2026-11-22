@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from .playground_abcd_v5_cases import V5_VERSION, build_v5_case
 POOL_VERSION = V5_VERSION
 from .playground_abcd_v4_cases import build_v4_case
+from .private_storage import secure_private_sqlite_files
 
 # Separate creative topics, not a fixed prompt with a random diagnostic marker.
 A_TOPICS = (
@@ -140,11 +141,16 @@ class OneShotPool:
 
     @contextmanager
     def connection(self):
+        secure_private_sqlite_files(self.filename, create_database=True)
         db = sqlite3.connect(str(self.filename), timeout=15)
         try:
+            db.execute("PRAGMA busy_timeout=15000")
+            db.execute("PRAGMA synchronous=FULL")
+            secure_private_sqlite_files(self.filename)
             yield db
         finally:
             db.close()
+            secure_private_sqlite_files(self.filename)
 
     def preview(self, scene: str) -> dict:
         if scene not in "ABCD" or len(scene) != 1:
