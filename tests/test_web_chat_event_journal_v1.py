@@ -512,11 +512,8 @@ def test_worker_terminal_outbox_replays_across_two_server_instances(tmp_path):
             app_after_restart.state.web_chat_event_journal.snapshot(request_id, key_id)
         )
         assert snapshot["terminal_status"] == "completed"
-        # Worker evidence keeps the original terminal, while delivery stores
-        # the post-archive text actually sent to Web Chat. Media and staged
-        # file markers are intentionally rewritten to owned download URLs.
-        # Worker terminal evidence is intentionally bounded to 50k chars;
-        # the delivery journal stores the full post-archive response.
+        # Worker evidence is bounded to 50k chars; delivery stores the full
+        # post-archive text actually sent to Web Chat, with owned media URLs.
         assert snapshot["worker_partial_text"] == final_text[:50_000]
         assert snapshot["worker_text_truncated"] is True
         assert snapshot["delivered_text"] == recovered["response_text"]
