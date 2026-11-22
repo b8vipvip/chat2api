@@ -185,6 +185,8 @@ pong
 6. 为避免在 ChatGPT 页面上传尚未完成时堆积视频帧，客户端必须等待当前帧的 `input_video.frame.sent` 确认后再发送下一帧。
 
 **重要边界：这不是原生 WebRTC 视频轨道透传。** 每个采样帧会成为同一 Voice 会话中的独立图像输入，因此模型看到的是有时间戳的连续快照，而不是连续视频像素流；帧率、清晰度和同步精度由客户端采样策略及上传延迟决定。当前不支持 MP4/任意视频文件上传、音视频帧级同步或将摄像头轨道直接桥接进 ChatGPT WebRTC。原生视频轨道仍需单独开发和真实浏览器验收。
+
+补充：ChatGPT 页面自身发起的 `getUserMedia({audio, video})` 仍由 MAIN-world Voice Hook 保留真实视频约束和原生 camera track；麦克风替换只替换音频轨道，不应丢弃视频轨道。`tests/voice_camera_track_passthrough_v1.mjs` 对此边界做了独立回归。它不代表 Web Chat API 已自动采集摄像头，也不把 `input_video.frame` 采样帧协议描述成 WebRTC 视频轨道。
 ### 测试场
 
 选择「语音生成」会测试 TTS 前缀作用后的 `POST /v1/audio/speech`，并检查真实语音音轨/音频字节。
