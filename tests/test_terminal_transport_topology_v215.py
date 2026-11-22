@@ -76,7 +76,9 @@ def test_stream_completed_is_persisted_before_any_content_sse_yield():
     )[0]
     persisted = segment.index('usage, token_meta = await record_request(')
     assert 'final_chunks = list(final_text_chunks(display_final_text))' in segment
-    assert 'display_final_text = apply_inline_citation_markers(' in segment
+    assert 'display_final_text = (' in segment
+    assert 'web_chat_delivery_text(final_text, raw_final, event)' in segment
+    assert 'delivery_text=display_final_text' in segment
     first_sse_output = segment.index('for index, delta in enumerate(final_chunks):')
     assert persisted < first_sse_output
     assert 'recorded = True' in segment[persisted:first_sse_output]
