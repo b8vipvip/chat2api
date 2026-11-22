@@ -509,3 +509,24 @@ def test_payment_secret_initialization_is_serialized_across_workers(tmp_path: Pa
         values = list(pool.map(initialize, range(16)))
     assert len(set(values)) == 1
     assert stat.S_IMODE((root / ".chat2api_data_secret").stat().st_mode) == 0o600
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX flock concurrency assertion")
+def test_admin_audit_hash_chain_is_serialized_across_store_instances(tmp_path: Path) -> None:
+    stores = [AdminAuditStore(tmp_path) for _ in range(8)]
+
+    def append(index: int) -> None:
+        stores[index % len(stores)].append(
+            actor="worker",
+            action="request.completed",
+            target_type="request",
+            target_id=f"req_{index}",
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(append, range(80)))
+
+    rows = stores[0].recent(200)
+    assert len(rows) == 80
+    assert len({row["event_id"] for row in rows}) == 80
+    assert rows[-1]["previous_hash"] == AdminAuditStore.ZERO_HASH
