@@ -1,4 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
+import os
+import stat
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -54,3 +56,27 @@ def test_claim_id_cannot_cross_scene():
         with pytest.raises(ValueError,match="another scene"):
             store.claim("B","claim_valid_01234567890")
         assert store.preview("B")["serial"]==0
+
+
+def test_one_shot_pool_database_is_private_and_rejects_linked_files(tmp_path):
+    store = OneShotPool(tmp_path)
+    assert stat.S_IMODE(store.filename.stat().st_mode) == 0o600
+
+    outside = tmp_path / "outside-abcd-pool"
+    outside.write_text("must remain untouched", encoding="utf-8")
+    os.link(store.filename, outside)
+    with pytest.raises(RuntimeError, match="single-link regular files"):
+        OneShotPool(tmp_path)
+    assert outside.read_text(encoding="utf-8") == "must remain untouched"
+
+
+def test_one_shot_pool_rejects_symlinked_sqlite_sidecars(tmp_path):
+    store = OneShotPool(tmp_path)
+    target = tmp_path / "outside-abcd-pool-wal"
+    target.write_text("must remain untouched", encoding="utf-8")
+    sidecar = Path(str(store.filename) + "-wal")
+    sidecar.unlink(missing_ok=True)
+    sidecar.symlink_to(target)
+    with pytest.raises(RuntimeError, match="symbolic link"):
+        OneShotPool(tmp_path)
+    assert target.read_text(encoding="utf-8") == "must remain untouched"
