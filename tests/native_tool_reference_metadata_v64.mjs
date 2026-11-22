@@ -90,6 +90,7 @@ const emitFinalReferences = runInNewContext("(" + bridgeMatch[0] + ")", {
   state: bridgeState,
   __CHAT2API_REQUEST_CONTENT_V6__:{active:activeRequestState},
   cleanMetadata: value => value,
+  bounded: value => String(value || "").slice(0, 1_000_000),
   emit: async value => { bridgeEvents.push(value); return true; },
 });
 await emitFinalReferences({
