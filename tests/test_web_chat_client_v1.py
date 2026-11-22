@@ -32,6 +32,9 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         page = client.get("/chat")
         assert page.status_code == 200
         assert 'id="messageInput"' in page.text
+        assert 'id="exportJsonButton"' in page.text
+        assert 'id="importButton"' in page.text
+        assert 'id="conversationImportInput"' in page.text
         assert "/assets/chat2api-chat-client-v1.js" in page.text
         assert "/assets/chat2api-chat-client-v1.css" in page.text
         assert "/assets/katex/0.19.1/katex.min.js" in page.text
@@ -50,6 +53,10 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         assert "/api/user/chat/requests/" in script.text
         assert "localStorage" in script.text
         assert "/api/user/chat/conversations" in script.text
+        assert "/api/user/chat/conversations/search" in script.text
+        assert "/api/user/chat/conversations/import" in script.text
+        assert "exportConversationJson" in script.text
+        assert "importConversationJson" in script.text
         assert "syncServerConversations" in script.text
         assert "normalizeToolEvents" in script.text
         assert "const toolEvents = normalizeToolEvents(message.toolEvents,message.role)" in script.text

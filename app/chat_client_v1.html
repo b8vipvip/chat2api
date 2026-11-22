@@ -69,7 +69,10 @@
           <span class="connection-state" id="connectionState">连接中</span>
         </div>
         <div class="topbar-actions">
-          <button class="icon-button" id="exportButton" type="button" title="导出当前对话" aria-label="导出当前对话">⇩</button>
+          <button class="icon-button" id="exportButton" type="button" title="导出当前对话为 Markdown" aria-label="导出 Markdown">⇩</button>
+          <button class="icon-button" id="exportJsonButton" type="button" title="导出完整会话 JSON（附件保留为文件引用）" aria-label="导出 JSON">{}</button>
+          <button class="icon-button" id="importButton" type="button" title="导入 Chat2API 会话 JSON" aria-label="导入 JSON">⇧</button>
+          <input id="conversationImportInput" class="sr-only" type="file" accept=".json,application/json">
           <a class="topbar-link" href="/console">控制台</a>
         </div>
       </header>

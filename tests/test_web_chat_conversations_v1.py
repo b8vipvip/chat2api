@@ -494,7 +494,7 @@ def test_conversation_attachment_reference_migration_backfills_legacy_rows(tmp_p
     assert migrated.file_reference_count(file_id, "legacy-user") == 2
     assert migrated.referenced_file_ids() == {file_id}
     with sqlite3.connect(database) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
 
 
 def test_conversation_tool_events_preserve_unknown_and_missing_status_as_unknown() -> None:

@@ -319,6 +319,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await file_store.load()
         conversation_files = getattr(app.state, "web_chat_conversations", None)
 
+        async def expire_web_chat_conversations() -> int:
+            if conversation_files is None:
+                return 0
+            total = 0
+            while True:
+                expired = await asyncio.to_thread(
+                    conversation_files.expire_old_conversations, 500,
+                )
+                total += expired
+                if expired < 500:
+                    return total
+
         async def cleanup_web_chat_orphan_files() -> int:
             if conversation_files is None:
                 return 0
@@ -339,6 +351,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return await asyncio.to_thread(cleanup_under_file_lock)
 
         try:
+            expired_conversations = await expire_web_chat_conversations()
+            if expired_conversations:
+                logger.info(
+                    "Expired %s Web Chat conversation(s) under the configured retention policy",
+                    expired_conversations,
+                )
             removed_web_chat_files = await cleanup_web_chat_orphan_files()
             if removed_web_chat_files:
                 logger.info(
@@ -354,6 +372,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             while True:
                 await asyncio.sleep(24 * 60 * 60)
                 try:
+                    expired = await expire_web_chat_conversations()
+                    if expired:
+                        logger.info("Expired %s Web Chat conversation(s)", expired)
                     removed = await cleanup_web_chat_orphan_files()
                     if removed:
                         logger.info("Expired %s unreferenced Web Chat attachment(s)", removed)
@@ -531,6 +552,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if await api_keys.authenticate(supplied):
             raise HTTPException(status_code=403, detail="Managed API keys cannot access administrator endpoints")
         raise HTTPException(status_code=401, detail="Invalid administrator API key")
+
+    @app.get("/api/admin/web-chat-retention", dependencies=[Depends(require_admin_key)])
+    async def admin_web_chat_retention() -> dict[str, Any]:
+        store = getattr(app.state, "web_chat_conversations", None)
+        if store is None:
+            raise HTTPException(status_code=503, detail="Web Chat conversation service unavailable")
+        return store.retention_policy()
+
+    @app.put("/api/admin/web-chat-retention")
+    async def update_admin_web_chat_retention(
+        payload: dict[str, Any],
+        principal: ApiPrincipal = Depends(require_admin_key),
+    ) -> dict[str, Any]:
+        store = getattr(app.state, "web_chat_conversations", None)
+        if store is None:
+            raise HTTPException(status_code=503, detail="Web Chat conversation service unavailable")
+        retention_days = payload.get("retention_days")
+        if type(retention_days) is not int or not 0 <= retention_days <= 3650:
+            raise HTTPException(status_code=422, detail="retention_days must be an integer between 0 and 3650")
+        policy = store.set_retention_days(retention_days)
+        logger.warning(
+            "Web Chat conversation retention policy changed admin_key_id=%s retention_days=%s",
+            principal.key_id, retention_days,
+        )
+        return policy
 
     def probe_worker_id(client_id: str) -> str:
         client = registry.clients.get(client_id)

@@ -30,6 +30,11 @@
     remoteSyncAgain: new Set(),
     remoteSyncFingerprints: new Map(),
     remoteSyncWarned: false,
+    searchResults: null,
+    searchQuery: "",
+    searchController: null,
+    searchTimer: null,
+    searchWarned: false,
   };
   const MAX_CONVERSATIONS = 15;
   const MAX_MESSAGES = 30;
@@ -648,6 +653,9 @@
     }
     if (!window.confirm("删除这段对话？删除会同步到你的其他设备。附件文件暂时保留，避免误删其他对话仍在使用的文件。")) return;
     state.conversations = state.conversations.filter((row) => row.id !== conversationId);
+    if (Array.isArray(state.searchResults)) {
+      state.searchResults = state.searchResults.filter((row) => row.id !== conversationId);
+    }
     if (state.activeConversationId === conversationId) {
       state.activeConversationId = state.conversations[0]?.id || "";
     }
@@ -669,15 +677,103 @@
     renderSidebar();
   }
 
+  function hydrateSearchConversation(row) {
+    const existing = state.conversations.find((item) => item.id === row.id);
+    if (existing) {
+      Object.assign(existing, mergeConversation(row, existing));
+      existing.serverRevision = row.serverRevision;
+      if (Array.isArray(state.searchResults)) {
+        state.searchResults = state.searchResults.map((item) => item.id === row.id ? existing : item);
+      }
+      return existing;
+    }
+    // Opening an older server-side search result promotes it into the local
+    // recent window without mutating the server revision. A read must not race
+    // a subsequent delete/rename with an unnecessary background PUT.
+    const opened = {...row};
+    state.conversations.unshift(opened);
+    state.conversations = state.conversations.slice(0, MAX_CONVERSATIONS);
+    if (Array.isArray(state.searchResults)) {
+      state.searchResults = state.searchResults.map((item) => item.id === row.id ? opened : item);
+    }
+    persistHistorySnapshot();
+    return opened;
+  }
+
+  async function searchConversationsOnServer(rawQuery) {
+    const query = String(rawQuery || "").trim();
+    const normalized = query.toLocaleLowerCase();
+    if (!query) return;
+    const controller = new AbortController();
+    state.searchController = controller;
+    try {
+      const response = await fetch(
+        "/api/user/chat/conversations/search?q=" + encodeURIComponent(query),
+        {credentials:"same-origin", headers:{"Accept":"application/json"}, signal:controller.signal},
+      );
+      let payload = {};
+      try { payload = await response.json(); } catch {}
+      if (!response.ok) throw new Error(payload.detail || "HTTP " + response.status);
+      if ($("conversationSearch").value.trim().toLocaleLowerCase() !== normalized) return;
+      const rows = Array.isArray(payload.data) ? payload.data : [];
+      state.searchResults = rows.map((row) => normalizeConversationRow(row)).filter(Boolean);
+      state.searchQuery = normalized;
+      state.searchResults.forEach((row) => {
+        row.serverRevision = Number.isInteger(row.serverRevision) ? row.serverRevision : 0;
+      });
+      renderSidebar();
+    } catch (error) {
+      if (error.name === "AbortError") return;
+      if ($("conversationSearch").value.trim().toLocaleLowerCase() !== normalized) return;
+      state.searchResults = null;
+      state.searchQuery = normalized;
+      if (!state.searchWarned) {
+        state.searchWarned = true;
+        toast("服务端搜索暂时不可用，当前显示本地最近记录。");
+      }
+      renderSidebar();
+    } finally {
+      if (state.searchController === controller) state.searchController = null;
+    }
+  }
+
+  function onConversationSearchInput() {
+    if (state.searchTimer) window.clearTimeout(state.searchTimer);
+    state.searchTimer = null;
+    if (state.searchController) state.searchController.abort();
+    const query = $("conversationSearch").value.trim();
+    if (!query) {
+      state.searchResults = null;
+      state.searchQuery = "";
+      renderSidebar();
+      return;
+    }
+    state.searchResults = null;
+    state.searchQuery = "";
+    renderSidebar();
+    state.searchTimer = window.setTimeout(() => {
+      state.searchTimer = null;
+      void searchConversationsOnServer(query);
+    }, 250);
+  }
+
   function renderSidebar() {
     const root = $("conversationList");
     root.replaceChildren();
     const query = $("conversationSearch").value.trim().toLocaleLowerCase();
-    const rows = state.conversations.filter((conversation) => {
+    const localRows = state.conversations.filter((conversation) => {
       if (!query) return true;
       return conversation.title.toLocaleLowerCase().includes(query) ||
         conversation.messages.some((message) => messageText(message).toLocaleLowerCase().includes(query));
     });
+    const serverIds = new Set((state.searchResults || []).map((row) => row.id));
+    const serverRows = query && state.searchQuery === query && Array.isArray(state.searchResults)
+      ? state.searchResults.map((row) => {
+          const local = state.conversations.find((item) => item.id === row.id);
+          return local ? mergeConversation(row, local) : row;
+        }).concat(localRows.filter((row) => !serverIds.has(row.id)))
+      : localRows;
+    const rows = serverRows;
     if (!rows.length) {
       const empty = document.createElement("div");
       empty.className = "muted-empty";
@@ -693,15 +789,24 @@
       open.className = "conversation-title";
       open.textContent = conversation.title || "新对话";
       open.title = "打开对话；双击重命名";
-      open.addEventListener("click", () => setActiveConversation(conversation.id));
-      open.addEventListener("dblclick", () => renameConversation(conversation.id));
+      open.addEventListener("click", () => {
+        const selected = query ? hydrateSearchConversation(conversation) : conversation;
+        setActiveConversation(selected.id);
+      });
+      open.addEventListener("dblclick", () => {
+        const selected = query ? hydrateSearchConversation(conversation) : conversation;
+        renameConversation(selected.id);
+      });
       const remove = document.createElement("button");
       remove.type = "button";
       remove.className = "conversation-delete";
       remove.textContent = "×";
       remove.title = "删除对话";
       remove.setAttribute("aria-label", "删除对话");
-      remove.addEventListener("click", () => deleteConversation(conversation.id));
+      remove.addEventListener("click", () => {
+        const selected = query ? hydrateSearchConversation(conversation) : conversation;
+        deleteConversation(selected.id);
+      });
       item.append(open, remove);
       root.appendChild(item);
     });
@@ -1042,6 +1147,7 @@
     if (conversation && conversation.messages.length) renderMessages();
     else showOnly("welcomeScreen");
     $("exportButton").disabled = !conversation || !conversation.messages.length;
+    $("exportJsonButton").disabled = !conversation || !conversation.messages.length;
   }
 
   function autoTitle(conversation) {
@@ -2177,6 +2283,68 @@
     URL.revokeObjectURL(url);
   }
 
+  function exportConversationJson() {
+    const conversation = currentConversation();
+    if (!conversation || !conversation.messages.length) return;
+    const payload = {
+      format: "chat2api.web-chat-conversation",
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      conversation: serverConversationPayload(conversation),
+    };
+    const blob = new Blob([JSON.stringify(payload)], {
+      type: "application/json;charset=utf-8",
+    });
+    if (blob.size > 520 * 1024) {
+      toast("当前会话 JSON 超过 520 KiB 导出限制，请先精简会话内容。");
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "chat2api-conversation-" +
+      conversation.id.replace(/[^A-Za-z0-9_-]/g, "_") + ".json";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  async function importConversationJson(file) {
+    if (!file) return;
+    if (file.size > 520 * 1024) throw new Error("JSON 会话文件超过 520 KiB 限制");
+    let payload;
+    try {
+      payload = JSON.parse(await file.text());
+    } catch {
+      throw new Error("JSON 会话文件格式无效");
+    }
+    const response = await fetch("/api/user/chat/conversations/import", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {"Content-Type":"application/json", "Accept":"application/json"},
+      body: JSON.stringify(payload),
+    });
+    let result = {};
+    try { result = await response.json(); } catch {}
+    if (!response.ok || !result.conversation) {
+      throw new Error(result.detail || "导入失败，HTTP " + response.status);
+    }
+    const imported = normalizeConversationRow(result.conversation);
+    if (!imported) throw new Error("服务端返回的导入会话无效");
+    imported.serverRevision = Number(result.conversation.revision || 0);
+    state.conversations = [imported, ...state.conversations.filter((row) => row.id !== imported.id)]
+      .slice(0, MAX_CONVERSATIONS);
+    state.activeConversationId = imported.id;
+    state.searchResults = null;
+    state.searchQuery = "";
+    $("conversationSearch").value = "";
+    state.remoteSyncFingerprints.set(imported.id, JSON.stringify(serverConversationPayload(imported)));
+    persistHistorySnapshot();
+    renderAll();
+    toast("会话已导入。附件按原 file ID 引用，需在当前账户中仍可访问。");
+  }
+
   async function bootstrap() {
     try {
       const payload = await apiJson("/api/user/me");
@@ -2219,7 +2387,19 @@
   }
 
   $("newChatButton").addEventListener("click", createConversation);
-  $("conversationSearch").addEventListener("input", renderSidebar);
+  $("conversationSearch").addEventListener("input", onConversationSearchInput);
+  $("exportJsonButton").addEventListener("click", exportConversationJson);
+  $("importButton").addEventListener("click", () => $("conversationImportInput").click());
+  $("conversationImportInput").addEventListener("change", async (event) => {
+    const file = event.target.files?.[0];
+    try {
+      await importConversationJson(file);
+    } catch (error) {
+      toast("导入失败：" + error.message);
+    } finally {
+      event.target.value = "";
+    }
+  });
   $("apiKeySelect").addEventListener("change", (event) => {
     const conversation = currentConversation();
     if ((state.pendingImages.length || state.pendingFiles.length) && conversation?.apiKeyId && conversation.apiKeyId !== event.target.value) {
@@ -2316,6 +2496,8 @@
     if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
   } catch {}
   window.addEventListener("beforeunload", () => {
+    if (state.searchTimer) window.clearTimeout(state.searchTimer);
+    if (state.searchController) state.searchController.abort();
     state.nativeStreams.forEach(controller => controller.abort());
     if (typeof state.destroyImageDrop === "function") state.destroyImageDrop();
     state.pendingImages.forEach((image) => {

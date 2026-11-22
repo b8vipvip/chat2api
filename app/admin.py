@@ -49,6 +49,19 @@ ADMIN_HTML = r'''<!doctype html>
     <div class="c-form"><label>用户名<input id="cAdminName" autocomplete="off" placeholder="support_agent"></label><label>初始密码<input id="cAdminPassword" type="password" autocomplete="new-password" placeholder="至少 12 位"></label><label>角色<select id="cAdminRole"></select></label><button class="action good" id="cAdminCreate">创建管理员</button><button class="action" id="cAdminReload">刷新</button></div>
     <div id="cAdminStatus" class="muted"></div><div class="scroll"><table class="c-table"><thead><tr><th>用户名</th><th>角色</th><th>状态</th><th>操作</th></tr></thead><tbody id="cAdminRows"></tbody></table></div>
   </div>
+  <div class="panel" id="webChatRetentionPanel">
+    <h2>Web Chat 会话保留策略</h2>
+    <p class="muted">按会话最后一次服务端保存时间计算。设置为 0 表示不自动过期；设置为 1–3650 天后，超期会话会被转换为删除墓碑并释放附件引用。墓碑会持续保留，以阻止长期离线设备重新同步时复活已过期会话。</p>
+    <p class="muted">附件二进制文件使用独立的 90 天孤儿文件保留策略；只有不再被任何会话引用的附件才会被清理。策略变更在下次启动或每日维护周期执行，不会立即删除会话内容。</p>
+    <div class="c-form">
+      <label>会话消息保留天数
+        <input id="webChatRetentionDays" type="number" min="0" max="3650" step="1" value="0">
+      </label>
+      <button class="action good" id="webChatRetentionSave" type="button">保存策略</button>
+      <button class="action" id="webChatRetentionReload" type="button">重新读取</button>
+    </div>
+    <div id="webChatRetentionStatus" class="muted" aria-live="polite">正在读取保留策略…</div>
+  </div>
 </section>
 <section class="view" id="view-client-policy">
   <div class="panel"><h2>客户端动态配置</h2><p class="c-note">注册开关和 Web Chat 开关由服务端强制执行；公告作为纯文本返回，客户端必须使用 textContent 渲染。客户端域名用于用户端开发文档展示的 API Base URL；留空时自动使用当前访问域名，不会自动修改 DNS、Nginx 或 HTTPS 证书。</p>
@@ -147,7 +160,7 @@ async function api(path,opt={}){const h={...headers(opt.key||key()),...(opt.head
 function pill(v){const c=v==='completed'||v==='passed'||v==='online'?'ok':v==='warning'||v==='skipped'||v==='busy'?'warn':'bad';return`<span class="pill ${c}">${esc(v)}</span>`}
 function status(t,c='muted'){$('status').className=c;$('status').textContent=t}
 const titles={overview:'概览',keys:'API Key',requests:'请求记录','media-storage':'转存管理',docs:'开发文档',playground:'测试场','control-admins':'管理员 RBAC','client-policy':'客户端配置','registration-invitations':'邀请注册',tenants:'租户管理','user-roles':'用户角色',subscriptions:'订阅套餐','model-entitlements':'模型权限',plugins:'插件目录','quota-ledger':'额度预留','api-keys':'API Key 管理'};
-function show(v){document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.nav button').forEach(x=>x.classList.toggle('active',x.dataset.view===v));$('view-'+v)?.classList.add('active');$('pageTitle').textContent=titles[v]||v;location.hash=v;if(v==='overview')loadOverview();if(v==='keys')loadKeys();if(v==='requests')loadRequests();if(v==='media-storage')loadMediaStorage();if(v==='docs')renderDocs();if(v==='playground'){loadOverview().then(loadTests)}}
+function show(v){document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.nav button').forEach(x=>x.classList.toggle('active',x.dataset.view===v));$('view-'+v)?.classList.add('active');$('pageTitle').textContent=titles[v]||v;location.hash=v;if(v==='overview')loadOverview();if(v==='keys')loadKeys();if(v==='requests')loadRequests();if(v==='media-storage')loadMediaStorage();if(v==='control-admins')loadWebChatRetention();if(v==='docs')renderDocs();if(v==='playground'){loadOverview().then(loadTests)}}
 document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>show(b.dataset.view));
 async function loadOverview(){if(!key()){status('请输入管理员主密钥');return}try{overview=await api('/api/admin/overview');status(`已连接 · v${overview.version}`,'ok');const s=overview.telemetry||{};$('sExt').textContent=overview.health?.online_extensions??0;$('sReq').textContent=s.retained_requests??0;$('sSuccess').textContent=(s.success_rate??100)+'%';$('sFirst').textContent=fmtMs(s.avg_first_token_ms);$('sToken').textContent=s.estimated_total_tokens??0;$('extBody').innerHTML=(overview.clients||[]).map(c=>`<tr><td><code>${esc(c.client_id)}</code></td><td>${esc(c.name)}</td><td>${pill(c.online?(c.busy?'busy':'online'):'offline')}</td><td>${esc(c.version)}</td><td>${esc((c.metadata?.capabilities||[]).join(', '))}</td></tr>`).join('')||'<tr><td colspan="5">暂无扩展</td></tr>';$('modelBody').innerHTML=(overview.models||[]).map(m=>`<tr><td><code>${esc(m.id)}</code></td><td>${esc((m.capabilities||[]).join(', '))}</td></tr>`).join('');$('recentBody').innerHTML=(overview.recent_requests||[]).map(r=>`<tr><td>${fmtTime(r.recorded_at)}</td><td>${esc(r.request_type||'text')}</td><td>${pill(r.status)}</td><td>${esc(r.api_key_name||'-')}</td><td><code>${esc(r.requested_model||'-')}</code></td><td>${fmtMs(r.timings?.first_token_ms)}</td><td>${fmtMs(r.timings?.total_ms)}</td><td>${esc(r.usage?.total_tokens??0)}</td></tr>`).join('');fillModels();return overview}catch(e){status('连接失败：'+e.message,'bad')}}
 // Test only concrete models discovered AND validated on an online Worker.
@@ -261,6 +274,36 @@ async function loadMediaStorage(){
   }catch(e){$('mediaStorageStatus').textContent='加载失败：'+e.message;}
 }
 $('mediaReloadSettings').onclick=loadMediaStorage;
+async function loadWebChatRetention(){
+  $('webChatRetentionStatus').textContent='正在读取保留策略…';
+  try{
+    const policy=await api('/api/admin/web-chat-retention');
+    $('webChatRetentionDays').value=String(policy.retention_days??0);
+    $('webChatRetentionStatus').textContent=policy.retention_days
+      ? '当前策略：保留最近 '+policy.retention_days+' 天的会话消息；超期内容将在维护周期转为墓碑。'
+      : '当前策略：永久保留会话消息（自动过期已关闭）。';
+  }catch(error){
+    $('webChatRetentionStatus').textContent='读取失败：'+error.message;
+  }
+}
+$('webChatRetentionReload').onclick=loadWebChatRetention;
+$('webChatRetentionSave').onclick=async()=>{
+  const raw=$('webChatRetentionDays').value;
+  const days=Number(raw);
+  if(!Number.isInteger(days)||days<0||days>3650){
+    $('webChatRetentionStatus').textContent='请输入 0–3650 之间的整数天数。';
+    return;
+  }
+  if(days>0&&!confirm('启用 '+days+' 天会话保留策略？超期会话将在维护周期被转换为删除墓碑；旧设备无法恢复这些内容。'))return;
+  const button=$('webChatRetentionSave');button.disabled=true;
+  try{
+    const policy=await api('/api/admin/web-chat-retention',{method:'PUT',body:{retention_days:days}});
+    $('webChatRetentionDays').value=String(policy.retention_days??0);
+    $('webChatRetentionStatus').textContent='策略已保存。'+(days>0?'超期会话将在下次启动或每日维护周期清理。':'自动过期已关闭。');
+  }catch(error){
+    $('webChatRetentionStatus').textContent='保存失败：'+error.message;
+  }finally{button.disabled=false;}
+};
 $('mediaTestSettings').onclick=async()=>{
   $('mediaStorageStatus').textContent='正在执行存储写入/读取验证…';
   try{

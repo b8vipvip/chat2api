@@ -8,7 +8,7 @@ import sqlite3
 import stat
 import threading
 from contextlib import closing, contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -45,10 +45,29 @@ _MAX_MESSAGE_PARTS = 8
 _MAX_ATTACHMENTS_PER_MESSAGE = 4
 _MAX_DOCUMENT_BYTES = 20 * 1024 * 1024
 _MAX_CONVERSATION_BYTES = 512 * 1024
+_MAX_SEARCH_QUERY_CHARS = 120
+_MAX_SEARCH_RESULTS = 100
+_CONVERSATION_EXPORT_FORMAT = "chat2api.web-chat-conversation"
+_MAX_RETENTION_DAYS = 3650
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+async def _read_bounded_request_body(request: Request, max_bytes: int) -> bytes:
+    try:
+        declared_length = int(request.headers.get("content-length") or "0")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid Content-Length", headers=_PRIVATE_HEADERS)
+    if declared_length > max_bytes:
+        raise HTTPException(status_code=413, detail="conversation import is too large", headers=_PRIVATE_HEADERS)
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > max_bytes:
+            raise HTTPException(status_code=413, detail="conversation import is too large", headers=_PRIVATE_HEADERS)
+        body.extend(chunk)
+    return bytes(body)
 
 
 def _bounded_string(value: Any, field: str, limit: int, *, default: str = "") -> str:
@@ -296,7 +315,7 @@ class WebChatConversationStoreV1:
         with closing(self._connect()) as connection:
             connection.execute("PRAGMA journal_mode=WAL")
             version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-            if version > 2:
+            if version > 3:
                 raise RuntimeError("Web Chat conversation database version is newer than this application")
             connection.execute("""
                 CREATE TABLE IF NOT EXISTS web_chat_conversations (
@@ -384,6 +403,20 @@ class WebChatConversationStoreV1:
                     raise
             else:
                 connection.execute("PRAGMA user_version=2")
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS web_chat_policy (
+                    policy_id INTEGER PRIMARY KEY CHECK (policy_id = 1),
+                    retention_days INTEGER NOT NULL DEFAULT 0
+                        CHECK (retention_days BETWEEN 0 AND 3650),
+                    updated_at TEXT NOT NULL
+                )
+            """)
+            connection.execute(
+                "INSERT OR IGNORE INTO web_chat_policy(policy_id, retention_days, updated_at) "
+                "VALUES (1, 0, ?)",
+                (_now(),),
+            )
+            connection.execute("PRAGMA user_version=3")
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=10, isolation_level=None)
@@ -420,6 +453,124 @@ class WebChatConversationStoreV1:
                 LIMIT ?
                 """,
                 (user_id, _MAX_CONVERSATIONS_RETURNED),
+            ).fetchall()
+            return [self._decode(row) for row in rows if row is not None]
+
+    def retention_policy(self) -> dict[str, Any]:
+        with self.lock, closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT retention_days, updated_at FROM web_chat_policy WHERE policy_id=1"
+            ).fetchone()
+            return {
+                "retention_days": int(row["retention_days"]) if row else 0,
+                "updated_at": str(row["updated_at"]) if row else _now(),
+                "tombstones_retained": True,
+            }
+
+    def set_retention_days(self, retention_days: int) -> dict[str, Any]:
+        if type(retention_days) is not int or not 0 <= retention_days <= _MAX_RETENTION_DAYS:
+            raise ValueError("retention_days must be an integer between 0 and 3650")
+        now = _now()
+        with self.lock, closing(self._connect()) as connection:
+            connection.execute(
+                """INSERT INTO web_chat_policy(policy_id, retention_days, updated_at)
+                   VALUES (1, ?, ?)
+                   ON CONFLICT(policy_id) DO UPDATE SET
+                       retention_days=excluded.retention_days,
+                       updated_at=excluded.updated_at""",
+                (retention_days, now),
+            )
+        return self.retention_policy()
+
+    def expire_old_conversations(self, limit: int = 500) -> int:
+        if type(limit) is not int or not 1 <= limit <= 5000:
+            raise ValueError("retention batch limit is invalid")
+        expired = 0
+        with self.lock, closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            policy_row = connection.execute(
+                "SELECT retention_days FROM web_chat_policy WHERE policy_id=1"
+            ).fetchone()
+            days = int(policy_row["retention_days"]) if policy_row else 0
+            if days == 0:
+                connection.commit()
+                return 0
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat().replace("+00:00", "Z")
+            rows = connection.execute(
+                """SELECT user_id, conversation_id, revision, deleted, payload
+                   FROM web_chat_conversations
+                   WHERE deleted=0 AND updated_at<?
+                   ORDER BY updated_at ASC, user_id ASC, conversation_id ASC
+                   LIMIT ?""",
+                (cutoff, limit),
+            ).fetchall()
+            for stored in rows:
+                current = self._decode(stored)
+                if current is None or current.get("deleted"):
+                    continue
+                user_id = str(stored["user_id"] or "")
+                conversation_id = str(stored["conversation_id"] or "")
+                now = _now()
+                self._adjust_file_references(
+                    connection, user_id, self._file_ids(current), set(), now,
+                )
+                tombstone = {
+                    "id": conversation_id,
+                    "title": "",
+                    "model": "",
+                    "apiKeyId": "",
+                    "createdAt": str(current.get("createdAt") or now),
+                    "updatedAt": now,
+                    "messages": [],
+                }
+                changed = connection.execute(
+                    """UPDATE web_chat_conversations
+                       SET revision=revision+1, updated_at=?, deleted=1, payload=?
+                       WHERE user_id=? AND conversation_id=? AND revision=? AND deleted=0""",
+                    (
+                        now,
+                        json.dumps(tombstone, ensure_ascii=False, separators=(",", ":")),
+                        user_id,
+                        conversation_id,
+                        int(stored["revision"]),
+                    ),
+                ).rowcount
+                expired += int(changed == 1)
+            connection.commit()
+        return expired
+
+    def get_for_user(self, user_id: str, conversation_id: str) -> dict[str, Any] | None:
+        with self.lock, closing(self._connect()) as connection:
+            row = connection.execute(
+                """SELECT revision, deleted, payload
+                   FROM web_chat_conversations
+                   WHERE user_id=? AND conversation_id=?""",
+                (user_id, conversation_id),
+            ).fetchone()
+            decoded = self._decode(row)
+            if decoded is None or decoded.get("deleted"):
+                return None
+            return decoded
+
+    def search_for_user(
+        self, user_id: str, query: str, limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        normalized = query.strip()
+        if not normalized or len(normalized) > _MAX_SEARCH_QUERY_CHARS:
+            raise ValueError("search query is invalid")
+        if type(limit) is not int or not 1 <= limit <= _MAX_SEARCH_RESULTS:
+            raise ValueError("search result limit is invalid")
+        # instr() treats %, _ and backslashes literally; unlike LIKE it cannot
+        # turn user input into an unbounded wildcard scan pattern.
+        with self.lock, closing(self._connect()) as connection:
+            rows = connection.execute(
+                """SELECT revision, deleted, payload
+                   FROM web_chat_conversations
+                   WHERE user_id=? AND deleted=0
+                     AND instr(lower(payload), lower(?)) > 0
+                   ORDER BY updated_at DESC, conversation_id ASC
+                   LIMIT ?""",
+                (user_id, normalized, limit),
             ).fetchall()
             return [self._decode(row) for row in rows if row is not None]
 
@@ -686,6 +837,84 @@ def install_web_chat_conversations_v1(app: FastAPI) -> None:
         _, user = current_user(request)
         rows = store.list_for_user(str(user["user_id"]))
         return JSONResponse({"data": rows}, headers=_PRIVATE_HEADERS)
+
+    @app.get("/api/user/chat/conversations/search")
+    async def search_user_chat_conversations(request: Request):
+        _, user = current_user(request)
+        query = str(request.query_params.get("q") or "")
+        try:
+            limit = int(request.query_params.get("limit") or "50")
+            rows = store.search_for_user(str(user["user_id"]), query, limit)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="search query or limit is invalid", headers=_PRIVATE_HEADERS)
+        return JSONResponse({"data": rows}, headers=_PRIVATE_HEADERS)
+
+    @app.get("/api/user/chat/conversations/{conversation_id}/export")
+    async def export_user_chat_conversation(conversation_id: str, request: Request):
+        _, user = current_user(request)
+        if not _CONVERSATION_ID_RE.fullmatch(conversation_id):
+            raise HTTPException(status_code=404, detail="conversation not found", headers=_PRIVATE_HEADERS)
+        row = store.get_for_user(str(user["user_id"]), conversation_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="conversation not found", headers=_PRIVATE_HEADERS)
+        exported = dict(row)
+        exported.pop("revision", None)
+        exported.pop("deleted", None)
+        return JSONResponse(
+            {
+                "format": _CONVERSATION_EXPORT_FORMAT,
+                "version": 1,
+                "exportedAt": _now(),
+                "conversation": exported,
+            },
+            headers={
+                **_PRIVATE_HEADERS,
+                "Content-Disposition": f'attachment; filename="chat2api-conversation-{conversation_id}.json"',
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    @app.post("/api/user/chat/conversations/import")
+    async def import_user_chat_conversation(request: Request):
+        accounts, user = current_user(request)
+        max_import_bytes = _MAX_CONVERSATION_BYTES + 8192
+        raw_body = await _read_bounded_request_body(request, max_import_bytes)
+        try:
+            body = json.loads(raw_body)
+        except (TypeError, ValueError, UnicodeDecodeError):
+            raise HTTPException(status_code=400, detail="invalid JSON body", headers=_PRIVATE_HEADERS)
+        if (
+            not isinstance(body, dict)
+            or body.get("format") != _CONVERSATION_EXPORT_FORMAT
+            or type(body.get("version")) is not int
+            or body.get("version") != 1
+            or not isinstance(body.get("conversation"), dict)
+        ):
+            raise HTTPException(status_code=422, detail="conversation export format is unsupported", headers=_PRIVATE_HEADERS)
+        conversation_id = str(body["conversation"].get("id") or "")
+        file_store = getattr(request.app.state, "file_store", None)
+        if file_store is None:
+            raise HTTPException(status_code=503, detail="file service unavailable", headers=_PRIVATE_HEADERS)
+        with file_store.lock:
+            try:
+                conversation = normalize_conversation(
+                    conversation_id, body["conversation"],
+                    accounts=accounts, telemetry=request.app.state.telemetry,
+                    user_id=str(user["user_id"]), file_store=file_store,
+                )
+                saved, row = store.upsert(
+                    str(user["user_id"]), conversation, 0, file_store,
+                )
+            except LookupError:
+                raise HTTPException(status_code=404, detail="conversation resource not found", headers=_PRIVATE_HEADERS)
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error), headers=_PRIVATE_HEADERS)
+        if not saved:
+            return JSONResponse(
+                {"detail": "conversation ID already exists", "conversation": row},
+                status_code=409, headers=_PRIVATE_HEADERS,
+            )
+        return JSONResponse({"conversation": row}, status_code=201, headers=_PRIVATE_HEADERS)
 
     @app.put("/api/user/chat/conversations/{conversation_id}")
     async def save_user_chat_conversation(conversation_id: str, request: Request):
