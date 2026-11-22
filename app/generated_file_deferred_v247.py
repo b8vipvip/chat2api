@@ -40,7 +40,13 @@ class DeferredGeneratedFiles:
     def __init__(self, archive):
         self.archive = archive
         self.root = archive.storage.root / "generated-file-pending"
-        self.root.mkdir(parents=True, exist_ok=True)
+        if self.root.is_symlink():
+            raise ValueError("Deferred generated-file staging root must not be a symlink")
+        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if self.root.is_symlink() or not self.root.is_dir():
+            raise ValueError("Deferred generated-file staging root must be a private directory")
+        if os.name != "nt":
+            os.chmod(self.root, 0o700)
         self.pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="generated-file-archive")
         self.lock = threading.RLock()
         with self._db() as conn:
@@ -268,6 +274,12 @@ class DeferredGeneratedFiles:
         path = self.root / (pending_id + ".bin")
         saved = None
         try:
+            if (
+                path.is_symlink()
+                or path.resolve().parent != self.root.resolve()
+                or not path.is_file()
+            ):
+                raise ValueError("Deferred generated-file staging bytes are missing or unsafe")
             data = path.read_bytes()
             if len(data) != row["size"] or hashlib.sha256(data).hexdigest() != row["sha256"]:
                 raise ValueError("Deferred generated file staging integrity mismatch")
