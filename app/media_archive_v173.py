@@ -22,6 +22,8 @@ from datetime import datetime, timezone
 from cryptography.fernet import Fernet, InvalidToken
 from PIL import Image, ImageOps, UnidentifiedImageError
 
+from .private_storage import secure_private_sqlite_files
+
 MEDIA_PATTERN = re.compile(
     r"!\[([^\]\n]{0,200})\]\((data:image/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+|https://[^)\s]{1,2048})\)", re.I,
 )
@@ -98,13 +100,13 @@ class MediaArchive:
         return self.root / relative
 
     def _db(self):
-        self._secure_regular_file(self.db_path, create=True)
+        secure_private_sqlite_files(self.db_path, create_database=True)
         conn = sqlite3.connect(self.db_path, timeout=20)
         try:
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA busy_timeout=10000")
             conn.execute("PRAGMA synchronous=FULL")
-            self._secure_regular_file(self.db_path)
+            secure_private_sqlite_files(self.db_path)
         except Exception:
             conn.close()
             raise

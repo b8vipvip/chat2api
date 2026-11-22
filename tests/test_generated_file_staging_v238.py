@@ -1,7 +1,9 @@
 """Generated file staging remains bounded, ordered and request-scoped."""
 import base64
 import hashlib
+import os
 import sqlite3
+from pathlib import Path
 import time
 
 import pytest
@@ -205,3 +207,42 @@ def test_persisted_stage_pruning_does_not_retry_busy_index_on_every_call(tmp_pat
     staging._prune()
     staging._prune()
     assert calls["count"] == 1
+
+
+def test_generated_file_staging_storage_is_private_and_rejects_linked_bytes(tmp_path):
+    import stat
+
+    staging = GeneratedFileStaging(tmp_path)
+    payload = b"PK\x03\x04" + b"verified private bytes"
+    push(staging, "req_linked_stage", payload)
+    row = staging.entries[("req_linked_stage", UPID)]
+    assert stat.S_IMODE(staging.root.stat().st_mode) == 0o700
+    assert stat.S_IMODE(staging.db_path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(row.path.stat().st_mode) == 0o600
+
+    outside = tmp_path / "outside-stage-target"
+    outside.write_bytes(b"must remain untouched")
+    row.path.unlink()
+    row.path.symlink_to(outside)
+    with pytest.raises(ValueError, match="not verified"):
+        staging.read("req_linked_stage", UPID, "budget.xlsx", owner_key_id="owner")
+    assert outside.read_bytes() == b"must remain untouched"
+
+    hardlink_request = "req_hardlinked_stage"
+    push(staging, hardlink_request, payload)
+    hardlink_row = staging.entries[(hardlink_request, UPID)]
+    hardlink = tmp_path / "outside-stage-hardlink"
+    os.link(hardlink_row.path, hardlink)
+    before = hardlink.read_bytes()
+    with pytest.raises(ValueError, match="not verified"):
+        staging.read(hardlink_request, UPID, "budget.xlsx", owner_key_id="owner")
+    assert hardlink.read_bytes() == before
+
+    sidecar_target = tmp_path / "outside-staging-wal"
+    sidecar_target.write_text("must remain untouched", encoding="utf-8")
+    sidecar = Path(str(staging.db_path) + "-wal")
+    sidecar.unlink(missing_ok=True)
+    sidecar.symlink_to(sidecar_target)
+    with pytest.raises(RuntimeError, match="symbolic link"):
+        GeneratedFileStaging(tmp_path)
+    assert sidecar_target.read_text(encoding="utf-8") == "must remain untouched"

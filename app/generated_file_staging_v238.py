@@ -22,6 +22,7 @@ from pathlib import Path
 
 from .file_store import safe_name
 from .generated_files_v196 import FILE_MIMES
+from .private_storage import ensure_private_directory, open_private_regular_file, secure_private_sqlite_files
 
 MAX_CHUNK_BYTES = 96 * 1024
 MAX_STAGED_FILE_BYTES = 12 * 1024 * 1024
@@ -54,31 +55,26 @@ class _Stage:
 class GeneratedFileStaging:
     def __init__(self, storage_root: Path):
         self.root = Path(storage_root) / "generated-file-staging"
-        if self.root.is_symlink():
-            raise ValueError("Generated staging root must not be a symlink")
-        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
-        os.chmod(self.root, 0o700)
+        ensure_private_directory(self.root)
         self.db_path = self.root / "index.sqlite3"
-        if self.db_path.is_symlink():
-            raise ValueError("Generated staging index must not be a symlink")
         self.lock = threading.RLock()
         self.entries: dict[tuple[str, str], _Stage] = {}
         self._last_persisted_prune_mono = 0.0
         self._init_db()
-        os.chmod(self.db_path, 0o600)
-        for suffix in ("-wal", "-shm"):
-            sidecar = Path(str(self.db_path) + suffix)
-            if sidecar.exists() and not sidecar.is_symlink():
-                os.chmod(sidecar, 0o600)
+        secure_private_sqlite_files(self.db_path)
         self._restore_completed()
 
     def _db(self):
-        if self.db_path.is_symlink():
-            raise ValueError("Generated staging index must not be a symlink")
+        secure_private_sqlite_files(self.db_path, create_database=True)
         conn = sqlite3.connect(self.db_path, timeout=20)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA synchronous=FULL")
-        return conn
+        try:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA synchronous=FULL")
+            secure_private_sqlite_files(self.db_path)
+            return conn
+        except Exception:
+            conn.close()
+            raise
 
     def _init_db(self) -> None:
         with self._db() as conn:
@@ -186,14 +182,14 @@ class GeneratedFileStaging:
 
             path = self.root / path_name
             try:
-                if (
-                    path.is_symlink()
-                    or path.resolve().parent != self.root.resolve()
-                    or not path.is_file()
-                ):
+                if path.resolve().parent != self.root.resolve():
                     raise ValueError("staged file missing or unsafe")
-                payload = path.read_bytes()
-            except (OSError, ValueError):
+                fd = open_private_regular_file(path, os.O_RDONLY)
+                with os.fdopen(fd, "rb") as handle:
+                    if os.fstat(handle.fileno()).st_size > MAX_STAGED_FILE_BYTES:
+                        raise ValueError("staged file exceeds its safety limit")
+                    payload = handle.read(MAX_STAGED_FILE_BYTES + 1)
+            except (OSError, RuntimeError, ValueError):
                 self._delete_persisted(request_id, upload_id, path)
                 continue
 
@@ -374,8 +370,10 @@ class GeneratedFileStaging:
                     raise ValueError("staged-file-total-budget-exceeded")
                 path_name = "stg_" + secrets.token_hex(24) + ".part"
                 path = self.root / path_name
-                path.touch(mode=0o600, exist_ok=False)
-                os.chmod(path, 0o600)
+                fd = open_private_regular_file(
+                    path, os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                )
+                os.close(fd)
                 row = _Stage(
                     request_id, upload_id, owner_key_id, name, canonical, expected_bytes,
                     expected_sha256, path, time.monotonic(), hashlib.sha256(),
@@ -410,9 +408,10 @@ class GeneratedFileStaging:
 
             previous_size = row.size
             try:
-                if row.path.is_symlink() or row.path.resolve().parent != self.root.resolve():
+                if row.path.resolve().parent != self.root.resolve():
                     raise ValueError("staged file path changed")
-                with row.path.open("ab") as sink:
+                fd = open_private_regular_file(row.path, os.O_WRONLY | os.O_APPEND)
+                with os.fdopen(fd, "ab") as sink:
                     sink.write(chunk)
                     sink.flush()
                     os.fsync(sink.fileno())
@@ -469,10 +468,14 @@ class GeneratedFileStaging:
             ):
                 raise ValueError("Generated staged file was not verified")
             try:
-                if row.path.is_symlink() or row.path.resolve().parent != self.root.resolve():
+                if row.path.resolve().parent != self.root.resolve():
                     raise ValueError("staged file path changed")
-                payload = row.path.read_bytes()
-            except OSError as exc:
+                fd = open_private_regular_file(row.path, os.O_RDONLY)
+                with os.fdopen(fd, "rb") as handle:
+                    if os.fstat(handle.fileno()).st_size > MAX_STAGED_FILE_BYTES:
+                        raise ValueError("staged file exceeds its safety limit")
+                    payload = handle.read(MAX_STAGED_FILE_BYTES + 1)
+            except (OSError, RuntimeError, ValueError) as exc:
                 self.entries.pop(key, None)
                 self._delete_persisted(key[0], key[1], row.path)
                 raise ValueError("Generated staged file was not verified") from exc
