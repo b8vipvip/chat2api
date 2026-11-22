@@ -363,3 +363,13 @@ def test_disappeared_pending_row_after_original_store_is_compensated(tmp_path, m
     fid, token = files[0]["url"].rsplit("/", 2)[-2:]
     with pytest.raises(KeyError):
         deferred.status(fid, token)
+
+
+def test_deferred_generated_file_staging_root_rejects_symlinks(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (tmp_path / "generated-file-pending").symlink_to(outside, target_is_directory=True)
+    archive = FakeArchive(tmp_path, threading.Event())
+
+    with pytest.raises(ValueError, match="must not be a symlink"):
+        DeferredGeneratedFiles(archive)
