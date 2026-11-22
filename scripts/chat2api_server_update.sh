@@ -11,7 +11,7 @@ REQUEST_FILE="${DATA_DIR}/admin-update-request.json"
 STATUS_FILE="${DATA_DIR}/admin-update-status.json"
 LOG_FILE="${DATA_DIR}/admin-update.log"
 DEPLOYMENT_FILE="${DATA_DIR}/deployment.json"
-LOCK_FILE="/run/lock/chat2api-admin-update.lock"
+LOCK_FILE="${DATA_DIR}/.admin-update.lock"
 GITHUB_KNOWN_HOSTS_FILE="/run/chat2api-github-known-hosts"
 CURRENT_STAGE="starting"
 CURRENT_PERCENT="2"
@@ -47,40 +47,23 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
-mkdir -p "$DATA_DIR" /run/lock
-chmod 755 "$DATA_DIR"
-: > "$LOG_FILE"
-chmod 640 "$LOG_FILE"
-exec > >(tee -a "$LOG_FILE") 2>&1
+python3 "$APP_DIR/scripts/chat2api_update_storage.py" ensure-dir "$DATA_DIR"
+python3 "$APP_DIR/scripts/chat2api_update_storage.py" prepare-lock "$LOCK_FILE"
+python3 "$APP_DIR/scripts/chat2api_update_storage.py" truncate-log "$LOG_FILE"
+# The log sink validates the opened descriptor (regular file, one hard link,
+# no symlink following) before appending and mirrors output to the journal.
+exec > >(python3 "$APP_DIR/scripts/chat2api_update_storage.py" tee-log "$LOG_FILE") 2>&1
 
 log() {
   printf '%s [chat2api-update] %s\n' "$(date -Is)" "$*"
 }
 
 read_request_id() {
-  python3 - "$REQUEST_FILE" <<'PY'
-import json, sys
-from pathlib import Path
-path = Path(sys.argv[1])
-try:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-except Exception:
-    payload = {}
-print(str(payload.get("request_id") or ""))
-PY
+  python3 "$APP_DIR/scripts/chat2api_update_storage.py" read-request-id "$REQUEST_FILE"
 }
 
 read_use_build_cache() {
-  python3 - "$REQUEST_FILE" <<'PY'
-import json, sys
-from pathlib import Path
-path = Path(sys.argv[1])
-try:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-except Exception:
-    payload = {}
-print("false" if payload.get("use_build_cache") is False else "true")
-PY
+  python3 "$APP_DIR/scripts/chat2api_update_storage.py" read-build-cache "$REQUEST_FILE"
 }
 
 write_status() {
@@ -90,19 +73,19 @@ write_status() {
   CURRENT_MESSAGE="$message"
   python3 - "$STATUS_FILE" "$status" "$stage" "$percent" "$message" "$REQUEST_ID" "$FROM_COMMIT" "$TARGET_COMMIT" "$ROLLBACK_COMMIT" "$ROLLBACK_SUCCEEDED" "$FETCH_TRANSPORT" "$FETCH_ELAPSED_MS" "$FETCH_ATTEMPTS" <<'PY'
 from __future__ import annotations
-import json, os, sys, tempfile
+import json, os, sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(os.environ.get("APP_DIR", "/opt/chat2api")) / "scripts"))
+from chat2api_update_storage import read_json, write_json_atomic
 
 path = Path(sys.argv[1])
 status, stage, percent, message = sys.argv[2:6]
 request_id, from_commit, target_commit, rollback_commit, rollback_succeeded = sys.argv[6:11]
 fetch_transport, fetch_elapsed_ms, fetch_attempts = sys.argv[11:14]
 now = datetime.now(timezone.utc).isoformat()
-try:
-    old = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-except Exception:
-    old = {}
+old = read_json(path)
 started = str(old.get("started_at") or now)
 if status == "running" and stage == "starting":
     started = now
@@ -124,17 +107,7 @@ payload = {
     "fetch_elapsed_ms": int(fetch_elapsed_ms) if fetch_elapsed_ms.isdigit() else int(old.get("fetch_elapsed_ms") or 0),
     "fetch_attempts": int(fetch_attempts) if fetch_attempts.isdigit() else int(old.get("fetch_attempts") or 0),
 }
-path.parent.mkdir(parents=True, exist_ok=True)
-fd, tmp = tempfile.mkstemp(prefix=".admin-update-status.", dir=str(path.parent), text=True)
-try:
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, ensure_ascii=False, indent=2)
-        handle.write("\n")
-        handle.flush(); os.fsync(handle.fileno())
-    os.replace(tmp, path)
-finally:
-    if os.path.exists(tmp):
-        os.unlink(tmp)
+write_json_atomic(path, payload)
 PY
   log "status=${status} stage=${stage} percent=${percent} message=${message}"
 }
@@ -443,7 +416,7 @@ on_exit() {
 }
 trap on_exit EXIT
 
-exec 9>"$LOCK_FILE"
+exec 9<>"$LOCK_FILE"
 if ! flock -n 9; then
   REQUEST_ID="$(read_request_id)"
   write_status "failed" "starting" "1" "已有更新任务持有主机更新锁"
@@ -519,15 +492,14 @@ fi
 if [[ "$TARGET_COMMIT" == "$FROM_COMMIT" && "$RUNTIME_SHA" == "$TARGET_COMMIT" ]]; then
   write_status "succeeded" "completed" "100" "当前已经是 GitHub main 最新提交 ${TARGET_COMMIT:0:12}"
   python3 - "$DEPLOYMENT_FILE" "$TARGET_COMMIT" <<'PY'
-import json, os, sys, tempfile
+import os, sys
 from datetime import datetime, timezone
 from pathlib import Path
+sys.path.insert(0, str(Path(os.environ.get("APP_DIR", "/opt/chat2api")) / "scripts"))
+from chat2api_update_storage import write_json_atomic
 path = Path(sys.argv[1]); sha = sys.argv[2]
 payload = {"commit": sha, "branch": "main", "repository": "b8vipvip/chat2api", "updated_at": datetime.now(timezone.utc).isoformat()}
-fd, tmp = tempfile.mkstemp(prefix=".deployment.", dir=str(path.parent), text=True)
-with os.fdopen(fd, "w", encoding="utf-8") as f:
-    json.dump(payload, f, ensure_ascii=False, indent=2); f.write("\n"); f.flush(); os.fsync(f.fileno())
-os.replace(tmp, path)
+write_json_atomic(path, payload)
 PY
   trap - EXIT
   cleanup
@@ -561,11 +533,13 @@ fi
 if [[ "$SMART_UPDATE_MODE" == "checks-only" ]]; then
   write_status "running" "verify" "85" "智能判断：只修改文档/测试，跳过 Docker 构建和容器重启"
   python3 - "$DEPLOYMENT_FILE" "$TARGET_COMMIT" "$FROM_COMMIT" <<'PY'
-import json, os, sys
+import os, sys
 from pathlib import Path
+sys.path.insert(0, str(Path(os.environ.get("APP_DIR", "/opt/chat2api")) / "scripts"))
+from chat2api_update_storage import write_json_atomic
 p=Path(sys.argv[1]); record={"commit":sys.argv[2],"previous_commit":sys.argv[3],
 "repository":"b8vipvip/chat2api","update_mode":"checks-only"}
-temp=p.with_suffix(".tmp");temp.write_text(json.dumps(record),encoding="utf-8");os.replace(temp,p)
+write_json_atomic(p, record)
 PY
   write_status "succeeded" "completed" "100" "GPTAuto 智能更新：无运行时代码变更，跳过构建"
   trap - EXIT
@@ -604,11 +578,13 @@ if [[ "$SMART_UPDATE_MODE" == "runtime-hotfix" && -f "$SMART_APPLY_TOOL" ]]; the
     exit 9
   fi
   python3 - "$DEPLOYMENT_FILE" "$TARGET_COMMIT" "$FROM_COMMIT" <<'PY'
-import json, os, sys
+import os, sys
 from pathlib import Path
+sys.path.insert(0, str(Path(os.environ.get("APP_DIR", "/opt/chat2api")) / "scripts"))
+from chat2api_update_storage import write_json_atomic
 p=Path(sys.argv[1]); record={"commit":sys.argv[2],"previous_commit":sys.argv[3],
 "repository":"b8vipvip/chat2api","update_mode":"runtime-hotfix"}
-temp=p.with_suffix(".tmp");temp.write_text(json.dumps(record),encoding="utf-8");os.replace(temp,p)
+write_json_atomic(p, record)
 PY
   write_status "succeeded" "completed" "100" "GPTAuto 智能热修复成功：精确 CI、文件校验和健康检查通过"
   trap - EXIT
@@ -646,9 +622,11 @@ if ! wait_health "$port" 60; then
 fi
 
 python3 - "$DEPLOYMENT_FILE" "$TARGET_COMMIT" "$FROM_COMMIT" <<'PY'
-import json, os, sys, tempfile
+import os, sys
 from datetime import datetime, timezone
 from pathlib import Path
+sys.path.insert(0, str(Path(os.environ.get("APP_DIR", "/opt/chat2api")) / "scripts"))
+from chat2api_update_storage import write_json_atomic
 path = Path(sys.argv[1]); sha = sys.argv[2]; previous = sys.argv[3]
 payload = {
     "commit": sha,
@@ -657,10 +635,7 @@ payload = {
     "repository": "b8vipvip/chat2api",
     "updated_at": datetime.now(timezone.utc).isoformat(),
 }
-fd, tmp = tempfile.mkstemp(prefix=".deployment.", dir=str(path.parent), text=True)
-with os.fdopen(fd, "w", encoding="utf-8") as f:
-    json.dump(payload, f, ensure_ascii=False, indent=2); f.write("\n"); f.flush(); os.fsync(f.fileno())
-os.replace(tmp, path)
+write_json_atomic(path, payload)
 PY
 
 write_status "succeeded" "completed" "100" "服务端更新完成：${FROM_COMMIT:0:12} → ${TARGET_COMMIT:0:12}"
