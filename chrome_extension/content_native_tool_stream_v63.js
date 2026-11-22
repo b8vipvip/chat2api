@@ -3,7 +3,11 @@
   if (globalThis[KEY]) return;
 
   const SOURCE = "chat2api-native-tool-stream-v63";
-  const state = { revision: 63, calls: 0, results: 0, final_snapshots: 0, final_completions: 0, completions: 0, ignored: 0 };
+  const state = {
+    revision: 64, calls: 0, results: 0, final_snapshots: 0,
+    final_completions: 0, completions: 0, ignored: 0,
+    finalReferenceSignatures: new Map(),
+  };
   globalThis[KEY] = state;
 
   function activeRequest() {
@@ -41,6 +45,28 @@
     }
   }
 
+  async function emitFinalReferences(detail, requestId) {
+    const metadata = cleanMetadata(detail?.metadata);
+    if (!metadata || typeof metadata !== "object" || !Object.keys(metadata).length
+        || metadata.truncated === true) return;
+    const messageId = String(detail?.message_id || "").slice(0, 128);
+    let signature = "";
+    try { signature = JSON.stringify(metadata).slice(0, 2048); } catch (_) { return; }
+    if (!signature || state.finalReferenceSignatures.get(messageId) === signature) return;
+    state.finalReferenceSignatures.set(messageId, signature);
+    if (state.finalReferenceSignatures.size > 32) {
+      const oldest = state.finalReferenceSignatures.keys().next().value;
+      state.finalReferenceSignatures.delete(oldest);
+    }
+    await emit({
+      type: "chat.references",
+      request_id: requestId,
+      message_id: messageId,
+      metadata,
+      native: true,
+    });
+  }
+
   async function handle(detail) {
     const phase = String(detail?.phase || "");
     if (["topic-subscribe", "topic-unsubscribe"].includes(phase)) return;
@@ -53,6 +79,7 @@
 
     if (phase === "final-snapshot") {
       state.final_snapshots += 1;
+      await emitFinalReferences(detail, requestId);
       await emit({
         type: "chat.response.snapshot",
         request_id: requestId,
@@ -66,6 +93,7 @@
 
     if (phase === "final-complete") {
       state.final_completions += 1;
+      await emitFinalReferences(detail, requestId);
       await emit({
         type: "chat.response.completed",
         request_id: requestId,
