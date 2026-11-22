@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import threading
 import traceback
@@ -10,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .timezone_utils import beijing_now_iso
+from .private_storage import ensure_private_directory, open_private_regular_file, private_file_lock
 
 
 MAX_MEMORY_ENTRIES = 5000
@@ -51,6 +53,7 @@ class RuntimeLogStore:
         self.max_entries = max(200, int(max_entries))
         self.entries: deque[dict[str, Any]] = deque(maxlen=self.max_entries)
         self.lock = threading.RLock()
+        ensure_private_directory(self.directory)
         self._load_tail()
 
     def _load_tail(self) -> None:
@@ -60,37 +63,65 @@ class RuntimeLogStore:
         ] + [self.path]
         with self.lock:
             for path in candidates:
-                if not path.is_file():
+                try:
+                    fd = open_private_regular_file(path, os.O_RDONLY)
+                except FileNotFoundError:
+                    continue
+                except (OSError, RuntimeError):
                     continue
                 try:
-                    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-                        if not line.strip():
-                            continue
-                        try:
-                            item = json.loads(line)
-                        except Exception:
-                            continue
-                        if isinstance(item, dict):
-                            self.entries.append(item)
+                    with os.fdopen(fd, "r", encoding="utf-8", errors="replace") as handle:
+                        for line in handle:
+                            if not line.strip():
+                                continue
+                            try:
+                                item = json.loads(line)
+                            except Exception:
+                                continue
+                            if isinstance(item, dict):
+                                self.entries.append(item)
                 except OSError:
                     continue
 
+    def _remove_private_log(self, path: Path) -> None:
+        try:
+            fd = open_private_regular_file(path, os.O_RDONLY)
+        except FileNotFoundError:
+            return
+        try:
+            os.close(fd)
+            path.unlink()
+        except OSError:
+            raise
+
+    def _move_private_log(self, source: Path, destination: Path) -> None:
+        try:
+            fd = open_private_regular_file(source, os.O_RDONLY)
+        except FileNotFoundError:
+            return
+        os.close(fd)
+        self._remove_private_log(destination)
+        source.replace(destination)
+
     def _rotate_if_needed(self, incoming_bytes: int) -> None:
         try:
-            size = self.path.stat().st_size if self.path.exists() else 0
-        except OSError:
+            fd = open_private_regular_file(self.path, os.O_RDONLY)
+        except FileNotFoundError:
             size = 0
+        else:
+            try:
+                size = os.fstat(fd).st_size
+            finally:
+                os.close(fd)
         if size + incoming_bytes <= MAX_FILE_BYTES:
             return
-        self.directory.mkdir(parents=True, exist_ok=True)
         oldest = self.directory / f"chat2api-runtime.ndjson.{MAX_ROTATED_FILES}"
-        oldest.unlink(missing_ok=True)
+        self._remove_private_log(oldest)
         for index in range(MAX_ROTATED_FILES - 1, 0, -1):
             source = self.directory / f"chat2api-runtime.ndjson.{index}"
-            if source.exists():
-                source.replace(self.directory / f"chat2api-runtime.ndjson.{index + 1}")
-        if self.path.exists():
-            self.path.replace(self.directory / "chat2api-runtime.ndjson.1")
+            destination = self.directory / f"chat2api-runtime.ndjson.{index + 1}"
+            self._move_private_log(source, destination)
+        self._move_private_log(self.path, self.directory / "chat2api-runtime.ndjson.1")
 
     def append(
         self,
@@ -123,12 +154,18 @@ class RuntimeLogStore:
         with self.lock:
             self.entries.append(entry)
             try:
-                self.directory.mkdir(parents=True, exist_ok=True)
-                self._rotate_if_needed(len(encoded))
-                with self.path.open("ab") as handle:
-                    handle.write(encoded)
-            except OSError:
+                ensure_private_directory(self.directory)
+                with private_file_lock(self.directory / ".runtime_logs.lock"):
+                    self._rotate_if_needed(len(encoded))
+                    fd = open_private_regular_file(
+                        self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT,
+                    )
+                    with os.fdopen(fd, "ab") as handle:
+                        handle.write(encoded)
+                        handle.flush()
+            except (OSError, RuntimeError):
                 # Logging must never make the application request path fail.
+                # Unsafe paths fail closed instead of following linked files.
                 pass
         return entry
 

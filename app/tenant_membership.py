@@ -8,7 +8,6 @@ those owners must consume membership at every resource access separately.
 from __future__ import annotations
 
 import hashlib
-import os
 import re
 import secrets
 import sqlite3
@@ -17,6 +16,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from .private_storage import secure_private_sqlite_files
 
 
 SLUG = re.compile(r"^[a-z][a-z0-9-]{2,47}$")
@@ -45,9 +46,8 @@ class TenantMembershipStore:
     def __init__(self, data_dir: Path | str) -> None:
         self.path = Path(data_dir) / "tenant_membership_v1.sqlite3"
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        if self.path.is_symlink():
-            raise TenantMembershipError("Tenant store must not be a symlink")
         self.lock = threading.RLock()
+        secure_private_sqlite_files(self.path, create_database=True)
         self.db = sqlite3.connect(str(self.path), timeout=10, check_same_thread=False, isolation_level=None)
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.execute("PRAGMA busy_timeout=10000")
@@ -93,7 +93,7 @@ class TenantMembershipStore:
             CREATE INDEX IF NOT EXISTS tenant_invites_email_idx
               ON tenant_invitations(tenant_id,email,status);
         """)
-        os.chmod(self.path, 0o600)
+        secure_private_sqlite_files(self.path)
 
     def create(self, slug: str, display_name: str) -> dict[str, Any]:
         if not isinstance(slug, str) or not SLUG.fullmatch(slug):

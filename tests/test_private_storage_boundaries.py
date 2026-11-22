@@ -30,6 +30,10 @@ from app.test_runs import TestRunStore
 from app.telemetry import TelemetryStore
 from app.web_chat_conversations_v1 import WebChatConversationStoreV1
 from app.worker_probe_store import WorkerProbeStore
+from app.runtime_logs import RuntimeLogStore
+from app.registration_invitations import InvitationStore
+from app.tenant_membership import TenantMembershipStore
+from app.user_subscriptions import UserSubscriptionStore
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX permission and symlink assertions")
@@ -559,3 +563,89 @@ def test_private_file_lock_is_released_by_os_after_process_crash(tmp_path: Path)
     # even though the child bypassed Python's finally/context-manager cleanup.
     with private_file_lock(lock_path):
         assert stat.S_IMODE(lock_path.stat().st_mode) == 0o600
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission, symlink and hard-link assertions")
+def test_invitation_tenant_and_subscription_sqlite_stores_reject_linked_sidecars(tmp_path: Path) -> None:
+    factories = (
+        ("invitations", InvitationStore),
+        ("tenants", TenantMembershipStore),
+        ("subscriptions", UserSubscriptionStore),
+    )
+    for name, factory in factories:
+        root = tmp_path / name
+        store = factory(root)
+        database = store.path
+        connection = getattr(store, "db", None)
+        if connection is not None:
+            connection.close()
+        assert stat.S_IMODE(database.stat().st_mode) == 0o600
+
+        sidecar_target = tmp_path / f"outside-{name}-wal"
+        sidecar_target.write_text("must remain untouched", encoding="utf-8")
+        sidecar = Path(str(database) + "-wal")
+        sidecar.symlink_to(sidecar_target)
+        with pytest.raises(RuntimeError, match="symbolic link"):
+            factory(root)
+        assert sidecar_target.read_text(encoding="utf-8") == "must remain untouched"
+        sidecar.unlink()
+
+        hardlink = tmp_path / f"outside-{name}-database"
+        os.link(database, hardlink)
+        with pytest.raises(RuntimeError, match="single-link regular files"):
+            factory(root)
+        assert database.exists() and hardlink.exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission, symlink and hard-link assertions")
+def test_runtime_log_storage_is_private_and_rejects_linked_files(tmp_path: Path) -> None:
+    root = tmp_path / "runtime"
+    store = RuntimeLogStore(root)
+    store.append(
+        level="INFO", logger_name="storage-test",
+        message="private runtime log entry",
+    )
+    log_dir = root / "runtime_logs"
+    log_path = log_dir / "chat2api-runtime.ndjson"
+    assert stat.S_IMODE(log_dir.stat().st_mode) == 0o700
+    assert stat.S_IMODE(log_path.stat().st_mode) == 0o600
+
+    outside = tmp_path / "outside-runtime-log"
+    outside.write_text('{"message":"outside secret"}\n', encoding="utf-8")
+    log_path.unlink()
+    log_path.symlink_to(outside)
+    store.append(
+        level="ERROR", logger_name="storage-test",
+        message="must not follow symlink",
+    )
+    assert outside.read_text(encoding="utf-8") == '{"message":"outside secret"}\n'
+    assert RuntimeLogStore(root).query(limit=10)["returned"] == 0
+
+    log_path.unlink()
+    store.append(
+        level="INFO", logger_name="storage-test",
+        message="create a new regular log",
+    )
+    before = log_path.read_bytes()
+    hardlink = tmp_path / "outside-runtime-hardlink"
+    os.link(log_path, hardlink)
+    store.append(
+        level="ERROR", logger_name="storage-test",
+        message="must not append through hard link",
+    )
+    assert log_path.read_bytes() == before
+    assert hardlink.read_bytes() == before
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission assertions")
+def test_runtime_log_rotation_preserves_private_modes(tmp_path: Path, monkeypatch) -> None:
+    import app.runtime_logs as runtime_logs_module
+
+    monkeypatch.setattr(runtime_logs_module, "MAX_FILE_BYTES", 1)
+    store = RuntimeLogStore(tmp_path)
+    store.append(level="INFO", logger_name="rotation", message="first")
+    store.append(level="INFO", logger_name="rotation", message="second")
+    rotated = tmp_path / "runtime_logs" / "chat2api-runtime.ndjson.1"
+    current = tmp_path / "runtime_logs" / "chat2api-runtime.ndjson"
+    assert stat.S_IMODE(rotated.stat().st_mode) == 0o600
+    assert stat.S_IMODE(current.stat().st_mode) == 0o600
