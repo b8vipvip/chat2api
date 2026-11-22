@@ -387,13 +387,22 @@
       const serverCompleted = !existing.pending && existing.recoveryStatus === "completed";
       const localToolWeight = toolActivityWeight(message.toolEvents);
       const serverToolWeight = toolActivityWeight(existing.toolEvents);
+      const mergedReferences = normalizeToolReferences([
+        ...(Array.isArray(existing.references) ? existing.references : []),
+        ...(Array.isArray(message.references) ? message.references : []),
+      ]);
+      const withMergedReferences = row => mergedReferences.length
+        ? {...row,references:mergedReferences} : row;
       if ((localCompleted && !serverCompleted) ||
           (!serverCompleted && messageContentWeight(message) > messageContentWeight(existing))) {
-        messages.set(message.id, message);
+        messages.set(message.id, withMergedReferences(message));
       } else if (localToolWeight > serverToolWeight) {
         // Preserve newer call/result state without replacing an authoritative
         // completed answer with a stale local text snapshot.
-        messages.set(message.id, {...existing,toolEvents:message.toolEvents});
+        messages.set(message.id, withMergedReferences({...existing,toolEvents:message.toolEvents}));
+      } else if (mergedReferences.length) {
+        // A newer text snapshot must not erase server-side citations.
+        messages.set(message.id, withMergedReferences(existing));
       }
     });
     const localNewer = String(localRow.updatedAt || "") > String(serverRow.updatedAt || "");
