@@ -78,3 +78,31 @@ assert.deepEqual(
 );
 
 console.log("Web Chat conversation merge preserves final-message citations across devices");
+
+
+const citationMatch = source.match(/function citationTextForMessage\(message\) \{[\s\S]*?\n  \}/);
+assert.ok(citationMatch, "production citationTextForMessage function must remain extractable");
+const citationTextForMessage = runInNewContext("(" + citationMatch[0] + ")", {
+  messageText:message => String(message?.content || ""),
+  referencesForMessage:message => Array.isArray(message?.references) ? message.references : [],
+});
+const inlineMarker = "\uE200cite\uE202turn0search0\uE201";
+assert.equal(
+  citationTextForMessage({content:"Read the docs" + inlineMarker,references:[sourceRef]}),
+  "Read the docs [1]",
+  "copy/export must replace private citation tokens with readable reference numbers",
+);
+const secondRef = {
+  id:"turn0search1",
+  url:"https://developer.mozilla.org/",
+  title:"MDN",
+  snippet:"",
+};
+const multiMarker = "\uE200cite\uE202turn0search0\uE202turn0search1\uE201";
+assert.equal(
+  citationTextForMessage({
+    content:"Read both" + multiMarker,
+    references:[sourceRef,secondRef],
+  }),
+  "Read both [1, 2]",
+);
