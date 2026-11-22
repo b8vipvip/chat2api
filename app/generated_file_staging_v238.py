@@ -28,6 +28,7 @@ MAX_STAGED_FILE_BYTES = 12 * 1024 * 1024
 MAX_STAGED_RESPONSE_BYTES = 24 * 1024 * 1024
 MAX_STAGED_FILES = 4
 MAX_STAGE_AGE_SECONDS = 1800
+PERSISTED_STAGE_PRUNE_INTERVAL_SECONDS = 60.0
 UPLOAD_ID = re.compile(r"^[a-f0-9]{32}$")
 SHA256_HEX = re.compile(r"^[a-f0-9]{64}$")
 STAGE_PATH = re.compile(r"^stg_[a-f0-9]{48}\.part$")
@@ -62,6 +63,7 @@ class GeneratedFileStaging:
             raise ValueError("Generated staging index must not be a symlink")
         self.lock = threading.RLock()
         self.entries: dict[tuple[str, str], _Stage] = {}
+        self._last_persisted_prune_mono = 0.0
         self._init_db()
         os.chmod(self.db_path, 0o600)
         for suffix in ("-wal", "-shm"):
@@ -255,13 +257,70 @@ class GeneratedFileStaging:
                 path.unlink(missing_ok=True)
 
     def _prune(self) -> None:
+        # A second API process deliberately does not restore another process's
+        # incomplete upload. Those rows are therefore absent from self.entries;
+        # prune their durable index and bytes periodically once the shared TTL
+        # expires. Do not take a SQLite write lock for every upload chunk.
+        now_mono = time.monotonic()
+        if now_mono - self._last_persisted_prune_mono >= PERSISTED_STAGE_PRUNE_INTERVAL_SECONDS:
+            cutoff = time.time() - MAX_STAGE_AGE_SECONDS
+            removed: list[tuple[str, str, str]] = []
+            try:
+                with self._db() as conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    rows = conn.execute(
+                        """SELECT request_id, upload_id, path_name, created_at
+                           FROM generated_file_stages
+                           WHERE created_at<=?
+                           ORDER BY created_at ASC LIMIT 500""",
+                        (cutoff,),
+                    ).fetchall()
+                    for raw in rows:
+                        request_id = str(raw["request_id"] or "")
+                        upload_id = str(raw["upload_id"] or "")
+                        path_name = str(raw["path_name"] or "")
+                        if STAGE_PATH.fullmatch(path_name):
+                            try:
+                                # unlink removes a symlink itself; it never follows it.
+                                (self.root / path_name).unlink(missing_ok=True)
+                            except OSError:
+                                # Keep the durable row so a later prune can retry.
+                                continue
+                        deleted = conn.execute(
+                            """DELETE FROM generated_file_stages
+                               WHERE request_id=? AND upload_id=? AND path_name=? AND created_at=?""",
+                            (request_id, upload_id, path_name, raw["created_at"]),
+                        ).rowcount
+                        if deleted:
+                            removed.append((request_id, upload_id, path_name))
+            except sqlite3.Error:
+                # Cleanup is best effort; retry on the next interval. Upload
+                # admission and reads must not fail just because pruning is busy.
+                self._last_persisted_prune_mono = now_mono
+            else:
+                self._last_persisted_prune_mono = now_mono
+                for request_id, upload_id, path_name in removed:
+                    key = (request_id, upload_id)
+                    entry = self.entries.get(key)
+                    if entry is not None and entry.path.name == path_name:
+                        self.entries.pop(key, None)
+
+        # Keep the monotonic-clock guard for in-memory entries if the wall
+        # clock moved backwards or a legacy index row is missing.
         expired = [
             key for key, row in self.entries.items()
             if time.monotonic() - row.created_at > MAX_STAGE_AGE_SECONDS
         ]
         for request_id, upload_id in expired:
-            row = self.entries.pop((request_id, upload_id), None)
+            key = (request_id, upload_id)
+            row = self.entries.get(key)
             if row is not None:
+                try:
+                    row.path.unlink(missing_ok=True)
+                except OSError:
+                    # Keep both the in-memory entry and durable row retryable.
+                    continue
+                self.entries.pop(key, None)
                 self._delete_persisted(request_id, upload_id, row.path)
 
     def ingest(

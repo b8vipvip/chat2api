@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import base64
+import os
 import sqlite3
 import threading
+import time
 from pathlib import Path
 
 import pytest
 
 from app.generated_file_deferred_v247 import (
     DeferredGeneratedFiles, FileStillProcessing, FileTransferFailed,
+    MAX_ORPHAN_STAGE_AGE_SECONDS,
 )
 
 
@@ -306,6 +309,35 @@ def test_staging_unlink_error_after_ready_does_not_make_download_fail(tmp_path, 
     assert deferred.status(fid, token)["status"] == "ready"
     assert deferred.read(fid, token)[0] == raw
     assert len(generated.list_items()) == 1
+
+    # A successful ready manifest may outlive one failed unlink attempt. A
+    # fresh process retries that cleanup without touching the archived object.
+    pending_id = files[0]["id"]
+    stale_ready_bytes = deferred.root / (pending_id + ".bin")
+    assert stale_ready_bytes.exists()
+    orphan_bin = deferred.root / ("pgen_" + "a" * 32 + ".bin")
+    orphan_part = deferred.root / ("pgen_" + "b" * 32 + ".part")
+    orphan_bin.write_bytes(b"orphan")
+    orphan_part.write_bytes(b"partial")
+    old_mtime = time.time() - MAX_ORPHAN_STAGE_AGE_SECONDS - 1
+    os.utime(orphan_bin, (old_mtime, old_mtime))
+    os.utime(orphan_part, (old_mtime, old_mtime))
+    # Fresh orphan names may belong to a concurrent process between its file
+    # rename and manifest insert; startup must not delete them immediately.
+    fresh_bin = deferred.root / ("pgen_" + "c" * 32 + ".bin")
+    fresh_part = deferred.root / ("pgen_" + "d" * 32 + ".part")
+    fresh_bin.write_bytes(b"fresh")
+    fresh_part.write_bytes(b"fresh-part")
+    monkeypatch.undo()
+
+    reopened = DeferredGeneratedFiles(generated)
+    reopened.pool.shutdown(wait=True)
+    assert not stale_ready_bytes.exists()
+    assert not orphan_bin.exists()
+    assert not orphan_part.exists()
+    assert fresh_bin.exists()
+    assert fresh_part.exists()
+    assert reopened.read(fid, token)[0] == raw
 
 
 def test_disappeared_pending_row_after_original_store_is_compensated(tmp_path, monkeypatch):

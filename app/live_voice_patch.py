@@ -35,6 +35,15 @@ MAX_LIVE_CONTROL_CHARS = 64 * 1024
 LIVE_KEY_REVALIDATE_SECONDS = 5.0
 
 
+async def _send_live_audio_frame(websocket, send_lock, audio: bytes, is_finished) -> bool:
+    """Serialize PCM with control frames and reject queued post-terminal audio."""
+    async with send_lock:
+        if is_finished():
+            return False
+        await websocket.send_bytes(audio)
+        return True
+
+
 def _bearer(headers: Any) -> str:
     authorization = str(headers.get("authorization") or "").strip()
     if authorization.lower().startswith("bearer "):
@@ -418,7 +427,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     await send_json({
                         "type": "input_media.sent",
                         "item_id": item_id,
-                        "attachment_count": int(event.get("attachment_count") or 0),
+                        "attachment_count": len(confirmed_item_media_ids),
                     })
                 elif event_type == "input.error":
                     failed_item_id = str(event.get("item_id") or "")
@@ -515,9 +524,9 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                                 "message": error_message, "retryable": False,
                             })
                             return
-                        if not finished:
-                            async with ws_send_lock:
-                                await websocket.send_bytes(audio)
+                        if await _send_live_audio_frame(
+                            websocket, ws_send_lock, audio, lambda: finished,
+                        ):
                             observed_audio_bytes += len(audio)
                 elif event_type == "response.audio.done":
                     response_id = str(event.get("response_id") or "")
