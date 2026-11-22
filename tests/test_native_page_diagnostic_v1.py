@@ -5,6 +5,7 @@ import asyncio
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -159,6 +160,10 @@ def test_admin_jobs_are_request_bound_and_zip_authenticated(tmp_path,monkeypatch
         assert created.status_code==200,created.text
         assert created.json()["job"]["worker_id"]==worker_ext
         job=created.json()["job"]["job_id"]
+        diagnostic_root=tmp_path/"native_page_diagnostics"
+        job_file=diagnostic_root/(job+".json")
+        assert (os.stat(diagnostic_root).st_mode & 0o777)==0o700
+        assert (os.stat(job_file).st_mode & 0o777)==0o600
         result=None
         for _ in range(70):
             result=client.get("/api/admin/worker-tools/native-page/jobs/"+job,headers=auth)
@@ -170,6 +175,8 @@ def test_admin_jobs_are_request_bound_and_zip_authenticated(tmp_path,monkeypatch
         download=client.get("/api/admin/worker-tools/native-page/jobs/"+job+"/download",headers=auth)
         assert download.status_code==200
         assert download.content==raw
+        archive_path=diagnostic_root/(job+".zip")
+        assert (os.stat(archive_path).st_mode & 0o777)==0o600
         assert "v1.2.2.zip" in download.headers["content-disposition"]
         record=client.get("/api/admin/worker-tools/native-page/jobs",headers=auth).json()
         assert record["data"][0]["request_id"]==request_id
@@ -223,6 +230,15 @@ def test_admin_jobs_are_request_bound_and_zip_authenticated(tmp_path,monkeypatch
         assert exported.json()["record"]["page_probe"]==probe
         assert client.get("/api/admin/worker-tools/native-page/jobs/"+failed_id+"/download",
             headers=auth).status_code==409
+
+        # Job JSON must never follow a symlink to an arbitrary local file.
+        outside=tmp_path/"outside-native-page-job.json"
+        outside.write_text('{"job_id":"outside","status":"completed"}',encoding="utf8")
+        job_file.unlink()
+        job_file.symlink_to(outside)
+        denied=client.get("/api/admin/worker-tools/native-page/jobs/"+job,headers=auth)
+        assert denied.status_code==404
+        assert outside.read_text(encoding="utf8")=='{"job_id":"outside","status":"completed"}'
 
 
 def test_native_page_history_recovery_uses_time_filter_and_content_sha(tmp_path):
