@@ -82,7 +82,7 @@ def test_media_archive_settings_write_ignores_legacy_predictable_temp_path(tmp_p
 def test_telemetry_load_uses_the_validated_open_descriptor(tmp_path: Path, monkeypatch) -> None:
     path = tmp_path / "request_history.jsonl"
     path.write_text(
-        '{"request_id":"req_descriptor_read","status":"completed","response_text":"ok"}\\n',
+        '{"request_id":"req_descriptor_read","status":"completed","response_text":"ok"}\n',
         encoding="utf-8",
     )
     original_open = Path.open
