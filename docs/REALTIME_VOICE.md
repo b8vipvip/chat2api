@@ -160,6 +160,30 @@ pong
 文件目前仅接受 PNG/JPEG/WebP/GIF、PDF、TXT、CSV、MD、JSON 和部分 Office 文档 MIME。
 任意外链不会被作为文件下载；不接受跨 API Key 访问。上行语音依然只走 PCM binary frame。
 
+
+## 采样视频帧输入（chat2api-live-v1）
+
+当前可在同一 Voice 会话中发送有序的图像帧快照。它复用已验证的 FileStore 图片附件和 ChatGPT Voice 多模态输入路径，不会把视频伪装成 PCM，也不会启动第二个文本请求。
+
+1. 客户端从自己的摄像头/视频源按需采样 JPEG、PNG 或 WebP 帧（建议 1–2 FPS；服务端硬限制为最多 5 FPS）。
+2. 使用同一 managed API Key 和 `files` scope，将每帧通过 `POST /v1/files` 上传，JSON 请求指定 `purpose: "vision"`，保存返回的 `file_id`。
+3. 在已 ready 的实时 WebSocket 中发送：
+
+```json
+{
+  "type": "input_video.frame",
+  "item_id": "camera-frame-000001",
+  "sequence": 1,
+  "timestamp_ms": 1000,
+  "file_id": "file_由上传接口返回的ID",
+  "text": "请结合连续画面描述当前发生的事情"
+}
+```
+
+4. `input_video.frame.queued` 只表示已排队；只有 `input_video.frame.sent` 才表示 Worker 已确认该帧对应的图片和文字进入 ChatGPT Voice 会话。确认事件回传同一 `sequence` 和 `timestamp_ms`。
+5. 每帧必须是当前 API Key 所有的单张 JPEG/PNG/WebP 图片。序号和时间戳必须严格递增；每个会话最多 64 帧、最长时间轴 6 小时。重复、乱序、超速、跨 Key 或不支持的图片会被拒绝。
+
+**重要边界：这不是原生 WebRTC 视频轨道透传。** 每个采样帧会成为同一 Voice 会话中的独立图像输入，因此模型看到的是有时间戳的连续快照，而不是连续视频像素流；帧率、清晰度和同步精度由客户端采样策略及上传延迟决定。当前不支持 MP4/任意视频文件上传、音视频帧级同步或将摄像头轨道直接桥接进 ChatGPT WebRTC。原生视频轨道仍需单独开发和真实浏览器验收。
 ### 测试场
 
 选择「语音生成」会测试 TTS 前缀作用后的 `POST /v1/audio/speech`，并检查真实语音音轨/音频字节。
