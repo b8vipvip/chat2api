@@ -71,3 +71,23 @@ def write_private_bytes_atomic(path: Path, payload: bytes, *, mode: int = 0o600)
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def secure_private_sqlite_files(path: Path, *, create_database: bool = False) -> None:
+    """Protect a SQLite database and any existing rollback/WAL sidecars."""
+    path = Path(path)
+    flags = os.O_RDWR | (os.O_CREAT if create_database else 0)
+    try:
+        fd = open_private_regular_file(path, flags)
+    except FileNotFoundError:
+        if create_database:
+            raise
+    else:
+        os.close(fd)
+    for suffix in ("-wal", "-shm", "-journal"):
+        try:
+            fd = open_private_regular_file(Path(str(path) + suffix), os.O_RDWR)
+        except FileNotFoundError:
+            continue
+        else:
+            os.close(fd)
