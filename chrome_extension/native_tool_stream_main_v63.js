@@ -100,7 +100,13 @@
   function safeToolMetadata(metadata) {
     if (!metadata || typeof metadata !== "object") return {};
     const result = {};
-    for (const key of ["search_model_queries", "search_result_groups", "search_results", "citations", "content_references", "references", "sources", "tool_icons", "reasoning_title", "reasoning_status"]) {
+    for (const key of [
+      "search_model_queries", "search_result_groups", "search_results",
+      "citations", "content_references", "references", "sources",
+      "annotations", "citation_annotations", "url_citation",
+      "web_search_results", "source_references", "tool_references",
+      "tool_icons", "reasoning_title", "reasoning_status",
+    ]) {
       if (metadata[key] !== undefined) result[key] = metadata[key];
     }
     return result;
