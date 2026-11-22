@@ -35,6 +35,19 @@ def _best_partial_text(*values: Any) -> str:
     return max(candidates, key=len, default="")
 
 
+def _completed_delivery_text(row: dict, snapshot: dict) -> str:
+    """Prefer the exact persisted Web Chat projection over canonical telemetry text."""
+    canonical = str(row.get("response_text") or "")
+    delivered = snapshot.get("delivered_text")
+    if (
+        snapshot.get("terminal_status") == "completed"
+        and isinstance(delivered, str)
+        and (delivered or not canonical)
+    ):
+        return delivered
+    return canonical
+
+
 def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
     if getattr(app.state, "web_chat_recovery_api_installed", False):
         return app
@@ -85,12 +98,14 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
         last_event_id = int(journal_snapshot.get("last_event_id") or 0)
 
         if status == "completed":
-            final_text = str(row.get("response_text") or "")
-            if not final_text and journal_snapshot.get("terminal_status") == "completed":
-                final_text = str(journal_snapshot.get("delivered_text") or "")
+            final_text = _completed_delivery_text(row, journal_snapshot)
+            journal_has_terminal = (
+                journal_snapshot.get("terminal_status") == "completed"
+                and isinstance(journal_snapshot.get("delivered_text"), str)
+            )
             available = (
                 bool(row.get("response_text_available")) and bool(row.get("response_text"))
-            ) or bool(final_text and journal_snapshot.get("terminal_status") == "completed")
+            ) or journal_has_terminal
             return {
                 "request_id": request_id,
                 "status": "completed",
@@ -275,10 +290,7 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                         payload = {
                             "status": "completed",
                             "terminal": True,
-                            "response_text": str(
-                                latest_row.get("response_text")
-                                or snapshot.get("delivered_text") or ""
-                            ),
+                            "response_text": _completed_delivery_text(latest_row, snapshot),
                         }
                     elif status_value in {"stalled", "error", "cancelled"}:
                         payload = {
@@ -391,10 +403,7 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                         payload = {
                             "status": "completed",
                             "terminal": True,
-                            "response_text": str(
-                                latest.get("response_text")
-                                or snapshot.get("delivered_text") or ""
-                            ),
+                            "response_text": _completed_delivery_text(latest, snapshot),
                         }
                     else:
                         payload = {
