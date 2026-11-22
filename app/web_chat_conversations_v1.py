@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import sqlite3
 import stat
@@ -15,6 +14,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from .private_storage import secure_private_sqlite_files
 from .user_commerce import USER_SESSION_COOKIE
 from .chat_tool_references_v1 import normalize_tool_references
 
@@ -296,33 +296,11 @@ def normalize_conversation(
 class WebChatConversationStoreV1:
     """SQLite-backed conversation rows with per-user ownership and optimistic revisions."""
 
-    @staticmethod
-    def _secure_regular_file(path: Path, *, create: bool = False) -> None:
-        """Reject linked/non-regular SQLite files and keep them owner-private."""
-        if path.is_symlink():
-            raise RuntimeError("Web Chat conversation database files cannot be symbolic links")
-        flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
-        if create:
-            flags |= os.O_CREAT
-        try:
-            fd = os.open(path, flags, 0o600)
-        except FileNotFoundError:
-            if create:
-                raise
-            return
-        try:
-            metadata = os.fstat(fd)
-            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
-                raise RuntimeError("Web Chat conversation database files must be private regular files")
-            if os.name != "nt" and hasattr(os, "fchmod"):
-                os.fchmod(fd, 0o600)
-        finally:
-            os.close(fd)
-
     def _secure_sqlite_files(self, *, create_database: bool = False) -> None:
-        self._secure_regular_file(self.path, create=create_database)
-        for suffix in ("-wal", "-shm", "-journal"):
-            self._secure_regular_file(Path(str(self.path) + suffix))
+        # Reuse the shared validator so SQLite's transient rollback-journal
+        # unlink race is handled consistently with the host updater and other
+        # private stores. Persistent links/special files still fail closed.
+        secure_private_sqlite_files(self.path, create_database=create_database)
 
     def __init__(self, data_dir: Path) -> None:
         self.path = Path(data_dir) / "web_chat_conversations_v1.sqlite3"
