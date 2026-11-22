@@ -88,3 +88,14 @@ def test_media_archive_local_reader_rejects_symlinked_object(tmp_path):
     with pytest.raises(RuntimeError, match="symbolic links"):
         store._read({}, "local", "objects/linked.png")
     assert target.read_bytes() == _png()
+
+
+def test_media_archive_local_path_rejects_traversal(tmp_path):
+    store = MediaArchive(tmp_path, "master")
+    with pytest.raises(ValueError, match="Invalid local media object key"):
+        store._local_path("../outside.bin")
+    with pytest.raises(ValueError, match="Invalid local media object key"):
+        store._local_path("/outside.bin")
+    if os.name == "nt":
+        with pytest.raises(ValueError, match="Invalid local media object key"):
+            store._local_path("C:outside.bin")
