@@ -44,9 +44,6 @@ def validate_directory(path: Path, *, create: bool = False, mode: int = DEFAULT_
     metadata = path.lstat()
     if not stat.S_ISDIR(metadata.st_mode):
         raise RuntimeError(f"Updater path must be a directory: {path}")
-    if metadata.st_uid != os.geteuid():
-        raise RuntimeError(f"Updater directory must be owned by the updater user: {path}")
-
     # chmod through a validated directory descriptor, not a path that could be
     # swapped for a symlink between lstat and chmod.
     if create:
