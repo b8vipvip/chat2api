@@ -7,14 +7,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import sqlite3
-import stat
 import time
 from contextlib import closing
 from pathlib import Path
 from typing import Any
 
+from .private_storage import secure_private_sqlite_files
 from .chat_stream_delivery_v194 import FINAL_CHUNK_CHARS
 from .chat_tool_references_v1 import extract_tool_references, normalize_tool_references
 
@@ -43,33 +42,11 @@ class WebChatEventJournal:
     def __init__(self, data_dir: Path) -> None:
         self.path = Path(data_dir) / "web_chat_events.sqlite3"
 
-    @staticmethod
-    def _secure_regular_file(path: Path, *, create: bool = False) -> None:
-        """Reject linked/non-regular journal files and keep them owner-private."""
-        if path.is_symlink():
-            raise RuntimeError("Web Chat event journal files cannot be symbolic links")
-        flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
-        if create:
-            flags |= os.O_CREAT
-        try:
-            fd = os.open(path, flags, 0o600)
-        except FileNotFoundError:
-            if create:
-                raise
-            return
-        try:
-            metadata = os.fstat(fd)
-            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
-                raise RuntimeError("Web Chat event journal files must be private regular files")
-            if os.name != "nt" and hasattr(os, "fchmod"):
-                os.fchmod(fd, 0o600)
-        finally:
-            os.close(fd)
-
     def _secure_sqlite_files(self, *, create_database: bool = False) -> None:
-        self._secure_regular_file(self.path, create=create_database)
-        for suffix in ("-wal", "-shm"):
-            self._secure_regular_file(Path(str(self.path) + suffix))
+        # The journal contains private user prompts, delivered text and source
+        # snippets. Use the shared race-tolerant validator for the database and
+        # all SQLite sidecars, including rollback journals.
+        secure_private_sqlite_files(self.path, create_database=create_database)
 
     def _connect(self) -> sqlite3.Connection:
         self.path.parent.mkdir(parents=True, exist_ok=True)
