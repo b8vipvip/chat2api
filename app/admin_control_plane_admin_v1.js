@@ -55,7 +55,7 @@
       const activeView = location.hash.replace(/^#/, "");
       const activeItem = Array.from(group.querySelectorAll(".nav-submenu button[data-view]"))
         .find((item) => item.dataset.view === activeView && !item.hidden);
-      if (activeItem) group.open = true;
+      group.open = Boolean(activeItem);
     });
     return group;
   }
