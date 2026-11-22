@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import base64
+import struct
 import time
+import zlib
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -105,6 +107,17 @@ def test_speech_dispatch_and_audit_use_single_server_composed_prompt(tmp_path):
         assert row["final_prompt"] == req["prompt"]
 
 
+def _tiny_png() -> bytes:
+    def chunk(kind: bytes, payload: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(payload)) + kind + payload
+            + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
+        )
+    header = struct.pack(">IIBBBBB", 1, 1, 8, 6, 0, 0, 0)
+    pixels = zlib.compress(b"\\x00\\x00\\x00\\x00\\xff")
+    return b"\\x89PNG\\r\\n\\x1a\\n" + chunk(b"IHDR", header) + chunk(b"IDAT", pixels) + chunk(b"IEND", b"")
+
+
 def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_path):
     app = app_live(tmp_path)
     with TestClient(app) as client:
@@ -121,6 +134,16 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
                               json={"filename": "frame-not-image.pdf", "mime_type": "application/pdf",
                                     "purpose": "assistants",
                                     "data_base64": base64.b64encode(b"fake-pdf").decode()}).json()["id"]
+        video_frame_file = client.post(
+            "/v1/files",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "filename": "camera-frame.png",
+                "mime_type": "image/png",
+                "purpose": "vision",
+                "data_base64": base64.b64encode(_tiny_png()).decode(),
+            },
+        ).json()["id"]
         extra_files = [
             client.post("/v1/files", headers={"Authorization": f"Bearer {token}"},
                         json={"filename": f"extra-{index}.png", "mime_type": "image/png",
@@ -175,12 +198,12 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
                     "item_id": "video-frame-000",
                     "sequence": 0,
                     "timestamp_ms": 1000,
-                    "file_id": extra_files[1],
+                    "file_id": video_frame_file,
                     "text": "观察连续画面",
                 })
                 video_dispatch = ext.receive_json()
                 assert video_dispatch["type"] == "voice.live.multimodal"
-                assert video_dispatch["attachments"][0]["file_id"] == extra_files[1]
+                assert video_dispatch["attachments"][0]["file_id"] == video_frame_file
                 assert "视频帧 0 · 1.000s" in video_dispatch["text"]
                 video_queued = live.receive_json()
                 assert video_queued["type"] == "input_video.frame.queued"
@@ -233,7 +256,17 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
                 out_of_order_video = live.receive_json()
                 assert out_of_order_video["type"] == "error"
                 assert out_of_order_video["code"] == "INVALID_VIDEO_FRAME"
-                time.sleep(0.21)  # Respect the server's five-FPS ceiling before testing MIME validation.
+                time.sleep(0.21)  # Respect the server's five-FPS ceiling before validating image bytes.
+                live.send_json({
+                    "type": "input_video.frame",
+                    "sequence": 1,
+                    "timestamp_ms": 2000,
+                    "file_id": extra_files[2],
+                })
+                fake_raster = live.receive_json()
+                assert fake_raster["type"] == "error"
+                assert fake_raster["code"] == "INVALID_MEDIA_INPUT"
+                time.sleep(0.21)
                 live.send_json({
                     "type": "input_video.frame",
                     "sequence": 1,
@@ -322,5 +355,5 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
         assert row and row["request_type"] == "voice_call"
         assert row["diagnostics"]["attachments_confirmed"] == 2
         assert row["diagnostics"]["input_confirmed_turns"] == 5
-        assert row["input_file_ids"] == [file_a, extra_files[1]]
+        assert row["input_file_ids"] == [file_a, video_frame_file]
         assert row["diagnostics"]["audio_bytes"] == 1600
