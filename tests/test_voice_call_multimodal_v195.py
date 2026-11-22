@@ -292,6 +292,58 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
                 non_image_video = live.receive_json()
                 assert non_image_video["type"] == "error"
                 assert non_image_video["code"] == "INVALID_MEDIA_INPUT"
+
+                # A Worker-side failure must release the in-flight frame slot,
+                # return the frame identity to the caller, and allow a later
+                # monotonically increasing frame to be queued.
+                time.sleep(0.21)
+                live.send_json({
+                    "type": "input_video.frame",
+                    "item_id": "failed-video-frame",
+                    "sequence": 1,
+                    "timestamp_ms": 2000,
+                    "file_id": video_frame_file,
+                })
+                failed_video_dispatch = ext.receive_json()
+                assert failed_video_dispatch["type"] == "voice.live.multimodal"
+                assert live.receive_json()["type"] == "input_video.frame.queued"
+                ext.send_json({
+                    "type": "image.progress", "kind": "voice-live",
+                    "request_id": request_id, "live_event": "input.error",
+                    "item_id": "failed-video-frame",
+                    "message": "simulated camera frame send failure",
+                })
+                failed_video = live.receive_json()
+                assert failed_video["type"] == "error"
+                assert failed_video["code"] == "VOICE_CALL_INPUT_FAILED"
+                assert failed_video["video_sequence"] == 1
+                assert failed_video["timestamp_ms"] == 2000
+
+                time.sleep(0.21)
+                live.send_json({
+                    "type": "input_video.frame",
+                    "item_id": "retry-video-frame",
+                    "sequence": 2,
+                    "timestamp_ms": 2200,
+                    "file_id": video_frame_file,
+                })
+                retry_video_dispatch = ext.receive_json()
+                assert retry_video_dispatch["type"] == "voice.live.multimodal"
+                retry_video_queued = live.receive_json()
+                assert retry_video_queued["type"] == "input_video.frame.queued"
+                assert retry_video_queued["sequence"] == 2
+                # Leave the retry unconfirmed and explicitly fail it to keep
+                # the test focused on queue release, not media accounting.
+                ext.send_json({
+                    "type": "image.progress", "kind": "voice-live",
+                    "request_id": request_id, "live_event": "input.error",
+                    "item_id": "retry-video-frame",
+                    "message": "simulated retry frame failure",
+                })
+                retry_video_failed = live.receive_json()
+                assert retry_video_failed["type"] == "error"
+                assert retry_video_failed["video_sequence"] == 2
+
                 # Invalid cross-key file must produce a per-input error, NOT
                 # a voice.live.stop or WebSocket disconnect.
                 live.send_json({"type": "input_media", "text": "私密文件", "attachments": [
