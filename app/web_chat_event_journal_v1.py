@@ -420,12 +420,32 @@ class WebChatEventJournal:
                 """,
                 (request_id, owner_key_id),
             ).fetchone()
+            reference_rows = connection.execute(
+                """
+                SELECT payload FROM web_chat_events
+                WHERE request_id = ? AND owner_key_id = ?
+                  AND event_type IN ('chat.references', 'chat.tool.result', 'worker.terminal')
+                ORDER BY sequence ASC
+                """,
+                (request_id, owner_key_id),
+            ).fetchall()
+        references: list[dict[str, str]] = []
+        for reference_row in reference_rows:
+            try:
+                payload = json.loads(str(reference_row["payload"]))
+            except (ValueError, TypeError):
+                continue
+            if isinstance(payload, dict):
+                references = normalize_tool_references([
+                    *references,
+                    *(payload.get("references") if isinstance(payload.get("references"), list) else []),
+                ])
         if row is None:
             return {
                 "last_event_id": 0, "worker_partial_text": "",
                 "delivered_text": "", "terminal_status": "",
                 "terminal_message": "", "worker_text_truncated": False,
-                "delivered_text_truncated": False,
+                "delivered_text_truncated": False, "references": references,
             }
         return {
             "last_event_id": int(row["last_sequence"]),
@@ -435,4 +455,5 @@ class WebChatEventJournal:
             "terminal_message": str(row["terminal_message"] or ""),
             "worker_text_truncated": bool(row["worker_text_truncated"]),
             "delivered_text_truncated": bool(row["delivered_text_truncated"]),
+            "references": references,
         }
