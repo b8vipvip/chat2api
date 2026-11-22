@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 import subprocess
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -77,6 +82,8 @@ def test_update_api_is_session_protected_and_only_queues_fixed_request(tmp_path,
         assert request["branch"] == "main"
         assert request["request_id"].startswith("upd_")
         assert request["use_build_cache"] is False
+        assert stat.S_IMODE((tmp_path / update_patch.UPDATE_STATUS_NAME).stat().st_mode) == 0o600
+        assert stat.S_IMODE((tmp_path / update_patch.UPDATE_REQUEST_NAME).stat().st_mode) == 0o600
         assert "command" not in request
         assert "shell" not in request
 
@@ -177,3 +184,65 @@ def test_update_preserves_only_docker_compose_local_override_and_recovers_it_aft
     assert "reapplied merged local docker-compose.yml" in updater
     assert 'if [[ "$path" != "docker-compose.yml" ]]' in updater
     assert 'shutil.copy2(compose_backup, compose_target)' in reconcile
+
+
+def test_update_state_and_log_helpers_reject_symlinked_files(tmp_path):
+    status_target = tmp_path / "outside-update-status"
+    status_target.write_text('{"status":"running"}', encoding="utf-8")
+    status = tmp_path / update_patch.UPDATE_STATUS_NAME
+    status.symlink_to(status_target)
+    assert update_patch._read_json(status) == {}
+    with pytest.raises(RuntimeError, match="symbolic link"):
+        update_patch._write_json_atomic(status, {"status": "queued"})
+    assert status_target.read_text(encoding="utf-8") == '{"status":"running"}'
+
+    log_target = tmp_path / "outside-update-log"
+    log_target.write_text("sensitive external log line\\n", encoding="utf-8")
+    log = tmp_path / update_patch.UPDATE_LOG_NAME
+    log.symlink_to(log_target)
+    assert update_patch._tail_log(log) == []
+    assert log_target.read_text(encoding="utf-8") == "sensitive external log line\\n"
+
+
+def test_concurrent_api_workers_cannot_queue_two_server_updates(tmp_path, monkeypatch):
+    (tmp_path / update_patch.UPDATER_MARKER_NAME).write_text(
+        json.dumps({"installed": True, "mode": "systemd-path"}),
+        encoding="utf-8",
+    )
+    app = app_for(tmp_path)
+    original_status = update_patch._status_payload
+    counter_lock = threading.Lock()
+    active = 0
+    peak_active = 0
+
+    def slow_status(app_state):
+        nonlocal active, peak_active
+        with counter_lock:
+            active += 1
+            peak_active = max(peak_active, active)
+        try:
+            time.sleep(0.08)
+            return original_status(app_state)
+        finally:
+            with counter_lock:
+                active -= 1
+
+    monkeypatch.setattr(update_patch, "_status_payload", slow_status)
+
+    def start_update():
+        with TestClient(app) as client:
+            client.cookies.set("chat2api_admin_session", "admin-ok")
+            return client.post(
+                "/api/admin/server-update/start",
+                json={"confirm": True},
+            ).status_code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        statuses = list(pool.map(lambda _: start_update(), range(2)))
+
+    assert sorted(statuses) == [202, 409]
+    assert peak_active == 1, "the status check and queue write must share one cross-worker lock"
+    request = json.loads((tmp_path / update_patch.UPDATE_REQUEST_NAME).read_text(encoding="utf-8"))
+    assert request["request_id"].startswith("upd_")
+    assert stat.S_IMODE((tmp_path / update_patch.UPDATE_STATUS_NAME).stat().st_mode) == 0o600
+    assert stat.S_IMODE((tmp_path / update_patch.UPDATE_REQUEST_NAME).stat().st_mode) == 0o600
