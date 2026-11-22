@@ -12,6 +12,9 @@ generated media under the configured data directory.
 - API-key ciphertext, client registry state and the server-local data secret
   use owner-private `0600` files, no-follow reads and unique exclusive atomic
   writes. Data-secret initialization is serialized across local processes.
+- Administrator session hashes, encrypted Worker pairing codes and the
+  hash-chained audit log use the same no-follow, single-link private-file
+  boundary; pairing/session data is never written through predictable temp names.
 - Telemetry, diagnostics and test-run startup readers retain the validated file
   descriptor while reading the bounded JSONL tail; they do not validate a path
   and then reopen it.
