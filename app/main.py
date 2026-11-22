@@ -24,6 +24,7 @@ from pydantic import ValidationError
 from .admin import admin_response
 from .api_keys import ApiKeyStore, ApiPrincipal, UNSET
 from .broker import RequestBroker, RequestState
+from .chat_tool_references_v1 import apply_inline_citation_markers
 from .web_chat_event_journal_v1 import WebChatEventJournal
 from .web_chat_terminal_replay_v1 import (
     is_already_finalized_worker_terminal,
@@ -2705,7 +2706,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     # of assistant content, regardless of provisional snapshots.
                     # Emit the *whole* authoritative text in bounded SSE chunks
                     # even if the preview is unrelated ("我会..." -> "# ...").
-                    final_chunks = list(final_text_chunks(final_text))
+                    display_final_text = final_text
+                    if (request.scope.get("chat2api_mode1_web_chat") is True
+                            and isinstance(event.get("references"), list)):
+                        # Annotation offsets are validated against the archived
+                        # terminal text. Only the Web Chat projection receives
+                        # inert renderer markers; usage, telemetry and Mode 2
+                        # continue to retain the original answer bytes.
+                        display_final_text = apply_inline_citation_markers(
+                            final_text, event["references"],
+                        )
+                    final_chunks = list(final_text_chunks(display_final_text))
                     for index, delta in enumerate(final_chunks):
                         sent_text += delta
                         chunk_delta: dict[str, object] = {"content": delta}
