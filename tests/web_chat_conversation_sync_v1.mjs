@@ -7,7 +7,16 @@ const source = readFileSync("app/chat_client_v1.js", "utf8");
 const start = source.indexOf("  function messageContentWeight(");
 const end = source.indexOf("  async function syncServerConversations(", start);
 assert.ok(start >= 0 && end > start, "conversation merge helpers must remain extractable");
-const context = vm.createContext({MAX_MESSAGES:30});
+const referenceHelpersStart = source.indexOf("  function cleanToolReferenceText(");
+const referenceHelpersEnd = source.indexOf("  function toolReferencesEqual(", referenceHelpersStart);
+assert.ok(referenceHelpersStart >= 0 && referenceHelpersEnd > referenceHelpersStart,
+  "production citation normalization helpers must remain extractable");
+const context = vm.createContext({
+  MAX_MESSAGES:30,
+  URL,
+  window:{location:{origin:"https://chat.example"}},
+});
+vm.runInContext(source.slice(referenceHelpersStart, referenceHelpersEnd), context);
 const mergeConversation = vm.runInContext(
   source.slice(start, end) + "\nmergeConversation",
   context,

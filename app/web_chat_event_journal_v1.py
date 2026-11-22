@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .chat_stream_delivery_v194 import FINAL_CHUNK_CHARS
-from .chat_tool_references_v1 import normalize_tool_references
+from .chat_tool_references_v1 import extract_tool_references, normalize_tool_references
 
 
 _MAX_TEXT_CHARS = 2_000_000
@@ -111,6 +111,16 @@ class WebChatEventJournal:
         if event_type == "chat.snapshot":
             snapshot = _text(event.get("text"), _MAX_TEXT_CHARS)
             return ("worker.snapshot", {"text": snapshot}) if snapshot else None
+        if event_type == "chat.references":
+            references = extract_tool_references(event.get("metadata"))
+            if not references:
+                references = normalize_tool_references(event.get("references"))
+            if not references:
+                return None
+            return "chat.references", {
+                "message_id": _text(event.get("message_id"), 128),
+                "references": references,
+            }
         if event_type in {"chat.tool.call", "chat.tool.result"}:
             field = "arguments" if event_type == "chat.tool.call" else "output"
             payload: dict[str, Any] = {
@@ -126,12 +136,20 @@ class WebChatEventJournal:
             return event_type, payload
         if event_type in {"chat.completed", "image.completed"}:
             terminal_text = event.get("text")
-            return "worker.terminal", {
+            payload: dict[str, Any] = {
                 "status": "completed",
                 "kind": "image" if event_type == "image.completed" else "chat",
+                "message_id": _text(event.get("message_id"), 128),
                 "text": _text(terminal_text, 50_000) if event_type == "chat.completed" else "",
                 "text_chars": len(terminal_text) if isinstance(terminal_text, str) else 0,
             }
+            if event_type == "chat.completed":
+                references = extract_tool_references(event.get("metadata"))
+                if not references:
+                    references = normalize_tool_references(event.get("references"))
+                if references:
+                    payload["references"] = references
+            return "worker.terminal", payload
         if event_type in {"chat.error", "chat.cancelled", "image.error", "image.cancelled"}:
             return "worker.terminal", {
                 "status": "cancelled" if event_type in {"chat.cancelled", "image.cancelled"} else "error",
@@ -402,12 +420,32 @@ class WebChatEventJournal:
                 """,
                 (request_id, owner_key_id),
             ).fetchone()
+            reference_rows = connection.execute(
+                """
+                SELECT payload FROM web_chat_events
+                WHERE request_id = ? AND owner_key_id = ?
+                  AND event_type IN ('chat.references', 'chat.tool.result', 'worker.terminal')
+                ORDER BY sequence ASC
+                """,
+                (request_id, owner_key_id),
+            ).fetchall()
+        references: list[dict[str, str]] = []
+        for reference_row in reference_rows:
+            try:
+                payload = json.loads(str(reference_row["payload"]))
+            except (ValueError, TypeError):
+                continue
+            if isinstance(payload, dict):
+                references = normalize_tool_references([
+                    *references,
+                    *(payload.get("references") if isinstance(payload.get("references"), list) else []),
+                ])
         if row is None:
             return {
                 "last_event_id": 0, "worker_partial_text": "",
                 "delivered_text": "", "terminal_status": "",
                 "terminal_message": "", "worker_text_truncated": False,
-                "delivered_text_truncated": False,
+                "delivered_text_truncated": False, "references": references,
             }
         return {
             "last_event_id": int(row["last_sequence"]),
@@ -417,4 +455,5 @@ class WebChatEventJournal:
             "terminal_message": str(row["terminal_message"] or ""),
             "worker_text_truncated": bool(row["worker_text_truncated"]),
             "delivered_text_truncated": bool(row["delivered_text_truncated"]),
+            "references": references,
         }

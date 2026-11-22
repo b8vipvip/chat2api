@@ -1,7 +1,10 @@
 import asyncio
 
 from app.broker import RequestBroker
-from app.chat_tool_references_v1 import extract_tool_references, normalize_tool_references
+from app.main import web_chat_delivery_text
+from app.chat_tool_references_v1 import (
+    apply_inline_citation_markers, extract_tool_references, normalize_tool_references,
+)
 
 
 def test_extracts_bounded_public_citations_from_supported_metadata_roots() -> None:
@@ -185,3 +188,224 @@ def test_broker_does_not_forward_web_chat_citations_to_mode2_sdk_events() -> Non
         assert "references" not in event
 
     asyncio.run(scenario())
+
+
+
+def test_extracts_responses_url_citation_annotations_and_nested_web_search_sources() -> None:
+    metadata = {
+        "annotations": [
+            {
+                "type": "url_citation",
+                "start_index": 12,
+                "end_index": 24,
+                "url_citation": {
+                    "url": "https://docs.python.org/3/library/",
+                    "title": "Python library reference",
+                    "ref_id": "turn0search42",
+                },
+            },
+        ],
+        "web_search_results": [
+            {
+                "source_title": "Python packaging guide",
+                "link_url": "https://packaging.python.org/en/latest/",
+                "source_ref": "turn0search43",
+            },
+        ],
+        "unrelated": {
+            "url": "https://private.example.net/not-a-source",
+            "title": "Must not be forwarded",
+        },
+    }
+
+    assert extract_tool_references(metadata) == [
+        {
+            "url": "https://docs.python.org/3/library/",
+            "title": "Python library reference",
+            "snippet": "",
+            "id": "turn0search42",
+            "start_index": 12,
+            "end_index": 24,
+        },
+        {
+            "url": "https://packaging.python.org/en/latest/",
+            "title": "Python packaging guide",
+            "snippet": "",
+            "id": "turn0search43",
+        },
+    ]
+
+
+
+def test_final_assistant_message_annotations_attach_to_canonical_terminal_for_web_chat() -> None:
+    async def scenario() -> None:
+        broker = RequestBroker()
+        state = await broker.create("req_final_refs_123", "worker-client")
+        state.mode1_web_chat = True
+
+        accepted = await broker.publish("req_final_refs_123", {
+            "type": "chat.completed",
+            "text": "The API is documented here.",
+            "metadata": {
+                "annotations": [{
+                    "type": "url_citation",
+                    "start_index": 0,
+                    "end_index": 26,
+                    "url_citation": {
+                        "url": "https://docs.example.org/api",
+                        "title": "API reference",
+                        "ref_id": "turn0search0",
+                    },
+                }],
+            },
+        })
+
+        assert accepted is True
+        event = await state.queue.get()
+        assert event["type"] == "chat.completed"
+        assert event["text"] == "The API is documented here."
+        assert event["references"] == [{
+            "url": "https://docs.example.org/api",
+            "title": "API reference",
+            "snippet": "",
+            "id": "turn0search0",
+            "start_index": 0,
+            "end_index": 26,
+        }]
+        assert state.references == event["references"]
+        assert state.terminal_event_type == "chat.completed"
+
+    asyncio.run(scenario())
+
+
+def test_final_assistant_message_annotations_are_not_exposed_to_mode2() -> None:
+    async def scenario() -> None:
+        broker = RequestBroker()
+        state = await broker.create("req_final_refs_mode2", "worker-client")
+        accepted = await broker.publish("req_final_refs_mode2", {
+            "type": "chat.completed",
+            "text": "Answer",
+            "metadata": {
+                "annotations": [{
+                    "type": "url_citation",
+                    "url_citation": {"url": "https://docs.example.org/api"},
+                }],
+            },
+        })
+        assert accepted is True
+        event = await state.queue.get()
+        assert event["type"] == "chat.completed"
+        assert "references" not in event
+        assert state.references == []
+
+    asyncio.run(scenario())
+
+
+
+def test_inline_citation_markers_use_utf16_offsets_and_preserve_multiple_mentions() -> None:
+    text = "A😀BC and D"
+    references = [
+        {
+            "id": "turn0search0",
+            "url": "https://docs.example.org/api",
+            "title": "API",
+            "start_index": 1,
+            "end_index": 3,
+        },
+        {
+            "id": "turn0search0",
+            "url": "https://docs.example.org/api",
+            "title": "API",
+            "start_index": 10,
+            "end_index": 11,
+        },
+        {
+            # This begins inside the emoji's UTF-16 surrogate pair and must
+            # not produce a marker at an invalid Unicode boundary.
+            "id": "turn0search1",
+            "url": "https://docs.example.org/invalid",
+            "title": "Invalid",
+            "start_index": 2,
+            "end_index": 3,
+        },
+    ]
+
+    marker = "\uE200cite\uE202turn0search0\uE201"
+    assert apply_inline_citation_markers(text, references) == (
+        "A😀" + marker + "BC and D" + marker
+    )
+    already_marked = "A😀" + marker + "BC"
+    assert apply_inline_citation_markers(already_marked, references) == already_marked
+
+
+def test_live_reference_event_keeps_the_durable_sse_cursor() -> None:
+    async def scenario() -> None:
+        broker = RequestBroker()
+        state = await broker.create("req_live_refs_cursor", "worker-client")
+        state.mode1_web_chat = True
+        accepted = await broker.publish("req_live_refs_cursor", {
+            "type": "chat.references",
+            "event_id": 17,
+            "message_id": "assistant-final",
+            "metadata": {
+                "annotations": [{
+                    "type": "url_citation",
+                    "url_citation": {
+                        "url": "https://docs.example.org/api",
+                        "title": "API reference",
+                        "ref_id": "turn0search0",
+                    },
+                }],
+            },
+        })
+        assert accepted is True
+        event = await state.queue.get()
+        assert event["type"] == "chat.references"
+        assert event["event_id"] == 17
+        assert event["references"][0]["id"] == "turn0search0"
+
+    asyncio.run(scenario())
+
+
+
+def test_web_chat_delivery_text_requires_verified_exact_native_citation_spans() -> None:
+    text = "Read the docs"
+    terminal = {
+        "diagnostics": {
+            "native_citation_text_match": True,
+            "response_boundary_prompt_echo_removed": False,
+        },
+        "metadata": {
+            "annotations": [{
+                "type": "url_citation",
+                "start_index": 0,
+                "end_index": len(text),
+                "url_citation": {
+                    "url": "https://docs.example.org/",
+                    "title": "Documentation",
+                    "ref_id": "turn0search0",
+                },
+            }],
+        },
+    }
+    marker = "\uE200cite\uE202turn0search0\uE201"
+    assert web_chat_delivery_text(text, text, terminal) == text + marker
+    assert web_chat_delivery_text(text + " changed", text, terminal) == text + " changed"
+
+    unverified = {
+        **terminal,
+        "diagnostics": {
+            "native_citation_text_match": False,
+            "response_boundary_prompt_echo_removed": False,
+        },
+    }
+    assert web_chat_delivery_text(text, text, unverified) == text
+
+    prompt_echo_removed = {
+        **terminal,
+        "diagnostics": {
+            "native_citation_text_match": True,
+            "response_boundary_prompt_echo_removed": True,
+        },
+    }
+    assert web_chat_delivery_text(text, text, prompt_echo_removed) == text

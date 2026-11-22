@@ -511,7 +511,8 @@ const replies = [
   {status:200, ok:true, json:async()=>({
     request_id:"req_12345678", status:"completed", terminal:true,
     recoverable:false, active:false, response_text_available:true,
-    response_text:"final answer"
+    response_text:"final answer",
+    references:[{id:"turn0search0",url:"https://docs.example.org/",title:"Documentation",snippet:""}]
   })}
 ];
 const fetcher = async (url, options) => {
@@ -532,6 +533,8 @@ assert(/^req_[A-Za-z0-9_-]{8,120}$/.test(api.createRequestId({randomUUID:()=>"12
   }).resume({request_id:"req_12345678", assistant_message_id:"message_123456"});
   assert.strictEqual(result.status, "completed");
   assert.strictEqual(result.response_text, "final answer");
+  assert.strictEqual(result.references[0].id, "turn0search0");
+  assert(updates.some(value=>value.status==="completed" && value.references?.[0]?.id==="turn0search0"));
   assert.strictEqual(calls.length, 2);
   assert(calls.every(call=>call.method==="GET"));
   assert(calls.every(call=>call.credentials==="same-origin"));
@@ -548,7 +551,7 @@ assert(/^req_[A-Za-z0-9_-]{8,120}$/.test(api.createRequestId({randomUUID:()=>"12
   const replayFrames = [
     "id: 7\nevent: cursor\ndata: {}\n\n",
     "id: 8\nevent: delivery.delta\ndata: {\"delta\":\"replayed answer\"}\n\n",
-    "id: 9\nevent: delivery.completed\ndata: {\"text_chars\":15}\n\n",
+    "id: 9\nevent: recovery.terminal\ndata: {\"status\":\"completed\",\"terminal\":true,\"response_text\":\"replayed answer\",\"references\":[{\"id\":\"turn0search0\",\"url\":\"https://docs.example.org/\",\"title\":\"Documentation\",\"snippet\":\"\"}]}\n\n",
   ].join("");
   const replayBytes = new TextEncoder().encode(replayFrames);
   let replayRead = false;
@@ -570,6 +573,7 @@ assert(/^req_[A-Za-z0-9_-]{8,120}$/.test(api.createRequestId({randomUUID:()=>"12
   }, 6);
   assert.strictEqual(replayResult.status,"completed");
   assert.strictEqual(replayResult.terminal,true);
+  assert.strictEqual(replayResult.references[0].id,"turn0search0");
   assert.strictEqual(replayEvents.length,3);
   assert.strictEqual(replayEvents[1].id,8);
   assert.strictEqual(replayEvents[1].data.delta,"replayed answer");
@@ -748,3 +752,179 @@ assert.equal(assistant.content, 'longer worker progress plus new text');
         check=False, capture_output=True, text=True, timeout=15,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_recovering_sse_replays_citations_from_canonical_worker_terminal(tmp_path):
+    app = make_app(tmp_path)
+    request_id = "req_terminalcitation123"
+    with TestClient(app) as client:
+        user_id = register(client, "terminal-citation@example.org")
+        app.state.user_accounts.attach_key(user_id, "key_terminal_citation")
+        remember(
+            app, request_id, "key_terminal_citation",
+            status="recovering", web_chat_mode=True,
+            response_text="", response_text_available=False,
+        )
+        asyncio.run(app.state.web_chat_event_journal.append_worker_event(
+            request_id, "key_terminal_citation",
+            {
+                "type": "chat.completed",
+                "message_id": "assistant-final",
+                "text": "The API is documented here.",
+                "metadata": {
+                    "annotations": [{
+                        "type": "url_citation",
+                        "start_index": 0,
+                        "end_index": 26,
+                        "url_citation": {
+                            "url": "https://docs.example.org/api",
+                            "title": "API reference",
+                            "ref_id": "turn0search0",
+                        },
+                    }],
+                },
+            },
+        ))
+        asyncio.run(app.state.web_chat_event_journal.append_terminal(
+            request_id, "key_terminal_citation", "stalled", "worker lease expired",
+        ))
+        replay = client.get(f"/api/user/chat/requests/{request_id}/events")
+        assert replay.status_code == 200, replay.text
+        assert "event: recovery.partial.snapshot" in replay.text
+        assert '"id":"turn0search0"' in replay.text
+        assert '"message_id":"assistant-final"' in replay.text
+        assert "event: chat.references" not in replay.text
+        assert "event: delivery.stalled" in replay.text
+
+
+def test_completed_sse_replay_surfaces_terminal_citations_without_recovery_snapshot(tmp_path):
+    app = make_app(tmp_path)
+    request_id = "req_completedcitation123"
+    with TestClient(app) as client:
+        user_id = register(client, "completed-citation@example.org")
+        app.state.user_accounts.attach_key(user_id, "key_completed_citation")
+        remember(
+            app, request_id, "key_completed_citation",
+            status="completed", web_chat_mode=True,
+            response_text="The API is documented here.", response_text_available=True,
+        )
+        asyncio.run(app.state.web_chat_event_journal.append_worker_event(
+            request_id, "key_completed_citation",
+            {
+                "type": "chat.completed",
+                "message_id": "assistant-final",
+                "text": "The API is documented here.",
+                "metadata": {
+                    "annotations": [{
+                        "type": "url_citation",
+                        "start_index": 0,
+                        "end_index": 26,
+                        "url_citation": {
+                            "url": "https://docs.example.org/api",
+                            "title": "API reference",
+                            "ref_id": "turn0search0",
+                        },
+                    }],
+                },
+            },
+        ))
+        delivery = asyncio.run(app.state.web_chat_event_journal.append_delivery(
+            request_id, "key_completed_citation", "The API is documented here.",
+        ))
+        asyncio.run(app.state.web_chat_event_journal.append_delivery_terminal(
+            request_id, "key_completed_citation", delivery["text_chars"],
+        ))
+        replay = client.get(f"/api/user/chat/requests/{request_id}/events")
+        assert replay.status_code == 200, replay.text
+        assert "event: chat.references" in replay.text
+        assert '"id":"turn0search0"' in replay.text
+        assert "event: delivery.completed" in replay.text
+        assert "event: recovery.partial.snapshot" not in replay.text
+
+
+def test_completed_recovery_prefers_exact_delivery_projection_and_references(tmp_path):
+    app = make_app(tmp_path)
+    request_id = "req_citation_delivery123"
+    raw_text = "Read the docs"
+    marker = "\uE200cite\uE202turn0search0\uE201"
+    delivered_text = raw_text + marker
+    metadata = {
+        "annotations": [{
+            "type": "url_citation",
+            "start_index": 0,
+            "end_index": len(raw_text),
+            "url_citation": {
+                "url": "https://docs.example.org/",
+                "title": "Documentation",
+                "ref_id": "turn0search0",
+            },
+        }],
+    }
+    expected_references = [{
+        "url": "https://docs.example.org/",
+        "title": "Documentation",
+        "snippet": "",
+        "id": "turn0search0",
+        "start_index": 0,
+        "end_index": len(raw_text),
+    }]
+
+    with TestClient(app) as client:
+        user_id = register(client, "citation-delivery@example.org")
+        app.state.user_accounts.attach_key(user_id, "key_citation_delivery")
+        remember(
+            app, request_id, "key_citation_delivery",
+            status="completed",
+            response_text=raw_text,
+            response_text_available=True,
+        )
+        asyncio.run(app.state.web_chat_event_journal.append_worker_event(
+            request_id, "key_citation_delivery",
+            {"type": "chat.references", "metadata": metadata},
+        ))
+        asyncio.run(app.state.web_chat_event_journal.append_worker_event(
+            request_id, "key_citation_delivery",
+            {
+                "type": "chat.completed",
+                "text": raw_text,
+                "metadata": metadata,
+            },
+        ))
+        asyncio.run(app.state.web_chat_event_journal.append_delivery(
+            request_id, "key_citation_delivery", delivered_text,
+        ))
+        asyncio.run(app.state.web_chat_event_journal.append_delivery_terminal(
+            request_id, "key_citation_delivery", len(delivered_text),
+        ))
+
+        recovery = client.get(f"/api/user/chat/requests/{request_id}/recovery")
+        assert recovery.status_code == 200
+        assert recovery.json()["response_text"] == delivered_text
+        assert recovery.json()["references"] == expected_references
+
+        snapshot = asyncio.run(app.state.web_chat_event_journal.snapshot(
+            request_id, "key_citation_delivery",
+        ))
+        assert snapshot["references"] == expected_references
+
+        # Simulate journal compaction removing the early references event.
+        # The canonical worker terminal and durable snapshot must still carry
+        # enough information to render the citation after replay.reset.
+        with app.state.web_chat_event_journal._connect() as connection:
+            connection.execute(
+                "DELETE FROM web_chat_events WHERE request_id=? AND sequence=1",
+                (request_id,),
+            )
+        reset = client.get(f"/api/user/chat/requests/{request_id}/events?after=0")
+        assert reset.status_code == 200
+        assert "event: replay.reset" in reset.text
+        assert delivered_text in reset.text
+        assert '"id":"turn0search0"' in reset.text
+
+        replay = client.get(
+            f"/api/user/chat/requests/{request_id}/events?after={snapshot['last_event_id']}"
+        )
+        assert replay.status_code == 200
+        assert "event: recovery.terminal" in replay.text
+        assert delivered_text in replay.text
+        assert '"id":"turn0search0"' in replay.text
