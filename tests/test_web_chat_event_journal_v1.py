@@ -513,3 +513,58 @@ def test_worker_terminal_outbox_replays_across_two_server_instances(tmp_path):
         )
         assert snapshot["terminal_status"] == "completed"
         assert snapshot["delivered_text"] == final_text
+
+
+def test_final_message_citation_metadata_is_durable_in_worker_and_terminal_records(tmp_path):
+    async def scenario():
+        journal = WebChatEventJournal(tmp_path)
+        await journal.open()
+        metadata = {
+            "annotations": [{
+                "type": "url_citation",
+                "start_index": 0,
+                "end_index": 26,
+                "url_citation": {
+                    "url": "https://docs.example.org/api",
+                    "title": "API reference",
+                    "ref_id": "turn0search0",
+                },
+            }],
+        }
+        first = await journal.append_worker_event(
+            "req_final_citation_journal", "key-final-citation",
+            {
+                "type": "chat.references",
+                "message_id": "assistant-final",
+                "metadata": metadata,
+            },
+        )
+        terminal = await journal.append_worker_event(
+            "req_final_citation_journal", "key-final-citation",
+            {
+                "type": "chat.completed",
+                "message_id": "assistant-final",
+                "text": "The API is documented here.",
+                "metadata": metadata,
+            },
+        )
+        assert (first, terminal) == (1, 2)
+        page = await journal.events_after(
+            "req_final_citation_journal", "key-final-citation", 0,
+        )
+        assert [item["type"] for item in page["events"]] == [
+            "chat.references", "worker.terminal",
+        ]
+        expected = [{
+            "url": "https://docs.example.org/api",
+            "title": "API reference",
+            "snippet": "",
+            "id": "turn0search0",
+            "start_index": 0,
+            "end_index": 26,
+        }]
+        assert page["events"][0]["data"]["references"] == expected
+        assert page["events"][1]["data"]["references"] == expected
+        assert page["events"][1]["data"]["message_id"] == "assistant-final"
+
+    asyncio.run(scenario())
