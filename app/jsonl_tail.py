@@ -35,7 +35,7 @@ def _tail_lines_from_handle(
         handle.seek(position)
         block = handle.read(count)
         scanned += len(block)
-        parts = block.split(b"\\n")
+        parts = block.split(b"\n")
 
         if len(parts) == 1:
             if not pending_too_large:
