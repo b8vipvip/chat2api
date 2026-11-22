@@ -618,7 +618,7 @@ def test_runtime_log_storage_is_private_and_rejects_linked_files(tmp_path: Path)
         level="ERROR", logger_name="storage-test",
         message="must not follow symlink",
     )
-    assert outside.read_text(encoding="utf-8") == '{"message":"outside secret"}\\n'
+    assert outside.read_text(encoding="utf-8") == '{"message":"outside secret"}\n'
     assert RuntimeLogStore(root).query(limit=10)["returned"] == 0
 
     log_path.unlink()
