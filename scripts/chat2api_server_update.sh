@@ -26,8 +26,11 @@ TARGET_COMMIT=""
 ROLLBACK_COMMIT=""
 ROLLBACK_SUCCEEDED="false"
 CODE_SWITCHED="false"
+UPDATE_SUCCEEDED="false"
 LOCAL_COMPOSE_OVERRIDE="false"
 LOCAL_COMPOSE_BACKUP_CREATED="false"
+LOCAL_COMPOSE_BACKUP_RESTORED="false"
+ENV_BACKUP_RESTORED="false"
 LOCAL_COMPOSE_BACKUP_FILE="${DATA_DIR}/.admin-update-docker-compose.backup"
 LOCAL_COMPOSE_MERGED_FILE=""
 LOCAL_COMPOSE_BASE_FILE=""
@@ -125,9 +128,15 @@ PY
 }
 
 restore_env() {
-  if [[ -n "$ENV_BACKUP" && ( -f "$ENV_BACKUP" || -L "$ENV_BACKUP" ) ]]; then
-    cp -a "$ENV_BACKUP" "$APP_DIR/.env"
+  [[ -n "$ENV_BACKUP" ]] || return 0
+  ENV_BACKUP_RESTORED="false"
+  if [[ ! -f "$ENV_BACKUP" && ! -L "$ENV_BACKUP" ]]; then
+    log "preserved .env backup is missing; refusing to claim restoration"
+    return 1
   fi
+  python3 "$APP_DIR/scripts/chat2api_update_storage.py" copy-file \
+    "$ENV_BACKUP" "$APP_DIR/.env" --mode 0600
+  ENV_BACKUP_RESTORED="true"
 }
 
 health_port() {
@@ -338,9 +347,10 @@ rollback() {
   set +e
   git -C "$APP_DIR" reset --hard "$FROM_COMMIT"
   local git_rc=$?
-  restore_env
-  if (( git_rc == 0 )); then
-    restore_local_compose_backup || true
+  local env_rc=0 compose_rc=0
+  restore_env || env_rc=$?
+  restore_local_compose_backup || compose_rc=$?
+  if (( git_rc == 0 && env_rc == 0 && compose_rc == 0 )); then
     # Recovery prioritizes speed/availability; always reuse safe local cache.
     (cd "$APP_DIR" && DOCKER_BUILDKIT=1 docker compose build --build-arg "CHAT2API_BUILD_COMMIT=$FROM_COMMIT")
     local build_rc=$?
@@ -352,16 +362,23 @@ rollback() {
         log "automatic rollback succeeded"
       fi
     fi
+  else
+    log "rollback source/config restoration failed (git=${git_rc}, env=${env_rc}, compose=${compose_rc}); recovery backups are preserved"
   fi
   set -e
 }
 
 restore_local_compose_backup() {
-  if [[ -f "$LOCAL_COMPOSE_BACKUP_FILE" || -L "$LOCAL_COMPOSE_BACKUP_FILE" ]]; then
-    python3 "$APP_DIR/scripts/chat2api_update_storage.py" copy-file \
-      "$LOCAL_COMPOSE_BACKUP_FILE" "$APP_DIR/docker-compose.yml" --mode 0644
-    log "restored preserved local docker-compose.yml"
+  [[ "$LOCAL_COMPOSE_BACKUP_CREATED" == "true" ]] || return 0
+  LOCAL_COMPOSE_BACKUP_RESTORED="false"
+  if [[ ! -f "$LOCAL_COMPOSE_BACKUP_FILE" && ! -L "$LOCAL_COMPOSE_BACKUP_FILE" ]]; then
+    log "preserved docker-compose backup is missing; refusing to claim restoration"
+    return 1
   fi
+  python3 "$APP_DIR/scripts/chat2api_update_storage.py" copy-file \
+    "$LOCAL_COMPOSE_BACKUP_FILE" "$APP_DIR/docker-compose.yml" --mode 0644
+  LOCAL_COMPOSE_BACKUP_RESTORED="true"
+  log "restored preserved local docker-compose.yml"
 }
 
 prepare_local_compose_override() {
@@ -418,7 +435,13 @@ merge_local_compose_override() {
 }
 
 cleanup() {
-  [[ -n "$ENV_BACKUP_DIR" ]] && rm -rf -- "$ENV_BACKUP_DIR" || true
+  if [[ -n "$ENV_BACKUP_DIR" ]]; then
+    if [[ "$CODE_SWITCHED" != "true" || "$ENV_BACKUP_RESTORED" == "true" || "$UPDATE_SUCCEEDED" == "true" ]]; then
+      rm -rf -- "$ENV_BACKUP_DIR" || true
+    else
+      log "preserving .env backup for recovery: $ENV_BACKUP_DIR"
+    fi
+  fi
   if [[ "$REQUEST_CONSUMED" == "true" ]]; then
     rm -f -- "$REQUEST_FILE" || true
   fi
@@ -427,7 +450,11 @@ cleanup() {
   [[ -n "$LOCAL_COMPOSE_BASE_FILE" ]] && rm -f -- "$LOCAL_COMPOSE_BASE_FILE" || true
   [[ -n "$LOCAL_COMPOSE_REMOTE_FILE" ]] && rm -f -- "$LOCAL_COMPOSE_REMOTE_FILE" || true
   if [[ "$LOCAL_COMPOSE_BACKUP_CREATED" == "true" ]]; then
-    rm -f -- "$LOCAL_COMPOSE_BACKUP_FILE" || true
+    if [[ "$CODE_SWITCHED" != "true" || "$LOCAL_COMPOSE_BACKUP_RESTORED" == "true" || "$UPDATE_SUCCEEDED" == "true" ]]; then
+      rm -f -- "$LOCAL_COMPOSE_BACKUP_FILE" || true
+    else
+      log "preserving docker-compose backup because restoration was not confirmed: $LOCAL_COMPOSE_BACKUP_FILE"
+    fi
   fi
 }
 
@@ -488,7 +515,8 @@ write_status "running" "backup" "14" "正在备份 .env 并记录当前提交 ${
 if [[ -f "$APP_DIR/.env" || -L "$APP_DIR/.env" ]]; then
   ENV_BACKUP_DIR="$(mktemp -d /tmp/chat2api-env.XXXXXX)"
   ENV_BACKUP="${ENV_BACKUP_DIR}/.env"
-  cp -a "$APP_DIR/.env" "$ENV_BACKUP"
+  python3 "$APP_DIR/scripts/chat2api_update_storage.py" copy-file \
+    "$APP_DIR/.env" "$ENV_BACKUP" --mode 0600
 fi
 
 # Keep HTTPS fallback on HTTP/1.1 because some Ubuntu/GnuTLS paths
@@ -540,9 +568,11 @@ PY
 fi
 
 write_status "running" "checkout" "40" "正在切换到 GitHub main ${TARGET_COMMIT:0:12}"
+# Mark the transition before the first mutating Git command so a partial
+# checkout/reset failure still enters the rollback path.
+CODE_SWITCHED="true"
 git -C "$APP_DIR" checkout "$BRANCH"
 git -C "$APP_DIR" reset --hard "$TARGET_COMMIT"
-CODE_SWITCHED="true"
 if [[ "$LOCAL_COMPOSE_OVERRIDE" == "true" ]]; then
   python3 "$APP_DIR/scripts/chat2api_update_storage.py" copy-file \
     "$LOCAL_COMPOSE_MERGED_FILE" "$APP_DIR/docker-compose.yml" --mode 0644
@@ -576,6 +606,7 @@ p=Path(sys.argv[1]); record={"commit":sys.argv[2],"previous_commit":sys.argv[3],
 write_json_atomic(p, record)
 PY
   write_status "succeeded" "completed" "100" "GPTAuto 智能更新：无运行时代码变更，跳过构建"
+  UPDATE_SUCCEEDED="true"
   trap - EXIT
   cleanup
   exit 0
@@ -621,6 +652,7 @@ p=Path(sys.argv[1]); record={"commit":sys.argv[2],"previous_commit":sys.argv[3],
 write_json_atomic(p, record)
 PY
   write_status "succeeded" "completed" "100" "GPTAuto 智能热修复成功：精确 CI、文件校验和健康检查通过"
+  UPDATE_SUCCEEDED="true"
   trap - EXIT
   cleanup
   exit 0
@@ -673,6 +705,7 @@ write_json_atomic(path, payload)
 PY
 
 write_status "succeeded" "completed" "100" "服务端更新完成：${FROM_COMMIT:0:12} → ${TARGET_COMMIT:0:12}"
+UPDATE_SUCCEEDED="true"
 trap - EXIT
 cleanup
 log "update completed successfully"
