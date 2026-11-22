@@ -210,6 +210,15 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
                 bad_video = live.receive_json()
                 assert bad_video["type"] == "error"
                 assert bad_video["code"] == "INVALID_VIDEO_FRAME"
+                live.send_json({
+                    "type": "input_video.frame",
+                    "sequence": 1,
+                    "timestamp_ms": 999,
+                    "file_id": extra_files[2],
+                })
+                out_of_order_video = live.receive_json()
+                assert out_of_order_video["type"] == "error"
+                assert out_of_order_video["code"] == "INVALID_VIDEO_FRAME"
                 # Invalid cross-key file must produce a per-input error, NOT
                 # a voice.live.stop or WebSocket disconnect.
                 live.send_json({"type": "input_media", "text": "私密文件", "attachments": [
