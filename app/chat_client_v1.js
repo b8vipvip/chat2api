@@ -2295,6 +2295,10 @@
     const blob = new Blob([JSON.stringify(payload)], {
       type: "application/json;charset=utf-8",
     });
+    if (blob.size > 520 * 1024) {
+      toast("当前会话 JSON 超过 520 KiB 导出限制，请先精简会话内容。");
+      return;
+    }
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
