@@ -11,7 +11,7 @@ ADMIN_HTML = r'''<!doctype html>
 @media(max-width:1250px){.labConfig{grid-template-columns:1fr 1fr}.labConfig>button{align-self:end}.testKeyBox{grid-template-columns:1fr}}
 @media(max-width:1050px){.shell{grid-template-columns:1fr}.side{border-right:0;border-bottom:1px solid var(--line)}.nav{display:flex;overflow:visible;flex-wrap:wrap}.nav button{width:auto;white-space:nowrap}.nav-group{position:relative;flex:0 0 auto}.nav-group>summary{white-space:nowrap}.nav-submenu{position:absolute;top:100%;left:0;min-width:210px;z-index:20;margin:4px 0 0;padding:8px;background:#0b1322;border:1px solid var(--line);border-radius:10px;box-shadow:0 16px 40px rgba(0,0,0,.4)}.top{position:static;flex-wrap:wrap}.grid{grid-template-columns:repeat(2,1fr)}.panels,.split{grid-template-columns:1fr}.wide{grid-column:auto}.labConfig{grid-template-columns:1fr}.timelineRow{grid-template-columns:1fr 1fr}.auth{min-width:0;margin-left:auto}.sessionAuth{width:100%;justify-content:flex-end}.testKeyBox{grid-template-columns:1fr}}
 </style></head><body><div class="shell">
-<aside class="side"><div class="brand">chat2api<small>Server Console · v0.5</small></div><div class="nav"><button data-view="overview">概览</button><button data-view="keys">API Key</button><button data-view="requests">请求记录</button><button data-view="media-storage">转存管理</button><button data-view="docs">开发文档</button><button data-view="playground">测试场</button><button data-view="control-admins" data-cview>管理员 RBAC</button><button data-view="client-policy" data-cview>客户端配置</button><button data-view="registration-invitations" data-cview>邀请注册</button><button data-view="tenants" data-cview>租户管理</button><button data-view="user-roles" data-cview>用户角色</button><button data-view="subscriptions" data-cview>订阅套餐</button><button data-view="model-entitlements" data-cview>模型权限</button><button data-view="plugins" data-cview>插件目录</button><button data-view="quota-ledger" data-cview>额度预留</button></div></aside>
+<aside class="side"><div class="brand">chat2api<small>Server Console · v0.5</small></div><div class="nav"><button data-view="overview">概览</button><button data-view="keys">API Key</button><button data-view="requests">请求记录</button><button data-view="media-storage">转存管理</button><button data-view="web-chat-retention">Web Chat 保留策略</button><button data-view="docs">开发文档</button><button data-view="playground">测试场</button><button data-view="control-admins" data-cview>管理员 RBAC</button><button data-view="client-policy" data-cview>客户端配置</button><button data-view="registration-invitations" data-cview>邀请注册</button><button data-view="tenants" data-cview>租户管理</button><button data-view="user-roles" data-cview>用户角色</button><button data-view="subscriptions" data-cview>订阅套餐</button><button data-view="model-entitlements" data-cview>模型权限</button><button data-view="plugins" data-cview>插件目录</button><button data-view="quota-ledger" data-cview>额度预留</button></div></aside>
 <main class="main"><header class="top"><div><b id="pageTitle">概览</b><div id="status" class="muted">请登录管理员账号</div></div><div class="sessionAuth" id="sessionAuthControls"><span id="adminSessionState" class="sessionIdentity muted" aria-live="polite">正在检查登录状态</span><button class="action good" id="adminSessionOpenLogin" type="button">登录</button><button class="action danger" id="adminSessionLogout" type="button" hidden>退出登录</button><button class="action" id="adminSessionRotatePassword" type="button" hidden>修改密码</button></div></header><div class="content">
 <section class="view" id="view-overview"><div class="grid"><div class="card"><div class="muted">在线扩展</div><div class="n" id="sExt">-</div></div><div class="card"><div class="muted">请求记录</div><div class="n" id="sReq">-</div></div><div class="card"><div class="muted">成功率</div><div class="n" id="sSuccess">-</div></div><div class="card"><div class="muted">平均首 Token</div><div class="n" id="sFirst">-</div></div><div class="card"><div class="muted">估算 Token</div><div class="n" id="sToken">-</div></div></div><div class="panels"><div class="panel"><h3>Chrome 扩展</h3><table><thead><tr><th>ID</th><th>名称</th><th>状态</th><th>版本</th><th>能力</th></tr></thead><tbody id="extBody"></tbody></table></div><div class="panel"><h3>模型目录</h3><table><thead><tr><th>ID</th><th>能力</th></tr></thead><tbody id="modelBody"></tbody></table></div><div class="panel wide"><h3>最近请求</h3><div class="scroll"><table><thead><tr><th>时间</th><th>类型</th><th>状态</th><th>Key</th><th>模型</th><th>首包</th><th>总耗时</th><th>Token</th></tr></thead><tbody id="recentBody"></tbody></table></div></div></div></section>
 <section class="view" id="view-keys"><div class="panel"><h3>创建业务 API Key</h3><div class="toolbar"><input id="keyName" placeholder="名称"><input id="keyDays" type="number" min="1" max="3650" placeholder="有效天数"><input id="keyQuota" type="number" min="0" placeholder="Token 额度（留空不限）"><button class="action good" id="createKey">创建</button></div><div class="secret hidden" id="newSecret"><span id="newToken"></span> <button class="action" id="copyNew">复制</button></div></div><div class="panel" style="margin-top:14px"><h3>令牌列表</h3><div class="scroll"><table><thead><tr><th>名称</th><th>前缀</th><th>状态</th><th>权限</th><th>最后使用</th><th>请求/Token</th><th>Token 额度</th><th>操作</th></tr></thead><tbody id="keysBody"></tbody></table></div></div><div class="footer">新版本业务 Key 的可复制副本使用管理员主密钥派生密钥加密保存；鉴权仍只比较哈希。旧版 0.4 Key 没有密文副本，因此无法恢复。</div></section>
@@ -43,6 +43,21 @@ ADMIN_HTML = r'''<!doctype html>
     <div class="scroll"><table><thead><tr><th>时间</th><th>请求 ID</th><th>媒体类型</th><th>尺寸</th><th>大小</th><th>位置</th><th>操作</th></tr></thead><tbody id="mediaStoredRows"></tbody></table></div></div>
   <div class="panel" style="margin-top:14px"><h3>已转存生成文件</h3><p id="generatedFileSummary" class="muted">从 Worker 识别并归档的 PDF、Office、ZIP、代码和其它允许的文件。</p>
     <div class="scroll"><table><thead><tr><th>时间</th><th>请求 ID</th><th>文件名</th><th>MIME</th><th>大小</th><th>位置</th><th>操作</th></tr></thead><tbody id="generatedFileRows"></tbody></table></div></div>
+</section>
+<section class="view" id="view-web-chat-retention">
+  <div class="panel">
+    <h2>Web Chat 会话保留策略</h2>
+    <p class="muted">按会话最后一次服务端保存时间计算。设置为 0 表示不自动过期；设置为 1–3650 天后，超期会话会被转换为删除墓碑并释放附件引用。墓碑会持续保留，以阻止长期离线设备重新同步时复活已过期会话。</p>
+    <p class="muted">附件二进制文件使用独立的 90 天孤儿文件保留策略；只有不再被任何会话引用的附件才会被清理。策略变更在下次启动或每日维护周期执行，不会立即删除会话内容。</p>
+    <div class="c-form">
+      <label>会话消息保留天数
+        <input id="webChatRetentionDays" type="number" min="0" max="3650" step="1" value="0">
+      </label>
+      <button class="action good" id="webChatRetentionSave" type="button">保存策略</button>
+      <button class="action" id="webChatRetentionReload" type="button">重新读取</button>
+    </div>
+    <div id="webChatRetentionStatus" class="muted" aria-live="polite">正在读取保留策略…</div>
+  </div>
 </section>
 <section class="view" id="view-control-admins">
   <div class="panel"><h2>管理员 RBAC</h2><p class="c-note">管理员密码仅在创建时提交；服务端仅保存 PBKDF2 哈希。禁用账户会撤销其现有 Session。权限最终由服务端 RBAC 决定，隐藏按钮不是安全边界。</p>
@@ -146,8 +161,8 @@ function headers(k=key()){return{Authorization:'Bearer '+k}}
 async function api(path,opt={}){const h={...headers(opt.key||key()),...(opt.headers||{})};if(opt.body!==undefined)h['Content-Type']='application/json';const r=await fetch(path,{method:opt.method||'GET',headers:h,body:opt.body===undefined?undefined:JSON.stringify(opt.body),cache:'no-store',keepalive:opt.keepalive===true,signal:opt.signal});const t=await r.text();let d={};try{d=t?JSON.parse(t):{}}catch(_){d={detail:t}}if(!r.ok)throw new Error(d.detail||`${r.status} ${t}`);return d}
 function pill(v){const c=v==='completed'||v==='passed'||v==='online'?'ok':v==='warning'||v==='skipped'||v==='busy'?'warn':'bad';return`<span class="pill ${c}">${esc(v)}</span>`}
 function status(t,c='muted'){$('status').className=c;$('status').textContent=t}
-const titles={overview:'概览',keys:'API Key',requests:'请求记录','media-storage':'转存管理',docs:'开发文档',playground:'测试场','control-admins':'管理员 RBAC','client-policy':'客户端配置','registration-invitations':'邀请注册',tenants:'租户管理','user-roles':'用户角色',subscriptions:'订阅套餐','model-entitlements':'模型权限',plugins:'插件目录','quota-ledger':'额度预留','api-keys':'API Key 管理'};
-function show(v){document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.nav button').forEach(x=>x.classList.toggle('active',x.dataset.view===v));$('view-'+v)?.classList.add('active');$('pageTitle').textContent=titles[v]||v;location.hash=v;if(v==='overview')loadOverview();if(v==='keys')loadKeys();if(v==='requests')loadRequests();if(v==='media-storage')loadMediaStorage();if(v==='docs')renderDocs();if(v==='playground'){loadOverview().then(loadTests)}}
+const titles={overview:'概览',keys:'API Key',requests:'请求记录','media-storage':'转存管理','web-chat-retention':'Web Chat 保留策略',docs:'开发文档',playground:'测试场','control-admins':'管理员 RBAC','client-policy':'客户端配置','registration-invitations':'邀请注册',tenants:'租户管理','user-roles':'用户角色',subscriptions:'订阅套餐','model-entitlements':'模型权限',plugins:'插件目录','quota-ledger':'额度预留','api-keys':'API Key 管理'};
+function show(v){document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.nav button').forEach(x=>x.classList.toggle('active',x.dataset.view===v));$('view-'+v)?.classList.add('active');$('pageTitle').textContent=titles[v]||v;location.hash=v;if(v==='overview')loadOverview();if(v==='keys')loadKeys();if(v==='requests')loadRequests();if(v==='media-storage')loadMediaStorage();if(v==='web-chat-retention')loadWebChatRetention();if(v==='docs')renderDocs();if(v==='playground'){loadOverview().then(loadTests)}}
 document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>show(b.dataset.view));
 async function loadOverview(){if(!key()){status('请输入管理员主密钥');return}try{overview=await api('/api/admin/overview');status(`已连接 · v${overview.version}`,'ok');const s=overview.telemetry||{};$('sExt').textContent=overview.health?.online_extensions??0;$('sReq').textContent=s.retained_requests??0;$('sSuccess').textContent=(s.success_rate??100)+'%';$('sFirst').textContent=fmtMs(s.avg_first_token_ms);$('sToken').textContent=s.estimated_total_tokens??0;$('extBody').innerHTML=(overview.clients||[]).map(c=>`<tr><td><code>${esc(c.client_id)}</code></td><td>${esc(c.name)}</td><td>${pill(c.online?(c.busy?'busy':'online'):'offline')}</td><td>${esc(c.version)}</td><td>${esc((c.metadata?.capabilities||[]).join(', '))}</td></tr>`).join('')||'<tr><td colspan="5">暂无扩展</td></tr>';$('modelBody').innerHTML=(overview.models||[]).map(m=>`<tr><td><code>${esc(m.id)}</code></td><td>${esc((m.capabilities||[]).join(', '))}</td></tr>`).join('');$('recentBody').innerHTML=(overview.recent_requests||[]).map(r=>`<tr><td>${fmtTime(r.recorded_at)}</td><td>${esc(r.request_type||'text')}</td><td>${pill(r.status)}</td><td>${esc(r.api_key_name||'-')}</td><td><code>${esc(r.requested_model||'-')}</code></td><td>${fmtMs(r.timings?.first_token_ms)}</td><td>${fmtMs(r.timings?.total_ms)}</td><td>${esc(r.usage?.total_tokens??0)}</td></tr>`).join('');fillModels();return overview}catch(e){status('连接失败：'+e.message,'bad')}}
 // Test only concrete models discovered AND validated on an online Worker.
@@ -261,6 +276,36 @@ async function loadMediaStorage(){
   }catch(e){$('mediaStorageStatus').textContent='加载失败：'+e.message;}
 }
 $('mediaReloadSettings').onclick=loadMediaStorage;
+async function loadWebChatRetention(){
+  $('webChatRetentionStatus').textContent='正在读取保留策略…';
+  try{
+    const policy=await api('/api/admin/web-chat-retention');
+    $('webChatRetentionDays').value=String(policy.retention_days??0);
+    $('webChatRetentionStatus').textContent=policy.retention_days
+      ? '当前策略：保留最近 '+policy.retention_days+' 天的会话消息；超期内容将在维护周期转为墓碑。'
+      : '当前策略：永久保留会话消息（自动过期已关闭）。';
+  }catch(error){
+    $('webChatRetentionStatus').textContent='读取失败：'+error.message;
+  }
+}
+$('webChatRetentionReload').onclick=loadWebChatRetention;
+$('webChatRetentionSave').onclick=async()=>{
+  const raw=$('webChatRetentionDays').value;
+  const days=Number(raw);
+  if(!Number.isInteger(days)||days<0||days>3650){
+    $('webChatRetentionStatus').textContent='请输入 0–3650 之间的整数天数。';
+    return;
+  }
+  if(days>0&&!confirm('启用 '+days+' 天会话保留策略？超期会话将在维护周期被转换为删除墓碑；旧设备无法恢复这些内容。'))return;
+  const button=$('webChatRetentionSave');button.disabled=true;
+  try{
+    const policy=await api('/api/admin/web-chat-retention',{method:'PUT',body:{retention_days:days}});
+    $('webChatRetentionDays').value=String(policy.retention_days??0);
+    $('webChatRetentionStatus').textContent='策略已保存。'+(days>0?'超期会话将在下次启动或每日维护周期清理。':'自动过期已关闭。');
+  }catch(error){
+    $('webChatRetentionStatus').textContent='保存失败：'+error.message;
+  }finally{button.disabled=false;}
+};
 $('mediaTestSettings').onclick=async()=>{
   $('mediaStorageStatus').textContent='正在执行存储写入/读取验证…';
   try{
