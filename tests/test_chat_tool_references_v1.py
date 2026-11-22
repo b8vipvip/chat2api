@@ -333,6 +333,8 @@ def test_inline_citation_markers_use_utf16_offsets_and_preserve_multiple_mention
     assert apply_inline_citation_markers(text, references) == (
         "A😀" + marker + "BC and D" + marker
     )
+    already_marked = "A😀" + marker + "BC"
+    assert apply_inline_citation_markers(already_marked, references) == already_marked
 
 
 def test_live_reference_event_keeps_the_durable_sse_cursor() -> None:
