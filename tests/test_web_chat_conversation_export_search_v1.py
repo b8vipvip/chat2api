@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
+import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 from app.config import Settings
 from app.main import create_app
 from app.user_commerce import USER_SESSION_COOKIE
 from app.user_console_v104_patch import install_user_console_v104_patch
 from app.web_chat_integration_v1 import install_web_chat_features_v1
+from app.web_chat_conversations_v1 import _read_bounded_request_body
 
 
 def _conversation(conversation_id: str, title: str, message: str) -> dict:
@@ -192,3 +197,39 @@ def test_json_import_rejects_unsupported_format_and_oversized_body(tmp_path: Pat
             headers={"Content-Type": "application/json"},
         )
         assert oversized.status_code == 413
+
+
+
+def test_chunked_json_import_body_is_bounded_without_content_length() -> None:
+    async def scenario() -> None:
+        chunks = [
+            {"type": "http.request", "body": b"12345", "more_body": True},
+            {"type": "http.request", "body": b"67890", "more_body": False},
+        ]
+
+        async def receive():
+            return chunks.pop(0) if chunks else {"type": "http.disconnect"}
+
+        request = Request(
+            {"type": "http", "method": "POST", "path": "/", "headers": []},
+            receive,
+        )
+        with pytest.raises(HTTPException) as raised:
+            await _read_bounded_request_body(request, 8)
+        assert raised.value.status_code == 413
+
+        valid_chunks = [
+            {"type": "http.request", "body": b"1234", "more_body": True},
+            {"type": "http.request", "body": b"5678", "more_body": False},
+        ]
+
+        async def receive_valid():
+            return valid_chunks.pop(0) if valid_chunks else {"type": "http.disconnect"}
+
+        valid_request = Request(
+            {"type": "http", "method": "POST", "path": "/", "headers": []},
+            receive_valid,
+        )
+        assert await _read_bounded_request_body(valid_request, 8) == b"12345678"
+
+    asyncio.run(scenario())
