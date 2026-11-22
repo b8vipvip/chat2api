@@ -748,3 +748,45 @@ assert.equal(assistant.content, 'longer worker progress plus new text');
         check=False, capture_output=True, text=True, timeout=15,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_recovering_sse_replays_citations_from_canonical_worker_terminal(tmp_path):
+    app = make_app(tmp_path)
+    request_id = "req_terminalcitation123"
+    with TestClient(app) as client:
+        user_id = register(client, "terminal-citation@example.org")
+        app.state.user_accounts.attach_key(user_id, "key_terminal_citation")
+        remember(
+            app, request_id, "key_terminal_citation",
+            status="recovering", web_chat_mode=True,
+            response_text="", response_text_available=False,
+        )
+        asyncio.run(app.state.web_chat_event_journal.append_worker_event(
+            request_id, "key_terminal_citation",
+            {
+                "type": "chat.completed",
+                "message_id": "assistant-final",
+                "text": "The API is documented here.",
+                "metadata": {
+                    "annotations": [{
+                        "type": "url_citation",
+                        "start_index": 0,
+                        "end_index": 26,
+                        "url_citation": {
+                            "url": "https://docs.example.org/api",
+                            "title": "API reference",
+                            "ref_id": "turn0search0",
+                        },
+                    }],
+                },
+            },
+        ))
+        asyncio.run(app.state.web_chat_event_journal.append_terminal(
+            request_id, "key_terminal_citation", "stalled", "worker lease expired",
+        ))
+        replay = client.get(f"/api/user/chat/requests/{request_id}/events")
+        assert replay.status_code == 200, replay.text
+        assert "event: chat.references" in replay.text
+        assert '"id":"turn0search0"' in replay.text
+        assert '"message_id":"assistant-final"' in replay.text
+        assert "event: delivery.stalled" in replay.text
