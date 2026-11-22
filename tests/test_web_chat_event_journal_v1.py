@@ -574,6 +574,10 @@ def test_final_message_citation_metadata_is_durable_in_worker_and_terminal_recor
         assert page["events"][0]["data"]["references"] == expected
         assert page["events"][1]["data"]["references"] == expected
         assert page["events"][1]["data"]["message_id"] == "assistant-final"
+        snapshot = await journal.snapshot(
+            "req_final_citation_journal", "key-final-citation",
+        )
+        assert snapshot["references"] == expected
 
     asyncio.run(scenario())
 
