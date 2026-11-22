@@ -16,6 +16,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .private_storage import secure_private_sqlite_files
+
 
 PLUGIN_ID = re.compile(r"^[a-z][a-z0-9_-]{2,63}$")
 TOOL_NAME = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
@@ -91,22 +93,28 @@ class PluginRegistry:
         self.path = Path(data_dir) / "plugin_catalog_v1.sqlite3"
         self.lock = threading.RLock()
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        if self.path.is_symlink():
-            raise PluginRegistryError("Plugin catalog cannot be a symbolic link")
+        secure_private_sqlite_files(self.path, create_database=True)
         self.db = sqlite3.connect(str(self.path), check_same_thread=False, timeout=10)
-        self.db.execute("PRAGMA foreign_keys=ON")
-        self.db.execute("""
-            CREATE TABLE IF NOT EXISTS plugin_manifests (
-              plugin_id TEXT NOT NULL,
-              version TEXT NOT NULL,
-              manifest_json TEXT NOT NULL,
-              sha256 TEXT NOT NULL,
-              created_at TEXT NOT NULL,
-              PRIMARY KEY (plugin_id, version)
-            )
-        """)
-        self.db.commit()
-        os.chmod(self.path, 0o600)
+        try:
+            self.db.execute("PRAGMA busy_timeout=10000")
+            self.db.execute("PRAGMA synchronous=FULL")
+            self.db.execute("PRAGMA foreign_keys=ON")
+            secure_private_sqlite_files(self.path)
+            self.db.execute("""
+                CREATE TABLE IF NOT EXISTS plugin_manifests (
+                  plugin_id TEXT NOT NULL,
+                  version TEXT NOT NULL,
+                  manifest_json TEXT NOT NULL,
+                  sha256 TEXT NOT NULL,
+                  created_at TEXT NOT NULL,
+                  PRIMARY KEY (plugin_id, version)
+                )
+            """)
+            self.db.commit()
+            secure_private_sqlite_files(self.path)
+        except Exception:
+            self.db.close()
+            raise
 
     def add(self, raw: dict[str, Any]) -> dict[str, Any]:
         manifest = validate_manifest(raw)
@@ -120,6 +128,7 @@ class PluginRegistry:
                         "INSERT INTO plugin_manifests(plugin_id, version, manifest_json, sha256, created_at) VALUES (?, ?, ?, ?, ?)",
                         (manifest["id"], manifest["version"], canonical, digest, created),
                     )
+                secure_private_sqlite_files(self.path)
             except sqlite3.IntegrityError as exc:
                 raise PluginRegistryError("Plugin version already exists (immutable manifest)") from exc
         return {
