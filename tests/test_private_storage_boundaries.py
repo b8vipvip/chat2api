@@ -16,6 +16,8 @@ from app.diagnostics import DiagnosticStore, configure_file_logging
 from app.media_archive_v173 import MediaArchive
 from app.registry import ClientRegistry
 from app.pairing import PairingStore
+from app.plugin_registry import PluginRegistry
+from app.quota_reservations import QuotaReservationStore
 from app.test_runs import TestRunStore
 from app.telemetry import TelemetryStore
 from app.web_chat_conversations_v1 import WebChatConversationStoreV1
@@ -402,3 +404,28 @@ def test_admin_audit_rejects_symlinked_and_hard_linked_logs(tmp_path: Path) -> N
     os.link(hardlinked.path, tmp_path / "outside-audit-hardlink.jsonl")
     with pytest.raises(AdminAuditError, match="opened safely"):
         hardlinked.recent()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission and symlink assertions")
+def test_plugin_and_quota_sqlite_files_are_private_and_reject_sidecar_links(tmp_path: Path) -> None:
+    plugin = PluginRegistry(tmp_path / "plugin")
+    plugin.db.close()
+    assert stat.S_IMODE(plugin.path.stat().st_mode) == 0o600
+    plugin_wal = Path(str(plugin.path) + "-wal")
+    plugin_target = tmp_path / "outside-plugin-wal"
+    plugin_target.write_text("must remain untouched", encoding="utf-8")
+    plugin_wal.symlink_to(plugin_target)
+    with pytest.raises(RuntimeError, match="symbolic link"):
+        PluginRegistry(tmp_path / "plugin")
+    assert plugin_target.read_text(encoding="utf-8") == "must remain untouched"
+
+    quota = QuotaReservationStore(tmp_path / "quota")
+    quota.db.close()
+    assert stat.S_IMODE(quota.path.stat().st_mode) == 0o600
+    quota_shm = Path(str(quota.path) + "-shm")
+    quota_target = tmp_path / "outside-quota-shm"
+    quota_target.write_text("must remain untouched", encoding="utf-8")
+    quota_shm.symlink_to(quota_target)
+    with pytest.raises(RuntimeError, match="symbolic link"):
+        QuotaReservationStore(tmp_path / "quota")
+    assert quota_target.read_text(encoding="utf-8") == "must remain untouched"
