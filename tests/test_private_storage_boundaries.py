@@ -611,7 +611,7 @@ def test_runtime_log_storage_is_private_and_rejects_linked_files(tmp_path: Path)
     assert stat.S_IMODE(log_path.stat().st_mode) == 0o600
 
     outside = tmp_path / "outside-runtime-log"
-    outside.write_text('{"message":"outside secret"}\\n', encoding="utf-8")
+    outside.write_text('{"message":"outside secret"}\n', encoding="utf-8")
     log_path.unlink()
     log_path.symlink_to(outside)
     store.append(
