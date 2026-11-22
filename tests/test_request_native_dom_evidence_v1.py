@@ -242,3 +242,27 @@ def test_9d090b_private_button_only_retains_safe_raster_geometry():
     evidence["root"]["children"][0]["onclick"]="download()"
     with pytest.raises(ValueError,match="Unsafe tree node"):
         validate_evidence(evidence,RID)
+
+
+def test_native_dom_evidence_rejects_symlink_and_hardlink_storage(tmp_path):
+    store=NativeDomEvidenceStore(tmp_path)
+    assert store.save(RID,"owner",example())
+    path=store.root/(RID+".json")
+    outside=tmp_path/"outside-evidence.json"
+    outside.write_text('{"owner":"owner","report":{}}',encoding="utf8")
+
+    path.unlink()
+    path.symlink_to(outside)
+    assert store.get(RID,"owner") is None
+    assert store.save(RID,"owner",example()) is False
+    assert outside.read_text(encoding="utf8")=='{"owner":"owner","report":{}}'
+
+    path.unlink()
+    assert store.save(RID,"owner",example())
+    hardlink=tmp_path/"outside-evidence-hardlink.json"
+    os.link(path,hardlink)
+    before=path.read_bytes()
+    assert store.get(RID,"owner") is None
+    assert store.save(RID,"owner",example()) is False
+    assert path.read_bytes()==before
+    assert hardlink.read_bytes()==before
