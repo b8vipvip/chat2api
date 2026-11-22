@@ -182,9 +182,14 @@ def test_web_chat_conversations_sync_between_two_browser_profiles(tmp_path: Path
                     state="visible", timeout=10000,
                 )
                 citation_links = page_b.locator(".message-tool-reference")
-                assert citation_links.count() == 1
-                assert citation_links.first.get_attribute("href") == "https://docs.python.org/3/library/"
-                assert citation_links.first.inner_text().startswith("[2] Python library reference")
+                # One source comes from the final assistant annotation and one
+                # from the completed browser.search tool result. Both must be
+                # shown once, with the same numbering used by inline markers.
+                assert citation_links.count() == 2
+                assert citation_links.nth(0).get_attribute("href") == "https://docs.python.org/3/library/"
+                assert citation_links.nth(0).inner_text().startswith("[2] Python library reference")
+                assert citation_links.nth(1).get_attribute("href") == "https://docs.python.org/3/library/asyncio.html"
+                assert citation_links.nth(1).inner_text().startswith("[1] Python asyncio documentation")
                 inline_citations = page_b.locator(".inline-citation")
                 assert inline_citations.count() == 2
                 assert inline_citations.nth(0).get_attribute("href") == "https://docs.python.org/3/library/asyncio.html"
