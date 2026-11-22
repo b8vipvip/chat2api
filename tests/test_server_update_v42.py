@@ -168,6 +168,15 @@ def test_update_console_and_host_scripts_use_narrow_systemd_boundary():
     assert 'mktemp -d /tmp/chat2api-env.XXXXXX' in updater
     assert 'mktemp /run/chat2api-github-known-hosts.XXXXXX' in updater
     assert 'LOCAL_COMPOSE_BACKUP_CREATED="true"' in updater
+    assert 'LOCAL_COMPOSE_BACKUP_RESTORED="true"' in updater
+    assert 'preserving docker-compose backup because restoration was not confirmed' in updater
+    assert 'UPDATE_SUCCEEDED="true"' in updater
+    assert 'copy-file "$APP_DIR/.env" "$ENV_BACKUP" --mode 0600' in updater_commands
+    assert 'copy-file "$ENV_BACKUP" "$APP_DIR/.env" --mode 0600' in updater_commands
+    assert 'cp -a "$APP_DIR/.env" "$ENV_BACKUP"' not in updater
+    assert 'cp -a "$ENV_BACKUP" "$APP_DIR/.env"' not in updater
+    assert 'git_rc == 0 && env_rc == 0 && compose_rc == 0' in updater
+    assert updater.index('CODE_SWITCHED="true"') < updater.index('git -C "$APP_DIR" checkout "$BRANCH"')
     assert 'REQUEST_CONSUMED="true"' in updater
     assert 'trap - EXIT' in updater
     assert ': > "$LOG_FILE"' not in updater
