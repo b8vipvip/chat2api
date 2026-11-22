@@ -23,6 +23,7 @@ from .admin_auth import SESSION_COOKIE as ADMIN_SESSION_COOKIE
 from .timezone_utils import beijing_now_iso
 from .user_commerce import USER_SESSION_COOKIE, WalletReservationError
 from .user_console_v104_patch import _parse_json_maybe_wrapped, _safe_url, _verify_zpay, _zpay_sign
+from .private_storage import read_private_bytes, write_private_bytes_atomic
 
 
 PATCH_REVISION = 106
@@ -36,18 +37,8 @@ def _now() -> str:
 
 
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{secrets.token_hex(6)}.tmp")
-    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    try:
-        temporary.chmod(0o600)
-    except OSError:
-        pass
-    temporary.replace(path)
-    try:
-        path.chmod(0o600)
-    except OSError:
-        pass
+    serialized = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    write_private_bytes_atomic(path, serialized)
 
 
 def _valid_tron_address(value: str) -> bool:
@@ -62,16 +53,22 @@ def _payment_channels_secret_candidate(data_dir: Path, settings: Any) -> tuple[s
     V107 must not replace this key before an approved, reversible migration.
     """
     path = data_dir / ".chat2api_data_secret"
-    if path.is_symlink():
-        raise RuntimeError("Payment channel secret file must not be a symlink")
     try:
-        value = path.read_text(encoding="utf-8").strip()
-    except FileNotFoundError:
+        stored_secret = read_private_bytes(path)
+    except (OSError, RuntimeError) as exc:
+        raise RuntimeError("Unable to read the payment channel secret file safely") from exc
+    if stored_secret is None:
         value = ""
         config_path = data_dir / "user_payment_channels_v106.json"
-        if config_path.exists():
+        try:
+            stored_config = read_private_bytes(config_path)
+        except (OSError, RuntimeError) as exc:
+            raise RuntimeError(
+                "Payment channel configuration is unreadable; refusing to replace its secret"
+            ) from exc
+        if stored_config is not None:
             try:
-                raw = json.loads(config_path.read_text(encoding="utf-8"))
+                raw = json.loads(stored_config.decode("utf-8"))
             except (OSError, ValueError, TypeError) as exc:
                 raise RuntimeError(
                     "Payment channel configuration is unreadable; refusing to replace its secret"
@@ -87,8 +84,7 @@ def _payment_channels_secret_candidate(data_dir: Path, settings: Any) -> tuple[s
         else:
             value = secrets.token_urlsafe(48)
         return value, True
-    except OSError as exc:
-        raise RuntimeError("Unable to read the payment channel secret file") from exc
+    value = stored_secret.decode("utf-8").strip()
     if not value:
         # PaymentChannelsStore historically used this fallback when the file
         # existed but contained only whitespace.
@@ -98,17 +94,7 @@ def _payment_channels_secret_candidate(data_dir: Path, settings: Any) -> tuple[s
 
 def _persist_payment_channels_secret(data_dir: Path, value: str) -> None:
     path = data_dir / ".chat2api_data_secret"
-    temporary = path.with_name(f".{path.name}.{secrets.token_hex(6)}.tmp")
-    temporary.write_text(value, encoding="utf-8")
-    try:
-        temporary.chmod(0o600)
-    except OSError:
-        pass
-    temporary.replace(path)
-    try:
-        path.chmod(0o600)
-    except OSError:
-        pass
+    write_private_bytes_atomic(path, value.encode("utf-8"))
 
 
 def _validate_payment_channel_ciphertexts(channels: "PaymentChannelsStore") -> None:
@@ -176,11 +162,12 @@ class PaymentChannelsStore:
         self._load()
 
     def _load(self) -> None:
-        if not self.path.exists():
+        stored = read_private_bytes(self.path)
+        if stored is None:
             self._save()
             return
         try:
-            raw = json.loads(self.path.read_text(encoding="utf-8"))
+            raw = json.loads(stored.decode("utf-8"))
             if not isinstance(raw, dict):
                 raise ValueError("payment channel configuration root must be an object")
             version = raw.get("version", 106)
