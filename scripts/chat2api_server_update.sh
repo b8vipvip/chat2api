@@ -17,6 +17,7 @@ CURRENT_STAGE="starting"
 CURRENT_PERCENT="2"
 CURRENT_MESSAGE="正在启动更新任务"
 REQUEST_ID=""
+REQUEST_CONSUMED="false"
 USE_BUILD_CACHE="true"
 SMART_UPDATE_MODE="verified-image"
 SMART_HOTFIX_ATTEMPTED="false"
@@ -26,6 +27,7 @@ ROLLBACK_COMMIT=""
 ROLLBACK_SUCCEEDED="false"
 CODE_SWITCHED="false"
 LOCAL_COMPOSE_OVERRIDE="false"
+LOCAL_COMPOSE_BACKUP_CREATED="false"
 LOCAL_COMPOSE_BACKUP_FILE="${DATA_DIR}/.admin-update-docker-compose.backup"
 LOCAL_COMPOSE_MERGED_FILE=""
 LOCAL_COMPOSE_BASE_FILE=""
@@ -375,6 +377,7 @@ prepare_local_compose_override() {
   fi
   python3 "$APP_DIR/scripts/chat2api_update_storage.py" copy-file \
     "$APP_DIR/docker-compose.yml" "$LOCAL_COMPOSE_BACKUP_FILE" --mode 0600
+  LOCAL_COMPOSE_BACKUP_CREATED="true"
   LOCAL_COMPOSE_OVERRIDE="true"
   log "detected local docker-compose.yml override; it will be three-way merged into the target release"
   return 0
@@ -409,12 +412,16 @@ merge_local_compose_override() {
 
 cleanup() {
   [[ -n "$ENV_BACKUP_DIR" ]] && rm -rf -- "$ENV_BACKUP_DIR" || true
-  rm -f "$REQUEST_FILE" || true
-  rm -f "$GITHUB_KNOWN_HOSTS_FILE" || true
+  if [[ "$REQUEST_CONSUMED" == "true" ]]; then
+    rm -f -- "$REQUEST_FILE" || true
+  fi
+  rm -f -- "$GITHUB_KNOWN_HOSTS_FILE" || true
   [[ -n "$LOCAL_COMPOSE_MERGED_FILE" ]] && rm -f -- "$LOCAL_COMPOSE_MERGED_FILE" || true
   [[ -n "$LOCAL_COMPOSE_BASE_FILE" ]] && rm -f -- "$LOCAL_COMPOSE_BASE_FILE" || true
   [[ -n "$LOCAL_COMPOSE_REMOTE_FILE" ]] && rm -f -- "$LOCAL_COMPOSE_REMOTE_FILE" || true
-  rm -f -- "$LOCAL_COMPOSE_BACKUP_FILE" || true
+  if [[ "$LOCAL_COMPOSE_BACKUP_CREATED" == "true" ]]; then
+    rm -f -- "$LOCAL_COMPOSE_BACKUP_FILE" || true
+  fi
 }
 
 on_exit() {
@@ -434,14 +441,19 @@ trap on_exit EXIT
 
 exec 9<>"$LOCK_FILE"
 if ! flock -n 9; then
-  REQUEST_ID="$(read_request_id)"
-  write_status "failed" "starting" "1" "已有更新任务持有主机更新锁"
+  log "another host updater already holds the deployment lock; leaving its request and status untouched"
+  trap - EXIT
   exit 75
 fi
 
 REQUEST_ID="$(read_request_id)"
 USE_BUILD_CACHE="$(read_use_build_cache)"
-rm -f "$REQUEST_FILE"
+REQUEST_CONSUMED="true"
+rm -f -- "$REQUEST_FILE"
+if [[ -e "$LOCAL_COMPOSE_BACKUP_FILE" || -L "$LOCAL_COMPOSE_BACKUP_FILE" ]]; then
+  log "unreconciled local compose backup exists; refusing to start a second update"
+  exit 73
+fi
 write_status "running" "starting" "2" "主机更新助手已接管任务"
 
 write_status "running" "preflight" "8" "正在检查 Git、Docker Compose 与工作区"
