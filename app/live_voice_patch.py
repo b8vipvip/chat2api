@@ -469,6 +469,10 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 elif event_type == "input.error":
                     failed_item_id = str(event.get("item_id") or "")
                     pending_input_text.pop(failed_item_id, None)
+                    # Release the in-flight video frame slot on an explicit
+                    # Worker failure so the client can retry with the next
+                    # monotonically increasing sequence number.
+                    failed_video_frame = pending_video_frames.pop(failed_item_id, None)
                     failed_media_ids = pending_input_media_ids.pop(failed_item_id, [])
                     if failed_media_ids:
                         remaining_pending_ids = {
