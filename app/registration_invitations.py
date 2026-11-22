@@ -131,10 +131,7 @@ class InvitationStore:
                 raise
             finally:
                 conn.close()
-        try:
-            os.chmod(self.path, 0o600)
-        except OSError:
-            pass
+        secure_private_sqlite_files(self.path)
         return {
             "invitation": {
                 "invitation_id": invitation_id,
