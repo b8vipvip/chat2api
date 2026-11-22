@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import copy
+from contextlib import contextmanager
 import hashlib
 import json
 import re
@@ -95,6 +96,26 @@ def _payment_channels_secret_candidate(data_dir: Path, settings: Any) -> tuple[s
 def _persist_payment_channels_secret(data_dir: Path, value: str) -> None:
     path = data_dir / ".chat2api_data_secret"
     write_private_bytes_atomic(path, value.encode("utf-8"))
+
+
+@contextmanager
+def _payment_channels_secret_lock(data_dir: Path):
+    """Serialize payment-secret selection and persistence across API workers."""
+    data_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = data_dir / ".payment_channels_secret.lock"
+    deadline = time.monotonic() + 10.0
+    while True:
+        try:
+            lock_path.mkdir(mode=0o700)
+            break
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Timed out waiting for payment-channel secret lock")
+            time.sleep(0.05)
+    try:
+        yield
+    finally:
+        lock_path.rmdir()
 
 
 def _validate_payment_channel_ciphertexts(channels: "PaymentChannelsStore") -> None:
@@ -365,13 +386,14 @@ def install_payment_channels_v106_patch(app: FastAPI) -> FastAPI:
     pricing = app.state.user_pricing
     admin_sessions = getattr(app.state, "admin_sessions", None)
     data_dir = Path(settings.data_dir)
-    data_secret, persist_secret = _payment_channels_secret_candidate(data_dir, settings)
-    channels = PaymentChannelsStore(data_dir, data_secret)
-    # Never let _decrypt()'s legacy empty-string fallback hide an unreadable
-    # credential. Validate before pinning a fallback key or serving admin UI.
-    _validate_payment_channel_ciphertexts(channels)
-    if persist_secret:
-        _persist_payment_channels_secret(data_dir, data_secret)
+    with _payment_channels_secret_lock(data_dir):
+        data_secret, persist_secret = _payment_channels_secret_candidate(data_dir, settings)
+        channels = PaymentChannelsStore(data_dir, data_secret)
+        # Never let _decrypt()'s legacy empty-string fallback hide an unreadable
+        # credential. Validate before pinning a fallback key or serving admin UI.
+        _validate_payment_channel_ciphertexts(channels)
+        if persist_secret:
+            _persist_payment_channels_secret(data_dir, data_secret)
     app.state.user_payment_channels_v106 = channels
 
     original_create_order = billing.create_order
