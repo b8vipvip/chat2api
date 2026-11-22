@@ -137,6 +137,7 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
                 ready = live.receive_json()
                 assert ready["type"] == "session.ready"
                 assert "input_media" in ready["supports"]
+                assert "input_video.frame" in ready["supports"]
                 live.send_json({"type": "conversation.item.create", "item": {"id": "media195",
                     "role": "user", "content": [
                         {"type": "input_text", "text": "看看这张图，用语音告诉我"},
@@ -160,6 +161,55 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
                                "live_event": "input.media.sent", "item_id": "media195",
                                "attachment_count": 999, "text": "看看这张图，用语音告诉我"})
                 assert live.receive_json()["type"] == "input_media.sent"
+
+                # A video track is sampled by the client into timestamped,
+                # owner-scoped JPEG/PNG/WebP uploads. Each frame travels as an
+                # image turn in this same Voice session, never as a fake MP4.
+                live.send_json({
+                    "type": "input_video.frame",
+                    "item_id": "video-frame-000",
+                    "sequence": 0,
+                    "timestamp_ms": 1000,
+                    "file_id": extra_files[1],
+                    "text": "观察连续画面",
+                })
+                video_dispatch = ext.receive_json()
+                assert video_dispatch["type"] == "voice.live.multimodal"
+                assert video_dispatch["attachments"][0]["file_id"] == extra_files[1]
+                assert "视频帧 0 · 1.000s" in video_dispatch["text"]
+                video_queued = live.receive_json()
+                assert video_queued["type"] == "input_video.frame.queued"
+                assert video_queued["sequence"] == 0
+                assert video_queued["timestamp_ms"] == 1000
+                ext.send_json({
+                    "type": "image.progress", "kind": "voice-live",
+                    "request_id": request_id, "live_event": "input.text.sent",
+                    "item_id": "video-frame-000", "text": video_dispatch["text"],
+                })
+                assert live.receive_json()["type"] == "input_text.sent"
+                ext.send_json({
+                    "type": "image.progress", "kind": "voice-live",
+                    "request_id": request_id, "live_event": "input.media.sent",
+                    "item_id": "video-frame-000", "attachment_count": 999,
+                    "text": video_dispatch["text"],
+                })
+                video_sent = live.receive_json()
+                assert video_sent["type"] == "input_video.frame.sent"
+                assert video_sent["sequence"] == 0
+                assert video_sent["timestamp_ms"] == 1000
+                assert video_sent["attachment_count"] == 1
+
+                # Duplicate/out-of-order video frame metadata is rejected
+                # before a Worker dispatch.
+                live.send_json({
+                    "type": "input_video.frame",
+                    "sequence": 0,
+                    "timestamp_ms": 1000,
+                    "file_id": extra_files[2],
+                })
+                bad_video = live.receive_json()
+                assert bad_video["type"] == "error"
+                assert bad_video["code"] == "INVALID_VIDEO_FRAME"
                 # Invalid cross-key file must produce a per-input error, NOT
                 # a voice.live.stop or WebSocket disconnect.
                 live.send_json({"type": "input_media", "text": "私密文件", "attachments": [
@@ -237,7 +287,7 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
         assert not app.state.broker.requests
         row = app.state.telemetry.get(request_id)
         assert row and row["request_type"] == "voice_call"
-        assert row["diagnostics"]["attachments_confirmed"] == 1
-        assert row["diagnostics"]["input_confirmed_turns"] == 4
-        assert row["input_file_ids"] == [file_a]
+        assert row["diagnostics"]["attachments_confirmed"] == 2
+        assert row["diagnostics"]["input_confirmed_turns"] == 5
+        assert row["input_file_ids"] == [file_a, extra_files[1]]
         assert row["diagnostics"]["audio_bytes"] == 1600
