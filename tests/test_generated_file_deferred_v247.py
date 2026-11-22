@@ -148,17 +148,23 @@ def _assert_no_partial_pending_files(deferred: DeferredGeneratedFiles, archive: 
 
 
 def test_staged_write_failure_removes_part_file_before_sqlite_registration(tmp_path, monkeypatch):
+    from app import generated_file_deferred_v247 as module
+
     archive = FakeArchive(tmp_path, threading.Event())
     deferred = DeferredGeneratedFiles(archive)
-    real_write = Path.write_bytes
+    real_write = module.write_private_bytes_atomic
 
-    def fail_after_partial_write(self, data):
-        if self.parent == deferred.root and self.suffix == ".part":
-            real_write(self, b"partial")
+    def fail_after_partial_write(path, data):
+        if path.parent == deferred.root and path.suffix == ".part":
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            try:
+                os.write(fd, b"partial")
+            finally:
+                os.close(fd)
             raise OSError("injected disk-full write")
-        return real_write(self, data)
+        return real_write(path, data)
 
-    monkeypatch.setattr(Path, "write_bytes", fail_after_partial_write)
+    monkeypatch.setattr(module, "write_private_bytes_atomic", fail_after_partial_write)
     with pytest.raises(OSError, match="disk-full"):
         deferred.rewrite(_marker(b'{"ok":true}'), "owner", "req-part", "https://example.test")
     _assert_no_partial_pending_files(deferred, archive)
@@ -363,3 +369,29 @@ def test_disappeared_pending_row_after_original_store_is_compensated(tmp_path, m
     fid, token = files[0]["url"].rsplit("/", 2)[-2:]
     with pytest.raises(KeyError):
         deferred.status(fid, token)
+
+
+def test_deferred_generated_bytes_are_private_and_symlink_targets_are_never_read(tmp_path):
+    import stat
+
+    gate = threading.Event()
+    archive = FakeArchive(tmp_path, gate)
+    deferred = DeferredGeneratedFiles(archive)
+    raw = b'{"private":true}'
+    _, files = deferred.rewrite(
+        _marker(raw), "owner", "req-private-stage", "https://example.test",
+    )
+    pending_id, token = files[0]["url"].rsplit("/", 2)[-2:]
+    staged = deferred.root / (pending_id + ".bin")
+    assert stat.S_IMODE(deferred.root.stat().st_mode) == 0o700
+    assert stat.S_IMODE(staged.stat().st_mode) == 0o600
+    assert stat.S_IMODE(archive.db_path.stat().st_mode) == 0o600
+
+    outside = tmp_path / "outside-generated-pending.bin"
+    outside.write_bytes(b"must remain untouched")
+    staged.unlink()
+    staged.symlink_to(outside)
+    gate.set()
+    deferred.pool.shutdown(wait=True)
+    assert deferred.status(pending_id, token)["status"] == "failed"
+    assert outside.read_bytes() == b"must remain untouched"
