@@ -766,8 +766,14 @@
       return conversation.title.toLocaleLowerCase().includes(query) ||
         conversation.messages.some((message) => messageText(message).toLocaleLowerCase().includes(query));
     });
-    const rows = query && state.searchQuery === query && Array.isArray(state.searchResults)
-      ? state.searchResults : localRows;
+    const serverIds = new Set((state.searchResults || []).map((row) => row.id));
+    const serverRows = query && state.searchQuery === query && Array.isArray(state.searchResults)
+      ? state.searchResults.map((row) => {
+          const local = state.conversations.find((item) => item.id === row.id);
+          return local ? mergeConversation(row, local) : row;
+        }).concat(localRows.filter((row) => !serverIds.has(row.id)))
+      : localRows;
+    const rows = serverRows;
     if (!rows.length) {
       const empty = document.createElement("div");
       empty.className = "muted-empty";
