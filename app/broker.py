@@ -682,6 +682,13 @@ class RequestBroker:
                 "references": state.references,
             }
         elif event_type == "chat.completed":
+            if state.mode1_web_chat:
+                terminal_references = extract_tool_references(event.get("metadata"))
+                if terminal_references:
+                    state.references = normalize_tool_references([
+                        *state.references, *terminal_references,
+                    ])
+                    event = {**event, "references": state.references}
             state.terminal_event_type = str(event_type)
             state.completed_mono = now
             state.diagnostics.update(_terminal_provenance(event))
