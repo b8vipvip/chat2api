@@ -2615,7 +2615,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         yield "data: " + json.dumps(
                             chunk_payload(response_id, model, reference_delta),
                             ensure_ascii=False,
-                        ) + "\\n\\n"
+                        ) + "\n\n"
                     continue
                 if event_type in {"chat.tool.call", "chat.tool.result"}:
                     # Tool activity is an auxiliary Mode 1 presentation lane.
@@ -2700,7 +2700,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         yield "data: " + json.dumps(
                             chunk_payload(response_id, model, reference_delta),
                             ensure_ascii=False,
-                        ) + "\\n\\n"
+                        ) + "\n\n"
                     # The final same-request Worker terminal is the one owner
                     # of assistant content, regardless of provisional snapshots.
                     # Emit the *whole* authoritative text in bounded SSE chunks
