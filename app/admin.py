@@ -382,5 +382,5 @@ document.querySelectorAll('.nav button').forEach(button=>button.disabled=true);
 
 
 def admin_response(initial_view: str = "overview") -> HTMLResponse:
-    view = initial_view if initial_view in {"overview", "keys", "requests", "media-storage", "docs", "playground", "control-admins", "client-policy", "registration-invitations", "tenants", "user-roles", "subscriptions", "model-entitlements", "plugins", "quota-ledger", "api-keys"} else "overview"
+    view = initial_view if initial_view in {"overview", "keys", "requests", "media-storage", "web-chat-retention", "docs", "playground", "control-admins", "client-policy", "registration-invitations", "tenants", "user-roles", "subscriptions", "model-entitlements", "plugins", "quota-ledger", "api-keys"} else "overview"
     return HTMLResponse(ADMIN_HTML.replace("__INITIAL_VIEW__", view), headers={"Cache-Control": "no-store"})
