@@ -121,6 +121,7 @@ def test_update_console_and_host_scripts_use_narrow_systemd_boundary():
     updater = (ROOT / "scripts" / "chat2api_server_update.sh").read_text(encoding="utf-8")
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
+    updater_commands = updater.replace("\\\n", " ")
 
     for token in (
         "版本更新",
@@ -161,8 +162,8 @@ def test_update_console_and_host_scripts_use_narrow_systemd_boundary():
     assert 'if ! REQUEST_ID="$(read_request_id)" || ! USE_BUILD_CACHE="$(read_use_build_cache)"; then' in updater
     assert 'read-request-id "$REQUEST_FILE"' in updater
     assert 'read-build-cache "$REQUEST_FILE"' in updater
-    assert 'copy-file "$APP_DIR/docker-compose.yml"' in updater
-    assert 'copy-file "$LOCAL_COMPOSE_MERGED_FILE"' in updater
+    assert 'copy-file "$APP_DIR/docker-compose.yml" "$LOCAL_COMPOSE_BACKUP_FILE" --mode 0600' in updater_commands
+    assert 'copy-file "$LOCAL_COMPOSE_MERGED_FILE" "$APP_DIR/docker-compose.yml" --mode 0644' in updater_commands
     assert 'mktemp /tmp/chat2api-update-version.XXXXXX' in updater
     assert 'mktemp -d /tmp/chat2api-env.XXXXXX' in updater
     assert 'mktemp /run/chat2api-github-known-hosts.XXXXXX' in updater
@@ -221,7 +222,8 @@ def test_update_preserves_only_docker_compose_local_override_and_recovers_it_aft
     assert 'git -C "$APP_DIR" merge-file -p -q' in updater
     assert "reapplied merged local docker-compose.yml" in updater
     assert 'if [[ "$path" != "docker-compose.yml" ]]' in updater
-    assert 'shutil.copy2(compose_backup, compose_target)' in reconcile
+    assert "read_bytes, read_json, validate_directory, write_bytes_atomic" in reconcile
+    assert "write_bytes_atomic(compose_target, backup_bytes, mode=0o644)" in reconcile
 
 
 def test_update_state_and_log_helpers_reject_symlinked_files(tmp_path):
