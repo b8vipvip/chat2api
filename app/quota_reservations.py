@@ -14,6 +14,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .private_storage import secure_private_sqlite_files
+
 
 ACTIVE_STATES = ("reserved", "committing")
 
@@ -34,27 +36,31 @@ class QuotaReservationStore:
     def __init__(self, data_dir: Path | str, *, reservation_ttl_seconds: int = 1800) -> None:
         self.path = Path(data_dir) / "quota_reservations_v1.sqlite3"
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        if self.path.is_symlink():
-            raise QuotaReservationError("Quota reservation store cannot be a symbolic link")
+        secure_private_sqlite_files(self.path, create_database=True)
         self.reservation_ttl_seconds = max(60, int(reservation_ttl_seconds))
         self.lock = threading.RLock()
         self.db = sqlite3.connect(str(self.path), timeout=10, check_same_thread=False, isolation_level=None)
-        self.db.execute("PRAGMA busy_timeout=10000")
-        self.db.execute("PRAGMA synchronous=FULL")
-        self.db.execute("""
-            CREATE TABLE IF NOT EXISTS quota_reservations(
-              request_id TEXT PRIMARY KEY,
-              key_id TEXT NOT NULL,
-              reserved_tokens INTEGER NOT NULL CHECK(reserved_tokens >= 0),
-              actual_tokens INTEGER,
-              state TEXT NOT NULL CHECK(state IN ('reserved','committing','settled','released','expired')),
-              created_at REAL NOT NULL,
-              expires_at REAL NOT NULL,
-              updated_at REAL NOT NULL
-            )
-        """)
-        self.db.execute("CREATE INDEX IF NOT EXISTS quota_reservations_key_state_idx ON quota_reservations(key_id,state)")
-        os.chmod(self.path, 0o600)
+        try:
+            self.db.execute("PRAGMA busy_timeout=10000")
+            self.db.execute("PRAGMA synchronous=FULL")
+            secure_private_sqlite_files(self.path)
+            self.db.execute("""
+                CREATE TABLE IF NOT EXISTS quota_reservations(
+                  request_id TEXT PRIMARY KEY,
+                  key_id TEXT NOT NULL,
+                  reserved_tokens INTEGER NOT NULL CHECK(reserved_tokens >= 0),
+                  actual_tokens INTEGER,
+                  state TEXT NOT NULL CHECK(state IN ('reserved','committing','settled','released','expired')),
+                  created_at REAL NOT NULL,
+                  expires_at REAL NOT NULL,
+                  updated_at REAL NOT NULL
+                )
+            """)
+            self.db.execute("CREATE INDEX IF NOT EXISTS quota_reservations_key_state_idx ON quota_reservations(key_id,state)")
+            secure_private_sqlite_files(self.path)
+        except Exception:
+            self.db.close()
+            raise
 
     @staticmethod
     def _validate(request_id: str, key_id: str, amount: int) -> None:
