@@ -1,6 +1,7 @@
 import asyncio
 
 from app.broker import RequestBroker
+from app.main import web_chat_delivery_text
 from app.chat_tool_references_v1 import (
     apply_inline_citation_markers, extract_tool_references, normalize_tool_references,
 )
@@ -364,3 +365,47 @@ def test_live_reference_event_keeps_the_durable_sse_cursor() -> None:
         assert event["references"][0]["id"] == "turn0search0"
 
     asyncio.run(scenario())
+
+
+
+def test_web_chat_delivery_text_requires_verified_exact_native_citation_spans() -> None:
+    text = "Read the docs"
+    terminal = {
+        "diagnostics": {
+            "native_citation_text_match": True,
+            "response_boundary_prompt_echo_removed": False,
+        },
+        "metadata": {
+            "annotations": [{
+                "type": "url_citation",
+                "start_index": 0,
+                "end_index": len(text),
+                "url_citation": {
+                    "url": "https://docs.example.org/",
+                    "title": "Documentation",
+                    "ref_id": "turn0search0",
+                },
+            }],
+        },
+    }
+    marker = "\\uE200cite\\uE202turn0search0\\uE201"
+    assert web_chat_delivery_text(text, text, terminal) == text + marker
+    assert web_chat_delivery_text(text + " changed", text, terminal) == text + " changed"
+
+    unverified = {
+        **terminal,
+        "diagnostics": {
+            "native_citation_text_match": False,
+            "response_boundary_prompt_echo_removed": False,
+        },
+    }
+    assert web_chat_delivery_text(text, text, unverified) == text
+
+    prompt_echo_removed = {
+        **terminal,
+        "diagnostics": {
+            "native_citation_text_match": True,
+            "response_boundary_prompt_echo_removed": True,
+        },
+    }
+    assert web_chat_delivery_text(text, text, prompt_echo_removed) == text
