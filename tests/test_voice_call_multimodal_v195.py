@@ -181,6 +181,18 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
                                "live_event": "input.text.sent", "item_id": "media195",
                                "text": "看看这张图，用语音告诉我"})
                 assert live.receive_json()["type"] == "input_text.sent"
+                # Text acknowledgement arrives before the media acknowledgement.
+                # Reusing the same item ID must not overwrite the still-pending
+                # file grants or confuse the eventual media.sent correlation.
+                live.send_json({
+                    "type": "input_media",
+                    "item_id": "media195",
+                    "text": "duplicate item",
+                    "attachments": [{"type": "input_image", "file_id": file_a}],
+                })
+                duplicate_item = live.receive_json()
+                assert duplicate_item["type"] == "error"
+                assert duplicate_item["code"] == "DUPLICATE_INPUT_ITEM_ID"
                 ext.send_json({"type": "image.progress", "kind": "voice-live", "request_id": request_id,
                                "live_event": "input.media.sent", "item_id": "media195",
                                "attachment_count": 999, "text": "看看这张图，用语音告诉我"})
