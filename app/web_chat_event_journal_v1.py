@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sqlite3
+import stat
 import time
 from contextlib import closing
 from pathlib import Path
@@ -41,13 +43,50 @@ class WebChatEventJournal:
     def __init__(self, data_dir: Path) -> None:
         self.path = Path(data_dir) / "web_chat_events.sqlite3"
 
+    @staticmethod
+    def _secure_regular_file(path: Path, *, create: bool = False) -> None:
+        """Reject linked/non-regular journal files and keep them owner-private."""
+        if path.is_symlink():
+            raise RuntimeError("Web Chat event journal files cannot be symbolic links")
+        flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+        if create:
+            flags |= os.O_CREAT
+        try:
+            fd = os.open(path, flags, 0o600)
+        except FileNotFoundError:
+            if create:
+                raise
+            return
+        try:
+            metadata = os.fstat(fd)
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                raise RuntimeError("Web Chat event journal files must be private regular files")
+            if os.name != "nt" and hasattr(os, "fchmod"):
+                os.fchmod(fd, 0o600)
+        finally:
+            os.close(fd)
+
+    def _secure_sqlite_files(self, *, create_database: bool = False) -> None:
+        self._secure_regular_file(self.path, create=create_database)
+        for suffix in ("-wal", "-shm"):
+            self._secure_regular_file(Path(str(self.path) + suffix))
+
     def _connect(self) -> sqlite3.Connection:
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        # The journal contains private user prompts, delivered text and source
+        # snippets. Protect the database and any existing SQLite sidecars
+        # before SQLite opens them, then re-check files SQLite creates on open.
+        self._secure_sqlite_files(create_database=True)
         connection = sqlite3.connect(self.path, timeout=10.0)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA busy_timeout=10000")
-        connection.execute("PRAGMA foreign_keys=ON")
-        connection.execute("PRAGMA synchronous=FULL")
+        try:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA busy_timeout=10000")
+            connection.execute("PRAGMA foreign_keys=ON")
+            connection.execute("PRAGMA synchronous=FULL")
+            self._secure_sqlite_files()
+        except Exception:
+            connection.close()
+            raise
         return connection
 
     async def open(self) -> None:
@@ -57,6 +96,7 @@ class WebChatEventJournal:
         with closing(self._connect()) as connection:
             connection.execute("PRAGMA journal_mode=WAL")
             connection.execute("PRAGMA synchronous=FULL")
+            self._secure_sqlite_files()
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS web_chat_event_state (
@@ -101,6 +141,7 @@ class WebChatEventJournal:
                 (cutoff,),
             )
             connection.commit()
+            self._secure_sqlite_files()
 
     @staticmethod
     def _worker_record(event: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
@@ -345,6 +386,7 @@ class WebChatEventJournal:
                 (request_id, max(0, last_sequence - _MAX_EVENTS_PER_REQUEST)),
             )
             connection.commit()
+            self._secure_sqlite_files()
         return sequences
 
     async def events_after(
