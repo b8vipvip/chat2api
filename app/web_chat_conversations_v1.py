@@ -862,8 +862,15 @@ def install_web_chat_conversations_v1(app: FastAPI) -> None:
     @app.post("/api/user/chat/conversations/import")
     async def import_user_chat_conversation(request: Request):
         accounts, user = current_user(request)
+        max_import_bytes = _MAX_CONVERSATION_BYTES + 8192
+        try:
+            declared_length = int(request.headers.get("content-length") or "0")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid Content-Length", headers=_PRIVATE_HEADERS)
+        if declared_length > max_import_bytes:
+            raise HTTPException(status_code=413, detail="conversation import is too large", headers=_PRIVATE_HEADERS)
         raw_body = await request.body()
-        if len(raw_body) > _MAX_CONVERSATION_BYTES + 8192:
+        if len(raw_body) > max_import_bytes:
             raise HTTPException(status_code=413, detail="conversation import is too large", headers=_PRIVATE_HEADERS)
         try:
             body = json.loads(raw_body)
