@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import stat
 import subprocess
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
