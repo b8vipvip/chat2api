@@ -16,15 +16,18 @@ generated media under the configured data directory.
 - Administrator session hashes, encrypted Worker pairing codes and the
   hash-chained audit log use the same no-follow, single-link private-file
   boundary; pairing/session data is never written through predictable temp names.
-- Payment-provider ciphertext/secrets, prompt configuration, plugin catalog and
-  quota-reservation SQLite state use private files/databases with no-follow
-  reads and validated SQLite sidecars. Legacy payment-secret initialization is
+- Payment-provider ciphertext/secrets, prompt configuration, plugin catalog,
+  quota-reservation state, registration invitations, tenant membership and user
+  subscriptions use private files/databases with no-follow reads and validated
+  SQLite WAL/SHM/rollback-journal sidecars. Legacy payment-secret initialization is
   serialized across local API workers with an OS-released lock file, so a worker
   crash cannot leave a permanent startup-blocking directory lock or competing
   first-start encryption keys.
 - Telemetry, diagnostics and test-run startup readers retain the validated file
   descriptor while reading the bounded JSONL tail; they do not validate a path
   and then reopen it.
+- The redacted runtime log ring uses a `0700` directory, `0600` JSONL/rotated
+  files, no-follow single-link reads/appends and a cross-process rotation lock.
 - Worker probe policy/evidence directories use POSIX mode `0700`; policy and
   event files use `0600` and are written through exclusive, no-follow paths.
 - Web Chat conversation and event-journal SQLite databases validate the main
