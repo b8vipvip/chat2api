@@ -128,11 +128,14 @@ PY
 }
 
 restore_env() {
-  if [[ -n "$ENV_BACKUP" && ( -f "$ENV_BACKUP" || -L "$ENV_BACKUP" ) ]]; then
-    python3 "$APP_DIR/scripts/chat2api_update_storage.py" copy-file \
-      "$ENV_BACKUP" "$APP_DIR/.env" --mode 0600
-    ENV_BACKUP_RESTORED="true"
+  [[ -n "$ENV_BACKUP" ]] || return 0
+  if [[ ! -f "$ENV_BACKUP" && ! -L "$ENV_BACKUP" ]]; then
+    log "preserved .env backup is missing; refusing to claim restoration"
+    return 1
   fi
+  python3 "$APP_DIR/scripts/chat2api_update_storage.py" copy-file \
+    "$ENV_BACKUP" "$APP_DIR/.env" --mode 0600
+  ENV_BACKUP_RESTORED="true"
 }
 
 health_port() {
@@ -365,12 +368,15 @@ rollback() {
 }
 
 restore_local_compose_backup() {
-  if [[ -f "$LOCAL_COMPOSE_BACKUP_FILE" || -L "$LOCAL_COMPOSE_BACKUP_FILE" ]]; then
-    python3 "$APP_DIR/scripts/chat2api_update_storage.py" copy-file \
-      "$LOCAL_COMPOSE_BACKUP_FILE" "$APP_DIR/docker-compose.yml" --mode 0644
-    LOCAL_COMPOSE_BACKUP_RESTORED="true"
-    log "restored preserved local docker-compose.yml"
+  [[ "$LOCAL_COMPOSE_BACKUP_CREATED" == "true" ]] || return 0
+  if [[ ! -f "$LOCAL_COMPOSE_BACKUP_FILE" && ! -L "$LOCAL_COMPOSE_BACKUP_FILE" ]]; then
+    log "preserved docker-compose backup is missing; refusing to claim restoration"
+    return 1
   fi
+  python3 "$APP_DIR/scripts/chat2api_update_storage.py" copy-file \
+    "$LOCAL_COMPOSE_BACKUP_FILE" "$APP_DIR/docker-compose.yml" --mode 0644
+  LOCAL_COMPOSE_BACKUP_RESTORED="true"
+  log "restored preserved local docker-compose.yml"
 }
 
 prepare_local_compose_override() {
