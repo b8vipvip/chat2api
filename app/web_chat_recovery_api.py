@@ -313,6 +313,7 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                     cursor = sequence
                     event_type = str(item.get("type") or "")
                     payload = item.get("data") if isinstance(item.get("data"), dict) else {}
+                    references_in_partial_snapshot = False
                     if (
                         recovering_after_restart and not recovery_partial_sent
                         and event_type in {"worker.delta", "worker.snapshot", "worker.terminal"}
@@ -329,18 +330,26 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                             snapshot.get("worker_partial_text"),
                         )
                         if partial_text:
+                            partial_payload = {
+                                "partial_text": partial_text,
+                                "partial_text_unverified": True,
+                            }
+                            terminal_references = payload.get("references")
+                            if event_type == "worker.terminal" and isinstance(terminal_references, list) and terminal_references:
+                                partial_payload["references"] = terminal_references
+                                partial_payload["message_id"] = str(payload.get("message_id") or "")[:128]
+                                references_in_partial_snapshot = True
                             yield (
                                 f"id: {sequence}\nevent: recovery.partial.snapshot\ndata: "
-                                + json.dumps({
-                                    "partial_text": partial_text,
-                                    "partial_text_unverified": True,
-                                }, ensure_ascii=False, separators=(",", ":"))
+                                + json.dumps(
+                                    partial_payload, ensure_ascii=False, separators=(",", ":"),
+                                )
                                 + "\n\n"
                             )
                         recovery_partial_sent = True
                     if event_type == "worker.terminal":
                         references = payload.get("references")
-                        if isinstance(references, list) and references:
+                        if isinstance(references, list) and references and not references_in_partial_snapshot:
                             event_type = "chat.references"
                             payload = {
                                 "message_id": str(payload.get("message_id") or "")[:128],
