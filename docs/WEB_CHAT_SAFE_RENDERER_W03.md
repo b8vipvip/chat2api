@@ -11,8 +11,10 @@ native-content sidecar.
 - This PR deliberately does not modify `chat_client_v1.js`, `chat_client_v1.html`,
   `user_console_v104_patch.py`, or `app.entry:app`: those shared integration
   points are concurrently owned by the image attachment and storage work.
-- A later integration PR must load the renderer before the client under the
-  existing CSP and fail closed to plain text if the asset cannot load.
+- The production `/chat` page loads pinned KaTeX CSS/JS, the safe renderer, the
+  native renderer, stream recovery, attachment support and the chat client in
+  deferred document order under the existing CSP. The client is loaded after
+  the renderers so the renderer API is available before message delivery.
 - All output is built with explicit, fixed DOM constructors and `textContent`.
   Raw upstream text is never interpreted as HTML. Links allow only HTTP(S)
   without embedded credentials, use `noopener noreferrer` and disable referrers.
@@ -83,9 +85,9 @@ The Node VM DOM harness asserts that malicious SVG/script/iframe/image markup
 is never constructed, unsafe schemes cannot create active links, and math,
 table, code, citation and tool-fallback data are rendered as text-only nodes.
 
-The module is not yet loaded by the production `/chat` page. A dedicated
-integration PR after #793 settles must add asset serving and the script tag,
-then run real desktop/mobile browser fixtures. Image previews require W-01's image-content route and file cards require
-W-05A's download route to be integrated before they can succeed in production. End-to-end native sidecar
-presentation integration remains a separate release gate. Do not claim
-ChatGPT 1:1 parity.
+The renderer and pinned KaTeX assets are loaded by the production `/chat` page.
+The Node VM DOM harness covers renderer safety and formatting contracts, but
+real desktop/mobile browser fixtures and end-to-end Worker native-sidecar
+presentation remain separate acceptance gates. Image previews use W-01's
+owner-checked image-content route and file cards use W-05A's download route.
+Do not claim ChatGPT 1:1 parity or full coverage of every native sidecar.
