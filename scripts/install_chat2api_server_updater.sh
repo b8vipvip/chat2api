@@ -27,7 +27,7 @@ case "$origin" in
   *) echo "origin 不是预期的 chat2api 仓库：${origin}" >&2; exit 3 ;;
 esac
 
-install -d -m 0755 "$DATA_DIR"
+python3 "$APP_DIR/scripts/chat2api_update_storage.py" ensure-dir "$DATA_DIR"
 # The service invokes this tracked file through /bin/bash, so it does not need
 # an executable bit. Keep the mode aligned with Git (100644); the old installer
 # used chmod 755 here, which made the worktree look dirty and caused the updater
@@ -82,7 +82,7 @@ systemctl enable --now chat2api-admin-update.path
 current_sha="$(git -C "$APP_DIR" rev-parse HEAD)"
 python3 - "$MARKER_FILE" "$DEPLOYMENT_FILE" "$APP_DIR" "$current_sha" <<'PY'
 from __future__ import annotations
-import json, os, sys, tempfile
+import os, sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -90,22 +90,12 @@ marker = Path(sys.argv[1])
 deployment = Path(sys.argv[2])
 app_dir = sys.argv[3]
 sha = sys.argv[4]
+sys.path.insert(0, str(Path(app_dir) / "scripts"))
+from chat2api_update_storage import write_json_atomic
+
 now = datetime.now(timezone.utc).isoformat()
 
-def write(path: Path, payload: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent), text=True)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2)
-            handle.write("\n")
-            handle.flush(); os.fsync(handle.fileno())
-        os.replace(tmp, path)
-    finally:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
-
-write(marker, {
+write_json_atomic(marker, {
     "installed": True,
     "mode": "systemd-path",
     "app_dir": app_dir,
@@ -113,7 +103,7 @@ write(marker, {
     "service_unit": "chat2api-admin-update.service",
     "installed_at": now,
 })
-write(deployment, {
+write_json_atomic(deployment, {
     "commit": sha,
     "branch": "main",
     "repository": "b8vipvip/chat2api",
