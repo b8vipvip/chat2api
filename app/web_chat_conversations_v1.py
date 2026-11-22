@@ -55,6 +55,21 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+async def _read_bounded_request_body(request: Request, max_bytes: int) -> bytes:
+    try:
+        declared_length = int(request.headers.get("content-length") or "0")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid Content-Length", headers=_PRIVATE_HEADERS)
+    if declared_length > max_bytes:
+        raise HTTPException(status_code=413, detail="conversation import is too large", headers=_PRIVATE_HEADERS)
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > max_bytes:
+            raise HTTPException(status_code=413, detail="conversation import is too large", headers=_PRIVATE_HEADERS)
+        body.extend(chunk)
+    return bytes(body)
+
+
 def _bounded_string(value: Any, field: str, limit: int, *, default: str = "") -> str:
     if value is None:
         return default
@@ -863,15 +878,7 @@ def install_web_chat_conversations_v1(app: FastAPI) -> None:
     async def import_user_chat_conversation(request: Request):
         accounts, user = current_user(request)
         max_import_bytes = _MAX_CONVERSATION_BYTES + 8192
-        try:
-            declared_length = int(request.headers.get("content-length") or "0")
-        except ValueError:
-            raise HTTPException(status_code=400, detail="invalid Content-Length", headers=_PRIVATE_HEADERS)
-        if declared_length > max_import_bytes:
-            raise HTTPException(status_code=413, detail="conversation import is too large", headers=_PRIVATE_HEADERS)
-        raw_body = await request.body()
-        if len(raw_body) > max_import_bytes:
-            raise HTTPException(status_code=413, detail="conversation import is too large", headers=_PRIVATE_HEADERS)
+        raw_body = await _read_bounded_request_body(request, max_import_bytes)
         try:
             body = json.loads(raw_body)
         except (TypeError, ValueError, UnicodeDecodeError):
