@@ -14,6 +14,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from .admin_auth import same_origin_admin_request
 from .private_storage import secure_private_sqlite_files
 from .user_commerce import USER_SESSION_COOKIE
 from .chat_tool_references_v1 import normalize_tool_references
@@ -879,6 +880,8 @@ def install_web_chat_conversations_v1(app: FastAPI) -> None:
     @app.post("/api/user/chat/conversations/import")
     async def import_user_chat_conversation(request: Request):
         accounts, user = current_user(request)
+        if not same_origin_admin_request(request):
+            raise HTTPException(status_code=403, detail="same-origin request required", headers=_PRIVATE_HEADERS)
         max_import_bytes = _MAX_CONVERSATION_BYTES + 8192
         raw_body = await _read_bounded_request_body(request, max_import_bytes)
         try:
@@ -921,9 +924,14 @@ def install_web_chat_conversations_v1(app: FastAPI) -> None:
     @app.put("/api/user/chat/conversations/{conversation_id}")
     async def save_user_chat_conversation(conversation_id: str, request: Request):
         accounts, user = current_user(request)
+        if not same_origin_admin_request(request):
+            raise HTTPException(status_code=403, detail="same-origin request required", headers=_PRIVATE_HEADERS)
+        raw_body = await _read_bounded_request_body(
+            request, _MAX_CONVERSATION_BYTES + 8192,
+        )
         try:
-            body = await request.json()
-        except (ValueError, UnicodeDecodeError):
+            body = json.loads(raw_body)
+        except (TypeError, ValueError, UnicodeDecodeError):
             raise HTTPException(status_code=400, detail="invalid JSON body", headers=_PRIVATE_HEADERS)
         if not isinstance(body, dict):
             raise HTTPException(status_code=422, detail="conversation payload must be an object", headers=_PRIVATE_HEADERS)
@@ -964,6 +972,8 @@ def install_web_chat_conversations_v1(app: FastAPI) -> None:
     @app.delete("/api/user/chat/conversations/{conversation_id}")
     async def delete_user_chat_conversation(conversation_id: str, request: Request):
         _, user = current_user(request)
+        if not same_origin_admin_request(request):
+            raise HTTPException(status_code=403, detail="same-origin request required", headers=_PRIVATE_HEADERS)
         raw_revision = request.query_params.get("expected_revision")
         try:
             expected_revision = int(raw_revision) if raw_revision is not None else -1
