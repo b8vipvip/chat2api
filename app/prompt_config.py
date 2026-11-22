@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import json
-import os
 import re
-import uuid
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 from .timezone_utils import beijing_now_iso
+from .private_storage import read_private_bytes, write_private_bytes_atomic
 
 
 STORE_VERSION = 1
@@ -158,16 +157,17 @@ class PromptConfigStore:
         self._load()
 
     def _load(self) -> None:
-        if not self.path.exists():
-            return
         try:
-            raw = json.loads(self.path.read_text(encoding="utf-8"))
+            stored = read_private_bytes(self.path)
+            if stored is None:
+                return
+            raw = json.loads(stored.decode("utf-8"))
             loaded = normalize_config(raw, previous_revision=max(0, int(raw.get("revision") or 1) - 1))
             loaded["revision"] = max(1, int(raw.get("revision") or loaded["revision"]))
             loaded["updated_at"] = str(raw.get("updated_at") or loaded["updated_at"])
             self.config = loaded
             self.last_error = ""
-        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        except (OSError, ValueError, TypeError, RuntimeError) as exc:
             self.last_error = str(exc)
             self.config = default_config()
 
@@ -188,18 +188,8 @@ class PromptConfigStore:
 
     def save(self, raw: Any) -> dict[str, Any]:
         next_config = normalize_config(raw, previous_revision=int(self.config.get("revision") or 0))
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.path.with_name(f".{self.path.name}.{uuid.uuid4().hex}.tmp")
-        temporary.write_text(json.dumps(next_config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        try:
-            os.chmod(temporary, 0o600)
-        except OSError:
-            pass
-        os.replace(temporary, self.path)
-        try:
-            os.chmod(self.path, 0o600)
-        except OSError:
-            pass
+        serialized = (json.dumps(next_config, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+        write_private_bytes_atomic(self.path, serialized)
         self.config = next_config
         self.last_error = ""
         return self.snapshot()
