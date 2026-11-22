@@ -9,10 +9,13 @@ from pathlib import Path
 
 import pytest
 
+from app.admin_audit import AdminAuditError, AdminAuditStore
+from app.admin_auth import AdminSessionStore
 from app.api_keys import ApiKeyStore, load_or_create_data_secret
 from app.diagnostics import DiagnosticStore, configure_file_logging
 from app.media_archive_v173 import MediaArchive
 from app.registry import ClientRegistry
+from app.pairing import PairingStore
 from app.test_runs import TestRunStore
 from app.telemetry import TelemetryStore
 from app.web_chat_conversations_v1 import WebChatConversationStoreV1
@@ -340,3 +343,62 @@ def test_data_secret_rejects_symlink_without_reading_target(tmp_path: Path) -> N
     with pytest.raises(RuntimeError, match="symbolic link"):
         load_or_create_data_secret(tmp_path)
     assert target.read_text(encoding="utf-8") == "not the application secret"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission and symlink assertions")
+def test_admin_sessions_and_pairing_codes_are_private(tmp_path: Path) -> None:
+    sessions_path = tmp_path / "admin" / "admin_sessions.json"
+    sessions = AdminSessionStore("admin", "password", storage_path=sessions_path)
+    token = sessions.create()
+    assert stat.S_IMODE(sessions_path.stat().st_mode) == 0o600
+    reloaded = AdminSessionStore("admin", "password", storage_path=sessions_path)
+    assert reloaded.authenticate(token)
+
+    pairing_root = tmp_path / "pairing"
+    pairing = PairingStore(pairing_root)
+    outside = tmp_path / "outside-pairing-temp"
+    outside.write_text("must remain untouched", encoding="utf-8")
+    pairing.path.with_suffix(".tmp").symlink_to(outside)
+    public, raw_code = asyncio.run(pairing.create())
+    assert public["pairing_id"]
+    assert raw_code.startswith("pair-")
+    assert stat.S_IMODE(pairing.path.stat().st_mode) == 0o600
+    assert outside.read_text(encoding="utf-8") == "must remain untouched"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink assertions")
+def test_admin_session_and_pairing_loaders_reject_symlinked_files(tmp_path: Path) -> None:
+    target = tmp_path / "outside-sessions"
+    target.write_text('{"sessions":[]}', encoding="utf-8")
+    session_path = tmp_path / "linked-sessions.json"
+    session_path.symlink_to(target)
+    sessions = AdminSessionStore("admin", "password", storage_path=session_path)
+    assert sessions.last_persistence_error
+    sessions.create()
+    assert target.read_text(encoding="utf-8") == '{"sessions":[]}'
+
+    pairing_root = tmp_path / "linked-pairing"
+    pairing = PairingStore(pairing_root)
+    outside_pairing = tmp_path / "outside-pairing.json"
+    outside_pairing.write_text('{"pairing_codes":[]}', encoding="utf-8")
+    pairing.path.symlink_to(outside_pairing)
+    with pytest.raises(RuntimeError, match="symbolic link"):
+        asyncio.run(pairing.load())
+    assert outside_pairing.read_text(encoding="utf-8") == '{"pairing_codes":[]}'
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink and hard-link assertions")
+def test_admin_audit_rejects_symlinked_and_hard_linked_logs(tmp_path: Path) -> None:
+    linked = AdminAuditStore(tmp_path / "linked")
+    target = tmp_path / "outside-audit.jsonl"
+    target.write_text("", encoding="utf-8")
+    linked.path.symlink_to(target)
+    with pytest.raises(AdminAuditError, match="opened safely"):
+        linked.recent()
+    assert target.read_text(encoding="utf-8") == ""
+
+    hardlinked = AdminAuditStore(tmp_path / "hardlinked")
+    hardlinked.path.write_text("", encoding="utf-8")
+    os.link(hardlinked.path, tmp_path / "outside-audit-hardlink.jsonl")
+    with pytest.raises(AdminAuditError, match="opened safely"):
+        hardlinked.recent()
