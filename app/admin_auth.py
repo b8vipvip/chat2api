@@ -7,7 +7,6 @@ import os
 import secrets
 import threading
 import time
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
