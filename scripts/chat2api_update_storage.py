@@ -22,30 +22,48 @@ DEFAULT_DATA_DIR_MODE = 0o755
 
 def validate_directory(path: Path, *, create: bool = False, mode: int = DEFAULT_DATA_DIR_MODE) -> Path:
     path = Path(os.path.abspath(path))
+
+    def reject_symlink_components() -> None:
+        current = Path(path.anchor)
+        for part in path.parts[1:]:
+            current = current / part
+            try:
+                metadata = current.lstat()
+            except FileNotFoundError:
+                continue
+            if stat.S_ISLNK(metadata.st_mode):
+                raise RuntimeError(f"Updater directory cannot contain symlinks: {current}")
+
+    # Inspect existing ancestors before mkdir so a symlinked parent is never
+    # used as a creation target.
+    reject_symlink_components()
     if create:
         path.mkdir(parents=True, exist_ok=True, mode=mode)
-    # Reject symlinks in every existing path component. The updater is a
-    # privileged host process; accepting a redirected data directory is unsafe.
-    current = Path(path.anchor)
-    for part in path.parts[1:]:
-        current = current / part
-        try:
-            metadata = current.lstat()
-        except FileNotFoundError:
-            if create:
-                raise
-            raise
-        if stat.S_ISLNK(metadata.st_mode):
-            raise RuntimeError(f"Updater directory cannot contain symlinks: {current}")
+    reject_symlink_components()
+
     metadata = path.lstat()
     if not stat.S_ISDIR(metadata.st_mode):
         raise RuntimeError(f"Updater path must be a directory: {path}")
     if metadata.st_uid != os.geteuid():
         raise RuntimeError(f"Updater directory must be owned by the updater user: {path}")
+
+    # chmod through a validated directory descriptor, not a path that could be
+    # swapped for a symlink between lstat and chmod.
+    if create:
+        directory_fd = os.open(
+            path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+        try:
+            opened = os.fstat(directory_fd)
+            if not stat.S_ISDIR(opened.st_mode) or opened.st_ino != metadata.st_ino:
+                raise RuntimeError(f"Updater directory changed during validation: {path}")
+            os.fchmod(directory_fd, mode)
+            metadata = os.fstat(directory_fd)
+        finally:
+            os.close(directory_fd)
     if metadata.st_mode & 0o022:
         raise RuntimeError(f"Updater directory must not be group/world writable: {path}")
-    if create:
-        os.chmod(path, mode)
     return path
 
 
