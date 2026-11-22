@@ -144,10 +144,24 @@ def test_update_console_and_host_scripts_use_narrow_systemd_boundary():
     assert "chat2api-admin-update.service" in installer
     assert 'chmod 0644 "$UPDATER_SCRIPT"' in installer
     assert 'chmod 755 "$UPDATER_SCRIPT"' not in installer
+    assert 'ensure-dir "$DATA_DIR"' in installer
+    assert "write_json_atomic" in installer
     assert "git -C \"$APP_DIR\" config http.version HTTP/1.1" in updater
     assert "fetch_main" in updater
     assert "normalize_legacy_updater_mode" in updater
     assert "read_use_build_cache" in updater
+    assert 'LOCK_FILE="${DATA_DIR}/.admin-update.lock"' in updater
+    assert 'exec 9<>"$LOCK_FILE"' in updater
+    assert "chat2api_update_storage.py" in updater
+    assert 'ensure-dir "$DATA_DIR"' in updater
+    assert 'truncate-log "$LOG_FILE"' in updater
+    assert 'tee-log "$LOG_FILE"' in updater
+    assert 'read-request-id "$REQUEST_FILE"' in updater
+    assert 'read-build-cache "$REQUEST_FILE"' in updater
+    assert ': > "$LOG_FILE"' not in updater
+    assert 'tee -a "$LOG_FILE"' not in updater
+    assert "path.read_text(" not in updater
+    assert "temp.write_text(" not in updater
     assert "DOCKER_BUILDKIT=1 docker compose build" in updater
     assert "docker compose build --no-cache" in updater
     assert "rollback()" in updater
