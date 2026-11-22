@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import base64
+import struct
+import time
+import zlib
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -104,6 +107,17 @@ def test_speech_dispatch_and_audit_use_single_server_composed_prompt(tmp_path):
         assert row["final_prompt"] == req["prompt"]
 
 
+def _tiny_png() -> bytes:
+    def chunk(kind: bytes, payload: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(payload)) + kind + payload
+            + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
+        )
+    header = struct.pack(">IIBBBBB", 1, 1, 8, 6, 0, 0, 0)
+    pixels = zlib.compress(b"\x00\x00\x00\x00\xff")
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", pixels) + chunk(b"IEND", b"")
+
+
 def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_path):
     app = app_live(tmp_path)
     with TestClient(app) as client:
@@ -116,6 +130,20 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
         file_b = client.post("/v1/files", headers={"Authorization": f"Bearer {stranger}"},
                              json={"filename": "private.pdf", "mime_type": "application/pdf",
                                    "data_base64": base64.b64encode(b"fake-pdf").decode()}).json()["id"]
+        own_pdf = client.post("/v1/files", headers={"Authorization": f"Bearer {token}"},
+                              json={"filename": "frame-not-image.pdf", "mime_type": "application/pdf",
+                                    "purpose": "assistants",
+                                    "data_base64": base64.b64encode(b"fake-pdf").decode()}).json()["id"]
+        video_frame_file = client.post(
+            "/v1/files",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "filename": "camera-frame.png",
+                "mime_type": "image/png",
+                "purpose": "vision",
+                "data_base64": base64.b64encode(_tiny_png()).decode(),
+            },
+        ).json()["id"]
         extra_files = [
             client.post("/v1/files", headers={"Authorization": f"Bearer {token}"},
                         json={"filename": f"extra-{index}.png", "mime_type": "image/png",
@@ -137,6 +165,7 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
                 ready = live.receive_json()
                 assert ready["type"] == "session.ready"
                 assert "input_media" in ready["supports"]
+                assert "input_video.frame" in ready["supports"]
                 live.send_json({"type": "conversation.item.create", "item": {"id": "media195",
                     "role": "user", "content": [
                         {"type": "input_text", "text": "看看这张图，用语音告诉我"},
@@ -152,6 +181,18 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
                                "live_event": "input.text.sent", "item_id": "media195",
                                "text": "看看这张图，用语音告诉我"})
                 assert live.receive_json()["type"] == "input_text.sent"
+                # Text acknowledgement arrives before the media acknowledgement.
+                # Reusing the same item ID must not overwrite the still-pending
+                # file grants or confuse the eventual media.sent correlation.
+                live.send_json({
+                    "type": "input_media",
+                    "item_id": "media195",
+                    "text": "duplicate item",
+                    "attachments": [{"type": "input_image", "file_id": file_a}],
+                })
+                duplicate_item = live.receive_json()
+                assert duplicate_item["type"] == "error"
+                assert duplicate_item["code"] == "DUPLICATE_INPUT_ITEM_ID"
                 ext.send_json({"type": "image.progress", "kind": "voice-live", "request_id": request_id,
                                "live_event": "input.media.sent", "item_id": "media195",
                                "attachment_count": 999, "text": "看看这张图，用语音告诉我"})
@@ -164,6 +205,145 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
                 duplicate_media_ack = live.receive_json()
                 assert duplicate_media_ack["type"] == "input_media.sent"
                 assert duplicate_media_ack["attachment_count"] == 0
+
+                # A video track is sampled by the client into timestamped,
+                # owner-scoped JPEG/PNG/WebP uploads. Each frame travels as an
+                # image turn in this same Voice session, never as a fake MP4.
+                live.send_json({
+                    "type": "input_video.frame",
+                    "item_id": "video-frame-000",
+                    "sequence": 0,
+                    "timestamp_ms": 1000,
+                    "file_id": video_frame_file,
+                    "text": "观察连续画面",
+                })
+                video_dispatch = ext.receive_json()
+                assert video_dispatch["type"] == "voice.live.multimodal"
+                assert video_dispatch["attachments"][0]["file_id"] == video_frame_file
+                assert "视频帧 0 · 1.000s" in video_dispatch["text"]
+                video_queued = live.receive_json()
+                assert video_queued["type"] == "input_video.frame.queued"
+                assert video_queued["sequence"] == 0
+                assert video_queued["timestamp_ms"] == 1000
+                live.send_json({
+                    "type": "input_video.frame",
+                    "sequence": 1,
+                    "timestamp_ms": 2000,
+                    "file_id": extra_files[2],
+                })
+                backpressure = live.receive_json()
+                assert backpressure["type"] == "error"
+                assert backpressure["code"] == "LIVE_VIDEO_FRAME_BACKPRESSURE"
+                ext.send_json({
+                    "type": "image.progress", "kind": "voice-live",
+                    "request_id": request_id, "live_event": "input.text.sent",
+                    "item_id": "video-frame-000", "text": video_dispatch["text"],
+                })
+                assert live.receive_json()["type"] == "input_text.sent"
+                ext.send_json({
+                    "type": "image.progress", "kind": "voice-live",
+                    "request_id": request_id, "live_event": "input.media.sent",
+                    "item_id": "video-frame-000", "attachment_count": 999,
+                    "text": video_dispatch["text"],
+                })
+                video_sent = live.receive_json()
+                assert video_sent["type"] == "input_video.frame.sent"
+                assert video_sent["sequence"] == 0
+                assert video_sent["timestamp_ms"] == 1000
+                assert video_sent["attachment_count"] == 1
+
+                # Duplicate/out-of-order video frame metadata is rejected
+                # before a Worker dispatch.
+                live.send_json({
+                    "type": "input_video.frame",
+                    "sequence": 0,
+                    "timestamp_ms": 1000,
+                    "file_id": extra_files[2],
+                })
+                bad_video = live.receive_json()
+                assert bad_video["type"] == "error"
+                assert bad_video["code"] == "INVALID_VIDEO_FRAME"
+                live.send_json({
+                    "type": "input_video.frame",
+                    "sequence": 1,
+                    "timestamp_ms": 999,
+                    "file_id": extra_files[2],
+                })
+                out_of_order_video = live.receive_json()
+                assert out_of_order_video["type"] == "error"
+                assert out_of_order_video["code"] == "INVALID_VIDEO_FRAME"
+                time.sleep(0.21)  # Respect the server's five-FPS ceiling before validating image bytes.
+                live.send_json({
+                    "type": "input_video.frame",
+                    "sequence": 1,
+                    "timestamp_ms": 2000,
+                    "file_id": extra_files[2],
+                })
+                fake_raster = live.receive_json()
+                assert fake_raster["type"] == "error"
+                assert fake_raster["code"] == "INVALID_MEDIA_INPUT"
+                time.sleep(0.21)
+                live.send_json({
+                    "type": "input_video.frame",
+                    "sequence": 1,
+                    "timestamp_ms": 2000,
+                    "file_id": own_pdf,
+                })
+                non_image_video = live.receive_json()
+                assert non_image_video["type"] == "error"
+                assert non_image_video["code"] == "INVALID_MEDIA_INPUT"
+
+                # A Worker-side failure must release the in-flight frame slot,
+                # return the frame identity to the caller, and allow a later
+                # monotonically increasing frame to be queued.
+                time.sleep(0.21)
+                live.send_json({
+                    "type": "input_video.frame",
+                    "item_id": "failed-video-frame",
+                    "sequence": 1,
+                    "timestamp_ms": 2000,
+                    "file_id": video_frame_file,
+                })
+                failed_video_dispatch = ext.receive_json()
+                assert failed_video_dispatch["type"] == "voice.live.multimodal"
+                assert live.receive_json()["type"] == "input_video.frame.queued"
+                ext.send_json({
+                    "type": "image.progress", "kind": "voice-live",
+                    "request_id": request_id, "live_event": "input.error",
+                    "item_id": "failed-video-frame",
+                    "message": "simulated camera frame send failure",
+                })
+                failed_video = live.receive_json()
+                assert failed_video["type"] == "error"
+                assert failed_video["code"] == "VOICE_CALL_INPUT_FAILED"
+                assert failed_video["video_sequence"] == 1
+                assert failed_video["timestamp_ms"] == 2000
+
+                time.sleep(0.21)
+                live.send_json({
+                    "type": "input_video.frame",
+                    "item_id": "retry-video-frame",
+                    "sequence": 2,
+                    "timestamp_ms": 2200,
+                    "file_id": video_frame_file,
+                })
+                retry_video_dispatch = ext.receive_json()
+                assert retry_video_dispatch["type"] == "voice.live.multimodal"
+                retry_video_queued = live.receive_json()
+                assert retry_video_queued["type"] == "input_video.frame.queued"
+                assert retry_video_queued["sequence"] == 2
+                # Leave the retry unconfirmed and explicitly fail it to keep
+                # the test focused on queue release, not media accounting.
+                ext.send_json({
+                    "type": "image.progress", "kind": "voice-live",
+                    "request_id": request_id, "live_event": "input.error",
+                    "item_id": "retry-video-frame",
+                    "message": "simulated retry frame failure",
+                })
+                retry_video_failed = live.receive_json()
+                assert retry_video_failed["type"] == "error"
+                assert retry_video_failed["video_sequence"] == 2
+
                 # Invalid cross-key file must produce a per-input error, NOT
                 # a voice.live.stop or WebSocket disconnect.
                 live.send_json({"type": "input_media", "text": "私密文件", "attachments": [
@@ -241,7 +421,7 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
         assert not app.state.broker.requests
         row = app.state.telemetry.get(request_id)
         assert row and row["request_type"] == "voice_call"
-        assert row["diagnostics"]["attachments_confirmed"] == 1
-        assert row["diagnostics"]["input_confirmed_turns"] == 4
-        assert row["input_file_ids"] == [file_a]
+        assert row["diagnostics"]["attachments_confirmed"] == 2
+        assert row["diagnostics"]["input_confirmed_turns"] == 5
+        assert row["input_file_ids"] == [file_a, video_frame_file]
         assert row["diagnostics"]["audio_bytes"] == 1600

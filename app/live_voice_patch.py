@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocket
 
 from .api_keys import ApiPrincipal
 from . import model_capability_routing_patch as model_routing
-from .responses_multimodal_input_v183 import attachment_specs
+from .responses_multimodal_input_v183 import attachment_specs, validate_image_file
 from .token_usage import usage_for
 from .quota_reservation_runtime_v1 import authorize_wallet_dispatch, reserve_audio_request_quota
 
@@ -32,6 +32,10 @@ MAX_LIVE_PCM_FRAME_BYTES = 64 * 1024
 MAX_LIVE_ATTACHMENTS_PER_INPUT = 4
 MAX_LIVE_PENDING_INPUTS = 128
 MAX_LIVE_CONTROL_CHARS = 64 * 1024
+MAX_LIVE_VIDEO_FRAMES = 64
+MAX_LIVE_VIDEO_FRAME_BYTES = 2 * 1024 * 1024
+MAX_LIVE_VIDEO_DURATION_MS = 6 * 60 * 60 * 1000
+MIN_LIVE_VIDEO_FRAME_INTERVAL_SECONDS = 0.2
 LIVE_KEY_REVALIDATE_SECONDS = 5.0
 
 
@@ -87,6 +91,22 @@ def _input_text_from_control(control: Any) -> str:
     return "\n".join(parts).strip()
 
 
+def _video_frame_metadata(control: dict[str, Any]) -> tuple[int, int, str]:
+    sequence = control.get("sequence")
+    timestamp_ms = control.get("timestamp_ms")
+    file_id = control.get("file_id")
+    if type(sequence) is not int or not 0 <= sequence <= 2_147_483_647:
+        raise ValueError("video frame sequence must be a non-negative 32-bit integer")
+    if type(timestamp_ms) is not int or not 0 <= timestamp_ms <= MAX_LIVE_VIDEO_DURATION_MS:
+        raise ValueError("video frame timestamp_ms is outside the six-hour session limit")
+    if not isinstance(file_id, str) or not re.fullmatch(r"^file_[A-Za-z0-9]{8,64}$", file_id):
+        raise ValueError("video frames require an uploaded image file_id")
+    text = control.get("text", "")
+    if not isinstance(text, str) or len(text) > 11800:
+        raise ValueError("video frame text is limited to 11800 characters plus frame metadata")
+    return sequence, timestamp_ms, file_id
+
+
 def _media_ids_from_control(control: dict[str, Any]) -> list[str]:
     """FileStore IDs only; no arbitrary URLs/base64 over a live control frame."""
     kind = str(control.get("type") or "")
@@ -96,6 +116,8 @@ def _media_ids_from_control(control: dict[str, Any]) -> list[str]:
     elif kind == "conversation.item.create":
         item = control.get("item") if isinstance(control.get("item"), dict) else {}
         parts = item.get("content") or []
+    elif kind == "input_video.frame":
+        parts = [{"type": "input_image", "file_id": control.get("file_id")}]
     if isinstance(parts, str) and kind == "conversation.item.create":
         return []
     if not isinstance(parts, list):
@@ -318,6 +340,11 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
         observed_completion_parts: list[str] = []
         pending_input_text: dict[str, str] = {}
         pending_input_media_ids: dict[str, list[str]] = {}
+        pending_video_frames: dict[str, tuple[int, int]] = {}
+        last_video_sequence = -1
+        last_video_timestamp_ms = -1
+        last_video_dispatch_mono = 0.0
+        video_frame_count = 0
         confirmed_media_ids: set[str] = set()
         confirmed_media_item_ids: set[str] = set()
         confirmed_input_ids: set[str] = set()
@@ -369,7 +396,11 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         "effective_model": effective_model,
                         "input_audio_format": "pcm16le-16000-mono",
                         "output_audio_format": "pcm16le-24000-mono",
-                        "supports": ["input_text", "conversation.item.create", "input_media", "image_file_id", "document_file_id"],
+                        "supports": [
+                            "input_text", "conversation.item.create", "input_media",
+                            "input_video.frame", "sampled_video_frames",
+                            "image_file_id", "document_file_id",
+                        ],
                     }
                     if requested_model != effective_model:
                         payload["model_alias_of"] = effective_model
@@ -424,14 +455,24 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                             if len(observed_input_text_ids) >= 512:
                                 observed_input_text_ids.clear()
                             observed_input_text_ids.add(item_id)
-                    await send_json({
-                        "type": "input_media.sent",
+                    video_frame = pending_video_frames.pop(item_id, None)
+                    ack: dict[str, object] = {
+                        "type": "input_video.frame.sent" if video_frame else "input_media.sent",
                         "item_id": item_id,
+                        # The server-authorized file grants are authoritative;
+                        # never trust the extension's diagnostic attachment count.
                         "attachment_count": len(confirmed_item_media_ids),
-                    })
+                    }
+                    if video_frame:
+                        ack["sequence"], ack["timestamp_ms"] = video_frame
+                    await send_json(ack)
                 elif event_type == "input.error":
                     failed_item_id = str(event.get("item_id") or "")
                     pending_input_text.pop(failed_item_id, None)
+                    # Release the in-flight video frame slot on an explicit
+                    # Worker failure so the client can retry with the next
+                    # monotonically increasing sequence number.
+                    failed_video_frame = pending_video_frames.pop(failed_item_id, None)
                     failed_media_ids = pending_input_media_ids.pop(failed_item_id, [])
                     if failed_media_ids:
                         remaining_pending_ids = {
@@ -457,12 +498,15 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                                     "Live media grant rollback deferred request_id=%s item_id=%s error_type=%s",
                                     request_id, failed_item_id, type(rollback_error).__name__,
                                 )
-                    await send_json({
+                    failure: dict[str, object] = {
                         "type": "error", "code": "VOICE_CALL_INPUT_FAILED",
                         "item_id": failed_item_id,
                         "message": str(event.get("message") or "Media input was not accepted by the ChatGPT Voice composer"),
                         "retryable": True,
-                    })
+                    }
+                    if failed_video_frame:
+                        failure["video_sequence"], failure["timestamp_ms"] = failed_video_frame
+                    await send_json(failure)
                 elif event_type == "transcript.final":
                     text = str(event.get("text") or "").strip()
                     if text:
@@ -775,26 +819,63 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         "request_id": request_id,
                         "session_id": session_id,
                     })
-                elif control_type in {"input_text", "conversation.item.create", "input_media"}:
+                elif control_type in {"input_text", "conversation.item.create", "input_media", "input_video.frame"}:
                     item = control.get("item") if isinstance(control.get("item"), dict) else {}
                     if control_type == "conversation.item.create" and item.get("role", "user") != "user":
                         await send_json({"type": "error", "code": "INVALID_ITEM_ROLE", "message": "Only user input is accepted"})
                         continue
+                    video_frame: tuple[int, int, str] | None = None
+                    if control_type == "input_video.frame":
+                        if pending_video_frames:
+                            await send_json({
+                                "type": "error",
+                                "code": "LIVE_VIDEO_FRAME_BACKPRESSURE",
+                                "message": "Wait for input_video.frame.sent before sending the next frame",
+                                "retryable": True,
+                            })
+                            continue
+                        try:
+                            video_frame = _video_frame_metadata(control)
+                            sequence, timestamp_ms, _ = video_frame
+                            if sequence <= last_video_sequence or timestamp_ms <= last_video_timestamp_ms:
+                                raise ValueError("video frame sequence and timestamp_ms must increase monotonically")
+                            if video_frame_count >= MAX_LIVE_VIDEO_FRAMES:
+                                raise ValueError("Live session reached the 64-frame video limit")
+                            if (
+                                last_video_dispatch_mono
+                                and time.monotonic() - last_video_dispatch_mono < MIN_LIVE_VIDEO_FRAME_INTERVAL_SECONDS
+                            ):
+                                raise ValueError("Live video frames are limited to five frames per second")
+                        except ValueError as error:
+                            await send_json({
+                                "type": "error", "code": "INVALID_VIDEO_FRAME",
+                                "message": str(error), "retryable": True,
+                            })
+                            continue
                     input_text = (
                         str(control.get("text") or "").strip()
-                        if control_type == "input_media"
+                        if control_type in {"input_media", "input_video.frame"}
                         else _input_text_from_control(control)
                     )
+                    if video_frame:
+                        sequence, timestamp_ms, _ = video_frame
+                        marker = f"[视频帧 {sequence} · {timestamp_ms / 1000:.3f}s]"
+                        input_text = (input_text + "\n" if input_text else "") + marker
                     item_id = str(control.get("item_id") or item.get("id") or f"item_{uuid.uuid4().hex}")[:120]
-                    if item_id in pending_input_text:
+                    pending_item_ids = (
+                        set(pending_input_text)
+                        | set(pending_input_media_ids)
+                        | set(pending_video_frames)
+                    )
+                    if item_id in pending_item_ids or item_id in confirmed_input_ids:
                         await send_json({
                             "type": "error", "code": "DUPLICATE_INPUT_ITEM_ID",
                             "item_id": item_id,
-                            "message": "An input item with this ID is already awaiting Worker confirmation",
+                            "message": "An input item ID cannot be reused while pending or after Worker confirmation",
                             "retryable": False,
                         })
                         continue
-                    if len(pending_input_text) >= MAX_LIVE_PENDING_INPUTS:
+                    if len(pending_item_ids) >= MAX_LIVE_PENDING_INPUTS:
                         await send_json({
                             "type": "error", "code": "LIVE_INPUT_QUEUE_FULL",
                             "message": "Too many unconfirmed live inputs; wait for the Worker before sending more",
@@ -808,8 +889,19 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                             raise ValueError(
                                 f"A Live media message may attach at most {MAX_LIVE_ATTACHMENTS_PER_INPUT} files"
                             )
+                        if control_type == "input_video.frame" and len(attachments) != 1:
+                            raise ValueError("Each video frame must contain exactly one uploaded image")
                         for spec in attachments:
                             mime = str(spec.get("mime_type") or "").lower()
+                            if (
+                                control_type == "input_video.frame"
+                                and int(spec.get("size") or 0) > MAX_LIVE_VIDEO_FRAME_BYTES
+                            ):
+                                raise ValueError("Video frames are limited to 2 MiB each")
+                            if control_type == "input_video.frame" and mime not in {
+                                "image/jpeg", "image/png", "image/webp",
+                            }:
+                                raise ValueError("Video frames must be JPEG, PNG or WebP images")
                             allowed = (
                                 mime in {"image/png", "image/jpeg", "image/webp", "image/gif",
                                          "application/pdf", "text/plain", "text/csv",
@@ -819,6 +911,13 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                             )
                             if not allowed:
                                 raise ValueError("Live image/file MIME is not supported; send PCM as binary microphone frames")
+                        if control_type == "input_video.frame":
+                            # MIME labels are not proof of raster content. Require
+                            # a real, API-Key-owned vision image before relaying it
+                            # into the live camera track path.
+                            await asyncio.to_thread(
+                                validate_image_file, file_store, file_ids[0], principal,
+                            )
                         if not input_text and not attachments:
                             raise ValueError("Provide text, image or file")
                         if len(input_text) > 12000:
@@ -864,19 +963,41 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                             if spec.get("file_id")
                         ]
                     pending_input_text[item_id] = input_text
-                    await registry.send(selected_client, {
-                        "type": "voice.live.multimodal" if attachments else "voice.live.text",
-                        "request_id": request_id,
-                        "session_id": session_id,
-                        "item_id": item_id,
-                        "text": input_text,
-                        "attachments": attachments,
-                    })
-                    await send_json({
-                        "type": "input_media.queued" if attachments else "input_text.queued",
-                        "item_id": item_id, "text": input_text,
-                        **({"attachment_count": len(attachments)} if attachments else {}),
-                    })
+                    if video_frame:
+                        pending_video_frames[item_id] = (video_frame[0], video_frame[1])
+                    try:
+                        await registry.send(selected_client, {
+                            "type": "voice.live.multimodal" if attachments else "voice.live.text",
+                            "request_id": request_id,
+                            "session_id": session_id,
+                            "item_id": item_id,
+                            "text": input_text,
+                            "attachments": attachments,
+                        })
+                    except Exception:
+                        pending_input_text.pop(item_id, None)
+                        pending_input_media_ids.pop(item_id, None)
+                        pending_video_frames.pop(item_id, None)
+                        raise
+                    if video_frame:
+                        last_video_sequence = video_frame[0]
+                        last_video_timestamp_ms = video_frame[1]
+                        last_video_dispatch_mono = time.monotonic()
+                        video_frame_count += 1
+                        await send_json({
+                            "type": "input_video.frame.queued",
+                            "item_id": item_id,
+                            "sequence": video_frame[0],
+                            "timestamp_ms": video_frame[1],
+                            "text": input_text,
+                            "attachment_count": len(attachments),
+                        })
+                    else:
+                        await send_json({
+                            "type": "input_media.queued" if attachments else "input_text.queued",
+                            "item_id": item_id, "text": input_text,
+                            **({"attachment_count": len(attachments)} if attachments else {}),
+                        })
                 elif control_type == "session.finish":
                     # A client-controlled finish is not evidence that the
                     # browser started Voice. Never record a false completion
