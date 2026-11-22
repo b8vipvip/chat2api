@@ -125,7 +125,11 @@
     const text = contentText(message.content);
     if (!text) return;
     const status = String(message.status || "");
-    const key = `final:${message.id || ""}:${status}:${text.length}:${text.slice(-120)}`;
+    const metadata = safeToolMetadata(message.metadata);
+    const metadataSignature = (() => {
+      try { return JSON.stringify(metadata).slice(0, 2048); } catch (_) { return ""; }
+    })();
+    const key = `final:${message.id || ""}:${status}:${text.length}:${text.slice(-120)}:${metadataSignature}`;
     if (emitted.get(`final:${message.id || ""}`) === key) return;
     emitted.set(`final:${message.id || ""}`, key);
     state.final_snapshots += 1;
@@ -134,6 +138,7 @@
       message_id: String(message.id || ""),
       text,
       status: status || "in_progress",
+      metadata,
     });
     if (["finished_successfully", "completed"].includes(status) || message.end_turn === true) {
       state.final_completions += 1;
@@ -142,6 +147,7 @@
         message_id: String(message.id || ""),
         text,
         status: status || "completed",
+        metadata,
       });
     }
   }
