@@ -928,3 +928,48 @@ def test_completed_recovery_prefers_exact_delivery_projection_and_references(tmp
         assert "event: recovery.terminal" in replay.text
         assert delivered_text in replay.text
         assert '"id":"turn0search0"' in replay.text
+
+
+def test_broker_state_lost_recovery_does_not_emit_terminal_before_telemetry_persists(tmp_path):
+    app = make_app(tmp_path)
+    request_id = "req_stalledpersist123"
+    with TestClient(app) as client:
+        user_id = register(client, "stalled-persist@example.org")
+        app.state.user_accounts.attach_key(user_id, "key_stalled_persist")
+        remember(
+            app, request_id, "key_stalled_persist",
+            status="running", web_chat_mode=True,
+            response_text="", response_text_available=False,
+            response_text_provisional="unverified worker progress",
+        )
+
+        original_upsert = app.state.telemetry.upsert
+        failed_once = {"value": False}
+
+        async def fail_first_stalled_write(record):
+            if record.get("status") == "stalled" and not failed_once["value"]:
+                failed_once["value"] = True
+                raise OSError("simulated telemetry disk failure")
+            return await original_upsert(record)
+
+        app.state.telemetry.upsert = fail_first_stalled_write
+
+        first = client.get(f"/api/user/chat/requests/{request_id}/events")
+        assert first.status_code == 200, first.text
+        assert "event: recovery.pending" in first.text
+        assert "event: recovery.stalled" not in first.text
+        assert app.state.telemetry.get(request_id)["status"] == "running"
+        first_snapshot = asyncio.run(app.state.web_chat_event_journal.snapshot(
+            request_id, "key_stalled_persist",
+        ))
+        assert first_snapshot["terminal_status"] == "stalled"
+
+        # The browser reconnects without an advanced terminal Last-Event-ID.
+        second = client.get(f"/api/user/chat/requests/{request_id}/events")
+        assert second.status_code == 200, second.text
+        assert "event: recovery.stalled" in second.text
+        assert app.state.telemetry.get(request_id)["status"] == "stalled"
+        second_snapshot = asyncio.run(app.state.web_chat_event_journal.snapshot(
+            request_id, "key_stalled_persist",
+        ))
+        assert second_snapshot["terminal_status"] == "stalled"
