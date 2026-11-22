@@ -11,6 +11,11 @@ import re
 import time
 from pathlib import Path
 
+from .private_storage import (
+    ensure_private_directory, open_private_regular_file,
+    private_file_lock, write_private_bytes_atomic,
+)
+
 ID = re.compile(r"^(?:req|imgreq|resp)_[A-Za-z0-9_-]{6,100}$")
 TAGS = set("reply #text div section article p span h1 h2 h3 h4 h5 h6 strong em ul ol li table thead tbody tr td th pre code figure figcaption img blockquote a hr br".split())
 SOURCE_TYPES = {"blob", "data", "https", "other"}
@@ -140,24 +145,35 @@ def validate_evidence(value: object, expected_request_id: str) -> dict:
 class NativeDomEvidenceStore:
     def __init__(self, data_dir: Path):
         self.root=Path(data_dir)/"native_dom_evidence"
-        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
-        os.chmod(self.root,0o700)
+        ensure_private_directory(self.root)
         self._write_count=0
+
+    def _regular_files(self):
+        files=[]
+        for path in self.root.glob("*.json"):
+            try:
+                fd=open_private_regular_file(path,os.O_RDONLY)
+            except (OSError,RuntimeError):
+                continue
+            try:
+                metadata=os.fstat(fd)
+                files.append((metadata.st_mtime,path))
+            finally:
+                os.close(fd)
+        files.sort(key=lambda item:item[0])
+        return files
 
     def _prune(self):
         # Bounded retention: old evidence must not consume the Worker's disk
         # indefinitely when no administrator manually exports past requests.
-        paths=sorted(self.root.glob("*.json"),key=lambda p:p.stat().st_mtime)
         now=time.time()
-        for file in paths:
-            try:
-                if now-file.stat().st_mtime>RETENTION:
-                    file.unlink(missing_ok=True)
-            except OSError:
-                pass
-        files=sorted(self.root.glob("*.json"),key=lambda p:p.stat().st_mtime)
-        for file in files[:-128]:
-            file.unlink(missing_ok=True)
+        files=self._regular_files()
+        for modified,path in files:
+            if now-modified>RETENTION:
+                path.unlink(missing_ok=True)
+        remaining=self._regular_files()
+        for _,path in remaining[:-128]:
+            path.unlink(missing_ok=True)
 
     def _path(self,request_id):
         if not ID.fullmatch(request_id):raise ValueError("Invalid request ID")
@@ -166,37 +182,53 @@ class NativeDomEvidenceStore:
         if not owner:return False
         data=validate_evidence(report,request_id)
         path=self._path(request_id)
-        if path.exists():
+        payload=json.dumps(
+            {"owner":owner,"report":data},ensure_ascii=False,separators=(",",":")
+        ).encode("utf8")
+        # Owner check and atomic replacement are serialized across processes so
+        # two callers cannot race to claim the same request-bound evidence file.
+        with private_file_lock(self.root/".native_dom_evidence.lock"):
             try:
-                old=json.loads(path.read_text(encoding="utf8"))
+                fd=open_private_regular_file(path,os.O_RDONLY)
+            except FileNotFoundError:
+                fd=None
+            except (OSError,RuntimeError):
+                return False
+            if fd is not None:
+                try:
+                    with os.fdopen(fd,"r",encoding="utf8") as handle:
+                        old=json.load(handle)
+                except (OSError,ValueError,TypeError):
+                    return False
                 if old.get("owner")!=owner:return False
-            except (OSError, ValueError):return False
-        from uuid import uuid4
-        tmp=path.with_name("."+uuid4().hex+".tmp")
-        fd=os.open(tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
-        try:
-            with os.fdopen(fd,"w",encoding="utf8") as handle:
-                json.dump({"owner":owner,"report":data},handle,ensure_ascii=False)
-                handle.flush();os.fsync(handle.fileno())
-            os.replace(tmp,path)
-        finally:
-            tmp.unlink(missing_ok=True)
-        self._write_count+=1
-        if self._write_count%16==0:
-            try:
-                self._prune()
-            except OSError:
-                pass
+            write_private_bytes_atomic(path,payload)
+            self._write_count+=1
+            if self._write_count%16==0:
+                try:
+                    self._prune()
+                except (OSError,RuntimeError):
+                    pass
         return True
     def get(self,request_id,owner):
         path=self._path(request_id)
         try:
-            if time.time()-path.stat().st_mtime>RETENTION:
-                path.unlink(missing_ok=True);return None
-            content=json.loads(path.read_text(encoding="utf8"))
+            fd=open_private_regular_file(path,os.O_RDONLY)
+        except (OSError,RuntimeError):
+            return None
+        try:
+            with os.fdopen(fd,"r",encoding="utf8") as handle:
+                if time.time()-os.fstat(handle.fileno()).st_mtime>RETENTION:
+                    expired=True
+                    content=None
+                else:
+                    expired=False
+                    content=json.load(handle)
+            if expired:
+                path.unlink(missing_ok=True)
+                return None
             if content.get("owner")!=owner:return None
             return validate_evidence(content.get("report"),request_id)
-        except (OSError, ValueError, TypeError, KeyError):
+        except (OSError,ValueError,TypeError,KeyError,RuntimeError):
             return None
     def summary(self,request_id,owner):
         # Older retained request rows and fixtures can have noncanonical IDs.
