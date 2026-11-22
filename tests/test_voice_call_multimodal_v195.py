@@ -114,8 +114,8 @@ def _tiny_png() -> bytes:
             + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
         )
     header = struct.pack(">IIBBBBB", 1, 1, 8, 6, 0, 0, 0)
-    pixels = zlib.compress(b"\\x00\\x00\\x00\\x00\\xff")
-    return b"\\x89PNG\\r\\n\\x1a\\n" + chunk(b"IHDR", header) + chunk(b"IDAT", pixels) + chunk(b"IEND", b"")
+    pixels = zlib.compress(b"\x00\x00\x00\x00\xff")
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", pixels) + chunk(b"IEND", b"")
 
 
 def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_path):
