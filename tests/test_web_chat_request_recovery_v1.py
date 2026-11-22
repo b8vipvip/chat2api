@@ -511,7 +511,8 @@ const replies = [
   {status:200, ok:true, json:async()=>({
     request_id:"req_12345678", status:"completed", terminal:true,
     recoverable:false, active:false, response_text_available:true,
-    response_text:"final answer"
+    response_text:"final answer",
+    references:[{id:"turn0search0",url:"https://docs.example.org/",title:"Documentation",snippet:""}]
   })}
 ];
 const fetcher = async (url, options) => {
@@ -532,6 +533,8 @@ assert(/^req_[A-Za-z0-9_-]{8,120}$/.test(api.createRequestId({randomUUID:()=>"12
   }).resume({request_id:"req_12345678", assistant_message_id:"message_123456"});
   assert.strictEqual(result.status, "completed");
   assert.strictEqual(result.response_text, "final answer");
+  assert.strictEqual(result.references[0].id, "turn0search0");
+  assert(updates.some(value=>value.status==="completed" && value.references?.[0]?.id==="turn0search0"));
   assert.strictEqual(calls.length, 2);
   assert(calls.every(call=>call.method==="GET"));
   assert(calls.every(call=>call.credentials==="same-origin"));
@@ -548,7 +551,7 @@ assert(/^req_[A-Za-z0-9_-]{8,120}$/.test(api.createRequestId({randomUUID:()=>"12
   const replayFrames = [
     "id: 7\nevent: cursor\ndata: {}\n\n",
     "id: 8\nevent: delivery.delta\ndata: {\"delta\":\"replayed answer\"}\n\n",
-    "id: 9\nevent: delivery.completed\ndata: {\"text_chars\":15}\n\n",
+    "id: 9\nevent: recovery.terminal\ndata: {\"status\":\"completed\",\"terminal\":true,\"response_text\":\"replayed answer\",\"references\":[{\"id\":\"turn0search0\",\"url\":\"https://docs.example.org/\",\"title\":\"Documentation\",\"snippet\":\"\"}]}\n\n",
   ].join("");
   const replayBytes = new TextEncoder().encode(replayFrames);
   let replayRead = false;
@@ -570,6 +573,7 @@ assert(/^req_[A-Za-z0-9_-]{8,120}$/.test(api.createRequestId({randomUUID:()=>"12
   }, 6);
   assert.strictEqual(replayResult.status,"completed");
   assert.strictEqual(replayResult.terminal,true);
+  assert.strictEqual(replayResult.references[0].id,"turn0search0");
   assert.strictEqual(replayEvents.length,3);
   assert.strictEqual(replayEvents[1].id,8);
   assert.strictEqual(replayEvents[1].data.delta,"replayed answer");
