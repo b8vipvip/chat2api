@@ -786,7 +786,8 @@ def test_recovering_sse_replays_citations_from_canonical_worker_terminal(tmp_pat
         ))
         replay = client.get(f"/api/user/chat/requests/{request_id}/events")
         assert replay.status_code == 200, replay.text
-        assert "event: chat.references" in replay.text
+        assert "event: recovery.partial.snapshot" in replay.text
         assert '"id":"turn0search0"' in replay.text
         assert '"message_id":"assistant-final"' in replay.text
+        assert "event: chat.references" not in replay.text
         assert "event: delivery.stalled" in replay.text
