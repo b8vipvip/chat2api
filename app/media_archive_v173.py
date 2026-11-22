@@ -50,7 +50,7 @@ class MediaArchive:
         """Reject linked archive files and enforce owner-only POSIX access."""
         if path.is_symlink():
             raise RuntimeError("Media archive files cannot be symbolic links")
-        flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
         if create:
             flags |= os.O_CREAT
         try:
@@ -72,7 +72,7 @@ class MediaArchive:
         if not isinstance(key, str) or not key or len(key) > 512:
             raise ValueError("Invalid local media object key")
         relative = Path(key)
-        if relative.is_absolute() or ".." in relative.parts:
+        if relative.is_absolute() or relative.drive or relative.root or ".." in relative.parts:
             raise ValueError("Invalid local media object key")
         return self.root / relative
 
