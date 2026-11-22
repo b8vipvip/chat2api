@@ -8,7 +8,6 @@ import json
 import re
 import secrets
 import threading
-import time
 from pathlib import Path
 from types import MethodType
 from typing import Any
@@ -24,7 +23,7 @@ from .admin_auth import SESSION_COOKIE as ADMIN_SESSION_COOKIE
 from .timezone_utils import beijing_now_iso
 from .user_commerce import USER_SESSION_COOKIE, WalletReservationError
 from .user_console_v104_patch import _parse_json_maybe_wrapped, _safe_url, _verify_zpay, _zpay_sign
-from .private_storage import read_private_bytes, write_private_bytes_atomic
+from .private_storage import private_file_lock, read_private_bytes, write_private_bytes_atomic
 
 
 PATCH_REVISION = 106
@@ -102,20 +101,10 @@ def _persist_payment_channels_secret(data_dir: Path, value: str) -> None:
 def _payment_channels_secret_lock(data_dir: Path):
     """Serialize payment-secret selection and persistence across API workers."""
     data_dir.mkdir(parents=True, exist_ok=True)
-    lock_path = data_dir / ".payment_channels_secret.lock"
-    deadline = time.monotonic() + 10.0
-    while True:
-        try:
-            lock_path.mkdir(mode=0o700)
-            break
-        except FileExistsError:
-            if time.monotonic() >= deadline:
-                raise RuntimeError("Timed out waiting for payment-channel secret lock")
-            time.sleep(0.05)
-    try:
+    # A new lock-file name avoids deadlocking on stale mkdir locks left by
+    # an earlier release that was terminated while initializing credentials.
+    with private_file_lock(data_dir / ".payment_channels_secret.lockfile"):
         yield
-    finally:
-        lock_path.rmdir()
 
 
 def _validate_payment_channel_ciphertexts(channels: "PaymentChannelsStore") -> None:
