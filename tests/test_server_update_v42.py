@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 import app.server_update_patch as update_patch
 from app.server_update_patch import install_server_update_patch
+from app.telemetry import current_deployment_start
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -245,3 +246,15 @@ def test_concurrent_api_workers_cannot_queue_two_server_updates(tmp_path, monkey
     assert request["request_id"].startswith("upd_")
     assert stat.S_IMODE((tmp_path / update_patch.UPDATE_STATUS_NAME).stat().st_mode) == 0o600
     assert stat.S_IMODE((tmp_path / update_patch.UPDATE_REQUEST_NAME).stat().st_mode) == 0o600
+
+
+def test_telemetry_deployment_filter_does_not_follow_update_status_symlink(tmp_path):
+    target = tmp_path / "outside-deployment-status"
+    target.write_text(json.dumps({
+        "status": "succeeded",
+        "deployed_commit": "b" * 40,
+        "completed_at": "2026-11-22T00:00:00+00:00",
+    }), encoding="utf-8")
+    (tmp_path / update_patch.UPDATE_STATUS_NAME).symlink_to(target)
+    assert current_deployment_start(tmp_path, "b" * 40) is None
+    assert json.loads(target.read_text(encoding="utf-8"))["status"] == "succeeded"
