@@ -688,15 +688,15 @@
       return existing;
     }
     // Opening an older server-side search result promotes it into the local
-    // recent window so subsequent edits and offline access remain consistent.
-    const opened = {...row, updatedAt: new Date().toISOString()};
+    // recent window without mutating the server revision. A read must not race
+    // a subsequent delete/rename with an unnecessary background PUT.
+    const opened = {...row};
     state.conversations.unshift(opened);
     state.conversations = state.conversations.slice(0, MAX_CONVERSATIONS);
     if (Array.isArray(state.searchResults)) {
       state.searchResults = state.searchResults.map((item) => item.id === row.id ? opened : item);
     }
     persistHistorySnapshot();
-    scheduleConversationSync(opened.id, 250);
     return opened;
   }
 
