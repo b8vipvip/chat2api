@@ -468,10 +468,14 @@ class GeneratedFileStaging:
             ):
                 raise ValueError("Generated staged file was not verified")
             try:
-                if row.path.is_symlink() or row.path.resolve().parent != self.root.resolve():
+                if row.path.resolve().parent != self.root.resolve():
                     raise ValueError("staged file path changed")
-                payload = row.path.read_bytes()
-            except OSError as exc:
+                fd = open_private_regular_file(row.path, os.O_RDONLY)
+                with os.fdopen(fd, "rb") as handle:
+                    if os.fstat(handle.fileno()).st_size > MAX_STAGED_FILE_BYTES:
+                        raise ValueError("staged file exceeds its safety limit")
+                    payload = handle.read(MAX_STAGED_FILE_BYTES + 1)
+            except (OSError, RuntimeError, ValueError) as exc:
                 self.entries.pop(key, None)
                 self._delete_persisted(key[0], key[1], row.path)
                 raise ValueError("Generated staged file was not verified") from exc
