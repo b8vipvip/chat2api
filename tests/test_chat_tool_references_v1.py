@@ -229,3 +229,66 @@ def test_extracts_responses_url_citation_annotations_and_nested_web_search_sourc
             "id": "turn0search43",
         },
     ]
+
+
+
+def test_final_assistant_message_annotations_attach_to_canonical_terminal_for_web_chat() -> None:
+    async def scenario() -> None:
+        broker = RequestBroker()
+        state = await broker.create("req_final_refs_123", "worker-client")
+        state.mode1_web_chat = True
+
+        accepted = await broker.publish("req_final_refs_123", {
+            "type": "chat.completed",
+            "text": "The API is documented here.",
+            "metadata": {
+                "annotations": [{
+                    "type": "url_citation",
+                    "start_index": 0,
+                    "end_index": 26,
+                    "url_citation": {
+                        "url": "https://docs.example.org/api",
+                        "title": "API reference",
+                        "ref_id": "turn0search0",
+                    },
+                }],
+            },
+        })
+
+        assert accepted is True
+        event = await state.queue.get()
+        assert event["type"] == "chat.completed"
+        assert event["text"] == "The API is documented here."
+        assert event["references"] == [{
+            "url": "https://docs.example.org/api",
+            "title": "API reference",
+            "snippet": "",
+            "id": "turn0search0",
+        }]
+        assert state.references == event["references"]
+        assert state.terminal_event_type == "chat.completed"
+
+    asyncio.run(scenario())
+
+
+def test_final_assistant_message_annotations_are_not_exposed_to_mode2() -> None:
+    async def scenario() -> None:
+        broker = RequestBroker()
+        state = await broker.create("req_final_refs_mode2", "worker-client")
+        accepted = await broker.publish("req_final_refs_mode2", {
+            "type": "chat.completed",
+            "text": "Answer",
+            "metadata": {
+                "annotations": [{
+                    "type": "url_citation",
+                    "url_citation": {"url": "https://docs.example.org/api"},
+                }],
+            },
+        })
+        assert accepted is True
+        event = await state.queue.get()
+        assert event["type"] == "chat.completed"
+        assert "references" not in event
+        assert state.references == []
+
+    asyncio.run(scenario())
