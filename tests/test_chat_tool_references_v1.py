@@ -185,3 +185,47 @@ def test_broker_does_not_forward_web_chat_citations_to_mode2_sdk_events() -> Non
         assert "references" not in event
 
     asyncio.run(scenario())
+
+
+
+def test_extracts_responses_url_citation_annotations_and_nested_web_search_sources() -> None:
+    metadata = {
+        "annotations": [
+            {
+                "type": "url_citation",
+                "start_index": 12,
+                "end_index": 24,
+                "url_citation": {
+                    "url": "https://docs.python.org/3/library/",
+                    "title": "Python library reference",
+                    "ref_id": "turn0search42",
+                },
+            },
+        ],
+        "web_search_results": [
+            {
+                "source_title": "Python packaging guide",
+                "link_url": "https://packaging.python.org/en/latest/",
+                "source_ref": "turn0search43",
+            },
+        ],
+        "unrelated": {
+            "url": "https://private.example.net/not-a-source",
+            "title": "Must not be forwarded",
+        },
+    }
+
+    assert extract_tool_references(metadata) == [
+        {
+            "url": "https://docs.python.org/3/library/",
+            "title": "Python library reference",
+            "snippet": "",
+            "id": "turn0search42",
+        },
+        {
+            "url": "https://packaging.python.org/en/latest/",
+            "title": "Python packaging guide",
+            "snippet": "",
+            "id": "turn0search43",
+        },
+    ]
