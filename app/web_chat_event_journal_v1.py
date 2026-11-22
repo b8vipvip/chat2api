@@ -139,6 +139,7 @@ class WebChatEventJournal:
             payload: dict[str, Any] = {
                 "status": "completed",
                 "kind": "image" if event_type == "image.completed" else "chat",
+                "message_id": _text(event.get("message_id"), 128),
                 "text": _text(terminal_text, 50_000) if event_type == "chat.completed" else "",
                 "text_chars": len(terminal_text) if isinstance(terminal_text, str) else 0,
             }
