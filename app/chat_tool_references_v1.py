@@ -63,7 +63,7 @@ def normalize_tool_references(value: Any) -> list[dict[str, Any]]:
     """Normalize client-persisted references; never trust browser-supplied URLs."""
     if not isinstance(value, list):
         return []
-    result: list[dict[str, str]] = []
+    result: list[dict[str, Any]] = []
     seen: set[str] = set()
     for item in value[:32]:
         if not isinstance(item, dict):
@@ -78,7 +78,16 @@ def normalize_tool_references(value: Any) -> list[dict[str, Any]]:
         if not host:
             continue
         reference_id = _reference_id(item.get("id"))
-        identity = "id:" + reference_id if reference_id else "url:" + url
+        start_index = _citation_offset(item.get("start_index"))
+        end_index = _citation_offset(item.get("end_index"))
+        valid_range = (
+            start_index is not None and end_index is not None
+            and start_index < end_index
+        )
+        identity = (
+            ("id:" + reference_id if reference_id else "url:" + url)
+            + (f":{start_index}:{end_index}" if valid_range else "")
+        )
         if identity in seen:
             continue
         seen.add(identity)
@@ -89,9 +98,7 @@ def normalize_tool_references(value: Any) -> list[dict[str, Any]]:
         }
         if reference_id:
             row["id"] = reference_id
-        start_index = _citation_offset(item.get("start_index"))
-        end_index = _citation_offset(item.get("end_index"))
-        if start_index is not None and end_index is not None and start_index < end_index:
+        if valid_range:
             row["start_index"] = start_index
             row["end_index"] = end_index
         result.append(row)
@@ -104,7 +111,7 @@ def extract_tool_references(metadata: Any) -> list[dict[str, Any]]:
     """Extract only bounded citation/search-result roots from Worker metadata."""
     if not isinstance(metadata, dict):
         return []
-    candidates: list[dict[str, str]] = []
+    candidates: list[dict[str, Any]] = []
     visited = 0
 
     def visit(value: Any, depth: int = 0, inherited_title: str = "",
@@ -116,7 +123,7 @@ def extract_tool_references(metadata: Any) -> list[dict[str, Any]]:
         visited += 1
         if isinstance(value, list):
             for item in value[:32]:
-                visit(item, depth + 1, inherited_title, inherited_snippet)
+                visit(item, depth + 1, inherited_title, inherited_snippet, inherited_start, inherited_end)
             return
         if not isinstance(value, dict):
             return
