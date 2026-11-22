@@ -470,14 +470,17 @@ class WebChatConversationStoreV1:
     def expire_old_conversations(self, limit: int = 500) -> int:
         if type(limit) is not int or not 1 <= limit <= 5000:
             raise ValueError("retention batch limit is invalid")
-        policy = self.retention_policy()
-        days = int(policy["retention_days"])
-        if days == 0:
-            return 0
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat().replace("+00:00", "Z")
         expired = 0
         with self.lock, closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
+            policy_row = connection.execute(
+                "SELECT retention_days FROM web_chat_policy WHERE policy_id=1"
+            ).fetchone()
+            days = int(policy_row["retention_days"]) if policy_row else 0
+            if days == 0:
+                connection.commit()
+                return 0
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat().replace("+00:00", "Z")
             rows = connection.execute(
                 """SELECT user_id, conversation_id, revision, deleted, payload
                    FROM web_chat_conversations
