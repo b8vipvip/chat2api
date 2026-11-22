@@ -388,7 +388,7 @@ def test_web_chat_delivery_text_requires_verified_exact_native_citation_spans() 
             }],
         },
     }
-    marker = "\\uE200cite\\uE202turn0search0\\uE201"
+    marker = "\uE200cite\uE202turn0search0\uE201"
     assert web_chat_delivery_text(text, text, terminal) == text + marker
     assert web_chat_delivery_text(text + " changed", text, terminal) == text + " changed"
 
