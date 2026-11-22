@@ -33,6 +33,7 @@ MAX_LIVE_ATTACHMENTS_PER_INPUT = 4
 MAX_LIVE_PENDING_INPUTS = 128
 MAX_LIVE_CONTROL_CHARS = 64 * 1024
 MAX_LIVE_VIDEO_FRAMES = 64
+MAX_LIVE_VIDEO_FRAME_BYTES = 2 * 1024 * 1024
 MAX_LIVE_VIDEO_DURATION_MS = 6 * 60 * 60 * 1000
 MIN_LIVE_VIDEO_FRAME_INTERVAL_SECONDS = 0.2
 LIVE_KEY_REVALIDATE_SECONDS = 5.0
@@ -813,6 +814,14 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         continue
                     video_frame: tuple[int, int, str] | None = None
                     if control_type == "input_video.frame":
+                        if pending_video_frames:
+                            await send_json({
+                                "type": "error",
+                                "code": "LIVE_VIDEO_FRAME_BACKPRESSURE",
+                                "message": "Wait for input_video.frame.sent before sending the next frame",
+                                "retryable": True,
+                            })
+                            continue
                         try:
                             video_frame = _video_frame_metadata(control)
                             sequence, timestamp_ms, _ = video_frame
@@ -867,6 +876,11 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                             raise ValueError("Each video frame must contain exactly one uploaded image")
                         for spec in attachments:
                             mime = str(spec.get("mime_type") or "").lower()
+                            if (
+                                control_type == "input_video.frame"
+                                and int(spec.get("size") or 0) > MAX_LIVE_VIDEO_FRAME_BYTES
+                            ):
+                                raise ValueError("Video frames are limited to 2 MiB each")
                             if control_type == "input_video.frame" and mime not in {
                                 "image/jpeg", "image/png", "image/webp",
                             }:
