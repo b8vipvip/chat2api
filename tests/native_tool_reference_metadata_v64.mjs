@@ -75,3 +75,38 @@ assert.equal(finalEvents.length, 2);
 assert.equal(finalEvents[0].phase, "final-snapshot");
 assert.equal(finalEvents[1].phase, "final-complete");
 assert.equal(finalEvents[1].metadata.annotations[0].url_citation.ref_id, "turn0search0");
+
+
+// The isolated content bridge stores the final metadata on the active
+// request before forwarding the auxiliary references event. request-v6 can
+// then attach the same metadata to its sole canonical chat.completed event.
+const contentSource = readFileSync("chrome_extension/content_native_tool_stream_v63.js", "utf8");
+const bridgeMatch = contentSource.match(/async function emitFinalReferences\(detail, requestId\) \{[\s\S]*?\n  \}/);
+assert.ok(bridgeMatch, "production final-reference bridge must remain extractable");
+const bridgeEvents = [];
+const activeRequestState = {requestId:"req-citation-1"};
+const bridgeState = {finalReferenceSignatures:new Map()};
+const emitFinalReferences = runInNewContext("(" + bridgeMatch[0] + ")", {
+  state: bridgeState,
+  globalThis: {__CHAT2API_REQUEST_CONTENT_V6__:{active:activeRequestState}},
+  cleanMetadata: value => value,
+  emit: async value => { bridgeEvents.push(value); return true; },
+});
+await emitFinalReferences({
+  message_id:"assistant-final-1",
+  metadata:{annotations:[{
+    type:"url_citation",
+    url_citation:{url:"https://docs.example.org/api",title:"API reference",ref_id:"turn0search0"},
+  }]},
+}, "req-citation-1");
+assert.equal(activeRequestState.nativeCitationMetadata.annotations.length, 1);
+assert.equal(bridgeEvents.length, 1);
+assert.equal(bridgeEvents[0].type, "chat.references");
+assert.equal(bridgeEvents[0].request_id, "req-citation-1");
+
+const requestSource = readFileSync("chrome_extension/content_request_v6.js", "utf8");
+assert.match(
+  requestSource,
+  /event\?\.type === "chat\.completed" && active\?\.nativeCitationMetadata/,
+  "request-v6 canonical terminal must merge the captured citation metadata",
+);
