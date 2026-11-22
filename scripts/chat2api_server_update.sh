@@ -54,6 +54,13 @@ fi
 
 python3 "$APP_DIR/scripts/chat2api_update_storage.py" ensure-dir "$DATA_DIR"
 python3 "$APP_DIR/scripts/chat2api_update_storage.py" prepare-lock "$LOCK_FILE"
+# Acquire the cross-process lock before truncating or opening the shared log.
+# A duplicate systemd start must not erase the active updater's log or status.
+exec 9<>"$LOCK_FILE"
+if ! flock -n 9; then
+  echo "another host updater already holds the deployment lock; leaving its request and status untouched" >&2
+  exit 75
+fi
 python3 "$APP_DIR/scripts/chat2api_update_storage.py" truncate-log "$LOG_FILE"
 # The log sink validates the opened descriptor (regular file, one hard link,
 # no symlink following) before appending and mirrors output to the journal.
@@ -439,15 +446,12 @@ on_exit() {
 }
 trap on_exit EXIT
 
-exec 9<>"$LOCK_FILE"
-if ! flock -n 9; then
-  log "another host updater already holds the deployment lock; leaving its request and status untouched"
-  trap - EXIT
-  exit 75
+if ! REQUEST_ID="$(read_request_id)" || ! USE_BUILD_CACHE="$(read_use_build_cache)"; then
+  log "updater request file failed private-storage validation; discarding only the request path"
+  rm -f -- "$REQUEST_FILE"
+  REQUEST_CONSUMED="true"
+  exit 74
 fi
-
-REQUEST_ID="$(read_request_id)"
-USE_BUILD_CACHE="$(read_use_build_cache)"
 REQUEST_CONSUMED="true"
 rm -f -- "$REQUEST_FILE"
 if [[ -e "$LOCAL_COMPOSE_BACKUP_FILE" || -L "$LOCAL_COMPOSE_BACKUP_FILE" ]]; then
