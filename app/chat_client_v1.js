@@ -230,6 +230,23 @@
     ]);
   }
 
+  function citationTextForMessage(message) {
+    const text = messageText(message);
+    const references = referencesForMessage(message);
+    const numberById = new Map(
+      references.filter(item => item.id).map((item,index) => [item.id,index + 1])
+    );
+    return text.replace(
+      /\uE200cite\uE202([A-Za-z0-9_.:-]{1,128}(?:\uE202[A-Za-z0-9_.:-]{1,128})*)\uE201/g,
+      (_marker, encodedIds) => {
+        const numbers = encodedIds.split("\uE202")
+          .map(referenceId => numberById.get(referenceId))
+          .filter(Number.isInteger);
+        return numbers.length ? " [" + numbers.join(", ") + "]" : "";
+      },
+    );
+  }
+
   function normalizeToolEvents(value, role) {
     if (role !== "assistant" || !Array.isArray(value)) return [];
     return value.slice(-6).map(item => {
@@ -1034,7 +1051,16 @@
       copy.textContent = "复制";
       copy.addEventListener("click", async () => {
         try {
-          const copied = [messageText(message), ...messageImageIds(message).map(() => "[图片附件]"), ...messageFileAttachments(message).map((file) => "[文件附件: " + file.filename + "]")].filter(Boolean).join("\n");
+          const references = referencesForMessage(message);
+          const referenceLines = references.map((item,index) =>
+            "[" + (index + 1) + "] " + item.title + " — " + item.url
+          );
+          const copied = [
+            citationTextForMessage(message),
+            ...messageImageIds(message).map(() => "[图片附件]"),
+            ...messageFileAttachments(message).map((file) => "[文件附件: " + file.filename + "]"),
+            ...(referenceLines.length ? ["", "引用来源", ...referenceLines] : []),
+          ].filter(Boolean).join("\n");
           await navigator.clipboard.writeText(copied);
           toast("消息已复制");
         }
@@ -2245,8 +2271,14 @@
     const lines = ["# " + (conversation.title || "Chat2API 对话"), "", "模型：" + conversation.model, ""];
     conversation.messages.forEach((message) => {
       lines.push(message.role === "user" ? "## 用户" : "## Chat2API", "");
-      const text = messageText(message);
+      const text = citationTextForMessage(message);
       if (text) lines.push(text, "");
+      const references = referencesForMessage(message);
+      if (references.length) {
+        lines.push("引用来源：", ...references.map((item,index) =>
+          "[" + (index + 1) + "] " + item.title + " — " + item.url
+        ), "");
+      }
       messageImageIds(message).forEach((fileId) => lines.push("[图片附件: " + fileId + "]", ""));
       messageFileAttachments(message).forEach((file) => lines.push("[文件附件: " + file.filename + "]", ""));
     });
