@@ -335,6 +335,8 @@
       updatedAt: String(conversation.updatedAt || new Date().toISOString()),
       messages: (conversation.messages || []).slice(-MAX_MESSAGES).map((message) => {
         const toolEvents = normalizeToolEvents(message.toolEvents,message.role);
+        const references = message.role === "assistant"
+          ? normalizeToolReferences(message.references) : [];
         return {
           id: String(message.id || id()),
           role: message.role,
@@ -346,6 +348,7 @@
           lastEventId: Number.isSafeInteger(message.lastEventId) && message.lastEventId >= 0
             ? Math.min(message.lastEventId, Number.MAX_SAFE_INTEGER) : 0,
           ...(toolEvents.length ? {toolEvents} : {}),
+          ...(references.length ? {references} : {}),
         };
       }),
     };
