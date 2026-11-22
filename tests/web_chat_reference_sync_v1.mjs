@@ -39,8 +39,8 @@ const serverRow = {
   title:"Conversation",
   updatedAt:"2026-11-22T10:00:00Z",
   messages:[{
-    id:"assistant-1",role:"assistant",content:"Answer",pending:false,
-    recoveryStatus:"completed",references:[sourceRef],
+    id:"assistant-1",role:"assistant",content:"Answer",pending:true,
+    recoveryStatus:"recovering",references:[sourceRef],
   }],
 };
 const newerLocalRow = {
