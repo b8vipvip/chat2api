@@ -319,6 +319,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await file_store.load()
         conversation_files = getattr(app.state, "web_chat_conversations", None)
 
+        async def expire_web_chat_conversations() -> int:
+            if conversation_files is None:
+                return 0
+            total = 0
+            while True:
+                expired = await asyncio.to_thread(
+                    conversation_files.expire_old_conversations, 500,
+                )
+                total += expired
+                if expired < 500:
+                    return total
+
         async def cleanup_web_chat_orphan_files() -> int:
             if conversation_files is None:
                 return 0
@@ -339,6 +351,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return await asyncio.to_thread(cleanup_under_file_lock)
 
         try:
+            expired_conversations = await expire_web_chat_conversations()
+            if expired_conversations:
+                logger.info(
+                    "Expired %s Web Chat conversation(s) under the configured retention policy",
+                    expired_conversations,
+                )
             removed_web_chat_files = await cleanup_web_chat_orphan_files()
             if removed_web_chat_files:
                 logger.info(
@@ -354,6 +372,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             while True:
                 await asyncio.sleep(24 * 60 * 60)
                 try:
+                    expired = await expire_web_chat_conversations()
+                    if expired:
+                        logger.info("Expired %s Web Chat conversation(s)", expired)
                     removed = await cleanup_web_chat_orphan_files()
                     if removed:
                         logger.info("Expired %s unreferenced Web Chat attachment(s)", removed)
