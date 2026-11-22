@@ -100,6 +100,7 @@ await emitFinalReferences({
   }]},
 }, "req-citation-1");
 assert.equal(activeRequestState.nativeCitationMetadata.annotations.length, 1);
+assert.equal(activeRequestState.nativeCitationText, "");
 assert.equal(bridgeEvents.length, 1);
 assert.equal(bridgeEvents[0].type, "chat.references");
 assert.equal(bridgeEvents[0].request_id, "req-citation-1");
