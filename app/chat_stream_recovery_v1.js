@@ -149,6 +149,7 @@
                 terminal:true,
                 active:false,
                 response_text:hasText ? payload.response_text : "",
+                references:Array.isArray(payload.references) ? payload.references : [],
               };
               emit(safeRecord, result);
               return result;
@@ -158,6 +159,7 @@
               ...(status === "stalled" && payload.partial_text_available === true
                 && typeof payload.partial_text === "string"
                 ? {partial_text:payload.partial_text} : {}),
+              references:Array.isArray(payload.references) ? payload.references : [],
               last_event_id:Number.isSafeInteger(payload.last_event_id)
                 ? payload.last_event_id : 0,
             };
@@ -265,6 +267,7 @@
             status,terminal:true,active:false,
             ...(typeof payload.partial_text === "string" ? {partial_text:payload.partial_text} : {}),
             ...(typeof payload.response_text === "string" ? {response_text:payload.response_text} : {}),
+            references:Array.isArray(payload.references) ? payload.references : [],
           };
         } else if (eventName === "replay.reset" && payload.terminal === true) {
           const status = String(payload.status || "unknown");

@@ -363,3 +363,14 @@ def test_r05_short_reply_stability_provenance_uses_single_request_v6_policy():
     assert "+8s-stable" not in request
     assert "response_terminal_required_stable_ms: abortedReplyStableThreshold(rendered)" in request
     assert "response_terminal_stable_ms: abortedReplyStableElapsedMs(abortedRenderedCandidateSince)" in request
+
+
+def test_final_citation_metadata_is_attached_by_the_single_request_v6_terminal_owner():
+    request = read("chrome_extension/content_request_v6.js")
+    native_stream = read("chrome_extension/content_native_tool_stream_v63.js")
+    assert "requestState.nativeCitationMetadata = metadata" in native_stream
+    assert 'event?.type === "chat.completed" && active?.nativeCitationMetadata' in request
+    assert "metadata: {" in request
+    assert "...active.nativeCitationMetadata" in request
+    assert "nativeCitationTextMatch" in request
+    assert "native_citation_text_match: nativeCitationTextMatch" in request

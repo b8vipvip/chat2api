@@ -235,6 +235,23 @@
     ]);
   }
 
+  function citationTextForMessage(message) {
+    const text = messageText(message);
+    const references = referencesForMessage(message);
+    const numberById = new Map(
+      references.filter(item => item.id).map((item,index) => [item.id,index + 1])
+    );
+    return text.replace(
+      /\uE200cite\uE202([A-Za-z0-9_.:-]{1,128}(?:\uE202[A-Za-z0-9_.:-]{1,128})*)\uE201/g,
+      (_marker, encodedIds) => {
+        const numbers = encodedIds.split("\uE202")
+          .map(referenceId => numberById.get(referenceId))
+          .filter(Number.isInteger);
+        return numbers.length ? " [" + numbers.join(", ") + "]" : "";
+      },
+    );
+  }
+
   function normalizeToolEvents(value, role) {
     if (role !== "assistant" || !Array.isArray(value)) return [];
     return value.slice(-6).map(item => {
@@ -340,6 +357,8 @@
       updatedAt: String(conversation.updatedAt || new Date().toISOString()),
       messages: (conversation.messages || []).slice(-MAX_MESSAGES).map((message) => {
         const toolEvents = normalizeToolEvents(message.toolEvents,message.role);
+        const references = message.role === "assistant"
+          ? normalizeToolReferences(message.references) : [];
         return {
           id: String(message.id || id()),
           role: message.role,
@@ -351,6 +370,7 @@
           lastEventId: Number.isSafeInteger(message.lastEventId) && message.lastEventId >= 0
             ? Math.min(message.lastEventId, Number.MAX_SAFE_INTEGER) : 0,
           ...(toolEvents.length ? {toolEvents} : {}),
+          ...(references.length ? {references} : {}),
         };
       }),
     };
@@ -389,13 +409,22 @@
       const serverCompleted = !existing.pending && existing.recoveryStatus === "completed";
       const localToolWeight = toolActivityWeight(message.toolEvents);
       const serverToolWeight = toolActivityWeight(existing.toolEvents);
+      const mergedReferences = normalizeToolReferences([
+        ...(Array.isArray(existing.references) ? existing.references : []),
+        ...(Array.isArray(message.references) ? message.references : []),
+      ]);
+      const withMergedReferences = row => mergedReferences.length
+        ? {...row,references:mergedReferences} : row;
       if ((localCompleted && !serverCompleted) ||
           (!serverCompleted && messageContentWeight(message) > messageContentWeight(existing))) {
-        messages.set(message.id, message);
+        messages.set(message.id, withMergedReferences(message));
       } else if (localToolWeight > serverToolWeight) {
         // Preserve newer call/result state without replacing an authoritative
         // completed answer with a stale local text snapshot.
-        messages.set(message.id, {...existing,toolEvents:message.toolEvents});
+        messages.set(message.id, withMergedReferences({...existing,toolEvents:message.toolEvents}));
+      } else if (mergedReferences.length) {
+        // A newer text snapshot must not erase server-side citations.
+        messages.set(message.id, withMergedReferences(existing));
       }
     });
     const localNewer = String(localRow.updatedAt || "") > String(serverRow.updatedAt || "");
@@ -1104,6 +1133,7 @@
       }
       if (message.role === "assistant") {
         renderToolActivity(body,message,{includeReferences: !nativeRendered});
+        if (!nativeRendered) renderStandaloneMessageReferences(body,message);
       }
       if (state.streaming && message.id === state.streamingMessageId) {
         const caret = document.createElement("span");
@@ -1126,7 +1156,16 @@
       copy.textContent = "复制";
       copy.addEventListener("click", async () => {
         try {
-          const copied = [messageText(message), ...messageImageIds(message).map(() => "[图片附件]"), ...messageFileAttachments(message).map((file) => "[文件附件: " + file.filename + "]")].filter(Boolean).join("\n");
+          const references = referencesForMessage(message);
+          const referenceLines = references.map((item,index) =>
+            "[" + (index + 1) + "] " + item.title + " — " + item.url
+          );
+          const copied = [
+            citationTextForMessage(message),
+            ...messageImageIds(message).map(() => "[图片附件]"),
+            ...messageFileAttachments(message).map((file) => "[文件附件: " + file.filename + "]"),
+            ...(referenceLines.length ? ["", "引用来源", ...referenceLines] : []),
+          ].filter(Boolean).join("\n");
           await navigator.clipboard.writeText(copied);
           toast("消息已复制");
         }
@@ -1548,6 +1587,66 @@
     return true;
   }
 
+  function applyMessageReferences(assistant, value) {
+    if (!assistant || assistant.role !== "assistant") return false;
+    const incoming = normalizeToolReferences(value);
+    if (!incoming.length) return false;
+    const previous = Array.isArray(assistant.references) ? assistant.references : [];
+    const merged = normalizeToolReferences([...previous, ...incoming]);
+    const changed = merged.length !== previous.length ||
+      merged.some((item,index) => item.id !== previous[index]?.id || item.url !== previous[index]?.url);
+    if (!changed) return false;
+    assistant.references = merged;
+    saveHistory();
+    return true;
+  }
+
+  function renderStandaloneMessageReferences(body, message) {
+    const references = referencesForMessage(message);
+    if (!references.length) return;
+    const eventReferences = normalizeToolReferences(
+      (Array.isArray(message.toolEvents) ? message.toolEvents : [])
+        .flatMap(item => Array.isArray(item.references) ? item.references : [])
+    );
+    const eventKeys = new Set(eventReferences.map(item =>
+      item.id ? "id:" + item.id : "url:" + item.url
+    ));
+    const standalone = references.filter(item =>
+      !eventKeys.has(item.id ? "id:" + item.id : "url:" + item.url)
+    );
+    if (!standalone.length) return;
+    const section = document.createElement("section");
+    section.className = "message-tool-events";
+    const referenceBox = document.createElement("div");
+    referenceBox.className = "message-tool-references";
+    const heading = document.createElement("div");
+    heading.className = "message-tool-event-label";
+    heading.textContent = "引用来源";
+    referenceBox.appendChild(heading);
+    standalone.forEach(reference => {
+      const link = document.createElement("a");
+      link.className = "message-tool-reference";
+      link.href = reference.url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer nofollow";
+      link.referrerPolicy = "no-referrer";
+      const title = document.createElement("strong");
+      const number = references.findIndex(item =>
+        (item.id && reference.id) ? item.id === reference.id : item.url === reference.url
+      ) + 1;
+      title.textContent = "[" + number + "] " + reference.title;
+      link.appendChild(title);
+      if (reference.snippet) {
+        const snippet = document.createElement("span");
+        snippet.textContent = reference.snippet;
+        link.appendChild(snippet);
+      }
+      referenceBox.appendChild(link);
+    });
+    section.appendChild(referenceBox);
+    body.appendChild(section);
+  }
+
   function toolStatusLabel(status) {
     return ({running:"执行中",completed:"已完成",failed:"失败",cancelled:"已取消"})[status] || "状态未知";
   }
@@ -1644,6 +1743,10 @@
       appendDelta(assistant, event.delta);
       return false;
     }
+    if (eventName === "chat.references") {
+      applyMessageReferences(assistant, event.references);
+      return false;
+    }
     if (eventName === "chat.tool.call" || eventName === "chat.tool.result") {
       applyToolEvent(assistant, {
         ...event,
@@ -1652,6 +1755,9 @@
       return false;
     }
     if (eventName === "recovery.partial.snapshot") {
+      if (Array.isArray(event.references)) {
+        applyMessageReferences(assistant, event.references);
+      }
       if (event.partial_text_unverified === true && typeof event.partial_text === "string") {
         const candidate = event.partial_text.slice(0, MAX_MESSAGE_CHARS);
         // Worker and delivery snapshots are unverified candidates. Never let
@@ -1669,6 +1775,7 @@
     if (eventName === "delivery.error" || eventName === "delivery.cancelled"
         || eventName === "delivery.stalled" || eventName === "recovery.stalled"
         || eventName === "recovery.terminal") {
+      if (Array.isArray(event.references)) applyMessageReferences(assistant, event.references);
       const status = String(event.status || (
         eventName === "delivery.cancelled" ? "cancelled" :
         eventName === "delivery.error" ? "error" :
@@ -1683,6 +1790,7 @@
       return true;
     }
     if (eventName === "replay.reset") {
+      if (Array.isArray(event.references)) applyMessageReferences(assistant, event.references);
       if (event.status === "completed" && typeof event.response_text === "string") {
         assistant.content = event.response_text.slice(0, MAX_MESSAGE_CHARS);
         assistant.replayTerminalStatus = "completed";
@@ -1700,7 +1808,8 @@
     }
     const choice = Array.isArray(event?.choices) ? event.choices[0] : null;
     const eventCursor = choice?.delta?.chat2api_event_id
-      ?? choice?.delta?.chat2api_tool?.chat2api_event_id;
+      ?? choice?.delta?.chat2api_tool?.chat2api_event_id
+      ?? choice?.delta?.chat2api_references?.chat2api_event_id;
     if (Number.isSafeInteger(eventCursor) && eventCursor > Number(assistant.lastEventId || 0)) {
       assistant.lastEventId = eventCursor;
     }
@@ -1708,6 +1817,9 @@
       appendDelta(assistant, choice.delta.content);
     }
     if (choice?.delta?.chat2api_tool) applyToolEvent(assistant,choice.delta.chat2api_tool);
+    if (choice?.delta?.chat2api_references) {
+      applyMessageReferences(assistant, choice.delta.chat2api_references.references);
+    }
     return false;
   }
 
@@ -1732,6 +1844,7 @@
     return recoveryApi.create({
       onUpdate(update) {
         if (!update || update.request_id !== assistant.requestId || update.assistant_message_id !== assistant.id) return;
+        if (Array.isArray(update.references)) applyMessageReferences(assistant, update.references);
         assistant.recoveryStatus = String(update.status || "recovering").slice(0, 40);
         if (Number.isSafeInteger(update.last_event_id)
             && update.last_event_id > Number(assistant.lastEventId || 0)) {
@@ -1797,6 +1910,7 @@
       if (!result) result = await controller.resume(record);
       const status = String(result?.status || "recovery_failed");
       if (result?.terminal === true) {
+        if (Array.isArray(result.references)) applyMessageReferences(assistant, result.references);
         assistant.pending = false;
         assistant.recoveryStatus = status;
         if (status === "completed" && typeof result.response_text === "string") assistant.content = result.response_text.slice(0, MAX_MESSAGE_CHARS);
@@ -2267,8 +2381,14 @@
     const lines = ["# " + (conversation.title || "Chat2API 对话"), "", "模型：" + conversation.model, ""];
     conversation.messages.forEach((message) => {
       lines.push(message.role === "user" ? "## 用户" : "## Chat2API", "");
-      const text = messageText(message);
+      const text = citationTextForMessage(message);
       if (text) lines.push(text, "");
+      const references = referencesForMessage(message);
+      if (references.length) {
+        lines.push("引用来源：", ...references.map((item,index) =>
+          "[" + (index + 1) + "] " + item.title + " — " + item.url
+        ), "");
+      }
       messageImageIds(message).forEach((fileId) => lines.push("[图片附件: " + fileId + "]", ""));
       messageFileAttachments(message).forEach((file) => lines.push("[文件附件: " + file.filename + "]", ""));
     });

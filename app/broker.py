@@ -6,7 +6,7 @@ import re
 import time
 from urllib.parse import urlsplit
 
-from .chat_tool_references_v1 import extract_tool_references
+from .chat_tool_references_v1 import extract_tool_references, normalize_tool_references
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -43,6 +43,7 @@ class RequestState:
     # Mode 1 may expose bounded public citation cards in its Web Chat UI.
     mode1_web_chat: bool = False
     mode1_owner_key_id: str = ""
+    references: list[dict[str, Any]] = field(default_factory=list)
     last_event_id: int = 0
     delivery_event_ids: list[int] = field(default_factory=list)
     delivery_terminal_event_id: int = 0
@@ -664,7 +665,34 @@ class RequestBroker:
                 if references:
                     normalized["references"] = references
             event = normalized
+        elif event_type == "chat.references":
+            # Final-message citation metadata is an auxiliary Mode 1 lane.
+            # It may enrich a reply but can never change answer text or finality.
+            if not state.mode1_web_chat:
+                return True
+            references = extract_tool_references(event.get("metadata"))
+            if not references:
+                return True
+            state.references = normalize_tool_references([
+                *state.references, *references,
+            ])
+            reference_event_id = event.get("event_id")
+            event = {
+                "type": "chat.references",
+                "message_id": str(event.get("message_id") or "")[:128],
+                "references": state.references,
+            }
+            if isinstance(reference_event_id, int) and reference_event_id > 0:
+                event["event_id"] = reference_event_id
         elif event_type == "chat.completed":
+            if state.mode1_web_chat:
+                terminal_references = extract_tool_references(event.get("metadata"))
+                if terminal_references:
+                    state.references = normalize_tool_references([
+                        *state.references, *terminal_references,
+                    ])
+                if state.references:
+                    event = {**event, "references": state.references}
             state.terminal_event_type = str(event_type)
             state.completed_mono = now
             state.diagnostics.update(_terminal_provenance(event))

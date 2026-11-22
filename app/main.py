@@ -24,6 +24,7 @@ from pydantic import ValidationError
 from .admin import admin_response
 from .api_keys import ApiKeyStore, ApiPrincipal, UNSET
 from .broker import RequestBroker, RequestState
+from .chat_tool_references_v1 import apply_inline_citation_markers, extract_tool_references
 from .web_chat_event_journal_v1 import WebChatEventJournal
 from .web_chat_terminal_replay_v1 import (
     is_already_finalized_worker_terminal,
@@ -98,6 +99,25 @@ from .quota_reservation_runtime_v1 import (
 
 logger = logging.getLogger("chat2api")
 APP_VERSION = "0.5.0"
+
+
+def web_chat_delivery_text(final_text: str, source_text: str, terminal: dict[str, Any]) -> str:
+    """Return the exact Web Chat projection while keeping canonical answer bytes untouched."""
+    if not isinstance(final_text, str) or final_text != source_text or not isinstance(terminal, dict):
+        return final_text if isinstance(final_text, str) else ""
+    diagnostics = terminal.get("diagnostics")
+    diagnostics = diagnostics if isinstance(diagnostics, dict) else {}
+    if (
+        diagnostics.get("response_boundary_prompt_echo_removed") is True
+        or diagnostics.get("native_citation_text_match") is not True
+    ):
+        return final_text
+    references = terminal.get("references")
+    if not isinstance(references, list) or not references:
+        references = extract_tool_references(terminal.get("metadata"))
+    if not references:
+        return final_text
+    return apply_inline_citation_markers(final_text, references)
 
 
 async def _telemetry_upsert_best_effort(
@@ -1864,6 +1884,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         prompt_mode: str,
         response_id: str,
         final_text: str = "",
+        delivery_text: str | None = None,
         error: str | None = None,
         request_type: str = "text",
         attachments_count: int = 0,
@@ -1947,8 +1968,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if state.mode1_web_chat and state.mode1_owner_key_id:
             try:
                 if status_value == "completed":
+                    journal_text = final_text if delivery_text is None else delivery_text
                     delivery = await event_journal.append_delivery(
-                        state.request_id, state.mode1_owner_key_id, final_text,
+                        state.request_id, state.mode1_owner_key_id, journal_text,
                     )
                     state.delivery_event_ids = [
                         int(value) for value in delivery.get("chunk_event_ids", [])
@@ -2004,8 +2026,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if state.mode1_web_chat and state.mode1_owner_key_id:
             try:
                 if status_value == "completed":
+                    journal_text = final_text if delivery_text is None else delivery_text
                     terminal_id = await event_journal.append_delivery_terminal(
-                        state.request_id, state.mode1_owner_key_id, len(final_text),
+                        state.request_id, state.mode1_owner_key_id, len(journal_text),
                     )
                 elif status_value in {"error", "cancelled", "stalled"}:
                     terminal_id = await event_journal.append_terminal(
@@ -2274,6 +2297,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         archived_text, media_items, file_items = await archive_verified_terminal(
             state, candidate, owner, request_id, media_base_for_websocket(websocket),
         )
+        display_text = web_chat_delivery_text(archived_text, candidate, message)
         # The SSE journal retains at most two million final-text characters.
         # Check after media/file rewriting so large inline Base64 assets can be
         # archived into compact owned URLs before applying the delivery bound.
@@ -2305,6 +2329,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             prompt_mode=str(recovered_row.get("prompt_mode") or "auto"),
             response_id=response_id,
             final_text=archived_text,
+            delivery_text=display_text,
             request_type=str(recovered_row.get("request_type") or "web_chat"),
             attachments_count=(
                 recovered_row.get("attachments_count")
@@ -2318,7 +2343,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             timings_override=timings,
             verify_replayed_usage_settlement=True,
         )
-        if not await ensure_replayed_delivery_terminal(request_id, owner, archived_text):
+        if not await ensure_replayed_delivery_terminal(request_id, owner, display_text):
             raise RuntimeError("Recovered SSE delivery terminal was not durably journaled")
         return True
 
@@ -2651,6 +2676,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 chunk_payload(response_id, model, delta), ensure_ascii=False
                             ) + "\n\n"
                     continue
+                if event_type == "chat.references":
+                    if (request.scope.get("chat2api_mode1_web_chat") is True
+                            and isinstance(event.get("references"), list)
+                            and event["references"]):
+                        reference_delta = {"chat2api_references": event["references"]}
+                        if isinstance(event.get("event_id"), int):
+                            reference_delta["chat2api_event_id"] = event["event_id"]
+                        yield "data: " + json.dumps(
+                            chunk_payload(response_id, model, reference_delta),
+                            ensure_ascii=False,
+                        ) + "\n\n"
+                    continue
                 if event_type in {"chat.tool.call", "chat.tool.result"}:
                     # Tool activity is an auxiliary Mode 1 presentation lane.
                     # Do not leak it into ordinary Mode 2 SDK streams, and do
@@ -2713,23 +2750,44 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         yield "data: " + json.dumps({"error": {"type": "media_storage_error", "message": str(error)}}) + "\n\n"
                         yield "data: [DONE]\n\n"
                         break
+                    # Compute the exact Web Chat body before persisting its SSE
+                    # delivery journal. The journal cursor must describe the same
+                    # bytes the live client receives, including inline citations.
+                    display_final_text = (
+                        web_chat_delivery_text(final_text, raw_final, event)
+                        if request.scope.get("chat2api_mode1_web_chat") is True
+                        else final_text
+                    )
                     # Record the one genuine Worker terminal BEFORE yielding SSE
                     # content: slow or disconnected clients must not leave a
                     # completed browser request stuck in telemetry.running.
                     state.diagnostics["server_stream_terminal_stage"] = "persisting-before-sse"
                     usage, token_meta = await record_request(
                         state, model, prompt, "completed", principal, stream=True, prompt_mode=prompt_mode,
-                        response_id=response_id, final_text=final_text, request_type=request_type,
+                        response_id=response_id, final_text=final_text, delivery_text=display_final_text,
+                        request_type=request_type,
                         attachments_count=attachments_count, media_items=archived_media,
                         file_items=archived_files,
                     )
                     recorded = True
                     state.diagnostics["server_stream_terminal_stage"] = "persisted-before-sse"
+                    if (request.scope.get("chat2api_mode1_web_chat") is True
+                            and isinstance(event.get("references"), list)
+                            and event["references"]):
+                        reference_delta = {"chat2api_references": event["references"]}
+                        if isinstance(event.get("event_id"), int):
+                            reference_delta["chat2api_event_id"] = event["event_id"]
+                        yield "data: " + json.dumps(
+                            chunk_payload(response_id, model, reference_delta),
+                            ensure_ascii=False,
+                        ) + "\n\n"
                     # The final same-request Worker terminal is the one owner
                     # of assistant content, regardless of provisional snapshots.
                     # Emit the *whole* authoritative text in bounded SSE chunks
                     # even if the preview is unrelated ("我会..." -> "# ...").
-                    final_chunks = list(final_text_chunks(final_text))
+                    # display_final_text was also used for the durable delivery
+                    # journal above, so event IDs and replay content stay aligned.
+                    final_chunks = list(final_text_chunks(display_final_text))
                     for index, delta in enumerate(final_chunks):
                         sent_text += delta
                         chunk_delta: dict[str, object] = {"content": delta}
@@ -4066,7 +4124,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     continue
                 if request_id and message_type in {
                     "chat.diagnostics", "chat.started", "chat.delta", "chat.snapshot",
-                    "chat.tool.call", "chat.tool.result", "chat.completed",
+                    "chat.tool.call", "chat.tool.result", "chat.references", "chat.completed",
                     "chat.error", "chat.cancelled", "image.diagnostics", "image.started", "image.progress",
                     "image.completed", "image.error", "image.cancelled",
                 }:

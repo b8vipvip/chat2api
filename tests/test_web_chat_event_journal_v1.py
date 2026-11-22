@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from app.config import Settings
-from app.main import create_app
+from app.main import create_app, web_chat_delivery_text
 from app.telemetry import TelemetryStore
 from app.user_console_v104_patch import install_user_console_v104_patch
 from app.web_chat_event_journal_v1 import WebChatEventJournal
@@ -512,11 +512,8 @@ def test_worker_terminal_outbox_replays_across_two_server_instances(tmp_path):
             app_after_restart.state.web_chat_event_journal.snapshot(request_id, key_id)
         )
         assert snapshot["terminal_status"] == "completed"
-        # Worker evidence keeps the original terminal, while delivery stores
-        # the post-archive text actually sent to Web Chat. Media and staged
-        # file markers are intentionally rewritten to owned download URLs.
-        # Worker terminal evidence is intentionally bounded to 50k chars;
-        # the delivery journal stores the full post-archive response.
+        # Worker evidence is bounded to 50k chars; delivery stores the full
+        # post-archive text actually sent to Web Chat, with owned media URLs.
         assert snapshot["worker_partial_text"] == final_text[:50_000]
         assert snapshot["worker_text_truncated"] is True
         assert snapshot["delivered_text"] == recovered["response_text"]
@@ -524,3 +521,122 @@ def test_worker_terminal_outbox_replays_across_two_server_instances(tmp_path):
         assert "chat2api-staged:" not in snapshot["delivered_text"]
         assert "/api/media/" in snapshot["delivered_text"]
         assert "/api/generated-files/pending/" in snapshot["delivered_text"]
+
+
+def test_final_message_citation_metadata_is_durable_in_worker_and_terminal_records(tmp_path):
+    async def scenario():
+        journal = WebChatEventJournal(tmp_path)
+        await journal.open()
+        metadata = {
+            "annotations": [{
+                "type": "url_citation",
+                "start_index": 0,
+                "end_index": 26,
+                "url_citation": {
+                    "url": "https://docs.example.org/api",
+                    "title": "API reference",
+                    "ref_id": "turn0search0",
+                },
+            }],
+        }
+        first = await journal.append_worker_event(
+            "req_final_citation_journal", "key-final-citation",
+            {
+                "type": "chat.references",
+                "message_id": "assistant-final",
+                "metadata": metadata,
+            },
+        )
+        terminal = await journal.append_worker_event(
+            "req_final_citation_journal", "key-final-citation",
+            {
+                "type": "chat.completed",
+                "message_id": "assistant-final",
+                "text": "The API is documented here.",
+                "metadata": metadata,
+            },
+        )
+        assert (first, terminal) == (1, 2)
+        page = await journal.events_after(
+            "req_final_citation_journal", "key-final-citation", 0,
+        )
+        assert [item["type"] for item in page["events"]] == [
+            "chat.references", "worker.terminal",
+        ]
+        expected = [{
+            "url": "https://docs.example.org/api",
+            "title": "API reference",
+            "snippet": "",
+            "id": "turn0search0",
+            "start_index": 0,
+            "end_index": 26,
+        }]
+        assert page["events"][0]["data"]["references"] == expected
+        assert page["events"][1]["data"]["references"] == expected
+        assert page["events"][1]["data"]["message_id"] == "assistant-final"
+        snapshot = await journal.snapshot(
+            "req_final_citation_journal", "key-final-citation",
+        )
+        assert snapshot["references"] == expected
+
+    asyncio.run(scenario())
+
+
+
+def test_durable_delivery_journal_stores_the_exact_native_citation_projection(tmp_path):
+    async def scenario():
+        journal = WebChatEventJournal(tmp_path)
+        await journal.open()
+        text = "Read the docs"
+        terminal = {
+            "diagnostics": {
+                "native_citation_text_match": True,
+                "response_boundary_prompt_echo_removed": False,
+            },
+            "metadata": {
+                "annotations": [{
+                    "type": "url_citation",
+                    "start_index": 0,
+                    "end_index": len(text),
+                    "url_citation": {
+                        "url": "https://docs.example.org/",
+                        "title": "Documentation",
+                        "ref_id": "turn0search0",
+                    },
+                }],
+            },
+        }
+        display_text = web_chat_delivery_text(text, text, terminal)
+        await journal.append_worker_event(
+            "req_citation_delivery", "key-citation-delivery",
+            {"type": "chat.completed", "text": text, "metadata": terminal["metadata"]},
+        )
+        delivery = await journal.append_delivery(
+            "req_citation_delivery", "key-citation-delivery", display_text,
+        )
+        terminal_id = await journal.append_delivery_terminal(
+            "req_citation_delivery", "key-citation-delivery", len(display_text),
+        )
+        snapshot = await journal.snapshot(
+            "req_citation_delivery", "key-citation-delivery",
+        )
+        page = await journal.events_after(
+            "req_citation_delivery", "key-citation-delivery", 0,
+        )
+        assert delivery["text_chars"] == len(display_text)
+        assert terminal_id > 0
+        assert snapshot["delivered_text"] == display_text
+        assert page["events"][-2]["data"]["delta"] == display_text
+        assert page["events"][-1]["data"]["text_chars"] == len(display_text)
+
+    asyncio.run(scenario())
+
+
+def test_main_wires_projected_text_to_live_and_replayed_delivery_journals():
+    from pathlib import Path
+    import app.main as main_module
+
+    source = Path(main_module.__file__).read_text(encoding="utf-8")
+    assert "delivery_text=display_final_text" in source
+    assert "delivery_text=display_text" in source
+    assert "ensure_replayed_delivery_terminal(request_id, owner, display_text)" in source
