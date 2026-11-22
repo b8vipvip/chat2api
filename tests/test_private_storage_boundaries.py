@@ -18,7 +18,8 @@ from app.media_archive_v173 import MediaArchive
 from app.registry import ClientRegistry
 from app.pairing import PairingStore
 from app.payment_channels_v106_patch import (
-    PaymentChannelsStore, _payment_channels_secret_candidate, _persist_payment_channels_secret,
+    PaymentChannelsStore, _payment_channels_secret_candidate, _payment_channels_secret_lock,
+    _persist_payment_channels_secret,
 )
 from app.prompt_config import PromptConfigStore, default_config
 from app.plugin_registry import PluginRegistry
@@ -489,3 +490,22 @@ def test_payment_configuration_rejects_symlinked_credentials_file(tmp_path: Path
     with pytest.raises(RuntimeError):
         PaymentChannelsStore(tmp_path, "payment-secret")
     assert target.read_text(encoding="utf-8") == '{"aggregate":{},"direct":{}}'
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission assertions")
+def test_payment_secret_initialization_is_serialized_across_workers(tmp_path: Path) -> None:
+    root = tmp_path / "concurrent-payment"
+
+    def initialize(_: int) -> str:
+        with _payment_channels_secret_lock(root):
+            value, persist = _payment_channels_secret_candidate(
+                root, SimpleNamespace(api_key="legacy-api-key"),
+            )
+            if persist:
+                _persist_payment_channels_secret(root, value)
+            return value
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        values = list(pool.map(initialize, range(16)))
+    assert len(set(values)) == 1
+    assert stat.S_IMODE((root / ".chat2api_data_secret").stat().st_mode) == 0o600
