@@ -54,6 +54,8 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         assert "normalizeToolEvents" in script.text
         assert "chat2api_references" in script.text
         assert "applyMessageReferences" in script.text
+        assert "normalizeToolReferences(message.references)" in script.text
+        assert "...(references.length ? {references} : {})" in script.text
         assert "renderStandaloneMessageReferences" in script.text
         assert 'eventName === "chat.references"' in script.text
         assert "const toolEvents = normalizeToolEvents(message.toolEvents,message.role)" in script.text
