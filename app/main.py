@@ -2707,8 +2707,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     # Emit the *whole* authoritative text in bounded SSE chunks
                     # even if the preview is unrelated ("我会..." -> "# ...").
                     display_final_text = final_text
+                    terminal_diagnostics = (
+                        event.get("diagnostics") if isinstance(event.get("diagnostics"), dict) else {}
+                    )
                     if (request.scope.get("chat2api_mode1_web_chat") is True
                             and final_text == raw_final
+                            and terminal_diagnostics.get("response_boundary_prompt_echo_removed") is not True
                             and isinstance(event.get("references"), list)):
                         # Annotation offsets are validated against the archived
                         # terminal text. Only the Web Chat projection receives
