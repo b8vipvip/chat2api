@@ -82,7 +82,7 @@ systemctl enable --now chat2api-admin-update.path
 current_sha="$(git -C "$APP_DIR" rev-parse HEAD)"
 python3 - "$MARKER_FILE" "$DEPLOYMENT_FILE" "$APP_DIR" "$current_sha" <<'PY'
 from __future__ import annotations
-import os, sys
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
