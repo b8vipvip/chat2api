@@ -850,15 +850,20 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         marker = f"[视频帧 {sequence} · {timestamp_ms / 1000:.3f}s]"
                         input_text = (input_text + "\n" if input_text else "") + marker
                     item_id = str(control.get("item_id") or item.get("id") or f"item_{uuid.uuid4().hex}")[:120]
-                    if item_id in pending_input_text:
+                    pending_item_ids = (
+                        set(pending_input_text)
+                        | set(pending_input_media_ids)
+                        | set(pending_video_frames)
+                    )
+                    if item_id in pending_item_ids or item_id in confirmed_input_ids:
                         await send_json({
                             "type": "error", "code": "DUPLICATE_INPUT_ITEM_ID",
                             "item_id": item_id,
-                            "message": "An input item with this ID is already awaiting Worker confirmation",
+                            "message": "An input item ID cannot be reused while pending or after Worker confirmation",
                             "retryable": False,
                         })
                         continue
-                    if len(pending_input_text) >= MAX_LIVE_PENDING_INPUTS:
+                    if len(pending_item_ids) >= MAX_LIVE_PENDING_INPUTS:
                         await send_json({
                             "type": "error", "code": "LIVE_INPUT_QUEUE_FULL",
                             "message": "Too many unconfirmed live inputs; wait for the Worker before sending more",
