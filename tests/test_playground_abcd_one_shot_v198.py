@@ -63,11 +63,11 @@ def test_one_shot_pool_database_is_private_and_rejects_linked_files(tmp_path):
     assert stat.S_IMODE(store.filename.stat().st_mode) == 0o600
 
     outside = tmp_path / "outside-abcd-pool"
-    outside.write_text("must remain untouched", encoding="utf-8")
     os.link(store.filename, outside)
+    before = outside.read_bytes()
     with pytest.raises(RuntimeError, match="single-link regular files"):
         OneShotPool(tmp_path)
-    assert outside.read_text(encoding="utf-8") == "must remain untouched"
+    assert outside.read_bytes() == before
 
 
 def test_one_shot_pool_rejects_symlinked_sqlite_sidecars(tmp_path):
