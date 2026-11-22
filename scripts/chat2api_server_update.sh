@@ -129,6 +129,7 @@ PY
 
 restore_env() {
   [[ -n "$ENV_BACKUP" ]] || return 0
+  ENV_BACKUP_RESTORED="false"
   if [[ ! -f "$ENV_BACKUP" && ! -L "$ENV_BACKUP" ]]; then
     log "preserved .env backup is missing; refusing to claim restoration"
     return 1
@@ -369,6 +370,7 @@ rollback() {
 
 restore_local_compose_backup() {
   [[ "$LOCAL_COMPOSE_BACKUP_CREATED" == "true" ]] || return 0
+  LOCAL_COMPOSE_BACKUP_RESTORED="false"
   if [[ ! -f "$LOCAL_COMPOSE_BACKUP_FILE" && ! -L "$LOCAL_COMPOSE_BACKUP_FILE" ]]; then
     log "preserved docker-compose backup is missing; refusing to claim restoration"
     return 1
