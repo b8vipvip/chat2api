@@ -2708,6 +2708,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     # even if the preview is unrelated ("我会..." -> "# ...").
                     display_final_text = final_text
                     if (request.scope.get("chat2api_mode1_web_chat") is True
+                            and final_text == raw_final
                             and isinstance(event.get("references"), list)):
                         # Annotation offsets are validated against the archived
                         # terminal text. Only the Web Chat projection receives
