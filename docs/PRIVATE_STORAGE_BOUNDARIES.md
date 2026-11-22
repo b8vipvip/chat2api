@@ -15,6 +15,9 @@ generated media under the configured data directory.
 - Administrator session hashes, encrypted Worker pairing codes and the
   hash-chained audit log use the same no-follow, single-link private-file
   boundary; pairing/session data is never written through predictable temp names.
+- Payment-provider ciphertext/secrets, prompt configuration, plugin catalog and
+  quota-reservation SQLite state use private files/databases with no-follow
+  reads and validated SQLite sidecars.
 - Telemetry, diagnostics and test-run startup readers retain the validated file
   descriptor while reading the bounded JSONL tail; they do not validate a path
   and then reopen it.
