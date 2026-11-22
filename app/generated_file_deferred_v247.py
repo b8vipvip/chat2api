@@ -10,6 +10,7 @@ import base64
 import binascii
 import hashlib
 import logging
+import os
 import re
 import secrets
 import sqlite3
@@ -19,6 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .private_storage import ensure_private_directory, open_private_regular_file, secure_private_sqlite_files, write_private_bytes_atomic
 from .generated_files_v196 import (
     FILE_MARKER, STAGED_MARKER, MAX_FILES_PER_RESPONSE,
     MAX_FILE_BYTES, MAX_INLINE_FILE_BYTES, MAX_TOTAL_BYTES,
@@ -40,7 +42,7 @@ class DeferredGeneratedFiles:
     def __init__(self, archive):
         self.archive = archive
         self.root = archive.storage.root / "generated-file-pending"
-        self.root.mkdir(parents=True, exist_ok=True)
+        ensure_private_directory(self.root)
         self.pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="generated-file-archive")
         self.lock = threading.RLock()
         with self._db() as conn:
@@ -111,9 +113,15 @@ class DeferredGeneratedFiles:
                 )
 
     def _db(self):
+        secure_private_sqlite_files(self.archive.db_path, create_database=True)
         conn = sqlite3.connect(self.archive.db_path, timeout=20)
-        conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            conn.row_factory = sqlite3.Row
+            secure_private_sqlite_files(self.archive.db_path)
+            return conn
+        except Exception:
+            conn.close()
+            raise
 
     def rewrite(self, text: str, owner: str, request_id: str, base_url: str,
                 *, stop=None):
@@ -184,7 +192,9 @@ class DeferredGeneratedFiles:
                     token = secrets.token_urlsafe(24)
                     path = self.root / (file_id + ".bin")
                     staged = path.with_suffix(".part")
-                    staged.write_bytes(data)
+                    if path.exists() or path.is_symlink() or staged.exists() or staged.is_symlink():
+                        raise FileTransferFailed("Generated file staging path already exists")
+                    write_private_bytes_atomic(staged, data)
                     if stop is not None:
                         stop.checkpoint()
                     staged.replace(path)
@@ -268,7 +278,12 @@ class DeferredGeneratedFiles:
         path = self.root / (pending_id + ".bin")
         saved = None
         try:
-            data = path.read_bytes()
+            fd = open_private_regular_file(path, os.O_RDONLY)
+            with os.fdopen(fd, "rb") as handle:
+                metadata = os.fstat(handle.fileno())
+                if metadata.st_size != int(row["size"]) or metadata.st_size > MAX_FILE_BYTES:
+                    raise ValueError("Deferred generated file staging size mismatch")
+                data = handle.read(MAX_FILE_BYTES + 1)
             if len(data) != row["size"] or hashlib.sha256(data).hexdigest() != row["sha256"]:
                 raise ValueError("Deferred generated file staging integrity mismatch")
             saved = self.archive.store(data,row["filename"],row["mime"],row["owner"],row["request_id"])
