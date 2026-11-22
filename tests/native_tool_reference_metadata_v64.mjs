@@ -94,13 +94,14 @@ const emitFinalReferences = runInNewContext("(" + bridgeMatch[0] + ")", {
 });
 await emitFinalReferences({
   message_id:"assistant-final-1",
+  text:"The API is documented here.",
   metadata:{annotations:[{
     type:"url_citation",
     url_citation:{url:"https://docs.example.org/api",title:"API reference",ref_id:"turn0search0"},
   }]},
 }, "req-citation-1");
 assert.equal(activeRequestState.nativeCitationMetadata.annotations.length, 1);
-assert.equal(activeRequestState.nativeCitationText, "");
+assert.equal(activeRequestState.nativeCitationText, "The API is documented here.");
 assert.equal(bridgeEvents.length, 1);
 assert.equal(bridgeEvents[0].type, "chat.references");
 assert.equal(bridgeEvents[0].request_id, "req-citation-1");
