@@ -134,24 +134,26 @@ class TelemetryStore:
 
     async def load(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        if self.path.is_symlink():
-            raise RuntimeError("Telemetry history cannot be a symbolic link")
-        if not self.path.exists():
+        try:
+            fd = self._open_history_file()
+        except FileNotFoundError:
             return
-        fd = self._open_history_file()
-        os.close(fd)
         try:
             latest: dict[tuple[str, str], dict[str, Any]] = {}
             order: list[tuple[str, str]] = []
-            for line_number, item in enumerate(iter_recent_jsonl(self.path)):
-                request_id = str(item.get("request_id") or "")
-                record_key = ("request", request_id) if request_id else ("legacy-line", str(line_number))
-                if record_key in latest:
-                    continue
-                latest[record_key] = _normalize_record_time(item)
-                order.append(record_key)
-                if len(order) >= (self.items.maxlen or 500):
-                    break
+            # Keep the validated descriptor open for the entire bounded-tail
+            # read. Reopening by path after validation would reintroduce a
+            # symlink/rename race between the check and the actual read.
+            with os.fdopen(fd, "rb") as handle:
+                for line_number, item in enumerate(iter_recent_jsonl(handle)):
+                    request_id = str(item.get("request_id") or "")
+                    record_key = ("request", request_id) if request_id else ("legacy-line", str(line_number))
+                    if record_key in latest:
+                        continue
+                    latest[record_key] = _normalize_record_time(item)
+                    order.append(record_key)
+                    if len(order) >= (self.items.maxlen or 500):
+                        break
             for record_key in reversed(order):
                 self._remember(latest[record_key])
         except (OSError, ValueError, TypeError):
