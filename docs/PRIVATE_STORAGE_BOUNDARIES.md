@@ -28,6 +28,11 @@ generated media under the configured data directory.
   and then reopen it.
 - The redacted runtime log ring uses a `0700` directory, `0600` JSONL/rotated
   files, no-follow single-link reads/appends and a cross-process rotation lock.
+- The privileged host updater keeps its shared data directory non-writable by
+  group/other users, stores request/status/deployment JSON and its update lock
+  as `0600` single-link files, and writes its `0640` log through validated
+  no-follow descriptors. Systemd timeout reconciliation uses the same bounded
+  readers and atomic writes; compose backups are restored without following links.
 - Worker probe policy/evidence directories use POSIX mode `0700`; policy and
   event files use `0600` and are written through exclusive, no-follow paths.
 - Web Chat conversation and event-journal SQLite databases validate the main
