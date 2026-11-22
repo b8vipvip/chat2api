@@ -106,3 +106,28 @@ assert.equal(
   }),
   "Read both [1, 2]",
 );
+
+
+const normalizeMatch = source.match(/function normalizeToolReferences\(value\) \{[\s\S]*?\n  \}/);
+assert.ok(normalizeMatch, "production normalizeToolReferences function must remain extractable");
+const normalizeToolReferences = runInNewContext("(" + normalizeMatch[0] + ")", {
+  safeToolReference:item => {
+    if (!item || typeof item.url !== "string" || !item.url.startsWith("https://")) return null;
+    return {
+      id:String(item.id || ""),
+      url:item.url,
+      title:String(item.title || ""),
+      snippet:String(item.snippet || ""),
+      ...(Number.isSafeInteger(item.start_index) ? {start_index:item.start_index} : {}),
+      ...(Number.isSafeInteger(item.end_index) ? {end_index:item.end_index} : {}),
+    };
+  },
+});
+const enriched = normalizeToolReferences([
+  {...sourceRef,title:"",snippet:""},
+  {...sourceRef,title:"Detailed API reference",snippet:"Updated source description"},
+]);
+assert.equal(enriched.length,1);
+assert.equal(enriched[0].title,"Detailed API reference");
+assert.equal(enriched[0].snippet,"Updated source description",
+  "a later citation event must enrich an existing reference instead of being discarded");
