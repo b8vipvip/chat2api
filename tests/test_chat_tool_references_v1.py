@@ -333,3 +333,32 @@ def test_inline_citation_markers_use_utf16_offsets_and_preserve_multiple_mention
     assert apply_inline_citation_markers(text, references) == (
         "A😀" + marker + "BC and D" + marker
     )
+
+
+def test_live_reference_event_keeps_the_durable_sse_cursor() -> None:
+    async def scenario() -> None:
+        broker = RequestBroker()
+        state = await broker.create("req_live_refs_cursor", "worker-client")
+        state.mode1_web_chat = True
+        accepted = await broker.publish("req_live_refs_cursor", {
+            "type": "chat.references",
+            "event_id": 17,
+            "message_id": "assistant-final",
+            "metadata": {
+                "annotations": [{
+                    "type": "url_citation",
+                    "url_citation": {
+                        "url": "https://docs.example.org/api",
+                        "title": "API reference",
+                        "ref_id": "turn0search0",
+                    },
+                }],
+            },
+        })
+        assert accepted is True
+        event = await state.queue.get()
+        assert event["type"] == "chat.references"
+        assert event["event_id"] == 17
+        assert event["references"][0]["id"] == "turn0search0"
+
+    asyncio.run(scenario())
