@@ -17,6 +17,12 @@ const metadata = {
   citations: [{title: "Citation", url: "https://cite.example.org/item"}],
   content_references: [{title: "Content reference", url: "https://content.example.org/item"}],
   search_result_groups: [{entries: [{title: "Grouped result", url: "https://group.example.org/item"}]}],
+  annotations: [{type:"url_citation",url_citation:{url:"https://annotation.example.org/item"}}],
+  citation_annotations: [{url:"https://citation-annotation.example.org/item"}],
+  url_citation: {url:"https://url-citation.example.org/item"},
+  web_search_results: [{url:"https://web-search.example.org/item"}],
+  source_references: [{url:"https://source-reference.example.org/item"}],
+  tool_references: [{url:"https://tool-reference.example.org/item"}],
   unrelated: {url: "https://must-not-forward.example.org/private"},
 };
 const forwarded = JSON.parse(JSON.stringify(safeToolMetadata(metadata)));
@@ -28,6 +34,12 @@ assert.deepEqual(forwarded, {
   content_references: metadata.content_references,
   references: metadata.references,
   sources: metadata.sources,
+  annotations: metadata.annotations,
+  citation_annotations: metadata.citation_annotations,
+  url_citation: metadata.url_citation,
+  web_search_results: metadata.web_search_results,
+  source_references: metadata.source_references,
+  tool_references: metadata.tool_references,
 });
 assert.deepEqual(JSON.parse(JSON.stringify(safeToolMetadata(null))), {});
 console.log("Native tool metadata forwards every server-supported citation root and excludes unrelated metadata");
