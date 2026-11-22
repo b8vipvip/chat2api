@@ -999,6 +999,7 @@
       }
       if (message.role === "assistant") {
         renderToolActivity(body,message,{includeReferences: !nativeRendered});
+        if (!nativeRendered) renderStandaloneMessageReferences(body,message);
       }
       if (state.streaming && message.id === state.streamingMessageId) {
         const caret = document.createElement("span");
@@ -1442,6 +1443,66 @@
     return true;
   }
 
+  function applyMessageReferences(assistant, value) {
+    if (!assistant || assistant.role !== "assistant") return false;
+    const incoming = normalizeToolReferences(value);
+    if (!incoming.length) return false;
+    const previous = Array.isArray(assistant.references) ? assistant.references : [];
+    const merged = normalizeToolReferences([...previous, ...incoming]);
+    const changed = merged.length !== previous.length ||
+      merged.some((item,index) => item.id !== previous[index]?.id || item.url !== previous[index]?.url);
+    if (!changed) return false;
+    assistant.references = merged;
+    saveHistory();
+    return true;
+  }
+
+  function renderStandaloneMessageReferences(body, message) {
+    const references = referencesForMessage(message);
+    if (!references.length) return;
+    const eventReferences = normalizeToolReferences(
+      (Array.isArray(message.toolEvents) ? message.toolEvents : [])
+        .flatMap(item => Array.isArray(item.references) ? item.references : [])
+    );
+    const eventKeys = new Set(eventReferences.map(item =>
+      item.id ? "id:" + item.id : "url:" + item.url
+    ));
+    const standalone = references.filter(item =>
+      !eventKeys.has(item.id ? "id:" + item.id : "url:" + item.url)
+    );
+    if (!standalone.length) return;
+    const section = document.createElement("section");
+    section.className = "message-tool-events";
+    const referenceBox = document.createElement("div");
+    referenceBox.className = "message-tool-references";
+    const heading = document.createElement("div");
+    heading.className = "message-tool-event-label";
+    heading.textContent = "引用来源";
+    referenceBox.appendChild(heading);
+    standalone.forEach(reference => {
+      const link = document.createElement("a");
+      link.className = "message-tool-reference";
+      link.href = reference.url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer nofollow";
+      link.referrerPolicy = "no-referrer";
+      const title = document.createElement("strong");
+      const number = references.findIndex(item =>
+        (item.id && reference.id) ? item.id === reference.id : item.url === reference.url
+      ) + 1;
+      title.textContent = "[" + number + "] " + reference.title;
+      link.appendChild(title);
+      if (reference.snippet) {
+        const snippet = document.createElement("span");
+        snippet.textContent = reference.snippet;
+        link.appendChild(snippet);
+      }
+      referenceBox.appendChild(link);
+    });
+    section.appendChild(referenceBox);
+    body.appendChild(section);
+  }
+
   function toolStatusLabel(status) {
     return ({running:"执行中",completed:"已完成",failed:"失败",cancelled:"已取消"})[status] || "状态未知";
   }
@@ -1594,7 +1655,8 @@
     }
     const choice = Array.isArray(event?.choices) ? event.choices[0] : null;
     const eventCursor = choice?.delta?.chat2api_event_id
-      ?? choice?.delta?.chat2api_tool?.chat2api_event_id;
+      ?? choice?.delta?.chat2api_tool?.chat2api_event_id
+      ?? choice?.delta?.chat2api_references?.chat2api_event_id;
     if (Number.isSafeInteger(eventCursor) && eventCursor > Number(assistant.lastEventId || 0)) {
       assistant.lastEventId = eventCursor;
     }
@@ -1602,6 +1664,9 @@
       appendDelta(assistant, choice.delta.content);
     }
     if (choice?.delta?.chat2api_tool) applyToolEvent(assistant,choice.delta.chat2api_tool);
+    if (choice?.delta?.chat2api_references) {
+      applyMessageReferences(assistant, choice.delta.chat2api_references.references);
+    }
     return false;
   }
 
