@@ -88,7 +88,7 @@ const activeRequestState = {requestId:"req-citation-1"};
 const bridgeState = {finalReferenceSignatures:new Map()};
 const emitFinalReferences = runInNewContext("(" + bridgeMatch[0] + ")", {
   state: bridgeState,
-  globalThis: {__CHAT2API_REQUEST_CONTENT_V6__:{active:activeRequestState}},
+  __CHAT2API_REQUEST_CONTENT_V6__:{active:activeRequestState},
   cleanMetadata: value => value,
   emit: async value => { bridgeEvents.push(value); return true; },
 });
