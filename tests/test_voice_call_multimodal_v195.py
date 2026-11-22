@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -232,6 +233,7 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
                 out_of_order_video = live.receive_json()
                 assert out_of_order_video["type"] == "error"
                 assert out_of_order_video["code"] == "INVALID_VIDEO_FRAME"
+                time.sleep(0.21)  # Respect the server's five-FPS ceiling before testing MIME validation.
                 live.send_json({
                     "type": "input_video.frame",
                     "sequence": 1,
