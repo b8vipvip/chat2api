@@ -234,7 +234,6 @@ def test_rotating_application_log_is_private_and_rejects_symlinks(tmp_path: Path
     try:
         for handler in old_handlers:
             logger.removeHandler(handler)
-            handler.close()
         log_path = configure_file_logging(tmp_path)
         logger.info("private storage permission test")
         for handler in logger.handlers:
