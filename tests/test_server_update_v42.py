@@ -121,7 +121,7 @@ def test_update_console_and_host_scripts_use_narrow_systemd_boundary():
     updater = (ROOT / "scripts" / "chat2api_server_update.sh").read_text(encoding="utf-8")
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
-    updater_commands = updater.replace("\\\n", " ")
+    updater_commands = " ".join(updater.split())
 
     for token in (
         "版本更新",
