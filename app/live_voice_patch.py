@@ -92,8 +92,8 @@ def _video_frame_metadata(control: dict[str, Any]) -> tuple[int, int, str]:
     if not isinstance(file_id, str) or not re.fullmatch(r"^file_[A-Za-z0-9]{8,64}$", file_id):
         raise ValueError("video frames require an uploaded image file_id")
     text = control.get("text", "")
-    if not isinstance(text, str) or len(text) > 12000:
-        raise ValueError("video frame text is limited to 12000 characters")
+    if not isinstance(text, str) or len(text) > 11800:
+        raise ValueError("video frame text is limited to 11800 characters plus frame metadata")
     return sequence, timestamp_ms, file_id
 
 
