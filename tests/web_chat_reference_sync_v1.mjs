@@ -6,7 +6,7 @@ const source = readFileSync("app/chat_client_v1.js", "utf8");
 const match = source.match(/function mergeConversation\(serverRow, localRow\) \{[\s\S]*?\n  \}/);
 assert.ok(match, "production mergeConversation function must remain extractable");
 
-function normalizeToolReferences(value) {
+function normalizeMergeReferences(value) {
   if (!Array.isArray(value)) return [];
   const seen = new Set();
   const rows = [];
@@ -22,7 +22,7 @@ function normalizeToolReferences(value) {
   return rows;
 }
 const mergeConversation = runInNewContext("(" + match[0] + ")", {
-  normalizeToolReferences,
+  normalizeToolReferences: normalizeMergeReferences,
   toolActivityWeight:events => Array.isArray(events) ? events.length : 0,
   messageContentWeight:message => String(message?.content || "").length,
   MAX_MESSAGES:100,
