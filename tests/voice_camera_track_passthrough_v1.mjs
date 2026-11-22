@@ -59,6 +59,7 @@ vm.runInContext(source,sandbox);
 
 assert.equal(sandbox.__CHAT2API_VOICE_MAIN_V1__.micHookReady,true,
   "the native getUserMedia hook must be installed before camera capture");
+sandbox.__CHAT2API_VOICE_MAIN_V1__.requestId = "camera-test-request";
 
 const videoConstraints = {width:{ideal:1280},height:{ideal:720},frameRate:{ideal:30}};
 const combined = await mediaDevices.getUserMedia({audio:true,video:videoConstraints});
