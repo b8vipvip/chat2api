@@ -64,18 +64,18 @@ def validate_directory(path: Path, *, create: bool = False, mode: int = DEFAULT_
     return path
 
 
-def open_private_file(path: Path, flags: int, *, mode: int = 0o600) -> int:
+def open_private_file(path: Path, flags: int, *, mode: int | None = 0o600) -> int:
     path = Path(path)
     validate_directory(path.parent)
     if path.is_symlink():
         raise RuntimeError(f"Updater files cannot be symlinks: {path}")
     safe_flags = flags | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
-    fd = os.open(path, safe_flags, mode)
+    fd = os.open(path, safe_flags, 0o600 if mode is None else mode)
     try:
         metadata = os.fstat(fd)
         if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
             raise RuntimeError(f"Updater files must be single-link regular files: {path}")
-        if hasattr(os, "fchmod"):
+        if mode is not None and hasattr(os, "fchmod"):
             os.fchmod(fd, mode)
         return fd
     except Exception:
@@ -142,6 +142,21 @@ def write_bytes_atomic(path: Path, payload: bytes, *, mode: int = 0o600) -> None
 def write_json_atomic(path: Path, payload: dict[str, Any], *, mode: int = 0o600) -> None:
     encoded = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     write_bytes_atomic(path, encoded, mode=mode)
+
+
+def copy_file_atomic(
+    source: Path, destination: Path, *, mode: int = 0o600,
+    max_bytes: int = 4 * 1024 * 1024,
+) -> None:
+    fd = open_private_file(source, os.O_RDONLY, mode=None)
+    with os.fdopen(fd, "rb") as handle:
+        metadata = os.fstat(handle.fileno())
+        if metadata.st_size > max_bytes:
+            raise ValueError(f"Updater copy source exceeds its size limit: {source}")
+        payload = handle.read(max_bytes + 1)
+    if len(payload) > max_bytes:
+        raise ValueError(f"Updater copy source exceeds its size limit: {source}")
+    write_bytes_atomic(destination, payload, mode=mode)
 
 
 def truncate_private_file(path: Path, *, mode: int = 0o640) -> None:
@@ -215,6 +230,10 @@ def _main() -> int:
     write = sub.add_parser("write-json")
     write.add_argument("path", type=Path)
     write.add_argument("--mode", type=lambda value: int(value, 8), default=0o600)
+    copy = sub.add_parser("copy-file")
+    copy.add_argument("source", type=Path)
+    copy.add_argument("destination", type=Path)
+    copy.add_argument("--mode", type=lambda value: int(value, 8), default=0o600)
     args = parser.parse_args()
 
     if args.command == "ensure-dir":
@@ -238,6 +257,8 @@ def _main() -> int:
         if not isinstance(payload, dict):
             raise ValueError("Updater JSON input must be an object")
         write_json_atomic(args.path, payload, mode=args.mode)
+    elif args.command == "copy-file":
+        copy_file_atomic(args.source, args.destination, mode=args.mode)
     return 0
 
 
