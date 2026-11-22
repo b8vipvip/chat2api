@@ -1599,6 +1599,10 @@
       appendDelta(assistant, event.delta);
       return false;
     }
+    if (eventName === "chat.references") {
+      applyMessageReferences(assistant, event.references);
+      return false;
+    }
     if (eventName === "chat.tool.call" || eventName === "chat.tool.result") {
       applyToolEvent(assistant, {
         ...event,
