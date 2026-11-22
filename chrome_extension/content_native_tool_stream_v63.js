@@ -52,12 +52,13 @@
     const messageId = String(detail?.message_id || "").slice(0, 128);
     let signature = "";
     try { signature = JSON.stringify(metadata).slice(0, 2048); } catch (_) { return; }
-    if (!signature || state.finalReferenceSignatures.get(messageId) === signature) return;
-    state.finalReferenceSignatures.set(messageId, signature);
     const requestState = globalThis.__CHAT2API_REQUEST_CONTENT_V6__?.active;
     if (requestState?.requestId === requestId) {
       requestState.nativeCitationMetadata = metadata;
+      requestState.nativeCitationText = bounded(detail?.text, 1_000_000);
     }
+    if (!signature || state.finalReferenceSignatures.get(messageId) === signature) return;
+    state.finalReferenceSignatures.set(messageId, signature);
     if (state.finalReferenceSignatures.size > 32) {
       const oldest = state.finalReferenceSignatures.keys().next().value;
       state.finalReferenceSignatures.delete(oldest);
