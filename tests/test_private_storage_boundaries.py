@@ -226,6 +226,13 @@ def test_rotating_application_log_is_private_and_rejects_symlinks(tmp_path: Path
         for handler in logger.handlers:
             handler.flush()
         assert stat.S_IMODE(log_path.stat().st_mode) == 0o600
+        handler = logger.handlers[-1]
+        handler.maxBytes = 1
+        logger.info("force a private log rollover")
+        handler.flush()
+        rotated = Path(str(log_path) + ".1")
+        assert stat.S_IMODE(rotated.stat().st_mode) == 0o600
+        assert stat.S_IMODE(log_path.stat().st_mode) == 0o600
     finally:
         for handler in list(logger.handlers):
             logger.removeHandler(handler)
@@ -248,3 +255,24 @@ def test_rotating_application_log_is_private_and_rejects_symlinks(tmp_path: Path
                 logger.removeHandler(handler)
                 handler.close()
     assert target.read_text(encoding="utf-8") == "must remain untouched"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink assertions")
+def test_worker_probe_policy_writer_ignores_predictable_temp_symlink(tmp_path: Path) -> None:
+    store = WorkerProbeStore(tmp_path)
+    outside = tmp_path / "outside-policy-temp"
+    outside.write_text("must remain untouched", encoding="utf-8")
+    predictable_temp = store.policy_path.with_suffix(".tmp")
+    predictable_temp.symlink_to(outside)
+
+    async def write_policy() -> None:
+        await store.put_policy(
+            "global",
+            expected_revision=0,
+            tools={"media_delivery_v1": {"enabled": True}},
+        )
+
+    asyncio.run(write_policy())
+    assert outside.read_text(encoding="utf-8") == "must remain untouched"
+    assert store.policy_path.is_file()
+    assert not store.policy_path.is_symlink()
