@@ -131,5 +131,5 @@ def test_admin_retention_api_is_master_key_protected_and_bounded(tmp_path: Path)
 
         page = client.get("/admin")
         assert page.status_code == 200
-        assert 'id="view-web-chat-retention"' in page.text
+        assert 'id="webChatRetentionPanel"' in page.text
         assert 'id="webChatRetentionSave"' in page.text
