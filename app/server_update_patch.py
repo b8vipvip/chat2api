@@ -265,6 +265,7 @@ def install_server_update_patch(app: FastAPI) -> FastAPI:
     async def server_update_start(request: Request) -> JSONResponse:
         admin(request)
         data_dir = _data_dir(app)
+        data_dir.mkdir(parents=True, exist_ok=True)
         try:
             body = await request.json()
         except Exception:
