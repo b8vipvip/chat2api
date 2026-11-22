@@ -838,12 +838,32 @@ def test_completed_sse_replay_surfaces_terminal_citations_without_recovery_snaps
         assert "event: recovery.partial.snapshot" not in replay.text
 
 
-def test_completed_recovery_prefers_exact_delivery_projection_over_telemetry_text(tmp_path):
+def test_completed_recovery_prefers_exact_delivery_projection_and_references(tmp_path):
     app = make_app(tmp_path)
     request_id = "req_citation_delivery123"
     raw_text = "Read the docs"
     marker = "\uE200cite\uE202turn0search0\uE201"
     delivered_text = raw_text + marker
+    metadata = {
+        "annotations": [{
+            "type": "url_citation",
+            "start_index": 0,
+            "end_index": len(raw_text),
+            "url_citation": {
+                "url": "https://docs.example.org/",
+                "title": "Documentation",
+                "ref_id": "turn0search0",
+            },
+        }],
+    }
+    expected_references = [{
+        "url": "https://docs.example.org/",
+        "title": "Documentation",
+        "snippet": "",
+        "id": "turn0search0",
+        "start_index": 0,
+        "end_index": len(raw_text),
+    }]
 
     with TestClient(app) as client:
         user_id = register(client, "citation-delivery@example.org")
@@ -854,6 +874,18 @@ def test_completed_recovery_prefers_exact_delivery_projection_over_telemetry_tex
             response_text=raw_text,
             response_text_available=True,
         )
+        asyncio.run(app.state.web_chat_event_journal.append_worker_event(
+            request_id, "key_citation_delivery",
+            {"type": "chat.references", "metadata": metadata},
+        ))
+        asyncio.run(app.state.web_chat_event_journal.append_worker_event(
+            request_id, "key_citation_delivery",
+            {
+                "type": "chat.completed",
+                "text": raw_text,
+                "metadata": metadata,
+            },
+        ))
         asyncio.run(app.state.web_chat_event_journal.append_delivery(
             request_id, "key_citation_delivery", delivered_text,
         ))
@@ -864,13 +896,31 @@ def test_completed_recovery_prefers_exact_delivery_projection_over_telemetry_tex
         recovery = client.get(f"/api/user/chat/requests/{request_id}/recovery")
         assert recovery.status_code == 200
         assert recovery.json()["response_text"] == delivered_text
+        assert recovery.json()["references"] == expected_references
 
         snapshot = asyncio.run(app.state.web_chat_event_journal.snapshot(
             request_id, "key_citation_delivery",
         ))
+        assert snapshot["references"] == expected_references
+
+        # Simulate journal compaction removing the early references event.
+        # The canonical worker terminal and durable snapshot must still carry
+        # enough information to render the citation after replay.reset.
+        with app.state.web_chat_event_journal._connect() as connection:
+            connection.execute(
+                "DELETE FROM web_chat_events WHERE request_id=? AND sequence=1",
+                (request_id,),
+            )
+        reset = client.get(f"/api/user/chat/requests/{request_id}/events?after=0")
+        assert reset.status_code == 200
+        assert "event: replay.reset" in reset.text
+        assert delivered_text in reset.text
+        assert '"id":"turn0search0"' in reset.text
+
         replay = client.get(
             f"/api/user/chat/requests/{request_id}/events?after={snapshot['last_event_id']}"
         )
         assert replay.status_code == 200
         assert "event: recovery.terminal" in replay.text
         assert delivered_text in replay.text
+        assert '"id":"turn0search0"' in replay.text
