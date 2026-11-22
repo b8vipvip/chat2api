@@ -611,6 +611,16 @@
     // Sanitize the request-correlated user-turn echo at the single Worker
     // egress, before either SSE delivery or terminal evidence capture.
     const active = state.active?.requestId === event?.request_id ? state.active : null;
+    if (event?.type === "chat.completed" && active?.nativeCitationMetadata
+        && typeof active.nativeCitationMetadata === "object") {
+      event = {
+        ...event,
+        metadata: {
+          ...(event.metadata && typeof event.metadata === "object" ? event.metadata : {}),
+          ...active.nativeCitationMetadata,
+        },
+      };
+    }
     if (active && ["chat.completed", "chat.snapshot"].includes(event?.type)) {
       const result = assistantOnlyReplyText(active, event.text);
       if (result.pending && event.type === "chat.snapshot") return;
