@@ -944,15 +944,15 @@ def test_broker_state_lost_recovery_does_not_emit_terminal_before_telemetry_pers
         )
 
         original_upsert = app.state.telemetry.upsert
-        failed_once = {"value": False}
+        failed_writes = {"remaining": 2}
 
-        async def fail_first_stalled_write(record):
-            if record.get("status") == "stalled" and not failed_once["value"]:
-                failed_once["value"] = True
+        async def fail_stalled_writes(record):
+            if record.get("status") == "stalled" and failed_writes["remaining"]:
+                failed_writes["remaining"] -= 1
                 raise OSError("simulated telemetry disk failure")
             return await original_upsert(record)
 
-        app.state.telemetry.upsert = fail_first_stalled_write
+        app.state.telemetry.upsert = fail_stalled_writes
 
         first = client.get(f"/api/user/chat/requests/{request_id}/events")
         assert first.status_code == 200, first.text
@@ -964,12 +964,24 @@ def test_broker_state_lost_recovery_does_not_emit_terminal_before_telemetry_pers
         ))
         assert first_snapshot["terminal_status"] == "stalled"
 
-        # The browser reconnects without an advanced terminal Last-Event-ID.
-        second = client.get(f"/api/user/chat/requests/{request_id}/events")
-        assert second.status_code == 200, second.text
-        assert "event: recovery.stalled" in second.text
+        # The client's polling fallback must remain recoverable while the
+        # telemetry projection is unavailable, then settle on a later retry.
+        pending = client.get(f"/api/user/chat/requests/{request_id}/recovery")
+        assert pending.status_code == 200, pending.text
+        assert pending.json()["status"] == "recovering"
+        assert pending.json()["terminal"] is False
+        assert pending.json()["recoverable"] is True
+
+        recovered = client.get(f"/api/user/chat/requests/{request_id}/recovery")
+        assert recovered.status_code == 200, recovered.text
+        assert recovered.json()["status"] == "stalled"
+        assert recovered.json()["terminal"] is True
         assert app.state.telemetry.get(request_id)["status"] == "stalled"
         second_snapshot = asyncio.run(app.state.web_chat_event_journal.snapshot(
             request_id, "key_stalled_persist",
         ))
         assert second_snapshot["terminal_status"] == "stalled"
+
+        replay = client.get(f"/api/user/chat/requests/{request_id}/events")
+        assert replay.status_code == 200, replay.text
+        assert "event: delivery.stalled" in replay.text
