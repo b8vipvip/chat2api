@@ -1,7 +1,9 @@
 import asyncio
 
 from app.broker import RequestBroker
-from app.chat_tool_references_v1 import extract_tool_references, normalize_tool_references
+from app.chat_tool_references_v1 import (
+    apply_inline_citation_markers, extract_tool_references, normalize_tool_references,
+)
 
 
 def test_extracts_bounded_public_citations_from_supported_metadata_roots() -> None:
@@ -221,6 +223,8 @@ def test_extracts_responses_url_citation_annotations_and_nested_web_search_sourc
             "title": "Python library reference",
             "snippet": "",
             "id": "turn0search42",
+            "start_index": 12,
+            "end_index": 24,
         },
         {
             "url": "https://packaging.python.org/en/latest/",
@@ -292,3 +296,38 @@ def test_final_assistant_message_annotations_are_not_exposed_to_mode2() -> None:
         assert state.references == []
 
     asyncio.run(scenario())
+
+
+
+def test_inline_citation_markers_use_utf16_offsets_and_preserve_multiple_mentions() -> None:
+    text = "A😀BC and D"
+    references = [
+        {
+            "id": "turn0search0",
+            "url": "https://docs.example.org/api",
+            "title": "API",
+            "start_index": 1,
+            "end_index": 3,
+        },
+        {
+            "id": "turn0search0",
+            "url": "https://docs.example.org/api",
+            "title": "API",
+            "start_index": 10,
+            "end_index": 11,
+        },
+        {
+            # This begins inside the emoji's UTF-16 surrogate pair and must
+            # not produce a marker at an invalid Unicode boundary.
+            "id": "turn0search1",
+            "url": "https://docs.example.org/invalid",
+            "title": "Invalid",
+            "start_index": 2,
+            "end_index": 3,
+        },
+    ]
+
+    marker = "\\uE200cite\\uE202turn0search0\\uE201"
+    assert apply_inline_citation_markers(text, references) == (
+        "A😀" + marker + "BC and D" + marker
+    )
