@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import stat
+from contextlib import contextmanager
 from pathlib import Path
 
 
@@ -91,3 +92,33 @@ def secure_private_sqlite_files(path: Path, *, create_database: bool = False) ->
             continue
         else:
             os.close(fd)
+
+
+@contextmanager
+def private_file_lock(path: Path):
+    """Acquire an OS-level exclusive lock on a private, single-link lock file."""
+    fd = open_private_regular_file(path, os.O_RDWR | os.O_CREAT)
+    try:
+        if os.fstat(fd).st_size == 0:
+            os.write(fd, b"\\0")
+            os.fsync(fd)
+        if os.name == "nt":
+            import msvcrt
+
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
