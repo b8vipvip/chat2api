@@ -2292,7 +2292,7 @@
       exportedAt: new Date().toISOString(),
       conversation: serverConversationPayload(conversation),
     };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+    const blob = new Blob([JSON.stringify(payload)], {
       type: "application/json;charset=utf-8",
     });
     const url = URL.createObjectURL(blob);
