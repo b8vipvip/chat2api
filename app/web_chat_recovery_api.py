@@ -5,8 +5,11 @@ It never redispatches a generation and never infers completion from transport EO
 """
 from __future__ import annotations
 
+from typing import Any
+
 import asyncio
 import json
+import logging
 import re
 import time
 
@@ -15,6 +18,9 @@ from fastapi.responses import StreamingResponse
 
 from .admin_auth import same_origin_admin_request
 from .user_commerce import USER_SESSION_COOKIE
+
+
+logger = logging.getLogger(__name__)
 
 
 _REQUEST_ID_RE = re.compile(r"^req_[A-Za-z0-9_-]{8,120}$")
@@ -209,8 +215,68 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                 "updated_at": updated_at,
             }
 
-        # A running telemetry row with no Broker state is not safe to replay.
-        # This can happen after a process restart or retention/lease boundary.
+        # A stalled journal terminal may already be durable while the
+        # corresponding telemetry projection failed. Retry that exact
+        # fail-closed projection here so the browser's polling fallback can
+        # finish recovery after a nonterminal recovery.pending SSE frame.
+        if status == "running" and state is None and journal_snapshot.get("terminal_status") == "stalled":
+            partial_text = _best_partial_text(
+                row.get("response_text_provisional"),
+                journal_snapshot.get("delivered_text"),
+                journal_snapshot.get("worker_partial_text"),
+            )
+            diagnostics = row.get("diagnostics")
+            diagnostics = dict(diagnostics) if isinstance(diagnostics, dict) else {}
+            diagnostics.update({
+                "web_chat_request_recovery": "broker-state-lost-during-replay",
+                "web_chat_event_replay_available": bool(last_event_id),
+                "web_chat_partial_text_unverified": bool(partial_text),
+            })
+            try:
+                await telemetry.upsert({
+                    **row,
+                    "status": "stalled",
+                    "response_text": partial_text,
+                    "response_text_available": False,
+                    "error": "The active Web Chat Broker lease is unavailable; no generation was redispatched",
+                    "diagnostics": diagnostics,
+                })
+            except Exception:
+                logger.exception(
+                    "Unable to reconcile stalled Web Chat recovery request_id=%s",
+                    request_id,
+                )
+                return {
+                    "request_id": request_id,
+                    "status": "recovering",
+                    "terminal": False,
+                    "recoverable": True,
+                    "active": True,
+                    "phase": "persisting_terminal",
+                    "retry_after_ms": 500,
+                    "partial_text": partial_text,
+                    "partial_text_available": bool(partial_text),
+                    "partial_text_unverified": bool(partial_text),
+                    "last_event_id": last_event_id,
+                    "updated_at": updated_at,
+                }
+            return {
+                "request_id": request_id,
+                "status": "stalled",
+                "terminal": True,
+                "recoverable": False,
+                "active": False,
+                "response_text": "",
+                "response_text_available": False,
+                "partial_text": partial_text,
+                "partial_text_available": bool(partial_text),
+                "last_event_id": last_event_id,
+                "error_code": "request_stalled",
+                "updated_at": updated_at,
+            }
+
+        # A running telemetry row with no Broker state and no durable stalled
+        # terminal is not safe to replay.
         return {
             "request_id": request_id,
             "status": "unknown",
@@ -447,7 +513,15 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                         "web_chat_event_replay_available": bool(snapshot.get("last_event_id")),
                         "web_chat_partial_text_unverified": bool(partial_text),
                     })
+                    persisted = False
                     try:
+                        # Persist the journal terminal first. If telemetry
+                        # persistence then fails, the next reconnect retries
+                        # the idempotent terminal append and telemetry update.
+                        await journal.append_terminal(
+                            request_id, key_id, "stalled",
+                            "The active Web Chat Broker lease is unavailable",
+                        )
                         await telemetry.upsert({
                             **latest,
                             "status": "stalled",
@@ -456,12 +530,28 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                             "error": "The active Web Chat Broker lease is unavailable; no generation was redispatched",
                             "diagnostics": diagnostics,
                         })
-                        await journal.append_terminal(
-                            request_id, key_id, "stalled",
-                            "The active Web Chat Broker lease is unavailable",
-                        )
+                        persisted = True
                     except Exception:
-                        pass
+                        logger.exception(
+                            "Unable to durably persist stalled Web Chat recovery request_id=%s",
+                            request_id,
+                        )
+                    if not persisted:
+                        # Do not emit a terminal event or advance Last-Event-ID
+                        # until both durable authorities agree. The client can
+                        # reconnect and retry this idempotent projection.
+                        payload = {
+                            "status": "recovering",
+                            "terminal": False,
+                            "persistence_pending": True,
+                            "partial_text": partial_text,
+                        }
+                        yield (
+                            "event: recovery.pending\ndata: "
+                            + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+                            + "\n\n"
+                        )
+                        return
                     snapshot = await journal.snapshot(request_id, key_id)
                     payload = {
                         "status": "stalled",
