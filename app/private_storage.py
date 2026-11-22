@@ -35,3 +35,39 @@ def open_private_regular_file(path: Path, flags: int, *, mode: int = 0o600) -> i
     except Exception:
         os.close(fd)
         raise
+
+
+def read_private_bytes(path: Path) -> bytes | None:
+    """Read a private regular file through its validated descriptor, or return None."""
+    try:
+        fd = open_private_regular_file(path, os.O_RDONLY)
+    except FileNotFoundError:
+        return None
+    with os.fdopen(fd, "rb") as handle:
+        return handle.read()
+
+
+def write_private_bytes_atomic(path: Path, payload: bytes, *, mode: int = 0o600) -> None:
+    """Atomically replace a private file using a unique exclusive staging file."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() or path.is_symlink():
+        fd = open_private_regular_file(path, os.O_RDONLY)
+        os.close(fd)
+    temporary = path.with_name(f".{path.name}.{os.urandom(8).hex()}.tmp")
+    fd = open_private_regular_file(
+        temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode=mode,
+    )
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        # Re-check an existing destination before replacement. os.replace
+        # replaces a symlink itself, but rejecting it keeps the store fail-closed.
+        if path.exists() or path.is_symlink():
+            check_fd = open_private_regular_file(path, os.O_RDONLY)
+            os.close(check_fd)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
