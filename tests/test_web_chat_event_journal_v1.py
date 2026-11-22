@@ -2,7 +2,9 @@ import asyncio
 import base64
 import hashlib
 import io
+import os
 import re
+import stat
 import time
 
 import pytest
@@ -640,3 +642,37 @@ def test_main_wires_projected_text_to_live_and_replayed_delivery_journals():
     assert "delivery_text=display_final_text" in source
     assert "delivery_text=display_text" in source
     assert "ensure_replayed_delivery_terminal(request_id, owner, display_text)" in source
+
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission and symlink assertions")
+def test_event_journal_database_is_private_and_rejects_symlinks(tmp_path):
+    private_root = tmp_path / "private"
+    journal = WebChatEventJournal(private_root)
+    asyncio.run(journal.open())
+    assert stat.S_IMODE(journal.path.stat().st_mode) == 0o600
+
+    linked_root = tmp_path / "linked"
+    linked_root.mkdir()
+    target = tmp_path / "outside.sqlite3"
+    target.write_text("must remain untouched", encoding="utf-8")
+    (linked_root / "web_chat_events.sqlite3").symlink_to(target)
+
+    with pytest.raises(RuntimeError, match="symbolic links"):
+        asyncio.run(WebChatEventJournal(linked_root).open())
+    assert target.read_text(encoding="utf-8") == "must remain untouched"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission and symlink assertions")
+def test_event_journal_rejects_symlinked_wal_sidecar(tmp_path):
+    journal = WebChatEventJournal(tmp_path)
+    asyncio.run(journal.open())
+    wal_path = type(journal.path)(str(journal.path) + "-wal")
+    wal_path.unlink(missing_ok=True)
+    target = tmp_path / "outside-wal"
+    target.write_text("must remain untouched", encoding="utf-8")
+    wal_path.symlink_to(target)
+
+    with pytest.raises(RuntimeError, match="symbolic links"):
+        journal._connect()
+    assert target.read_text(encoding="utf-8") == "must remain untouched"
