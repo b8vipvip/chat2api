@@ -100,7 +100,7 @@ def private_file_lock(path: Path):
     fd = open_private_regular_file(path, os.O_RDWR | os.O_CREAT)
     try:
         if os.fstat(fd).st_size == 0:
-            os.write(fd, b"\\0")
+            os.write(fd, bytes([0]))
             os.fsync(fd)
         if os.name == "nt":
             import msvcrt
