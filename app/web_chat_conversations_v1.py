@@ -45,6 +45,9 @@ _MAX_MESSAGE_PARTS = 8
 _MAX_ATTACHMENTS_PER_MESSAGE = 4
 _MAX_DOCUMENT_BYTES = 20 * 1024 * 1024
 _MAX_CONVERSATION_BYTES = 512 * 1024
+_MAX_SEARCH_QUERY_CHARS = 120
+_MAX_SEARCH_RESULTS = 100
+_CONVERSATION_EXPORT_FORMAT = "chat2api.web-chat-conversation"
 
 
 def _now() -> str:
@@ -423,6 +426,41 @@ class WebChatConversationStoreV1:
             ).fetchall()
             return [self._decode(row) for row in rows if row is not None]
 
+    def get_for_user(self, user_id: str, conversation_id: str) -> dict[str, Any] | None:
+        with self.lock, closing(self._connect()) as connection:
+            row = connection.execute(
+                """SELECT revision, deleted, payload
+                   FROM web_chat_conversations
+                   WHERE user_id=? AND conversation_id=?""",
+                (user_id, conversation_id),
+            ).fetchone()
+            decoded = self._decode(row)
+            if decoded is None or decoded.get("deleted"):
+                return None
+            return decoded
+
+    def search_for_user(
+        self, user_id: str, query: str, limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        normalized = query.strip()
+        if not normalized or len(normalized) > _MAX_SEARCH_QUERY_CHARS:
+            raise ValueError("search query is invalid")
+        if type(limit) is not int or not 1 <= limit <= _MAX_SEARCH_RESULTS:
+            raise ValueError("search result limit is invalid")
+        # instr() treats %, _ and backslashes literally; unlike LIKE it cannot
+        # turn user input into an unbounded wildcard scan pattern.
+        with self.lock, closing(self._connect()) as connection:
+            rows = connection.execute(
+                """SELECT revision, deleted, payload
+                   FROM web_chat_conversations
+                   WHERE user_id=? AND deleted=0
+                     AND instr(lower(payload), lower(?)) > 0
+                   ORDER BY updated_at DESC, conversation_id ASC
+                   LIMIT ?""",
+                (user_id, normalized, limit),
+            ).fetchall()
+            return [self._decode(row) for row in rows if row is not None]
+
     @staticmethod
     def _file_ids(conversation: dict[str, Any] | None) -> set[str]:
         found: set[str] = set()
@@ -686,6 +724,85 @@ def install_web_chat_conversations_v1(app: FastAPI) -> None:
         _, user = current_user(request)
         rows = store.list_for_user(str(user["user_id"]))
         return JSONResponse({"data": rows}, headers=_PRIVATE_HEADERS)
+
+    @app.get("/api/user/chat/conversations/search")
+    async def search_user_chat_conversations(request: Request):
+        _, user = current_user(request)
+        query = str(request.query_params.get("q") or "")
+        try:
+            limit = int(request.query_params.get("limit") or "50")
+            rows = store.search_for_user(str(user["user_id"]), query, limit)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="search query or limit is invalid", headers=_PRIVATE_HEADERS)
+        return JSONResponse({"data": rows}, headers=_PRIVATE_HEADERS)
+
+    @app.get("/api/user/chat/conversations/{conversation_id}/export")
+    async def export_user_chat_conversation(conversation_id: str, request: Request):
+        _, user = current_user(request)
+        if not _CONVERSATION_ID_RE.fullmatch(conversation_id):
+            raise HTTPException(status_code=404, detail="conversation not found", headers=_PRIVATE_HEADERS)
+        row = store.get_for_user(str(user["user_id"]), conversation_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="conversation not found", headers=_PRIVATE_HEADERS)
+        exported = dict(row)
+        exported.pop("revision", None)
+        exported.pop("deleted", None)
+        return JSONResponse(
+            {
+                "format": _CONVERSATION_EXPORT_FORMAT,
+                "version": 1,
+                "exportedAt": _now(),
+                "conversation": exported,
+            },
+            headers={
+                **_PRIVATE_HEADERS,
+                "Content-Disposition": f'attachment; filename="chat2api-conversation-{conversation_id}.json"',
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    @app.post("/api/user/chat/conversations/import")
+    async def import_user_chat_conversation(request: Request):
+        accounts, user = current_user(request)
+        raw_body = await request.body()
+        if len(raw_body) > _MAX_CONVERSATION_BYTES + 8192:
+            raise HTTPException(status_code=413, detail="conversation import is too large", headers=_PRIVATE_HEADERS)
+        try:
+            body = json.loads(raw_body)
+        except (TypeError, ValueError, UnicodeDecodeError):
+            raise HTTPException(status_code=400, detail="invalid JSON body", headers=_PRIVATE_HEADERS)
+        if (
+            not isinstance(body, dict)
+            or body.get("format") != _CONVERSATION_EXPORT_FORMAT
+            or type(body.get("version")) is not int
+            or body.get("version") != 1
+            or not isinstance(body.get("conversation"), dict)
+        ):
+            raise HTTPException(status_code=422, detail="conversation export format is unsupported", headers=_PRIVATE_HEADERS)
+        conversation_id = str(body["conversation"].get("id") or "")
+        file_store = getattr(request.app.state, "file_store", None)
+        if file_store is None:
+            raise HTTPException(status_code=503, detail="file service unavailable", headers=_PRIVATE_HEADERS)
+        with file_store.lock:
+            try:
+                conversation = normalize_conversation(
+                    conversation_id, body["conversation"],
+                    accounts=accounts, telemetry=request.app.state.telemetry,
+                    user_id=str(user["user_id"]), file_store=file_store,
+                )
+                saved, row = store.upsert(
+                    str(user["user_id"]), conversation, 0, file_store,
+                )
+            except LookupError:
+                raise HTTPException(status_code=404, detail="conversation resource not found", headers=_PRIVATE_HEADERS)
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error), headers=_PRIVATE_HEADERS)
+        if not saved:
+            return JSONResponse(
+                {"detail": "conversation ID already exists", "conversation": row},
+                status_code=409, headers=_PRIVATE_HEADERS,
+            )
+        return JSONResponse({"conversation": row}, status_code=201, headers=_PRIVATE_HEADERS)
 
     @app.put("/api/user/chat/conversations/{conversation_id}")
     async def save_user_chat_conversation(conversation_id: str, request: Request):
