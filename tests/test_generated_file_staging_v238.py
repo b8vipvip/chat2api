@@ -212,7 +212,7 @@ def test_generated_file_staging_storage_is_private_and_rejects_linked_bytes(tmp_
     import stat
 
     staging = GeneratedFileStaging(tmp_path)
-    payload = b"PK\\x03\\x04" + b"verified private bytes"
+    payload = b"PK\x03\x04" + b"verified private bytes"
     push(staging, "req_linked_stage", payload)
     row = staging.entries[("req_linked_stage", UPID)]
     assert stat.S_IMODE(staging.root.stat().st_mode) == 0o700
