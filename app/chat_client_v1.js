@@ -1669,6 +1669,7 @@
     if (eventName === "delivery.error" || eventName === "delivery.cancelled"
         || eventName === "delivery.stalled" || eventName === "recovery.stalled"
         || eventName === "recovery.terminal") {
+      if (Array.isArray(event.references)) applyMessageReferences(assistant, event.references);
       const status = String(event.status || (
         eventName === "delivery.cancelled" ? "cancelled" :
         eventName === "delivery.error" ? "error" :
@@ -1683,6 +1684,7 @@
       return true;
     }
     if (eventName === "replay.reset") {
+      if (Array.isArray(event.references)) applyMessageReferences(assistant, event.references);
       if (event.status === "completed" && typeof event.response_text === "string") {
         assistant.content = event.response_text.slice(0, MAX_MESSAGE_CHARS);
         assistant.replayTerminalStatus = "completed";
@@ -1736,6 +1738,7 @@
     return recoveryApi.create({
       onUpdate(update) {
         if (!update || update.request_id !== assistant.requestId || update.assistant_message_id !== assistant.id) return;
+        if (Array.isArray(update.references)) applyMessageReferences(assistant, update.references);
         assistant.recoveryStatus = String(update.status || "recovering").slice(0, 40);
         if (Number.isSafeInteger(update.last_event_id)
             && update.last_event_id > Number(assistant.lastEventId || 0)) {
@@ -1801,6 +1804,7 @@
       if (!result) result = await controller.resume(record);
       const status = String(result?.status || "recovery_failed");
       if (result?.terminal === true) {
+        if (Array.isArray(result.references)) applyMessageReferences(assistant, result.references);
         assistant.pending = false;
         assistant.recoveryStatus = status;
         if (status === "completed" && typeof result.response_text === "string") assistant.content = result.response_text.slice(0, MAX_MESSAGE_CHARS);
