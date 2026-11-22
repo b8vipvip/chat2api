@@ -487,9 +487,9 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                             "partial_text": partial_text,
                         }
                         yield (
-                            "event: recovery.pending\\ndata: "
+                            "event: recovery.pending\ndata: "
                             + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-                            + "\\n\\n"
+                            + "\n\n"
                         )
                         return
                     snapshot = await journal.snapshot(request_id, key_id)
