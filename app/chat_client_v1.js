@@ -29,6 +29,7 @@
     remoteSyncInFlight: new Map(),
     remoteSyncAgain: new Set(),
     remoteSyncFingerprints: new Map(),
+    remoteSyncRetryCounts: new Map(),
     remoteSyncWarned: false,
     searchResults: null,
     searchQuery: "",
@@ -508,6 +509,9 @@
   function scheduleConversationSync(conversationId, delay = 450) {
     if (!state.remoteSyncReady || !conversationId) return;
     if (!state.conversations.some((row) => row.id === conversationId)) return;
+    // A fresh user edit starts a new retry budget; automatic backoff calls use
+    // a distinct delay and preserve the accumulated retry count.
+    if (delay === 450) state.remoteSyncRetryCounts.delete(conversationId);
     const previous = state.remoteSyncTimers.get(conversationId);
     if (previous) window.clearTimeout(previous);
     const timer = window.setTimeout(() => {
@@ -560,7 +564,9 @@
           continue;
         }
         if (!response.ok || !result.conversation) {
-          throw new Error(result.detail || "HTTP " + response.status);
+          const error = new Error(result.detail || "HTTP " + response.status);
+          error.status = response.ok ? 0 : response.status;
+          throw error;
         }
         const currentFingerprint = JSON.stringify(serverConversationPayload(conversation));
         const serverUpdatedAt = String(result.conversation.updatedAt || conversation.updatedAt);
@@ -568,6 +574,7 @@
         if (currentFingerprint === fingerprint) conversation.updatedAt = serverUpdatedAt;
         const savedFingerprint = JSON.stringify({...body, updatedAt:serverUpdatedAt});
         state.remoteSyncFingerprints.set(conversationId, savedFingerprint);
+        state.remoteSyncRetryCounts.delete(conversationId);
         persistHistorySnapshot();
         if (JSON.stringify(serverConversationPayload(conversation)) !== savedFingerprint) {
           state.remoteSyncAgain.add(conversationId);
@@ -583,6 +590,15 @@
       if (!state.remoteSyncWarned) {
         state.remoteSyncWarned = true;
         toast("服务端会话同步暂时失败，已保留本地记录：" + error.message);
+      }
+      const status = Number(error && error.status || 0);
+      const retryable = !status || status === 408 || status === 425 || status === 429 || status >= 500;
+      const stillPresent = state.conversations.some((row) => row.id === conversationId);
+      const retries = Number(state.remoteSyncRetryCounts.get(conversationId) || 0);
+      if (retryable && stillPresent && retries < 6) {
+        const delay = Math.min(30000, 1000 * (2 ** retries));
+        state.remoteSyncRetryCounts.set(conversationId, retries + 1);
+        scheduleConversationSync(conversationId, delay);
       }
     } finally {
       state.remoteSyncInFlight.delete(conversationId);
