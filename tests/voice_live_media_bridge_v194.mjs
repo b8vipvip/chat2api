@@ -142,29 +142,34 @@ assert.equal(reusedNodeResponse?.text,"continuation",
 
 // A user ending the Voice session while ChatGPT is still speaking must be
 // persisted as an interrupted/partial turn, not a successful response.done.
-assistantNodes = [makeTranscriptNode("answer interrupted by session stop","assistant-4")];
+assistantNodes = [makeTranscriptNode("previous assistant text","assistant-4")];
 dispatchVoiceMain("voice.live.response.started","response-session-stop");
-assistantNodes[0].innerText = "answer interrupted by session stop";
-assistantNodes[0].textContent = "answer interrupted by session stop";
+assistantNodes[0].innerText = "previous assistant text plus interrupted tail";
+assistantNodes[0].textContent = "previous assistant text plus interrupted tail";
 dispatchVoiceMain("voice.live.response.stopped","response-session-stop","session_stop");
 await flush();
 const stoppedResponse = transcriptEvents
   .map(message=>message.event)
   .find(event=>event?.live_event==="response.interrupted" && event.response_id==="response-session-stop");
 assert.equal(stoppedResponse?.reason,"session_stop");
+assert.equal(stoppedResponse?.text,"plus interrupted tail",
+  "session shutdown must carry the latest DOM suffix even if the polling interval did not run");
 assert.equal(transcriptEvents.map(message=>message.event).some(
   event=>event?.live_event==="response.done" && event.response_id==="response-session-stop",
 ),false,"session stop must never mark an unfinished answer as complete");
 
 // A lost/replaced remote WebRTC track is also a partial response boundary.
-assistantNodes = [makeTranscriptNode("track interrupted answer","assistant-5")];
+assistantNodes = [makeTranscriptNode("earlier answer","assistant-5")];
 dispatchVoiceMain("voice.live.response.started","response-track-ended");
+assistantNodes[0].innerText = "earlier answer with track-lost tail";
+assistantNodes[0].textContent = "earlier answer with track-lost tail";
 dispatchVoiceMain("voice.live.response.stopped","response-track-ended","track_ended");
 await flush();
 const trackEndedResponse = transcriptEvents
   .map(message=>message.event)
   .find(event=>event?.live_event==="response.interrupted" && event.response_id==="response-track-ended");
 assert.equal(trackEndedResponse?.reason,"track_ended");
+assert.equal(trackEndedResponse?.text,"with track-lost tail");
 assert.equal(transcriptEvents.map(message=>message.event).some(
   event=>event?.live_event==="response.done" && event.response_id==="response-track-ended",
 ),false,"a lost remote track must not mark an unfinished answer as complete");
