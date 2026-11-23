@@ -406,6 +406,7 @@ def test_live_voice_bounds_pcm16_frames_and_keeps_session_after_bad_input(tmp_pa
                     "type": "image.progress", "kind": "voice-live",
                     "request_id": request_id, "live_event": "session.ready",
                     "context_injected": True, "instructions_applied": True,
+                    "setup_response_text": "已准备好",
                 })
                 assert live.receive_json()["type"] == "session.ready"
 
@@ -483,11 +484,16 @@ def test_live_voice_bounds_pcm16_frames_and_keeps_session_after_bad_input(tmp_pa
             "请总结今天的天气",
             "今天天气晴朗",
         ))
-        expected_usage = usage_for(expected_prompt, "这是完整的最终回答")
+        expected_usage = usage_for(expected_prompt, "已准备好\\n这是完整的最终回答")
         assert row["prompt_chars"] == len(expected_prompt)
         assert row["usage"]["prompt_tokens"] == expected_usage.prompt_tokens, (
             "the confirmed setup instructions/history must be included in final usage settlement"
         )
+        assert row["usage"]["completion_tokens"] == expected_usage.completion_tokens, (
+            "the hidden setup acknowledgement must be billed without leaking into the user-visible reply"
+        )
+        assert row["response_text"] == "这是完整的最终回答"
+        assert row["diagnostics"]["setup_completion_chars"] == len("已准备好")
         assert row["usage"]["prompt_tokens"] > 0
         assert row["usage"]["completion_tokens"] > 0
         assert row["usage"]["total_tokens"] == (
