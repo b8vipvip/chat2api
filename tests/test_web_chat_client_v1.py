@@ -55,6 +55,11 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         assert "MAX_USER_MESSAGE_CHARS = 8000" in script.text
         assert "MAX_ASSISTANT_MESSAGE_CHARS = 32000" in script.text
         assert "MAX_LOCAL_MESSAGE_CHARS = 8000" in script.text
+        assert "MAX_MESSAGES = 100" in script.text
+        assert "MAX_LOCAL_MESSAGES = 30" in script.text
+        assert "normalizeConversationRow(row, MAX_LOCAL_MESSAGES)" in script.text
+        assert "slice(-MAX_LOCAL_MESSAGES)" in script.text
+        assert "slice(-MAX_MESSAGES)" in script.text
         assert "ASSISTANT_TRUNCATION_NOTICE" in script.text
         assert "limitAssistantText" in script.text
         assert "normalizeMessageContent(message.content, message.role, MAX_LOCAL_MESSAGE_CHARS)" in script.text
