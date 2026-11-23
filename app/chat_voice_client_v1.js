@@ -263,6 +263,12 @@
     function handleJson(payload) {
       if (!payload || typeof payload !== "object") return;
       if (payload.type === "session.ready") {
+        if (cleaned || stopping) {
+          // A late ready frame must not resurrect a session that the user has
+          // already stopped while the permission/socket handshake was pending.
+          try { socket?.close(); } catch {}
+          return;
+        }
         ready = true;
         supportsVideoFrames = Array.isArray(payload.supports) && payload.supports.includes("input_video.frame");
         sessionStartedAt = monotonicNow();
