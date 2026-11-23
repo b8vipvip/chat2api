@@ -446,6 +446,25 @@ test("cross-device conversation merge never revives terminal requests from stale
   assert.equal(completed.recoveryStatus,"completed");
   assert.equal(completed.content,"authoritative final answer");
   assert.equal(completed.toolEvents[0].output,"late tool observation");
+
+  const localCompleted = merge({
+    id:"conversation",updatedAt:"2026-11-23T10:00:00.000Z",serverRevision:7,
+    messages:[{
+      id:"assistant-4",role:"assistant",content:"the full server-side partial response is longer",
+      pending:false,recoveryStatus:"stalled",toolEvents:[],
+      createdAt:"2026-11-23T09:04:00.000Z",
+    }],
+  },{
+    id:"conversation",updatedAt:"2026-11-23T10:04:00.000Z",
+    messages:[{
+      id:"assistant-4",role:"assistant",content:"short local cache copy",
+      pending:false,recoveryStatus:"completed",toolEvents:[],
+      createdAt:"2026-11-23T09:04:00.000Z",
+    }],
+  }).messages[0];
+  assert.equal(localCompleted.pending,false);
+  assert.equal(localCompleted.recoveryStatus,"completed");
+  assert.equal(localCompleted.content,"the full server-side partial response is longer");
 });
 
 
