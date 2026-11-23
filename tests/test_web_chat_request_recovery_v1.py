@@ -151,6 +151,16 @@ def test_sse_event_replay_is_owner_scoped_and_honors_last_event_id(tmp_path):
         )
         assert invalid_cursor.status_code == 400
 
+        future_cursor = alice.get(
+            f"/api/user/chat/requests/{request_id}/events",
+            headers={"Last-Event-ID": str(terminal_id + 100000)},
+        )
+        assert future_cursor.status_code == 200, future_cursor.text
+        assert "event: recovery.terminal" in future_cursor.text
+        assert '"status":"completed"' in future_cursor.text
+        assert '"response_text":"xxxxx' in future_cursor.text
+        assert "event: delivery.delta" not in future_cursor.text
+
 
 def test_recovering_sse_replay_surfaces_unverified_worker_progress_before_terminal(tmp_path):
     app = make_app(tmp_path)
