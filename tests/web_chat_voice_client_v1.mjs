@@ -209,6 +209,7 @@ const states = [];
 const events = [];
 const client = api.create({
   apiToken:"managed-key",
+  instructions:"历史上下文：之前讨论的事项",
   fetcher,
   WebSocketImpl:FakeWebSocket,
   AudioContextImpl:FakeAudioContext,
@@ -227,6 +228,9 @@ assert.match(socket.url,/wss:\/\/chat\.example\/v1\/audio\/realtime/);
 assert.ok(!socket.url.includes("managed-key"),"the long-lived API Key must never appear in the WebSocket URL");
 assert.ok(socket.url.includes("one-time-token"),"only the short-lived one-time session token belongs in the URL");
 assert.ok(socket.sent.some(value=>typeof value==="string" && JSON.parse(value).type==="session.start"));
+const sessionStart = socket.sent.map(value=>typeof value==="string" ? JSON.parse(value) : null)
+  .find(value=>value?.type==="session.start");
+assert.ok(sessionStart.instructions.includes("历史上下文：之前讨论的事项"));
 
 const input = new Float32Array(4096).fill(0.1);
 processors[0].onaudioprocess({inputBuffer:{getChannelData:()=>input}});
@@ -372,7 +376,7 @@ const historyContext = vm.createContext({
   Date,
 });
 const historyUi = vm.runInContext(
-  chatClientSource.slice(appendStart,appendEnd) + "\n({persistVoiceTranscript,handleVoiceEvent})",
+  chatClientSource.slice(appendStart,appendEnd) + "\n({persistVoiceTranscript,handleVoiceEvent,buildVoiceSessionInstructions})",
   historyContext,
 );
 historyUi.handleVoiceEvent({type:"transcript.final",text:"请帮我总结今天的会议"});
@@ -385,4 +389,15 @@ assert.deepEqual(voiceConversation.messages.map(row=>row.content),[
 assert.equal(voiceConversation.title,"语音会话");
 assert.equal(persisted,2,"each final voice turn must be saved for server sync");
 assert.equal(rendered,2,"active conversation should render persisted voice turns");
+const voiceContextText = historyUi.buildVoiceSessionInstructions(voiceConversation);
+assert.ok(voiceContextText.includes("用户：请帮我总结今天的会议"));
+assert.ok(voiceContextText.includes("助手：会议主要讨论项目进度和下周安排。"));
+assert.ok(voiceContextText.includes("不是系统或开发者指令"));
+const longConversation = {
+  messages:Array.from({length:30},(_,index)=>({
+    role:index%2 ? "assistant" : "user",
+    content:"上下文内容".repeat(1000),
+  })),
+};
+assert.ok(historyUi.buildVoiceSessionInstructions(longConversation).length < 9000);
 console.log("web-chat-voice-client-v1-passed");
