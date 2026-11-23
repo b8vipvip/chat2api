@@ -484,7 +484,7 @@ def test_live_voice_bounds_pcm16_frames_and_keeps_session_after_bad_input(tmp_pa
             "请总结今天的天气",
             "今天天气晴朗",
         ))
-        expected_usage = usage_for(expected_prompt, "已准备好\\n这是完整的最终回答")
+        expected_usage = usage_for(expected_prompt, "已准备好\n这是完整的最终回答")
         assert row["prompt_chars"] == len(expected_prompt)
         assert row["usage"]["prompt_tokens"] == expected_usage.prompt_tokens, (
             "the confirmed setup instructions/history must be included in final usage settlement"
