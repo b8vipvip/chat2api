@@ -6,6 +6,9 @@ const source = readFileSync("app/chat_voice_client_v1.js","utf8");
 const chatClientSource = readFileSync("app/chat_client_v1.js","utf8");
 new vm.Script(source);
 new vm.Script(chatClientSource);
+const closeTimeout = Number(source.match(/SESSION_CLOSE_TIMEOUT_MS\s*=\s*(\d+)/)?.[1] || 0);
+assert.ok(closeTimeout > 5000,
+  "the browser must leave margin beyond the Broker's five-second Worker stop-drain timeout");
 
 class FakeWebSocket {
   static OPEN = 1;
