@@ -76,6 +76,7 @@
     let started = false;
     let stopping = false;
     let cleaned = false;
+    let cleanupPromise = null;
     let readyResolve = null;
     let readyReject = null;
     let closeResolve = null;
@@ -179,30 +180,34 @@
       state(ready ? "ready" : "idle", "摄像头抽帧已停止");
     }
     async function cleanup() {
+      if (cleanupPromise) return cleanupPromise;
       if (cleaned) return;
       cleaned = true;
-      ready = false;
-      started = false;
-      stopping = true;
-      if (heartbeatTimer !== null) timers.clearInterval(heartbeatTimer);
-      if (readyTimeoutId !== null) timers.clearTimeout(readyTimeoutId);
-      if (closeTimeoutId !== null) timers.clearTimeout(closeTimeoutId);
-      heartbeatTimer = null;
-      readyTimeoutId = null;
-      closeTimeoutId = null;
-      stopCamera();
-      stopMicrophone();
-      stopPlayback();
-      if (audioContext && typeof audioContext.close === "function") {
-        try { await audioContext.close(); } catch {}
-      }
-      audioContext = null;
-      if (socket && socket.readyState < WebSocketImpl.CLOSING) {
-        try { socket.close(); } catch {}
-      }
-      state("closed");
-      if (closeResolve) closeResolve();
-      closeResolve = null;
+      cleanupPromise = (async () => {
+        ready = false;
+        started = false;
+        stopping = true;
+        if (heartbeatTimer !== null) timers.clearInterval(heartbeatTimer);
+        if (readyTimeoutId !== null) timers.clearTimeout(readyTimeoutId);
+        if (closeTimeoutId !== null) timers.clearTimeout(closeTimeoutId);
+        heartbeatTimer = null;
+        readyTimeoutId = null;
+        closeTimeoutId = null;
+        stopCamera();
+        stopMicrophone();
+        stopPlayback();
+        if (audioContext && typeof audioContext.close === "function") {
+          try { await audioContext.close(); } catch {}
+        }
+        audioContext = null;
+        if (socket && socket.readyState < WebSocketImpl.CLOSING) {
+          try { socket.close(); } catch {}
+        }
+        state("closed");
+        if (closeResolve) closeResolve();
+        closeResolve = null;
+      })();
+      return cleanupPromise;
     }
     function handleJson(payload) {
       if (!payload || typeof payload !== "object") return;
@@ -256,6 +261,7 @@
       }
       if (!WebSocketImpl || !AudioContextImpl) throw new Error("当前浏览器缺少 WebSocket 或 Web Audio 支持");
       cleaned = false;
+      cleanupPromise = null;
       stopping = false;
       state("requesting_microphone", "等待麦克风授权");
       try {
