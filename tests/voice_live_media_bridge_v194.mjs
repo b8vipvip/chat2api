@@ -24,7 +24,7 @@ assert.ok(liveContent.includes("userMessageKey !== state.lastUserMessageKey || u
   "two consecutive identical user utterances must still produce two transcript events");
 assert.ok(liveContent.includes("assistantBaselineMessageKey"),
   "each assistant response must capture its own prior-message identity");
-assert.ok(liveContent.includes("hasCurrentResponseText"),
+assert.ok(liveContent.includes("belongsToCurrentResponse"),
   "a completed response must not reuse the previous assistant turn's text");
 assert.ok(liveContent.includes("function assistantTextForResponse(node)"),
   "a reused ChatGPT assistant DOM node must contribute only the new response suffix");
