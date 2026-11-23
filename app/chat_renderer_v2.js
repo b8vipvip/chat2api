@@ -332,6 +332,36 @@
     return index;
   }
 
+  function renderBlockquote(host, lines, start, references, depth = 1) {
+    const quote = node("blockquote");
+    let index = start;
+    let paragraphLines = [];
+    const flushParagraph = () => {
+      if (!paragraphLines.length) return;
+      paragraph(quote,paragraphLines,references);
+      paragraphLines = [];
+    };
+    while (index < lines.length) {
+      const match = String(lines[index]).match(/^((?:>\s?)+)(.*)$/);
+      if (!match) break;
+      const level = (match[1].match(/>/g) || []).length;
+      if (level < depth) break;
+      if (level > depth && depth < 8) {
+        flushParagraph();
+        const next = renderBlockquote(quote,lines,index,references,depth + 1);
+        if (next <= index) break;
+        index = next;
+        continue;
+      }
+      const extraDepth = Math.max(0,level - depth);
+      paragraphLines.push((extraDepth ? ">".repeat(extraDepth) + " " : "") + match[2]);
+      index++;
+    }
+    flushParagraph();
+    host.appendChild(quote);
+    return index;
+  }
+
   function renderMarkdown(host, source, sourceReferences = []) {
     const references = normalizeCitationReferences(sourceReferences);
     const input = String(source || "");
@@ -384,13 +414,7 @@
         continue;
       }
       if (/^>\s?/.test(line)) {
-        const quotes = [];
-        while (i < lines.length && /^>\s?/.test(lines[i])) {
-          quotes.push(lines[i++].replace(/^>\s?/, ""));
-        }
-        const quote = node("blockquote");
-        paragraph(quote, quotes, references);
-        host.appendChild(quote);
+        i = renderBlockquote(host,lines,i,references);
         continue;
       }
       if (/^\s*(?:[-*+] |\d+\. )/.test(line)) {
