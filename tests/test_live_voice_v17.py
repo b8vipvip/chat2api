@@ -10,6 +10,7 @@ from app.config import Settings
 from app.live_voice_patch import _send_live_audio_frame, install_live_voice_patch
 from app.main import create_app
 from app.voice_patch import install_voice_patch
+from app.token_usage import usage_for
 
 
 def settings(tmp_path: Path) -> Settings:
@@ -471,6 +472,17 @@ def test_live_voice_bounds_pcm16_frames_and_keeps_session_after_bad_input(tmp_pa
         assert row["diagnostics"]["input_audio_bytes"] == len(valid_pcm)
         assert row["diagnostics"]["audio_bytes"] == 960
         assert row["diagnostics"]["audio_usage_provider_verified"] is False
+        expected_prompt = "\\n".join((
+            "自然聊天",
+            "用户：你好\\n助手：你好，我可以继续帮你。",
+            "请总结今天的天气",
+            "今天天气晴朗",
+        ))
+        expected_usage = usage_for(expected_prompt, "这是完整的最终回答")
+        assert row["prompt_chars"] == len(expected_prompt)
+        assert row["usage"]["prompt_tokens"] == expected_usage.prompt_tokens, (
+            "the confirmed setup instructions/history must be included in final usage settlement"
+        )
         assert row["usage"]["prompt_tokens"] > 0
         assert row["usage"]["completion_tokens"] > 0
         assert row["usage"]["total_tokens"] == (
