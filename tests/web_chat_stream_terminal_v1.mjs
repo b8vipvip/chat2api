@@ -26,7 +26,7 @@ async function send(chunks, close = true, onCancel = () => {}) {
   const node = {value: "", classList: {add() {}, remove() {}}, focus() {}};
   const context = vm.createContext({
     MAX_ASSISTANT_MESSAGE_CHARS:32000,
-    ASSISTANT_TRUNCATION_NOTICE:"\\n\\n[回答超过 Web Chat 的 32,000 字符上限，后续内容未保存]",
+    ASSISTANT_TRUNCATION_NOTICE:"\n\n[回答超过 Web Chat 的 32,000 字符上限，后续内容未保存]",
     limitAssistantText:value=>String(value || "").slice(0,32000),
     appendAssistantText:(assistant,value)=>{assistant.content=String(assistant.content || "")+String(value || "");},
     state: {
@@ -137,7 +137,7 @@ test("preserves request-scoped tool calls and results as safe presentation state
   const context = vm.createContext({
     saveHistory() { saved += 1; }, document, URL,
     MAX_ASSISTANT_MESSAGE_CHARS:32000,
-    ASSISTANT_TRUNCATION_NOTICE:"\\n\\n[回答超过 Web Chat 的 32,000 字符上限，后续内容未保存]",
+    ASSISTANT_TRUNCATION_NOTICE:"\n\n[回答超过 Web Chat 的 32,000 字符上限，后续内容未保存]",
     limitAssistantText:value=>String(value || "").slice(0,32000),
     appendAssistantText:(assistant,value)=>{assistant.content=String(assistant.content || "")+String(value || "");},
     safeToolName(value) { return String(value || "tool").slice(0,80); },
