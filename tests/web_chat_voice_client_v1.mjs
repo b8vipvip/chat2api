@@ -95,6 +95,7 @@ let mediaCall = 0;
 const mediaDevices = {
   async getUserMedia(constraints) {
     mediaCall += 1;
+    if (constraints.audio) assert.ok(audioContexts.length > 0,"AudioContext must unlock before microphone permission/network waits");
     const track = {stopped:false,stop(){this.stopped=true;stoppedTracks.push(this);}};
     return {
       constraints,
@@ -207,8 +208,10 @@ assert.equal(samples441,16000,"44.1 kHz callback boundaries must preserve the 16
 
 const states = [];
 const events = [];
+let beforeConnectCalls = 0;
 const client = api.create({
   apiToken:"managed-key",
+  beforeConnect:async()=>{beforeConnectCalls+=1;assert.ok(audioContexts.length>0);},
   fetcher,
   WebSocketImpl:FakeWebSocket,
   AudioContextImpl:FakeAudioContext,
@@ -220,6 +223,7 @@ const client = api.create({
   onEvent:event=>events.push(event),
 });
 await client.start();
+assert.equal(beforeConnectCalls,1);
 assert.equal(client.isActive(),true);
 const socket = FakeWebSocket.last;
 assert.equal(socket.binaryType,"arraybuffer");
