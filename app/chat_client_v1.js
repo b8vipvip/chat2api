@@ -50,7 +50,7 @@
   const MAX_USER_MESSAGE_CHARS = 8000;
   const MAX_ASSISTANT_MESSAGE_CHARS = 32000;
   const MAX_LOCAL_MESSAGE_CHARS = 8000;
-  const ASSISTANT_TRUNCATION_NOTICE = "\\n\\n[回答超过 Web Chat 的 32,000 字符上限，后续内容未保存]";
+  const ASSISTANT_TRUNCATION_NOTICE = "\n\n[回答超过 Web Chat 的 32,000 字符上限，后续内容未保存]";
   const MAX_IMAGES_PER_MESSAGE = 4;
   const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
   const MAX_TOTAL_IMAGE_BYTES = 20 * 1024 * 1024;
