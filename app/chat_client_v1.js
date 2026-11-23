@@ -41,6 +41,7 @@
     voiceActive: false,
     voicePanelVisible: false,
     voiceAssistantLine: null,
+    voiceAssistantPersisted: false,
     voiceAuthTimer: null,
     voiceConversationId: "",
   };
@@ -119,9 +120,16 @@
       $("voiceStatus").textContent = labels[status] || "实时语音";
     }
     if (status === "closed") {
+      const partialAssistantText = String(state.voiceAssistantLine?.textContent || "").trim();
+      if (partialAssistantText && !state.voiceAssistantPersisted) {
+        // The user may stop Voice mid-response or the upstream socket may
+        // close before response.done. Preserve the visible partial transcript.
+        state.voiceAssistantPersisted = persistVoiceTranscript("assistant",partialAssistantText,"voice_partial");
+      }
       $("voiceCameraPreview").classList.add("hidden");
       $("voiceCameraButton").textContent = "开启摄像头";
       state.voiceAssistantLine = null;
+      state.voiceAssistantPersisted = false;
       state.voiceClient = null;
       state.voiceConversationId = "";
       if (state.voiceAuthTimer !== null) window.clearInterval(state.voiceAuthTimer);
@@ -151,7 +159,7 @@
     return body;
   }
 
-  function persistVoiceTranscript(role, value) {
+  function persistVoiceTranscript(role, value, recoveryStatus = "") {
     if ((role !== "user" && role !== "assistant") || !state.voiceConversationId) return false;
     const content = String(value || "").trim().slice(0,MAX_MESSAGE_CHARS);
     if (!content) return false;
@@ -162,6 +170,7 @@
       role,
       content,
       createdAt:new Date().toISOString(),
+      recoveryStatus:String(recoveryStatus || "").slice(0,40),
     });
     conversation.messages = conversation.messages.slice(-MAX_MESSAGES);
     if (role === "user") autoTitle(conversation);
@@ -179,6 +188,7 @@
     } else if (payload.type === "response.text.delta") {
       if (!state.voiceAssistantLine) {
         state.voiceAssistantLine = appendVoiceTranscript("assistant","");
+        state.voiceAssistantPersisted = false;
       }
       if (state.voiceAssistantLine) {
         state.voiceAssistantLine.textContent += String(payload.delta || "");
@@ -193,7 +203,9 @@
         // partial delta snapshot if any intermediate frame was lost.
         state.voiceAssistantLine.textContent = finalText;
       }
-      if (finalText) persistVoiceTranscript("assistant",finalText);
+      if (finalText) {
+        state.voiceAssistantPersisted = persistVoiceTranscript("assistant",finalText);
+      }
       state.voiceAssistantLine = null;
     } else if (payload.type === "input_video.frame.sent") {
       $("voiceStatus").textContent = "摄像头画面已送达 ChatGPT Voice";
@@ -240,6 +252,8 @@
       return;
     }
     state.voiceConversationId = voiceConversation.id;
+    state.voiceAssistantLine = null;
+    state.voiceAssistantPersisted = false;
     state.voicePanelVisible = true;
     $("voicePanel").classList.remove("hidden");
     $("voiceTranscript").replaceChildren();
@@ -2128,7 +2142,7 @@
       cancellation_requested: "正在确认停止", cancelled: "已取消", error: "请求失败",
       stalled: "请求停滞", auth_required: "需要重新登录", not_found: "请求记录不存在",
       recovery_unavailable: "暂时无法恢复，可稍后重试", recovery_timeout: "恢复超时",
-      recovery_failed: "恢复失败", recovery_error: "恢复连接异常",
+      recovery_failed: "恢复失败", recovery_error: "恢复连接异常", voice_partial: "语音中断 · 部分回复",
       invalid_response: "恢复响应无效", request_mismatch: "请求身份不匹配",
       invalid_request: "请求记录无效", polling_stopped: "恢复已停止",
     };

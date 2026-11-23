@@ -79,6 +79,28 @@ assert.deepEqual(
 
 console.log("Web Chat conversation merge preserves final-message citations across devices");
 
+const repeatedServerRow = {
+  id:"conversation-voice-repeat",
+  updatedAt:"2026-11-23T02:00:00Z",
+  messages:[{
+    id:"voice-user-turn-1",role:"user",content:"repeat this phrase",
+    createdAt:"2026-11-23T02:00:01Z",
+  }],
+};
+const repeatedLocalRow = {
+  ...repeatedServerRow,
+  updatedAt:"2026-11-23T02:00:02Z",
+  messages:[{
+    id:"voice-user-turn-2",role:"user",content:"repeat this phrase",
+    createdAt:"2026-11-23T02:00:03Z",
+  }],
+};
+const mergedRepeatedTurns = mergeConversation(repeatedServerRow,repeatedLocalRow);
+assert.equal(mergedRepeatedTurns.messages.length,2,
+  "cross-device merge must preserve both distinct Voice turns");
+assert.equal(mergedRepeatedTurns.messages[0].id,"voice-user-turn-1");
+assert.equal(mergedRepeatedTurns.messages[1].id,"voice-user-turn-2");
+
 
 const citationMatch = source.match(/function citationTextForMessage\(message\) \{[\s\S]*?\n  \}/);
 assert.ok(citationMatch, "production citationTextForMessage function must remain extractable");
