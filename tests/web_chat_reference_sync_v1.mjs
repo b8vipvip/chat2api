@@ -97,7 +97,7 @@ const repeatedLocalRow = {
 };
 const mergedRepeatedTurns = mergeConversation(repeatedServerRow,repeatedLocalRow);
 assert.deepEqual(
-  mergedRepeatedTurns.messages.map(message=>message.id),
+  Array.from(mergedRepeatedTurns.messages, message=>message.id),
   ["voice-user-turn-1","voice-user-turn-2"],
   "cross-device merge must preserve distinct Voice turns even when their text is identical",
 );
