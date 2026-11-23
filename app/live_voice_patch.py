@@ -22,6 +22,7 @@ from .quota_reservation_runtime_v1 import authorize_wallet_dispatch, reserve_aud
 
 logger = logging.getLogger(__name__)
 LIVE_PROTOCOL_VERSION = "chat2api-live-v1"
+DEFAULT_LIVE_SESSION_INSTRUCTIONS = "请用自然、清晰、简洁的中文回答。"
 SUPPORTED_MODELS = {"gpt-live", "gpt-live-mini"}
 MODEL_ALIASES = {"gpt-live-mini": "gpt-live"}
 REALTIME_SESSION_TTL_SECONDS = 60
@@ -338,6 +339,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
         observed_media_ids: list[str] = []
         input_confirmed = 0
         session_ready = False
+        setup_prompt_accounted = False
         error_message = ""
         quota_reservation = None
         observed_prompt_parts: list[str] = []
@@ -371,7 +373,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 await websocket.send_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
 
         async def relay_extension_events() -> None:
-            nonlocal finished, observed_audio_bytes, observed_response_count, observed_media_count, input_confirmed, session_ready, error_message, observed_media_ids
+            nonlocal finished, observed_audio_bytes, observed_response_count, observed_media_count, input_confirmed, session_ready, setup_prompt_accounted, error_message, observed_media_ids
             assert state is not None
             text_by_response: dict[str, str] = {}
 
@@ -446,6 +448,17 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 event_type = str(event.get("live_event") or "")
                 if event_type == "session.ready":
                     session_ready = True
+                    # The extension sends the instructions/history as a setup turn
+                    # before opening Voice. Include that confirmed input in the
+                    # final usage estimate once, rather than reserving it and then
+                    # dropping it from settlement.
+                    if not setup_prompt_accounted and (
+                        event.get("instructions_applied") is True
+                        or event.get("context_injected") is True
+                    ):
+                        if session_prompt:
+                            observed_prompt_parts.append(session_prompt)
+                        setup_prompt_accounted = True
                     payload: dict[str, object] = {
                         "type": "session.ready",
                         "session_id": session_id,
@@ -719,7 +732,8 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
             requested_client = str(start.get("client_id") or client_id or "").strip() or None
             selected_client = resolve_idle_client(requested_client, principal, requested_model)
             state = await broker.create(request_id, selected_client)
-            instructions = str(start.get("instructions") or "").strip()[:12000]
+            requested_instructions = str(start.get("instructions") or "").strip()
+            instructions = (requested_instructions or DEFAULT_LIVE_SESSION_INSTRUCTIONS)[:12000]
             context = str(start.get("context") or "").strip()
             if len(context) > 8000 or len(instructions) + len(context) > 12000:
                 await send_json({
