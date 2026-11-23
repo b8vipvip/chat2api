@@ -102,7 +102,7 @@
 
   function setVoiceUi(status, detail = "") {
     state.voiceStarting = status === "requesting_microphone" || status === "camera_starting";
-    state.voiceActive = ["requesting_microphone","ready","camera_starting","stopping"].includes(status);
+    state.voiceActive = ["requesting_microphone","ready","camera_starting","camera_ready","stopping"].includes(status);
     if (status !== "idle") state.voicePanelVisible = true;
     $("voicePanel").classList.toggle("hidden", !state.voicePanelVisible);
     if (detail) $("voiceStatus").textContent = detail;
