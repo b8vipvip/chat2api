@@ -363,6 +363,7 @@
   }
 
   function renderRichBlocks(host, blocks, sourceReferences = []) {
+    const references = normalizeCitationReferences(sourceReferences);
     // Only display evidence supplied by an authorized API; this method does
     // not fetch external media, execute tools or claim any request is final.
     if (!Array.isArray(blocks)) return;
