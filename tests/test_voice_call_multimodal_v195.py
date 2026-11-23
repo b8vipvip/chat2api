@@ -265,8 +265,9 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
                 bad_video = live.receive_json()
                 assert bad_video["type"] == "error"
                 assert bad_video["code"] == "INVALID_VIDEO_FRAME"
-                assert bad_video["item_id"] == "bad-video-sequence",
-                "video validation failures must release the matching browser pending-frame slot"
+                assert bad_video["item_id"] == "bad-video-sequence", (
+                    "video validation failures must release the matching browser pending-frame slot"
+                )
                 live.send_json({
                     "type": "input_video.frame",
                     "sequence": 1,
