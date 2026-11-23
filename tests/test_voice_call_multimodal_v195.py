@@ -447,7 +447,7 @@ def test_live_video_frame_ack_timeout_releases_slot_and_unconfirmed_grant(tmp_pa
                 "data_base64": base64.b64encode(_tiny_png()).decode(),
             },
         ).json()["id"]
-        request_id = "voice-video-ack-timeout"
+        request_id = "voicereq_videoacktimeout"
         with client.websocket_connect(f"/ws/extensions/{ext_id}?token={secret}") as ext:
             ext.receive_json()
             with client.websocket_connect(
