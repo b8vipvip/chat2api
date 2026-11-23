@@ -337,7 +337,8 @@
       const fixedLength = sections.join("\n\n").length + contextIntro.length + acknowledgement.length + 4;
       const available = Math.max(0,12000 - fixedLength);
       const context = String(active.context).trim();
-      sections.push(contextIntro + (context.length > available ? context.slice(-available) : context));
+      const boundedContext = available > 0 && context.length > available ? context.slice(-available) : (available > 0 ? context : "");
+      sections.push(contextIntro + boundedContext);
     }
     sections.push("请只简短回复“已准备好”，随后等待用户下一条语音输入，不要复述历史背景。");
     return sections.filter(Boolean).join("\n\n").slice(0,12000);
