@@ -113,6 +113,23 @@ assert(firstItem.children.some(child => child.tag === "ul" &&
   child.children[0].textContent.includes("nested item nested continuation")));
 assert.equal(topList.children[1].textContent,"second item");
 assert(continuationHost.children.some(child => child.tag === "p" && child.textContent === "outside paragraph"));
+
+const quoteHost = new Element("root");
+renderer.renderMarkdown(quoteHost,
+  "> outer first\n" +
+  "> > nested quote\n" +
+  "> > > deeply nested quote\n" +
+  "> outer after nested quote");
+const outerQuote = quoteHost.children[0];
+assert.equal(outerQuote.tag,"blockquote");
+assert(outerQuote.children.some(child => child.tag === "p" && child.textContent === "outer first"));
+const nestedQuote = outerQuote.children.find(child => child.tag === "blockquote");
+assert.ok(nestedQuote);
+assert(nestedQuote.children.some(child => child.tag === "p" && child.textContent === "nested quote"));
+const deepQuote = nestedQuote.children.find(child => child.tag === "blockquote");
+assert.ok(deepQuote);
+assert(deepQuote.children.some(child => child.tag === "p" && child.textContent === "deeply nested quote"));
+assert(outerQuote.children.some(child => child.tag === "p" && child.textContent === "outer after nested quote"));
 assert(nodes.some(x => x.tag === "a" && x.href === "https://example.org/x"));
 assert(nodes.some(x => x.tag === "table"));
 assert(nodes.some(x => x.tag === "span" && x.className === "math-inline"));
