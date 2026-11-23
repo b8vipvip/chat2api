@@ -192,9 +192,9 @@
     if (!payload || typeof payload !== "object") return;
     if (payload.type === "session.ready") {
       $("voiceStatus").textContent = payload.context_injected === true
-        ? "GPT-Live 已连接，已载入当前对话背景"
+        ? "GPT-Live 已连接，已将当前对话背景作为开场消息发送"
         : payload.instructions_applied === true
-          ? "GPT-Live 已连接，已应用语音指令（当前对话暂无历史背景）"
+          ? "GPT-Live 已连接，已发送语音开场指令"
           : "GPT-Live 已连接，未载入对话背景";
     } else if (payload.type === "response.created") {
       // Start a fresh persistence boundary for each assistant turn. Keep the
@@ -284,16 +284,16 @@
       content = String(content || "").replace(/\s+/g," ").trim();
       if (!content) continue;
       const prefix = message.role === "user" ? "用户" : "助手";
-      const available = Math.max(0,remaining - prefix.length - 2);
+      const available = Math.max(0,remaining - Array.from(prefix).length - 2);
       if (!available) break;
-      if (content.length > available) content = content.slice(-available);
+      const contentPoints = Array.from(content);
+      if (contentPoints.length > available) content = contentPoints.slice(-available).join("");
       rows.push(prefix + "：" + content);
-      remaining -= prefix.length + content.length + 2;
+      remaining -= Array.from(prefix).length + Array.from(content).length + 2;
       if (remaining <= 0) break;
     }
-    return rows.reverse().join("\n").slice(-MAX_VOICE_CONTEXT_CHARS);
+    return Array.from(rows.reverse().join("\n")).slice(-MAX_VOICE_CONTEXT_CHARS).join("");
   }
-
   async function startVoiceCall() {
     if (state.streaming || state.voiceActive) return;
     const activeConversation = currentConversation();

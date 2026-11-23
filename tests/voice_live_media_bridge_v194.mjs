@@ -194,6 +194,69 @@ const clientCancelledResponse = transcriptEvents
 assert.equal(clientCancelledResponse?.text,"interrupted by user",
   "client_cancel must retain the baseline until the explicit interruption event captures its partial text");
 
+// A setup bridge must positively acknowledge the isolated upstream user turn.
+// A resolved promise or an empty object is not enough to mark context/instructions
+// as applied or let the public session become ready.
+{
+  const setupAckListeners = [];
+  const setupAckMessages = [];
+  const setupAckWindow = {
+    addEventListener(type,listener) {
+      if(type === "message") setupAckListeners.push(listener);
+    },
+    postMessage(message) {
+      if(message?.source !== "chat2api-isolated") return;
+      const dispatch = type => Promise.resolve().then(() => setupAckListeners.forEach(listener=>listener({
+        source:setupAckWindow,
+        data:{
+          source:"chat2api-main",
+          request_id:message.request_id,
+          session_id:message.session_id,
+          type,
+        },
+      })));
+      if(message.type === "voice.live.prepare") dispatch("voice.live.prepared");
+      if(message.type === "voice.live.stop") dispatch("voice.live.stopped");
+    },
+  };
+  const setupAckSandbox = vm.createContext({
+    window:setupAckWindow,
+    chrome:{
+      runtime:{
+        onMessage:{addListener(){}},
+        sendMessage:async message=>{setupAckMessages.push(message);return {ok:true};},
+      },
+    },
+    __CHAT2API_VOICE_LIVE_TEXT_V24__:{
+      prepareContext:async()=>({acknowledged:false,responseText:""}),
+    },
+    document:{visibilityState:"visible",querySelectorAll(){return[];}},
+    getComputedStyle:()=>({display:"block",visibility:"visible"}),
+    setTimeout,clearTimeout,setInterval,clearInterval,
+    Date,Math,Promise,String,Number,Set,Array,Map,
+  });
+  const instrumentedSetupAck = liveContent.slice(0,closingIife) +
+    "globalThis.__voiceSetupAckTest = {startLive,state}; " +
+    liveContent.slice(closingIife);
+  vm.runInContext(instrumentedSetupAck,setupAckSandbox);
+  const setupAckTest = setupAckSandbox.__voiceSetupAckTest;
+  await assert.rejects(
+    setupAckTest.startLive({
+      requestId:"voice-setup-unacknowledged",
+      sessionId:"voice-session-unacknowledged",
+      options:{model:"gpt-live",instructions:"用简洁中文回答。",context:"用户：上一轮问题"},
+    }),
+    /did not acknowledge the Live Voice setup turn/,
+  );
+  const setupEvents = setupAckMessages.map(message=>message.event?.live_event);
+  assert.equal(setupEvents.includes("session.ready"),false,
+    "an unacknowledged setup turn must never be reported as a ready Voice session");
+  assert.equal(setupAckMessages.some(message=>message.event?.type==="image.started"),false,
+    "an unacknowledged setup turn must not emit image.started");
+  assert.equal(setupAckTest.state.active,null,
+    "the failed setup must release its active content-session ownership");
+}
+
 // Stopping while the extension is still waiting for ChatGPT's Voice UI
 // must abort startup instead of publishing a late image.started/session.ready.
 const startupListeners = [];

@@ -3,6 +3,9 @@
   if (globalThis[KEY]) return;
 
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+  function sliceCodePoints(value, start, end) {
+    return Array.from(String(value || "")).slice(start, end).join("");
+  }
   const normalize = value => String(value || "")
     .replace(/[\u200B-\u200D\uFEFF]/g, "")
     .replace(/\s+/g, " ")
@@ -290,7 +293,7 @@
       || baselineNodes[baselineNodes.length - 1]?.textContent || "");
     await queueTurn(() => sendLiveText(active,"session-context",String(text || "")));
     const responseText = await waitForAssistantCompletion(active,baselineText);
-    return {acknowledged:true,responseText:responseText.slice(0,1200)};
+    return {acknowledged:true,responseText:sliceCodePoints(responseText,0,1200)};
   }
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {

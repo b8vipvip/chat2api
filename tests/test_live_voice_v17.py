@@ -7,10 +7,22 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from app.config import Settings
-from app.live_voice_patch import _send_live_audio_frame, install_live_voice_patch
+from app.live_voice_patch import (
+    _build_live_session_setup_prompt,
+    _send_live_audio_frame,
+    install_live_voice_patch,
+)
 from app.main import create_app
 from app.voice_patch import install_voice_patch
 from app.token_usage import usage_for
+
+
+def test_live_voice_setup_prompt_preserves_supplementary_unicode_within_codepoint_budget() -> None:
+    context = "😀" * 8000
+    prompt = _build_live_session_setup_prompt("回答😀", context)
+    assert prompt.count("😀") == 8001
+    assert len(prompt) <= 12000
+    assert prompt.endswith("请只简短回复“已准备好”，随后等待用户下一条语音输入，不要复述历史背景。")
 
 
 def settings(tmp_path: Path) -> Settings:

@@ -15,6 +15,10 @@
   const MAX_SESSION_INSTRUCTIONS_CHARS = 4000;
   const MAX_SESSION_CONTEXT_CHARS = 8000;
 
+  function sliceCodePoints(value, start, end) {
+    return Array.from(String(value || "")).slice(start, end).join("");
+  }
+
   function resamplePcm16(input, inputRate, outputRate = INPUT_RATE) {
     if (!input || typeof input.length !== "number" || !Number.isFinite(inputRate) ||
         !Number.isFinite(outputRate) || inputRate < outputRate || outputRate < 8000 ||
@@ -95,8 +99,8 @@
 
   function create(options = {}) {
     const token = String(options.apiToken || "");
-    const instructions = String(options.instructions || DEFAULT_SESSION_INSTRUCTIONS).trim().slice(0,MAX_SESSION_INSTRUCTIONS_CHARS);
-    const context = String(options.context || "").trim().slice(0,MAX_SESSION_CONTEXT_CHARS);
+    const instructions = sliceCodePoints(String(options.instructions || DEFAULT_SESSION_INSTRUCTIONS).trim(),0,MAX_SESSION_INSTRUCTIONS_CHARS);
+    const context = sliceCodePoints(String(options.context || "").trim(),0,MAX_SESSION_CONTEXT_CHARS);
     const beforeConnect = typeof options.beforeConnect === "function" ? options.beforeConnect : null;
     const fetcher = options.fetcher || window.fetch.bind(window);
     const WebSocketImpl = options.WebSocketImpl || window.WebSocket;
