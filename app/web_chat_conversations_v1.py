@@ -40,7 +40,7 @@ _ALLOWED_DOCUMENT_MIME_TYPES = frozenset({
     "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 })
 _MAX_CONVERSATIONS_RETURNED = 100
-_MAX_MESSAGES = 30
+_MAX_MESSAGES = 100
 _MAX_USER_MESSAGE_CHARS = 8000
 _MAX_ASSISTANT_MESSAGE_CHARS = 32000
 _MAX_MESSAGE_PARTS = 8

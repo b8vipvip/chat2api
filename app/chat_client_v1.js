@@ -46,7 +46,8 @@
     voiceConversationId: "",
   };
   const MAX_CONVERSATIONS = 15;
-  const MAX_MESSAGES = 30;
+  const MAX_MESSAGES = 100;
+  const MAX_LOCAL_MESSAGES = 30;
   const MAX_USER_MESSAGE_CHARS = 8000;
   const MAX_ASSISTANT_MESSAGE_CHARS = 32000;
   const MAX_LOCAL_MESSAGE_CHARS = 8000;
@@ -610,9 +611,9 @@
     }).filter(Boolean);
   }
 
-  function normalizeConversationRow(row) {
+  function normalizeConversationRow(row, maxMessages = MAX_MESSAGES) {
     if (!row || typeof row !== "object" || typeof row.id !== "string") return null;
-    const messages = Array.isArray(row.messages) ? row.messages.slice(-MAX_MESSAGES).map((message) => {
+    const messages = Array.isArray(row.messages) ? row.messages.slice(-maxMessages).map((message) => {
       if (!message || (message.role !== "user" && message.role !== "assistant")) return null;
       const content = normalizeMessageContent(message.content, message.role);
       const pending = message.pending === true;
@@ -659,7 +660,7 @@
       const rows = raw ? JSON.parse(raw) : [];
       if (!Array.isArray(rows)) return [];
       return rows.filter((row) => row && typeof row === "object" && typeof row.id === "string")
-        .slice(0, MAX_CONVERSATIONS).map(normalizeConversationRow).filter(Boolean);
+        .slice(0, MAX_CONVERSATIONS).map(row => normalizeConversationRow(row, MAX_LOCAL_MESSAGES)).filter(Boolean);
     } catch {
       toast("本地聊天历史无法读取，已使用空白历史。");
       return [];
@@ -670,7 +671,7 @@
     if (!state.storageKey) return;
     const payload = state.conversations.map((conversation) => ({
       ...conversation,
-      messages: (conversation.messages || []).slice(-MAX_MESSAGES).map((message) => ({
+      messages: (conversation.messages || []).slice(-MAX_LOCAL_MESSAGES).map((message) => ({
         ...message,
         content: normalizeMessageContent(message.content, message.role, MAX_LOCAL_MESSAGE_CHARS),
       })),
