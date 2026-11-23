@@ -8,6 +8,7 @@
     mainEvents: [],
     transcriptTimer: null,
     lastUserText: "",
+    lastUserMessageKey: null,
     lastAssistantText: "",
     currentResponseId: null,
   };
@@ -103,19 +104,35 @@
     }, "*");
   }
 
-  function latestRoleText(role) {
+  function latestRoleMessage(role) {
     const nodes = [...document.querySelectorAll(`[data-message-author-role='${role}']`)].filter(visible);
-    return nodes.length ? textOf(nodes[nodes.length - 1]) : "";
+    return nodes.length ? nodes[nodes.length - 1] : null;
+  }
+
+  function latestRoleText(role) {
+    return textOf(latestRoleMessage(role));
+  }
+
+  function messageIdentity(node) {
+    const messageId = String(node?.getAttribute?.("data-message-id") || "").trim();
+    return messageId ? "id:" + messageId : node;
   }
 
   function startTranscriptPolling(active) {
     clearInterval(state.transcriptTimer);
-    state.lastUserText = latestRoleText("user");
+    const initialUserMessage = latestRoleMessage("user");
+    state.lastUserText = textOf(initialUserMessage);
+    state.lastUserMessageKey = messageIdentity(initialUserMessage);
     state.lastAssistantText = latestRoleText("assistant");
     state.transcriptTimer = setInterval(() => {
       if (state.active !== active) return;
-      const userText = latestRoleText("user");
-      if (userText && userText !== state.lastUserText) {
+      const userMessage = latestRoleMessage("user");
+      const userText = textOf(userMessage);
+      const userMessageKey = messageIdentity(userMessage);
+      // Compare message identity as well as text: two consecutive voice turns
+      // may legitimately contain the exact same words.
+      if (userText && (userMessageKey !== state.lastUserMessageKey || userText !== state.lastUserText)) {
+        state.lastUserMessageKey = userMessageKey;
         state.lastUserText = userText;
         emitLive(active, "transcript.final", { text: userText }).catch(() => {});
       }
