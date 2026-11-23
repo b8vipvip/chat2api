@@ -15,6 +15,7 @@
     assistantBaselineMessageKey: null,
     assistantBaselineText: "",
     currentResponseId: null,
+    stopWaiters: new Map(),
   };
   globalThis[KEY] = state;
 
@@ -105,10 +106,28 @@
     return pending;
   }
 
+  function waitForMainStop(active, timeout = 1800) {
+    return new Promise(resolve => {
+      let settled = false;
+      const finish = acknowledged => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (state.stopWaiters.get(active.requestId) === finish) {
+          state.stopWaiters.delete(active.requestId);
+        }
+        resolve(Boolean(acknowledged));
+      };
+      const timer = setTimeout(() => finish(false), timeout);
+      state.stopWaiters.set(active.requestId, finish);
+    });
+  }
+
   async function flushPendingEmits() {
-    // The stop path emits the last assistant DOM snapshot synchronously from
-    // the MAIN-world track-ended callback. Drain those already-issued runtime
-    // messages before sending session.closed to the Broker.
+    // Wait for the MAIN-world stop acknowledgement before draining these
+    // messages. postMessage delivery is asynchronous; an empty queue directly
+    // after postMain("voice.live.stop") does not mean the final DOM snapshot
+    // has reached this isolated-world listener yet.
     while (pendingEmits.size) await Promise.allSettled([...pendingEmits]);
   }
 
@@ -353,13 +372,16 @@
     if (!active || active.stopped) return;
     active.stopped = true;
     stopTranscriptPolling();
+    const mainStopAck = waitForMainStop(active);
     postMain("voice.live.stop", active);
     postMain("voice.reset", active);
     try { endVoiceButton()?.click(); } catch (_) {}
-    if (notify) {
-      await flushPendingEmits();
-      await emitLive(active, "session.closed");
-    }
+    // The MAIN-world bridge emits response.stopped during reset, then sends
+    // voice.live.stopped. Only after that acknowledgement can we know the
+    // interruption snapshot had a chance to enter pendingEmits.
+    await mainStopAck;
+    await flushPendingEmits();
+    if (notify) await emitLive(active, "session.closed");
     if (state.active === active) state.active = null;
     state.currentResponseId = null;
     state.mainEvents = [];
@@ -368,6 +390,11 @@
   window.addEventListener("message", event => {
     if (event.source !== window || event.data?.source !== "chat2api-main") return;
     const item = event.data;
+    if (item.type === "voice.live.stopped") {
+      const acknowledge = state.stopWaiters.get(item.request_id);
+      if (acknowledge) acknowledge(true);
+      return;
+    }
     if (!state.active || item.request_id !== state.active.requestId) return;
     // Streaming PCM chunks must never accumulate in the long-lived DOM
     // controller's diagnostics list (hundreds of MB in a long session).
