@@ -937,6 +937,10 @@
   }
 
   function setActiveConversation(conversationId) {
+    if (state.voiceActive) {
+      toast("请先结束实时语音，再切换对话。");
+      return;
+    }
     if (state.streaming) {
       toast("当前回复仍在生成；请先停止生成再切换对话。");
       return;
@@ -955,6 +959,10 @@
   }
 
   function deleteConversation(conversationId) {
+    if (state.voiceActive && conversationId === state.voiceConversationId) {
+      toast("请先结束实时语音，再删除当前语音会话。");
+      return;
+    }
     const conversation = state.conversations.find((row) => row.id === conversationId);
     if (!conversation) return;
     if (state.streaming && conversationId === state.activeConversationId) {
