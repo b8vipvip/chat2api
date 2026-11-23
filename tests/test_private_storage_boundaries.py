@@ -60,7 +60,7 @@ def test_web_chat_conversation_database_rejects_hard_links(tmp_path: Path) -> No
     store = WebChatConversationStoreV1(tmp_path)
     linked = tmp_path / "linked-conversation-db.sqlite3"
     os.link(store.path, linked)
-    with pytest.raises(RuntimeError, match="private regular files"):
+    with pytest.raises(RuntimeError, match="single-link regular files"):
         store._connect()
 
 
