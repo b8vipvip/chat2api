@@ -713,4 +713,76 @@ assert.equal(noAckFrames.length,2,
 assert.equal(noAckFrames[1].sequence,1);
 await noAckClient.stop();
 
+// The setup acknowledgement may repeat the previous assistant's exact text.
+// It must be recognized as a new message by identity, not rejected by text equality.
+{
+  const makeMessage = (text,id) => ({
+    innerText:text,
+    textContent:text,
+    closest(selector){return selector === "[data-message-id]" ? this : null;},
+    getAttribute(name){return name === "data-message-id" ? id : null;},
+    getBoundingClientRect(){return {width:320,height:24};},
+  });
+  const baselineAssistant = makeMessage("已准备好","assistant-before");
+  const assistantNodes = [baselineAssistant];
+  const userNodes = [];
+  class FakeTextArea {
+    constructor(){this._value="";this.disabled=false;}
+    get value(){return this._value;}
+    set value(value){this._value=String(value);}
+    getBoundingClientRect(){return {width:480,height:32};}
+    getAttribute(){return null;}
+    focus(){}
+    dispatchEvent(){return true;}
+  }
+  class FakeInput {}
+  const composer = new FakeTextArea();
+  const sendButton = {
+    disabled:false,
+    getBoundingClientRect(){return {width:32,height:32};},
+    getAttribute(){return null;},
+    click(){
+      const submitted = composer.value;
+      composer.value = "";
+      userNodes.push(makeMessage(submitted,"user-setup"));
+      setTimeout(()=>assistantNodes.push(makeMessage("已准备好","assistant-after")),30);
+    },
+  };
+  const form = {
+    getBoundingClientRect(){return {width:520,height:64};},
+    querySelector(){return composer;},
+    querySelectorAll(selector){
+      if(selector.startsWith("button")) return [sendButton];
+      return [composer];
+    },
+  };
+  const document = {
+    querySelectorAll(selector){
+      if(selector === "form[data-type='unified-composer'], form") return [form];
+      if(selector === "[data-message-author-role='assistant']") return assistantNodes;
+      if(selector === "[data-message-author-role='user']") return userNodes;
+      return [];
+    },
+  };
+  const sandbox = vm.createContext({
+    chrome:{runtime:{onMessage:{addListener(){}},sendMessage:async()=>({ok:true})}},
+    document,
+    HTMLTextAreaElement:FakeTextArea,
+    HTMLInputElement:FakeInput,
+    Event:class {},
+    getComputedStyle:()=>({display:"block",visibility:"visible"}),
+    setTimeout,clearTimeout,Date,Promise,Array,String,Number,Math,Set,Map,
+  });
+  vm.runInContext(liveTextSource,sandbox);
+  const active = {requestId:"voice-identical-ack",sessionId:"session-identical-ack",stopped:false};
+  sandbox.__CHAT2API_VOICE_LIVE_CONTENT_V2__ = {active};
+  const bridge = sandbox.__CHAT2API_VOICE_LIVE_TEXT_V24__;
+  const result = await bridge.prepareContext(active,"请只回复“已准备好”。");
+  assert.equal(result.acknowledged,true);
+  assert.equal(result.responseText,"已准备好",
+    "a new assistant message with the same text as the previous answer is a valid setup acknowledgement");
+  assert.equal(userNodes.length,1);
+  assert.ok(userNodes[0].innerText.includes("请只回复“已准备好”。"));
+}
+
 console.log("web-chat-voice-client-v1-passed");
