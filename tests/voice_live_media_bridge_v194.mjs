@@ -26,6 +26,8 @@ assert.ok(liveContent.includes("assistantBaselineMessageKey"),
   "each assistant response must capture its own prior-message identity");
 assert.ok(liveContent.includes("hasCurrentResponseText"),
   "a completed response must not reuse the previous assistant turn's text");
+assert.ok(liveContent.includes("function assistantTextForResponse(node)"),
+  "a reused ChatGPT assistant DOM node must contribute only the new response suffix");
 
 // Exercise the transcript poller with two distinct ChatGPT user message nodes
 // containing the same text. The second utterance must not be deduplicated.
@@ -123,6 +125,20 @@ const newResponse = transcriptEvents
   .map(message=>message.event)
   .find(event=>event?.live_event==="response.done" && event.response_id==="response-new");
 assert.equal(newResponse?.text,"new assistant answer");
+
+// Some Voice UI revisions reuse the same assistant message node after a
+// barge-in. The new response must contain only the appended suffix.
+assistantNodes = [makeTranscriptNode("older partial","assistant-3")];
+dispatchVoiceMain("voice.live.response.started","response-reused-node");
+assistantNodes[0].innerText = "older partial continuation";
+assistantNodes[0].textContent = "older partial continuation";
+dispatchVoiceMain("voice.live.response.stopped","response-reused-node");
+await flush();
+const reusedNodeResponse = transcriptEvents
+  .map(message=>message.event)
+  .find(event=>event?.live_event==="response.done" && event.response_id==="response-reused-node");
+assert.equal(reusedNodeResponse?.text,"continuation",
+  "the next response must not repeat the previous partial text when the DOM node is reused");
 
 const listeners = [];
 const posted = [];
