@@ -83,7 +83,10 @@
     let pendingVideoItemId = "";
     let videoSequence = 0;
     let videoFrameCount = 0;
-    let cameraStartedAt = 0;
+    let sessionStartedAt = 0;
+    let supportsVideoFrames = false;
+    let readyTimeoutId = null;
+    let closeTimeoutId = null;
 
     function state(status, detail = "") {
       try { onState(status, detail); } catch {}
@@ -173,8 +176,6 @@
         try { videoElement.pause(); } catch {}
         videoElement.srcObject = null;
       }
-      videoPending = false;
-      pendingVideoItemId = "";
       state(ready ? "ready" : "idle", "摄像头抽帧已停止");
     }
     async function cleanup() {
@@ -184,7 +185,11 @@
       started = false;
       stopping = true;
       if (heartbeatTimer !== null) timers.clearInterval(heartbeatTimer);
+      if (readyTimeoutId !== null) timers.clearTimeout(readyTimeoutId);
+      if (closeTimeoutId !== null) timers.clearTimeout(closeTimeoutId);
       heartbeatTimer = null;
+      readyTimeoutId = null;
+      closeTimeoutId = null;
       stopCamera();
       stopMicrophone();
       stopPlayback();
@@ -203,6 +208,8 @@
       if (!payload || typeof payload !== "object") return;
       if (payload.type === "session.ready") {
         ready = true;
+        supportsVideoFrames = Array.isArray(payload.supports) && payload.supports.includes("input_video.frame");
+        sessionStartedAt = Date.now();
         if (readyResolve) readyResolve(payload);
         readyResolve = null;
         readyReject = null;
@@ -274,7 +281,7 @@
       const readyPromise = new Promise((resolve,reject) => {
         readyResolve = resolve;
         readyReject = reject;
-        const timeout = timers.setTimeout(() => {
+        readyTimeoutId = timers.setTimeout(() => {
           readyReject?.(new Error("等待 GPT-Live 就绪超时"));
           readyReject = null;
         },30000);
@@ -302,7 +309,8 @@
         };
         const finishReady = readyResolve;
         readyResolve = payload => {
-          timers.clearTimeout(timeout);
+          if (readyTimeoutId !== null) timers.clearTimeout(readyTimeoutId);
+          readyTimeoutId = null;
           finishReady(payload);
         };
       });
@@ -314,6 +322,10 @@
       },20000);
       started = true;
       state("ready","麦克风已连接");
+      } catch (error) {
+        await cleanup();
+        throw error;
+      }
     }
     async function blobBase64(blob) {
       const buffer = await blob.arrayBuffer();
@@ -369,7 +381,7 @@
           type:"input_video.frame",
           item_id:itemId,
           sequence,
-          timestamp_ms:Math.max(0,Date.now() - cameraStartedAt),
+          timestamp_ms:Math.max(0,Date.now() - sessionStartedAt),
           file_id:fileId,
           text:"摄像头画面",
         })) throw new Error("实时语音连接已断开");
@@ -388,6 +400,7 @@
     }
     async function startCamera(targetVideo) {
       if (!ready || stopping) throw new Error("请先连接 GPT-Live 语音");
+      if (!supportsVideoFrames) throw new Error("当前 Worker 会话不支持摄像头抽帧");
       if (cameraStream) return;
       if (!mediaDevices || typeof mediaDevices.getUserMedia !== "function") {
         throw new Error("当前浏览器无法访问摄像头");
@@ -401,10 +414,6 @@
       });
       videoElement.srcObject = cameraStream;
       if (typeof videoElement.play === "function") await videoElement.play();
-      cameraStartedAt = Date.now();
-      videoSequence = 0;
-      videoFrameCount = 0;
-      videoPending = false;
       cameraTimer = timers.setInterval(() => { void captureAndSendFrame(); },1000);
       void captureAndSendFrame();
       state("camera_ready","摄像头已开启（每秒最多发送一张快照）");
@@ -424,7 +433,7 @@
       state("stopping","正在结束实时语音");
       const closed = new Promise(resolve => {
         closeResolve = resolve;
-        timers.setTimeout(resolve,5000);
+        closeTimeoutId = timers.setTimeout(resolve,5000);
       });
       sendJson({type:"session.finish"});
       await closed;
