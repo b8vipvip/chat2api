@@ -214,6 +214,11 @@
 
   async function startVoiceCall() {
     if (state.streaming || state.voiceActive) return;
+    const activeConversation = currentConversation();
+    if (activeConversation?.messages.some(message => message.pending === true)) {
+      toast("当前对话还有未完成的回复或恢复任务，请先处理后再开始语音。");
+      return;
+    }
     if (!state.apiToken) { toast("请先选择一个可用的 API Key。"); return; }
     if (!selectedKeyHasScope("audio") && !selectedKeyHasScope("chat")) {
       toast("当前 API Key 没有 audio 或 chat 权限。");
