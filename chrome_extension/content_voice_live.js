@@ -3,6 +3,7 @@
   if (globalThis[KEY]) return;
 
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const pendingEmits = new Set();
   const state = {
     active: null,
     mainEvents: [],
@@ -14,6 +15,7 @@
     assistantBaselineMessageKey: null,
     assistantBaselineText: "",
     currentResponseId: null,
+    stopWaiters: new Map(),
   };
   globalThis[KEY] = state;
 
@@ -69,9 +71,18 @@
       .find(button => /(end voice|exit voice|结束语音|退出语音|关闭语音)/i.test(labelOf(button))) || null;
   }
 
-  async function waitFor(fn, timeout = 20000, interval = 100) {
+  function isActiveSession(active) {
+    return Boolean(active && state.active === active && !active.stopped);
+  }
+
+  function assertActiveSession(active) {
+    if (!isActiveSession(active)) throw new Error("Live Voice startup was cancelled");
+  }
+
+  async function waitFor(fn, timeout = 20000, interval = 100, active = null) {
     const deadline = Date.now() + timeout;
     while (Date.now() < deadline) {
+      if (active && !isActiveSession(active)) return null;
       try {
         const value = fn();
         if (value) return value;
@@ -81,9 +92,43 @@
     return null;
   }
 
-  async function emit(event) {
-    try { await chrome.runtime.sendMessage({ type: "chat2api.event", event }); }
-    catch (_) {}
+  function emit(event) {
+    let pending;
+    try {
+      pending = Promise.resolve(
+        chrome.runtime.sendMessage({ type: "chat2api.event", event }),
+      ).catch(() => {});
+    } catch (_) {
+      return Promise.resolve();
+    }
+    pendingEmits.add(pending);
+    pending.then(() => pendingEmits.delete(pending), () => pendingEmits.delete(pending));
+    return pending;
+  }
+
+  function waitForMainStop(active, timeout = 1800) {
+    return new Promise(resolve => {
+      let settled = false;
+      const finish = acknowledged => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (state.stopWaiters.get(active.requestId) === finish) {
+          state.stopWaiters.delete(active.requestId);
+        }
+        resolve(Boolean(acknowledged));
+      };
+      const timer = setTimeout(() => finish(false), timeout);
+      state.stopWaiters.set(active.requestId, finish);
+    });
+  }
+
+  async function flushPendingEmits() {
+    // Wait for the MAIN-world stop acknowledgement before draining these
+    // messages. postMessage delivery is asynchronous; an empty queue directly
+    // after postMain("voice.live.stop") does not mean the final DOM snapshot
+    // has reached this isolated-world listener yet.
+    while (pendingEmits.size) await Promise.allSettled([...pendingEmits]);
   }
 
   function emitLive(active, liveEvent, data = {}) {
@@ -133,6 +178,16 @@
       return text.slice(state.assistantBaselineText.length).trimStart();
     }
     return text;
+  }
+
+  function currentAssistantResponseText() {
+    const message = latestRoleMessage("assistant");
+    const fullText = textOf(message);
+    const text = assistantTextForResponse(message);
+    const key = messageIdentity(message);
+    const belongsToCurrentResponse = key !== state.assistantBaselineMessageKey ||
+      fullText !== state.assistantBaselineText;
+    return belongsToCurrentResponse && text ? text : state.lastAssistantText;
   }
 
   function startTranscriptPolling(active) {
@@ -212,11 +267,12 @@
     throw new Error(failure.code + ": " + failure.message);
   }
 
-  async function settleVoiceWelcome() {
+  async function settleVoiceWelcome(active) {
     const gate = globalThis.__CHAT2API_VOICE_UI_GATE_V185__;
     let clicked = false;
     const deadline = Date.now() + 3400;
     while (Date.now() < deadline) {
+      assertActiveSession(active);
       const failure = gate?.connectionFailure?.();
       if (failure) await failLiveVoiceConnection(failure);
       if (!clicked && gate?.welcomeDialog?.()) {
@@ -224,12 +280,14 @@
       }
       await delay(120);
     }
+    assertActiveSession(active);
     return clicked;
   }
 
-  async function waitLiveTransport(type, timeout) {
+  async function waitLiveTransport(type, timeout, active) {
     const deadline = Date.now() + timeout;
     while (Date.now() < deadline) {
+      assertActiveSession(active);
       const failure = globalThis.__CHAT2API_VOICE_UI_GATE_V185__?.connectionFailure?.();
       if (failure) await failLiveVoiceConnection(failure);
       const found = state.mainEvents.find(item => item.type === type);
@@ -241,21 +299,27 @@
 
   async function openVoice(active) {
     // Visibility is only evidence: virtual-display windows may report hidden.
+    assertActiveSession(active);
     const existing = voiceUiReady();
     if (!existing) {
-      const trigger = await waitFor(voiceTrigger, 15000, 120);
+      const trigger = await waitFor(voiceTrigger, 15000, 120, active);
+      assertActiveSession(active);
       if (!trigger) throw new Error("ChatGPT Voice button was not found");
       trigger.button.click();
     }
-    await settleVoiceWelcome();
-    const ready = existing || await waitFor(() => voiceUiReady(), 20000, 120);
+    await settleVoiceWelcome(active);
+    assertActiveSession(active);
+    const ready = existing || await waitFor(() => voiceUiReady(), 20000, 120, active);
+    assertActiveSession(active);
     if (!ready) throw new Error("ChatGPT Voice UI did not become ready");
     // A UI orb or WebRTC track by itself is not proof that the client can
     // send microphone PCM and receive actual audio chunks. Both halves
     // must be active before the external WebSocket receives session.ready.
-    const remote = await waitLiveTransport("voice.live.remote.ready", 15000);
+    const remote = await waitLiveTransport("voice.live.remote.ready", 15000, active);
+    assertActiveSession(active);
     if (!remote) throw new Error("ChatGPT Voice remote WebRTC PCM processor did not become ready");
-    const microphone = await waitLiveTransport("voice.mic.synthetic", 9000);
+    const microphone = await waitLiveTransport("voice.mic.synthetic", 9000, active);
+    assertActiveSession(active);
     if (microphone && Number(microphone.track_count || 0) <= 0)
       throw new Error("ChatGPT Voice returned no usable bridged microphone track");
     if (!microphone) throw new Error("ChatGPT Voice did not acquire the bridged microphone for live input");
@@ -277,9 +341,11 @@
     try {
       postMain("voice.prepare", active, { mode: "live" });
       postMain("voice.live.prepare", active);
-      const prepared = await waitFor(() => state.mainEvents.find(item => item.type === "voice.live.prepared"), 5000, 50);
+      const prepared = await waitFor(() => state.mainEvents.find(item => item.type === "voice.live.prepared"), 5000, 50, active);
+      assertActiveSession(active);
       if (!prepared) throw new Error("Live MAIN-world bridge did not acknowledge preparation");
       await openVoice(active);
+      assertActiveSession(active);
       startTranscriptPolling(active);
       await emit({
         type: "image.started",
@@ -292,9 +358,12 @@
           effective_model: active.model,
         },
       });
+      assertActiveSession(active);
       await emitLive(active, "session.ready", { model: active.model, requested_model: active.requestedModel });
     } catch (error) {
+      const wasCancelled = !isActiveSession(active);
       await stopLive(active, false);
+      if (wasCancelled) return;
       throw error;
     }
   }
@@ -303,10 +372,29 @@
     if (!active || active.stopped) return;
     active.stopped = true;
     stopTranscriptPolling();
+    const mainStopAck = waitForMainStop(active);
     postMain("voice.live.stop", active);
+    // Do not click ChatGPT's End Voice button until the MAIN-world bridge has
+    // synchronously captured and posted its final assistant DOM snapshot. The
+    // button can tear down/rewrite the DOM before the queued postMessage event
+    // is handled, which would otherwise erase the last partial text.
+    const mainStopAcknowledged = await mainStopAck;
     postMain("voice.reset", active);
     try { endVoiceButton()?.click(); } catch (_) {}
-    if (notify) await emitLive(active, "session.closed");
+    await flushPendingEmits();
+    if (notify) {
+      if (mainStopAcknowledged) {
+        await emitLive(active, "session.closed");
+      } else {
+        // Fail closed: do not tell the Broker that the Worker drained its
+        // final DOM snapshot when the MAIN-world stop acknowledgement was
+        // never received. The server will terminate this session as an error.
+        await emitLive(active, "error", {
+          code:"VOICE_STOP_ACK_TIMEOUT",
+          message:"ChatGPT Voice did not acknowledge shutdown; final partial text may be incomplete",
+        });
+      }
+    }
     if (state.active === active) state.active = null;
     state.currentResponseId = null;
     state.mainEvents = [];
@@ -315,6 +403,11 @@
   window.addEventListener("message", event => {
     if (event.source !== window || event.data?.source !== "chat2api-main") return;
     const item = event.data;
+    if (item.type === "voice.live.stopped") {
+      const acknowledge = state.stopWaiters.get(item.request_id);
+      if (acknowledge) acknowledge(true);
+      return;
+    }
     if (!state.active || item.request_id !== state.active.requestId) return;
     // Streaming PCM chunks must never accumulate in the long-lived DOM
     // controller's diagnostics list (hundreds of MB in a long session).
@@ -346,24 +439,28 @@
     } else if (item.type === "voice.live.response.stopped") {
       const responseId = item.response_id;
       emitLive(active, "response.audio.done", { response_id: responseId }).catch(() => {});
-      if (item.reason !== "client_cancel") {
-        // Capture the DOM synchronously at stop: the 250 ms poller can lag the
-        // final ChatGPT mutation. Never fall back to the previous assistant
-        // turn, which was the initial value of lastAssistantText before this fix.
-        const finalAssistant = latestRoleMessage("assistant");
-        const finalAssistantFullText = textOf(finalAssistant);
-        const finalAssistantText = assistantTextForResponse(finalAssistant);
-        const finalAssistantKey = messageIdentity(finalAssistant);
-        const hasCurrentResponseText = Boolean(finalAssistantText) &&
-          (finalAssistantKey !== state.assistantBaselineMessageKey ||
-            finalAssistantFullText !== state.assistantBaselineText);
-        const finalText = hasCurrentResponseText ? finalAssistantText : state.lastAssistantText;
+      if (item.reason === "silence") {
+        // Only the normal end-of-utterance signal proves that ChatGPT finished
+        // speaking. Session shutdown and WebRTC track loss are interruptions:
+        // persist their visible text as voice_partial, never as a completed turn.
+        const finalText = currentAssistantResponseText();
         emitLive(active, "response.done", {
           response_id: responseId,
           text: finalText || "",
         }).catch(() => {});
+      } else if (item.reason !== "client_cancel") {
+        // client_cancel is followed by the explicit interrupted event below.
+        // Other stop reasons (session_stop, track_ended, track_replaced) must
+        // not be promoted to a completed assistant answer.
+        emitLive(active, "response.interrupted", {
+          response_id: responseId,
+          reason: item.reason || "transport_lost",
+          text: currentAssistantResponseText() || "",
+        }).catch(() => {});
       }
-      if (state.currentResponseId === responseId) {
+      // client_cancel is followed by a separate response.interrupted event.
+      // Keep the baseline until that event can capture the last DOM snapshot.
+      if (state.currentResponseId === responseId && item.reason !== "client_cancel") {
         state.currentResponseId = null;
         state.assistantBaselineMessageKey = null;
         state.assistantBaselineText = "";
@@ -374,6 +471,7 @@
       emitLive(active, "response.interrupted", {
         response_id: item.response_id,
         reason: item.reason || "client_cancel",
+        text: currentAssistantResponseText() || "",
       }).catch(() => {});
       if (state.currentResponseId === item.response_id) {
         state.currentResponseId = null;
@@ -420,7 +518,10 @@
     }
     if (message.type === "chat2api.voice.live.stop") {
       const active = state.active;
-      stopLive(active, false).then(() => sendResponse({ ok: true })).catch(() => sendResponse({ ok: true }));
+      // This is a Broker-requested graceful shutdown. Drain the final
+      // response.interrupted snapshot and acknowledge session.closed so the
+      // Broker can close the public WebSocket only after the transcript lands.
+      stopLive(active, true).then(() => sendResponse({ ok: true })).catch(() => sendResponse({ ok: true }));
       return true;
     }
     return false;

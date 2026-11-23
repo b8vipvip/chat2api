@@ -6,6 +6,10 @@
   const OUTPUT_RATE = 24000;
   const MAX_VIDEO_FRAME_BYTES = 2 * 1024 * 1024;
   const MAX_VIDEO_FRAMES = 64;
+  // The Broker allows up to 5 seconds for the Worker to drain its final
+  // interruption snapshot. Leave network/terminal-delivery margin before the
+  // browser gives up and closes the public WebSocket.
+  const SESSION_CLOSE_TIMEOUT_MS = 8000;
 
   function resamplePcm16(input, inputRate, outputRate = INPUT_RATE) {
     if (!input || typeof input.length !== "number" || !Number.isFinite(inputRate) ||
@@ -588,7 +592,7 @@
       state("stopping","正在结束实时语音");
       const closed = new Promise(resolve => {
         closeResolve = resolve;
-        closeTimeoutId = timers.setTimeout(resolve,5000);
+        closeTimeoutId = timers.setTimeout(resolve,SESSION_CLOSE_TIMEOUT_MS);
       });
       sendJson({type:"session.finish"});
       await closed;

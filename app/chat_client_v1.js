@@ -182,7 +182,13 @@
 
   function handleVoiceEvent(payload) {
     if (!payload || typeof payload !== "object") return;
-    if (payload.type === "transcript.final") {
+    if (payload.type === "response.created") {
+      // Start a fresh persistence boundary for each assistant turn. Keep the
+      // completed turn's guard set until this event so session-close cleanup
+      // cannot accidentally re-save the previous completed transcript.
+      state.voiceAssistantLine = null;
+      state.voiceAssistantPersisted = false;
+    } else if (payload.type === "transcript.final") {
       appendVoiceTranscript("user",payload.text);
       persistVoiceTranscript("user",payload.text);
     } else if (payload.type === "response.text.delta") {
@@ -204,7 +210,9 @@
         $("voiceTranscript").scrollTop = $("voiceTranscript").scrollHeight;
       }
     } else if (payload.type === "response.interrupted") {
-      const partialText = String(state.voiceAssistantLine?.textContent || "").trim();
+      // The extension sends a synchronous final DOM snapshot with interruption
+      // events because the periodic 250 ms poller may not have seen the last text.
+      const partialText = String(payload.text || state.voiceAssistantLine?.textContent || "").trim();
       if (partialText && !state.voiceAssistantPersisted) {
         persistVoiceTranscript("assistant",partialText,"voice_partial");
       }
@@ -690,6 +698,12 @@
     catch { return contentWeight; }
   }
 
+  function messageBodyWeight(message) {
+    if (typeof message?.content === "string") return message.content.length;
+    try { return JSON.stringify(message?.content || "").length; }
+    catch { return 0; }
+  }
+
   function toolActivityWeight(events) {
     if (!Array.isArray(events)) return 0;
     return events.reduce((weight,item) => weight
@@ -709,8 +723,10 @@
         messages.set(message.id, message);
         return;
       }
-      const localCompleted = !message.pending && message.recoveryStatus === "completed";
-      const serverCompleted = !existing.pending && existing.recoveryStatus === "completed";
+      const localPending = message.pending === true;
+      const serverPending = existing.pending === true;
+      const localCompleted = !localPending && message.recoveryStatus === "completed";
+      const serverCompleted = !serverPending && existing.recoveryStatus === "completed";
       const localToolWeight = toolActivityWeight(message.toolEvents);
       const serverToolWeight = toolActivityWeight(existing.toolEvents);
       const mergedReferences = normalizeToolReferences([
@@ -719,8 +735,29 @@
       ]);
       const withMergedReferences = row => mergedReferences.length
         ? {...row,references:mergedReferences} : row;
-      if ((localCompleted && !serverCompleted) ||
-          (!serverCompleted && messageContentWeight(message) > messageContentWeight(existing))) {
+
+      // A terminal snapshot must never be resurrected by a stale pending copy
+      // from another device. Keep the longer text/tool evidence, but preserve
+      // the terminal side's pending/recoveryStatus state.
+      if (serverCompleted || (!serverPending && localPending)) {
+        const merged = {...existing};
+        if (!serverCompleted && messageBodyWeight(message) > messageBodyWeight(existing)) {
+          merged.content = message.content;
+        }
+        if (localToolWeight > serverToolWeight) merged.toolEvents = message.toolEvents;
+        messages.set(message.id, withMergedReferences(merged));
+        return;
+      }
+      if (localCompleted || (!localPending && serverPending)) {
+        const merged = {...message};
+        if (!localCompleted && messageBodyWeight(existing) > messageBodyWeight(message)) {
+          merged.content = existing.content;
+        }
+        if (serverToolWeight > localToolWeight) merged.toolEvents = existing.toolEvents;
+        messages.set(message.id, withMergedReferences(merged));
+        return;
+      }
+      if (messageContentWeight(message) > messageContentWeight(existing)) {
         messages.set(message.id, withMergedReferences(message));
       } else if (localToolWeight > serverToolWeight) {
         // Preserve newer call/result state without replacing an authoritative
