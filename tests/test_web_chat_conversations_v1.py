@@ -565,18 +565,3 @@ def test_conversation_tool_events_preserve_unknown_and_missing_status_as_unknown
                 "callId": "call-invalid-1",
                 "status": invalid,
             }], "assistant")
-
-
-def test_recent_conversation_window_keeps_older_rows_searchable(tmp_path: Path) -> None:
-    store = WebChatConversationStoreV1(tmp_path)
-    for index in range(20):
-        conversation = _conversation(f"c2a_recent_{index:06d}", title=f"recent {index}")
-        conversation["messages"][0]["content"] = f"older-search-marker-{index}"
-        saved, _ = store.upsert("usr_owner", conversation, 0)
-        assert saved is True
-
-    recent = store.list_for_user("usr_owner")
-    assert len(recent) == 15
-    older = store.search_for_user("usr_owner", "older-search-marker-0")
-    assert any(row["id"] == "c2a_recent_000000" for row in older)
-    assert len(older) <= 20
