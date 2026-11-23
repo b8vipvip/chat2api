@@ -412,6 +412,17 @@ assert.equal(voiceConversation.messages.length,4);
 assert.equal(voiceConversation.messages[3].content,"下一轮完整回复");
 assert.notEqual(voiceConversation.messages[3].recoveryStatus,"voice_partial");
 
+// A session/track stop may deliver its only final partial snapshot in the
+// interruption event, before the 250 ms DOM poller has emitted any delta.
+historyUi.handleVoiceEvent({
+  type:"response.interrupted",
+  reason:"session_stop",
+  text:"最后一个未被轮询捕获的部分片段",
+});
+assert.equal(voiceConversation.messages.length,5);
+assert.equal(voiceConversation.messages[4].content,"最后一个未被轮询捕获的部分片段");
+assert.equal(voiceConversation.messages[4].recoveryStatus,"voice_partial");
+
 const setVoiceUiStart = chatClientSource.indexOf("  function setVoiceUi(");
 const setVoiceUiEnd = chatClientSource.indexOf("  function appendVoiceTranscript(",setVoiceUiStart);
 assert.ok(setVoiceUiStart>=0 && setVoiceUiEnd>setVoiceUiStart);
