@@ -580,10 +580,11 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     response_id = str(event.get("response_id") or "")
                     if response_id:
                         observed_response_count += 1
-                        completed_text = (
-                            text_by_response.pop(response_id, "")
-                            or str(event.get("text") or "")
-                        )
+                        snapshot_text = text_by_response.pop(response_id, "")
+                        # response.done carries the authoritative final DOM
+                        # snapshot. Earlier 250 ms snapshots are only deltas;
+                        # preferring them here can truncate the saved answer.
+                        completed_text = str(event.get("text") or "") or snapshot_text
                         if completed_text:
                             observed_completion_parts.append(completed_text)
                         await send_json({
