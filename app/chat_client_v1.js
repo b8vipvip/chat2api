@@ -128,7 +128,7 @@
 
   function appendVoiceTranscript(role, value) {
     const text = String(value || "");
-    if (!text) return null;
+    if (!text && role !== "assistant") return null;
     const row = document.createElement("div");
     row.className = "voice-transcript-line " + role;
     const label = document.createElement("span");
