@@ -379,9 +379,21 @@
     // The MAIN-world bridge emits response.stopped during reset, then sends
     // voice.live.stopped. Only after that acknowledgement can we know the
     // interruption snapshot had a chance to enter pendingEmits.
-    await mainStopAck;
+    const mainStopAcknowledged = await mainStopAck;
     await flushPendingEmits();
-    if (notify) await emitLive(active, "session.closed");
+    if (notify) {
+      if (mainStopAcknowledged) {
+        await emitLive(active, "session.closed");
+      } else {
+        // Fail closed: do not tell the Broker that the Worker drained its
+        // final DOM snapshot when the MAIN-world stop acknowledgement was
+        // never received. The server will terminate this session as an error.
+        await emitLive(active, "error", {
+          code:"VOICE_STOP_ACK_TIMEOUT",
+          message:"ChatGPT Voice did not acknowledge shutdown; final partial text may be incomplete",
+        });
+      }
+    }
     if (state.active === active) state.active = null;
     state.currentResponseId = null;
     state.mainEvents = [];
