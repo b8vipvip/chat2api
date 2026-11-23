@@ -3,6 +3,7 @@
   if (globalThis[KEY]) return;
 
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const pendingEmits = new Set();
   const state = {
     active: null,
     mainEvents: [],
@@ -90,9 +91,25 @@
     return null;
   }
 
-  async function emit(event) {
-    try { await chrome.runtime.sendMessage({ type: "chat2api.event", event }); }
-    catch (_) {}
+  function emit(event) {
+    let pending;
+    try {
+      pending = Promise.resolve(
+        chrome.runtime.sendMessage({ type: "chat2api.event", event }),
+      ).catch(() => {});
+    } catch (_) {
+      return Promise.resolve();
+    }
+    pendingEmits.add(pending);
+    pending.then(() => pendingEmits.delete(pending), () => pendingEmits.delete(pending));
+    return pending;
+  }
+
+  async function flushPendingEmits() {
+    // The stop path emits the last assistant DOM snapshot synchronously from
+    // the MAIN-world track-ended callback. Drain those already-issued runtime
+    // messages before sending session.closed to the Broker.
+    while (pendingEmits.size) await Promise.allSettled([...pendingEmits]);
   }
 
   function emitLive(active, liveEvent, data = {}) {
@@ -339,7 +356,10 @@
     postMain("voice.live.stop", active);
     postMain("voice.reset", active);
     try { endVoiceButton()?.click(); } catch (_) {}
-    if (notify) await emitLive(active, "session.closed");
+    if (notify) {
+      await flushPendingEmits();
+      await emitLive(active, "session.closed");
+    }
     if (state.active === active) state.active = null;
     state.currentResponseId = null;
     state.mainEvents = [];
@@ -458,7 +478,10 @@
     }
     if (message.type === "chat2api.voice.live.stop") {
       const active = state.active;
-      stopLive(active, false).then(() => sendResponse({ ok: true })).catch(() => sendResponse({ ok: true }));
+      // This is a Broker-requested graceful shutdown. Drain the final
+      // response.interrupted snapshot and acknowledge session.closed so the
+      // Broker can close the public WebSocket only after the transcript lands.
+      stopLive(active, true).then(() => sendResponse({ ok: true })).catch(() => sendResponse({ ok: true }));
       return true;
     }
     return false;
