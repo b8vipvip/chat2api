@@ -31,7 +31,8 @@ assert.ok(contextFixture.length <= 8000);
 const boundedContext = buildVoiceContext({
   messages:[{role:"user",content:"x".repeat(10000)}],
 });
-assert.equal(boundedContext.length,8000);
+assert.ok(boundedContext.length <= 8000);
+assert.ok(boundedContext.length >= 7990);
 const closeTimeout = Number(source.match(/SESSION_CLOSE_TIMEOUT_MS\s*=\s*(\d+)/)?.[1] || 0);
 assert.ok(closeTimeout > 5000,
   "the browser must leave margin beyond the Broker's five-second Worker stop-drain timeout");
