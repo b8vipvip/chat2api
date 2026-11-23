@@ -524,11 +524,19 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     previous = text_by_response.get(response_id, "")
                     if text.startswith(previous):
                         delta = text[len(previous):]
+                        text_by_response[response_id] = text
+                        if delta:
+                            await send_json({"type": "response.text.delta", "response_id": response_id, "delta": delta})
                     else:
-                        delta = text
-                    text_by_response[response_id] = text
-                    if delta:
-                        await send_json({"type": "response.text.delta", "response_id": response_id, "delta": delta})
+                        # ChatGPT may revise an in-progress DOM transcript.
+                        # Sending the whole revised snapshot as a delta makes
+                        # the client append duplicated text on interruption.
+                        text_by_response[response_id] = text
+                        await send_json({
+                            "type": "response.text.replace",
+                            "response_id": response_id,
+                            "text": text,
+                        })
                 elif event_type == "response.audio.started":
                     response_id = str(event.get("response_id") or "")
                     if response_id:
