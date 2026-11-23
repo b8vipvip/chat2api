@@ -454,6 +454,8 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         "effective_model": effective_model,
                         "input_audio_format": "pcm16le-16000-mono",
                         "output_audio_format": "pcm16le-24000-mono",
+                        "context_injected": event.get("context_injected") is True,
+                        "context_mode": str(event.get("context_mode") or "none")[:80],
                         "supports": [
                             "input_text", "conversation.item.create", "input_media",
                             "input_video.frame", "sampled_video_frames",
