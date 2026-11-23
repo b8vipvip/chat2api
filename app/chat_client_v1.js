@@ -36,6 +36,11 @@
     searchController: null,
     searchTimer: null,
     searchWarned: false,
+    voiceClient: null,
+    voiceStarting: false,
+    voiceActive: false,
+    voicePanelVisible: false,
+    voiceAssistantLine: null,
   };
   const MAX_CONVERSATIONS = 15;
   const MAX_MESSAGES = 30;
@@ -73,6 +78,167 @@
     const node = $("connectionState");
     node.textContent = message;
     node.className = "connection-state" + (kind ? " " + kind : "");
+  }
+
+  function updateVoiceControls() {
+    const start = $("voiceStartButton");
+    const stop = $("voiceStopButton");
+    const camera = $("voiceCameraButton");
+    if (!start || !stop || !camera) return;
+    start.disabled = state.streaming || state.voiceActive || !state.apiToken;
+    start.classList.toggle("hidden", state.voiceActive);
+    stop.classList.toggle("hidden", !state.voiceActive);
+    stop.disabled = !state.voiceActive || state.voiceStarting;
+    camera.classList.toggle("hidden", !state.voiceActive || state.voiceStarting);
+    camera.disabled = !state.voiceActive || state.voiceStarting || !selectedKeyHasScope("files");
+    if (!selectedKeyHasScope("files")) camera.title = "当前 API Key 缺少 files 权限";
+    else camera.title = "在同一 Voice 会话中发送摄像头快照";
+    $("apiKeySelect").disabled = state.streaming || state.voiceActive;
+    $("modelSelect").disabled = state.streaming || state.voiceActive;
+    $("newChatButton").disabled = state.streaming || state.voiceActive;
+    $("attachButton").disabled = state.streaming || state.voiceActive || !state.apiToken || !selectedKeyHasScope("files");
+    $("fileButton").disabled = state.streaming || state.voiceActive || !state.apiToken || !selectedKeyHasScope("files");
+  }
+
+  function setVoiceUi(status, detail = "") {
+    state.voiceStarting = status === "requesting_microphone" || status === "camera_starting";
+    state.voiceActive = ["requesting_microphone","ready","camera_starting","stopping"].includes(status);
+    if (status !== "idle") state.voicePanelVisible = true;
+    $("voicePanel").classList.toggle("hidden", !state.voicePanelVisible);
+    if (detail) $("voiceStatus").textContent = detail;
+    else {
+      const labels = {
+        requesting_microphone:"等待麦克风授权…",
+        ready:"GPT-Live 已连接",
+        camera_starting:"正在开启摄像头…",
+        stopping:"正在结束实时语音…",
+        closed:"实时语音已结束",
+      };
+      $("voiceStatus").textContent = labels[status] || "实时语音";
+    }
+    if (status === "closed") {
+      $("voiceCameraPreview").classList.add("hidden");
+      $("voiceCameraButton").textContent = "开启摄像头";
+      state.voiceAssistantLine = null;
+      state.voiceClient = null;
+    }
+    updateVoiceControls();
+    resizeComposer();
+  }
+
+  function appendVoiceTranscript(role, value) {
+    const text = String(value || "");
+    if (!text) return null;
+    const row = document.createElement("div");
+    row.className = "voice-transcript-line " + role;
+    const label = document.createElement("span");
+    label.className = "voice-transcript-role";
+    label.textContent = role === "assistant" ? "ChatGPT" : "你";
+    const body = document.createElement("span");
+    body.className = "voice-transcript-text";
+    body.textContent = text;
+    row.append(label,body);
+    $("voiceTranscript").appendChild(row);
+    while ($("voiceTranscript").childElementCount > 30) {
+      $("voiceTranscript").firstElementChild.remove();
+    }
+    $("voiceTranscript").scrollTop = $("voiceTranscript").scrollHeight;
+    return body;
+  }
+
+  function handleVoiceEvent(payload) {
+    if (!payload || typeof payload !== "object") return;
+    if (payload.type === "transcript.final") {
+      appendVoiceTranscript("user",payload.text);
+    } else if (payload.type === "response.text.delta") {
+      if (!state.voiceAssistantLine) {
+        state.voiceAssistantLine = appendVoiceTranscript("assistant","");
+      }
+      if (state.voiceAssistantLine) {
+        state.voiceAssistantLine.textContent += String(payload.delta || "");
+        $("voiceTranscript").scrollTop = $("voiceTranscript").scrollHeight;
+      }
+    } else if (payload.type === "response.done") {
+      if (!state.voiceAssistantLine && payload.text) {
+        state.voiceAssistantLine = appendVoiceTranscript("assistant",payload.text);
+      } else if (state.voiceAssistantLine && payload.text &&
+          !state.voiceAssistantLine.textContent) {
+        state.voiceAssistantLine.textContent = payload.text;
+      }
+      state.voiceAssistantLine = null;
+    } else if (payload.type === "input_video.frame.sent") {
+      $("voiceStatus").textContent = "摄像头画面已送达 ChatGPT Voice";
+    } else if (payload.type === "error" || payload.type === "client.error") {
+      $("voiceStatus").textContent = "语音提示：" + String(payload.message || payload.code || "未知错误");
+    } else if (payload.type === "client.notice") {
+      $("voiceStatus").textContent = String(payload.message || "摄像头抽帧已停止");
+    }
+  }
+
+  async function startVoiceCall() {
+    if (state.streaming || state.voiceActive) return;
+    if (!state.apiToken) { toast("请先选择一个可用的 API Key。"); return; }
+    if (!selectedKeyHasScope("audio") && !selectedKeyHasScope("chat")) {
+      toast("当前 API Key 没有 audio 或 chat 权限。");
+      return;
+    }
+    const voiceApi = window.Chat2APIVoiceClientV1;
+    if (!voiceApi || typeof voiceApi.create !== "function") {
+      toast("实时语音模块尚未加载，请刷新页面后重试。");
+      return;
+    }
+    state.voicePanelVisible = true;
+    $("voicePanel").classList.remove("hidden");
+    $("voiceTranscript").replaceChildren();
+    state.voiceAssistantLine = null;
+    const client = voiceApi.create({
+      apiToken:state.apiToken,
+      onState:(status,detail) => setVoiceUi(status,detail),
+      onEvent:handleVoiceEvent,
+    });
+    state.voiceClient = client;
+    setVoiceUi("requesting_microphone","正在请求麦克风权限…");
+    try {
+      await client.start();
+    } catch (error) {
+      await client.stop();
+      if (state.voiceClient === client) state.voiceClient = null;
+      setVoiceUi("closed","实时语音启动失败：" + String(error?.message || error));
+      toast("无法启动实时语音：" + String(error?.message || error));
+    }
+  }
+
+  async function stopVoiceCall() {
+    const client = state.voiceClient;
+    if (!client) { setVoiceUi("closed"); return; }
+    setVoiceUi("stopping","正在结束实时语音…");
+    try { await client.stop(); }
+    catch (error) { toast("结束语音时发生错误：" + String(error?.message || error)); }
+    if (state.voiceClient === client) state.voiceClient = null;
+    setVoiceUi("closed");
+  }
+
+  async function toggleVoiceCamera() {
+    const client = state.voiceClient;
+    if (!client || !client.isActive()) return;
+    if (client.isCameraActive()) {
+      client.stopCamera();
+      $("voiceCameraPreview").classList.add("hidden");
+      $("voiceCameraButton").textContent = "开启摄像头";
+      return;
+    }
+    if (!selectedKeyHasScope("files")) {
+      toast("摄像头画面上传需要当前 API Key 具有 files 权限。");
+      return;
+    }
+    try {
+      $("voiceCameraPreview").classList.remove("hidden");
+      await client.startCamera($("voiceCameraPreview"));
+      $("voiceCameraButton").textContent = "关闭摄像头";
+    } catch (error) {
+      $("voiceCameraPreview").classList.add("hidden");
+      toast("无法开启摄像头：" + String(error?.message || error));
+    }
   }
 
   function showOnly(view) {
@@ -1254,10 +1420,11 @@
       (state.pendingFiles.length > 0 && state.pendingFilesConversationId === conversation?.id);
     const keyMatchesConversation = !conversation?.apiKeyId || conversation.apiKeyId === selectedKeyId();
     const unresolvedRequest = Boolean(conversation?.messages?.some((message) => message.role === "assistant" && message.pending === true));
-    $("sendButton").disabled = state.streaming || unresolvedRequest || (!input.value.trim() && !pendingForConversation) ||
+    $("sendButton").disabled = state.streaming || state.voiceActive || unresolvedRequest || (!input.value.trim() && !pendingForConversation) ||
       !state.apiToken || !keyMatchesConversation;
-    $("attachButton").disabled = state.streaming || !state.apiToken || !selectedKeyHasScope("files");
-    $("fileButton").disabled = state.streaming || !state.apiToken || !selectedKeyHasScope("files");
+    $("attachButton").disabled = state.streaming || state.voiceActive || !state.apiToken || !selectedKeyHasScope("files");
+    $("fileButton").disabled = state.streaming || state.voiceActive || !state.apiToken || !selectedKeyHasScope("files");
+    updateVoiceControls();
   }
 
   function renderPendingImages() {
@@ -2099,6 +2266,7 @@
     pending.forEach(({conversation,message}) => { void recoverPendingMessage(conversation,message); });
   }
   async function sendMessage(text) {
+    if (state.voiceActive) { toast("请先结束实时语音，再发送普通聊天消息。"); return; }
     const clean = String(text || "").trim();
     if (state.streaming) return;
     const conversation = currentConversation() || createConversation();
