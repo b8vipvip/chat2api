@@ -103,16 +103,19 @@ const mediaDevices = {
     };
   },
 };
+const intervalCallbacks = new Map();
+let nextIntervalId = 0;
 const timers = {
   setTimeout,
   clearTimeout,
   setInterval(fn,ms) {
-    const id = setInterval(fn,ms);
-    id.unref?.();
+    const id = ++nextIntervalId;
+    intervalCallbacks.set(id,{fn,ms});
     return id;
   },
-  clearInterval,
+  clearInterval(id) { intervalCallbacks.delete(id); },
 };
+let clock = 1000;
 const video = {
   videoWidth:640,
   videoHeight:480,
@@ -212,6 +215,7 @@ const client = api.create({
   mediaDevices,
   location:window.location,
   timers,
+  now:()=>clock,
   onState:(status,detail)=>states.push({status,detail}),
   onEvent:event=>events.push(event),
 });
@@ -249,21 +253,30 @@ assert.ok(events.some(value=>value.type==="input_video.frame.queued"));
 
 client.stopCamera();
 assert.equal(client.isCameraActive(),false);
-await new Promise(resolve=>setTimeout(resolve,3));
 await client.startCamera(video);
+// Reopening the camera immediately must not exceed the one-frame-per-second cap.
+await new Promise(resolve=>setTimeout(resolve,10));
+let frames = socket.sent.map(value=>typeof value==="string" ? JSON.parse(value) : null)
+  .filter(value=>value?.type==="input_video.frame");
+assert.equal(frames.length,1);
+clock = 2000;
+const cameraTimer = [...intervalCallbacks.entries()].find(([,value])=>value.ms===1000);
+assert.ok(cameraTimer);
+cameraTimer[1].fn();
 await new Promise(resolve=>setTimeout(resolve,10));
 await new Promise(resolve=>setImmediate(resolve));
-const frames = socket.sent.map(value=>typeof value==="string" ? JSON.parse(value) : null)
+frames = socket.sent.map(value=>typeof value==="string" ? JSON.parse(value) : null)
   .filter(value=>value?.type==="input_video.frame");
 assert.equal(frames.length,2);
 assert.equal(frames[1].sequence,1,"camera restart must not reset server-owned sequence");
-assert.ok(frames[1].timestamp_ms > frames[0].timestamp_ms,"camera restart must keep monotonic session timestamps");
+assert.equal(frames[1].timestamp_ms,1000,"camera restart must preserve monotonic session timestamps and one-second pacing");
 
 await client.stop();
 assert.equal(client.isActive(),false);
 assert.ok(socket.sent.some(value=>typeof value==="string" && JSON.parse(value).type==="session.finish"));
 assert.ok(audioContexts[0].closed);
 assert.ok(stoppedTracks.length >= 2);
+assert.equal(intervalCallbacks.size,0,"heartbeat and camera timers must be cleared");
 assert.ok(states.some(value=>value.status==="ready"));
 assert.ok(states.some(value=>value.status==="closed"));
 
