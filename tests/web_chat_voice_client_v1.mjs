@@ -434,7 +434,7 @@ const historyContext = vm.createContext({
   state:historyState,
   MAX_USER_MESSAGE_CHARS:8000,
   MAX_ASSISTANT_MESSAGE_CHARS:32000,
-  ASSISTANT_TRUNCATION_NOTICE:"\\n\\n[回答超过 Web Chat 的 32,000 字符上限，后续内容未保存]",
+  ASSISTANT_TRUNCATION_NOTICE:"\n\n[回答超过 Web Chat 的 32,000 字符上限，后续内容未保存]",
   MAX_MESSAGES:30,
   limitAssistantText:value=>String(value || "").slice(0,32000),
   $:id=>id==="voiceTranscript" ? transcript : new FakeElement("status"),
