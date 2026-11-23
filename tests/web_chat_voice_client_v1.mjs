@@ -328,7 +328,7 @@ const transcript = {
   appendChild(node){this.children.push(node);return node;},
 };
 const clientContext = vm.createContext({
-  state:{voiceAssistantLine:null},
+  state:{voiceAssistantLine:null,voiceAssistantPersisted:false},
   $:id=>id==="voiceTranscript" ? transcript : new FakeElement("status"),
   document:{createElement:tag=>new FakeElement(tag)},
   String,
@@ -354,6 +354,7 @@ const voiceConversation = {
 };
 const historyState = {
   voiceAssistantLine:null,
+  voiceAssistantPersisted:false,
   voiceConversationId:voiceConversation.id,
   conversations:[voiceConversation],
   activeConversationId:voiceConversation.id,
@@ -389,4 +390,74 @@ assert.deepEqual(voiceConversation.messages.map(row=>row.content),[
 assert.equal(voiceConversation.title,"语音会话");
 assert.equal(persisted,2,"each final voice turn must be saved for server sync");
 assert.equal(rendered,2,"active conversation should render persisted voice turns");
+assert.equal(historyState.voiceAssistantPersisted,true,
+  "response.done must mark the final assistant transcript as already persisted");
+
+const setVoiceUiStart = chatClientSource.indexOf("  function setVoiceUi(");
+const setVoiceUiEnd = chatClientSource.indexOf("  function appendVoiceTranscript(",setVoiceUiStart);
+assert.ok(setVoiceUiStart>=0 && setVoiceUiEnd>setVoiceUiStart);
+function closeElements() {
+  const element = () => ({classList:{add(){},toggle(){}},textContent:""});
+  return {
+    voicePanel:element(),
+    voiceStatus:element(),
+    voiceCameraPreview:element(),
+    voiceCameraButton:element(),
+  };
+}
+const closeState = {
+  voiceStarting:false,
+  voiceActive:true,
+  voicePanelVisible:true,
+  voiceAssistantLine:{textContent:"尚未完成的回复"},
+  voiceAssistantPersisted:false,
+  voiceClient:{},
+  voiceConversationId:"conversation-voice-history",
+  voiceAuthTimer:null,
+};
+const partialWrites = [];
+const closeContext = vm.createContext({
+  state:closeState,
+  $:id=>closeElementsMap[id],
+  window:{clearInterval(){}},
+  persistVoiceTranscript:(role,value)=>{partialWrites.push({role,value});return true;},
+  updateVoiceControls(){},
+  resizeComposer(){},
+  String,
+});
+const closeElementsMap = closeElements();
+const closeUi = vm.runInContext(
+  chatClientSource.slice(setVoiceUiStart,setVoiceUiEnd) + "\nsetVoiceUi",
+  closeContext,
+);
+closeUi("closed");
+assert.equal(partialWrites.length,1,"closing mid-response must persist the visible partial assistant text");
+assert.equal(partialWrites[0].role,"assistant");
+assert.equal(partialWrites[0].value,"尚未完成的回复");
+assert.equal(closeState.voiceAssistantLine,null);
+assert.equal(closeState.voiceConversationId,"");
+assert.equal(closeState.voiceAssistantPersisted,false);
+
+const completedCloseState = {
+  ...closeState,
+  voiceAssistantLine:null,
+  voiceAssistantPersisted:true,
+  voiceConversationId:"conversation-voice-history",
+};
+let duplicateCloseWrites = 0;
+const completedCloseContext = vm.createContext({
+  state:completedCloseState,
+  $:id=>closeElementsMap[id],
+  window:{clearInterval(){}},
+  persistVoiceTranscript:()=>{duplicateCloseWrites+=1;return true;},
+  updateVoiceControls(){},
+  resizeComposer(){},
+  String,
+});
+const completedCloseUi = vm.runInContext(
+  chatClientSource.slice(setVoiceUiStart,setVoiceUiEnd) + "\nsetVoiceUi",
+  completedCloseContext,
+);
+completedCloseUi("closed");
+assert.equal(duplicateCloseWrites,0,"closing after response.done must not persist the same answer twice");
 console.log("web-chat-voice-client-v1-passed");
