@@ -354,16 +354,31 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
         return HTMLResponse(template, headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
 
     @app.get("/chat", include_in_schema=False)
-    async def chat_client() -> HTMLResponse:
+    async def chat_client(request: Request) -> HTMLResponse:
         control = getattr(app.state, "control_plane", None)
         if control is not None and not control.public_client()["web_chat_enabled"]:
             raise HTTPException(status_code=403, detail="Web Chat is disabled by administrator policy")
         template = Path(__file__).with_name("chat_client_v1.html").read_text(encoding="utf-8")
+        # CSP permits only this page's exact WebSocket origin. A scheme-wide
+        # ws:/wss: source would let injected script exfiltrate data to any host.
+        scheme = "wss" if request.url.scheme == "https" else "ws"
+        hostname = request.url.hostname or ""
+        if ":" in hostname and not hostname.startswith("["):
+            hostname = "[" + hostname + "]"
+        authority = hostname
+        try:
+            port = request.url.port
+        except ValueError:
+            port = None
+        default_port = 443 if scheme == "wss" else 80
+        if port and port != default_port:
+            authority += ":" + str(port)
+        websocket_source = (scheme + "://" + authority) if hostname else "'self'"
         return HTMLResponse(
             template,
             headers={
                 "Cache-Control": "no-store, no-cache, must-revalidate",
-                "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' ws: wss:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+                "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' " + websocket_source + "; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
                 "X-Content-Type-Options": "nosniff",
                 "Referrer-Policy": "no-referrer",
             },
