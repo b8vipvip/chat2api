@@ -152,7 +152,7 @@
   }
 
   function persistVoiceTranscript(role, value) {
-    if (role !== "user" && role !== "assistant") return false;
+    if ((role !== "user" && role !== "assistant") || !state.voiceConversationId) return false;
     const content = String(value || "").trim().slice(0,MAX_MESSAGE_CHARS);
     if (!content) return false;
     let conversation = state.conversations.find(row => row.id === state.voiceConversationId) || null;
