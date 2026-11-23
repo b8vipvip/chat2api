@@ -325,6 +325,12 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                 _http_error(400, "invalid Last-Event-ID")
             cursor = max(cursor, header_cursor)
 
+        # A reconnect cursor is client-supplied state, not an authority. If a
+        # stale/corrupt browser sends an ID beyond this request's durable
+        # journal head, clamp it to the current head so subsequent events are
+        # not silently skipped while the request is still running.
+        journal_head = await journal.snapshot(request_id, key_id)
+        cursor = min(cursor, max(0, int(journal_head.get("last_event_id") or 0)))
         start_cursor = cursor
 
         async def replay():
