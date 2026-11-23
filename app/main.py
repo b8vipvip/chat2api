@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import ValidationError
 
 from .admin import admin_response
+from .admin_auth import same_origin_admin_request
 from .api_keys import ApiKeyStore, ApiPrincipal, UNSET
 from .broker import RequestBroker, RequestState
 from .chat_tool_references_v1 import apply_inline_citation_markers, extract_tool_references
@@ -3516,6 +3517,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         user = accounts.authenticate(request.cookies.get(USER_SESSION_COOKIE))
         if not user:
             raise HTTPException(status_code=401, detail="User login required",
+                                headers=private_headers)
+        if not same_origin_admin_request(request):
+            raise HTTPException(status_code=403, detail="Same-origin request required",
                                 headers=private_headers)
         # Mode 1 never accepts the administrator master key or a Key owned by
         # another account. The selected Chat2API Key remains the request owner.
