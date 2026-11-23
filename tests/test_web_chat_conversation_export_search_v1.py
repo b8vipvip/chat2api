@@ -235,3 +235,63 @@ def test_chunked_json_import_body_is_bounded_without_content_length() -> None:
         assert await _read_bounded_request_body(valid_request, 8) == b"12345678"
 
     asyncio.run(scenario())
+
+
+
+def test_conversation_mutations_require_same_origin_and_bound_put_body(tmp_path: Path) -> None:
+    with _client(tmp_path) as client:
+        _register(client, "mutation-origin@example.test")
+        conversation = _conversation(
+            "c2a_origin_guard_01", "Origin guard", "same-origin mutation",
+        )
+        endpoint = f"/api/user/chat/conversations/{conversation['id']}"
+        payload = {"expected_revision": 0, "conversation": conversation}
+
+        missing_origin = client.put(endpoint, headers={"Origin": ""}, json=payload)
+        assert missing_origin.status_code == 403
+        cross_origin = client.put(
+            endpoint, headers={"Origin": "https://attacker.example"}, json=payload,
+        )
+        assert cross_origin.status_code == 403
+
+        oversized_payload = json.dumps({
+            "expected_revision": 0,
+            "conversation": {
+                **conversation,
+                "messages": [],
+                "padding": "x" * (540 * 1024),
+            },
+        })
+        oversized = client.put(
+            endpoint,
+            content=oversized_payload,
+            headers={
+                "Origin": "http://testserver",
+                "Content-Type": "application/json",
+            },
+        )
+        assert oversized.status_code == 413
+
+        created = client.put(endpoint, json=payload)
+        assert created.status_code == 200, created.text
+        blocked_delete = client.delete(
+            endpoint + "?expected_revision=1",
+            headers={"Origin": "https://attacker.example"},
+        )
+        assert blocked_delete.status_code == 403
+        still_present = client.get("/api/user/chat/conversations")
+        assert any(row["id"] == conversation["id"] for row in still_present.json()["data"])
+
+        import_payload = {
+            "format": "chat2api.web-chat-conversation",
+            "version": 1,
+            "conversation": _conversation(
+                "c2a_origin_import_01", "Import origin guard", "not imported cross-origin",
+            ),
+        }
+        blocked_import = client.post(
+            "/api/user/chat/conversations/import",
+            headers={"Origin": "https://attacker.example"},
+            json=import_payload,
+        )
+        assert blocked_import.status_code == 403
