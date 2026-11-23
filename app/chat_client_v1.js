@@ -227,6 +227,10 @@
         state.voiceAssistantPersisted = persistVoiceTranscript("assistant",finalText);
       }
       state.voiceAssistantLine = null;
+      // Reset the per-response guard after a completed turn. A later response
+      // may be interrupted before its first text delta, with its final DOM
+      // snapshot arriving only in response.interrupted.
+      state.voiceAssistantPersisted = false;
     } else if (payload.type === "input_video.frame.sent") {
       $("voiceStatus").textContent = "摄像头画面已送达 ChatGPT Voice";
     } else if (payload.type === "error" || payload.type === "client.error") {
