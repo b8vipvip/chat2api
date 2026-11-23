@@ -16,6 +16,7 @@
     remoteSource: null,
     remoteProcessor: null,
     remoteTrack: null,
+    remoteResampler: null,
     remoteSink: null,
     remoteWatchTimer: null,
     inputQueue: Promise.resolve(),
@@ -58,20 +59,37 @@
     return output;
   }
 
-  function resample(input, sourceRate, targetRate) {
-    if (!input.length || sourceRate <= 0 || targetRate <= 0) return new Float32Array();
+  // Resample remote WebRTC audio continuously. Rounding each 2048-sample
+  // callback independently drifts at non-integer ratios (for example 44.1 kHz
+  // to 24 kHz), so preserve the fractional source position and boundary sample.
+  function resampleStream(input, sourceRate, targetRate, state) {
+    if (!input || !input.length || !Number.isFinite(sourceRate) ||
+        !Number.isFinite(targetRate) || sourceRate <= 0 || targetRate <= 0 ||
+        !state || typeof state !== "object") return new Float32Array();
     if (sourceRate === targetRate) return new Float32Array(input);
-    const outputLength = Math.max(1, Math.round(input.length * targetRate / sourceRate));
-    const output = new Float32Array(outputLength);
-    const ratio = sourceRate / targetRate;
-    for (let i = 0; i < outputLength; i += 1) {
-      const position = i * ratio;
-      const left = Math.min(input.length - 1, Math.floor(position));
-      const right = Math.min(input.length - 1, left + 1);
-      const fraction = position - left;
-      output[i] = input[left] * (1 - fraction) + input[right] * fraction;
+    if (state.sourceRate !== sourceRate || state.targetRate !== targetRate) {
+      state.sourceRate = sourceRate;
+      state.targetRate = targetRate;
+      state.pending = new Float32Array(0);
+      state.position = 0;
     }
-    return output;
+    const pending = state.pending instanceof Float32Array ? state.pending : new Float32Array(0);
+    const combined = new Float32Array(pending.length + input.length);
+    combined.set(pending, 0);
+    combined.set(input, pending.length);
+    let position = Math.max(0, Number(state.position) || 0);
+    const step = sourceRate / targetRate;
+    const output = [];
+    while (position + 1 < combined.length) {
+      const index = Math.floor(position);
+      const fraction = position - index;
+      output.push(combined[index] * (1 - fraction) + combined[index + 1] * fraction);
+      position += step;
+    }
+    const drop = Math.max(0, Math.floor(position) - 1);
+    state.pending = combined.slice(drop);
+    state.position = position - drop;
+    return Float32Array.from(output);
   }
 
   function floatToPcm16Bytes(input) {
@@ -199,6 +217,12 @@
     live.remoteSource = source;
     live.remoteProcessor = processor;
     live.remoteTrack = remoteTrack;
+    live.remoteResampler = {
+      pending:new Float32Array(0),
+      position:0,
+      sourceRate:context.sampleRate,
+      targetRate:24000,
+    };
     live.remoteSink = sink;
     remoteTrack.addEventListener?.("ended", () => {
       if (live.prepared && live.requestId === ownerRequestId && live.remoteTrack === remoteTrack) {
@@ -226,7 +250,7 @@
         return;
       }
       if (!live.speaking || live.suppressed || !live.responseId) return;
-      const pcm = floatToPcm16Bytes(resample(samples, context.sampleRate, 24000));
+      const pcm = floatToPcm16Bytes(resampleStream(samples, context.sampleRate, 24000, live.remoteResampler));
       if (!pcm.byteLength) return;
       live.seq += 1;
       post("voice.live.audio", {
@@ -275,6 +299,7 @@
     live.remoteProcessor = null;
     live.remoteSource = null;
     live.remoteTrack = null;
+    live.remoteResampler = null;
     live.remoteSink = null;
     live.remoteContext = null;
     if (live.speaking) endRemoteSpeech(reason);
