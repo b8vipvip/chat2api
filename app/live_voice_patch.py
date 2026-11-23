@@ -635,11 +635,15 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 elif event_type == "response.interrupted":
                     response_id = str(event.get("response_id") or "")
                     if response_id:
+                        partial_text = str(
+                            event.get("text") or text_by_response.pop(response_id, "")
+                        )[:12000]
                         text_by_response.pop(response_id, None)
                         await send_json({
                             "type": "response.interrupted",
                             "response_id": response_id,
                             "reason": str(event.get("reason") or "barge_in"),
+                            "text": partial_text,
                         })
                 elif event_type == "session.closed":
                     await send_json({"type": "session.closed", "session_id": session_id})
