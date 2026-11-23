@@ -308,7 +308,7 @@ const appendStart = chatClientSource.indexOf("  function appendVoiceTranscript("
 const appendEnd = chatClientSource.indexOf("  async function startVoiceCall(",appendStart);
 assert.ok(appendStart>=0 && appendEnd>appendStart);
 const voiceUi = vm.runInContext(
-  chatClientSource.slice(appendStart,appendEnd) + "\\n({appendVoiceTranscript,handleVoiceEvent})",
+  chatClientSource.slice(appendStart,appendEnd) + "\n({appendVoiceTranscript,handleVoiceEvent})",
   clientContext,
 );
 voiceUi.handleVoiceEvent({type:"response.text.delta",delta:"部分"});
