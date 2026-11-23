@@ -265,7 +265,9 @@ test("keeps nonterminal recovery-unavailable turns pending for a later retry", a
   };
   const context = vm.createContext({
     state:{recoveryInFlight:new Set()},
-    MAX_MESSAGE_CHARS:8000,
+    MAX_ASSISTANT_MESSAGE_CHARS:32000,
+    ASSISTANT_TRUNCATION_NOTICE:"\\n\\n[回答超过 Web Chat 的 32,000 字符上限，后续内容未保存]",
+    limitAssistantText:value=>String(value || "").slice(0,32000),
     currentConversation:() => conversation,
     makeRecoveryController:() => null,
     saveHistory() {},
@@ -309,7 +311,9 @@ test("hydrates the authoritative answer snapshot after a replay terminal marker"
   let snapshotCalls = 0;
   const context = vm.createContext({
     state:{recoveryInFlight:new Set()},
-    MAX_MESSAGE_CHARS:8000,
+    MAX_ASSISTANT_MESSAGE_CHARS:32000,
+    ASSISTANT_TRUNCATION_NOTICE:"\\n\\n[回答超过 Web Chat 的 32,000 字符上限，后续内容未保存]",
+    limitAssistantText:value=>String(value || "").slice(0,32000),
     currentConversation:() => conversation,
     makeRecoveryController:() => null,
     saveHistory() {},
