@@ -6,6 +6,32 @@ const source = readFileSync("app/chat_voice_client_v1.js","utf8");
 const chatClientSource = readFileSync("app/chat_client_v1.js","utf8");
 new vm.Script(source);
 new vm.Script(chatClientSource);
+
+const voiceContextStart = chatClientSource.indexOf("  function buildVoiceContext(");
+const voiceContextEnd = chatClientSource.indexOf("  async function startVoiceCall(",voiceContextStart);
+assert.ok(voiceContextStart >= 0 && voiceContextEnd > voiceContextStart,
+  "production voice context builder must remain extractable");
+const buildVoiceContext = vm.runInNewContext(
+  chatClientSource.slice(voiceContextStart,voiceContextEnd) + "\\nbuildVoiceContext",
+  {MAX_VOICE_CONTEXT_CHARS:8000},
+);
+const contextFixture = buildVoiceContext({messages:[
+  {role:"user",content:"请帮我分析这个接口。"},
+  {role:"assistant",content:"可以，先看接口定义。"},
+  {role:"user",content:[
+    {type:"text",text:"这里还有附件。"},
+    {type:"file",filename:"接口说明.pdf"},
+    {type:"image_url",image_url:{url:"file_abcdefgh"}},
+  ]},
+]});
+assert.ok(contextFixture.indexOf("用户：请帮我分析这个接口。") < contextFixture.indexOf("助手：可以，先看接口定义。"));
+assert.ok(contextFixture.includes("接口说明.pdf"));
+assert.ok(contextFixture.includes("重新发送图片"));
+assert.ok(contextFixture.length <= 8000);
+const boundedContext = buildVoiceContext({
+  messages:[{role:"user",content:"x".repeat(10000)}],
+});
+assert.equal(boundedContext.length,8000);
 const closeTimeout = Number(source.match(/SESSION_CLOSE_TIMEOUT_MS\s*=\s*(\d+)/)?.[1] || 0);
 assert.ok(closeTimeout > 5000,
   "the browser must leave margin beyond the Broker's five-second Worker stop-drain timeout");
