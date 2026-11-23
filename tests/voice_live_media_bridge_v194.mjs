@@ -174,6 +174,22 @@ assert.equal(transcriptEvents.map(message=>message.event).some(
   event=>event?.live_event==="response.done" && event.response_id==="response-track-ended",
 ),false,"a lost remote track must not mark an unfinished answer as complete");
 
+// Explicit barge-in sends response.stopped(client_cancel) followed by
+// response.interrupted. Keep the baseline until the second event can snapshot
+// the current assistant DOM text.
+assistantNodes = [makeTranscriptNode("previous answer","assistant-6")];
+dispatchVoiceMain("voice.live.response.started","response-client-cancel");
+assistantNodes[0].innerText = "previous answer interrupted by user";
+assistantNodes[0].textContent = "previous answer interrupted by user";
+dispatchVoiceMain("voice.live.response.stopped","response-client-cancel","client_cancel");
+dispatchVoiceMain("voice.live.response.interrupted","response-client-cancel","client_cancel");
+await flush();
+const clientCancelledResponse = transcriptEvents
+  .map(message=>message.event)
+  .find(event=>event?.live_event==="response.interrupted" && event.response_id==="response-client-cancel");
+assert.equal(clientCancelledResponse?.text,"interrupted by user",
+  "client_cancel must retain the baseline until the explicit interruption event captures its partial text");
+
 const listeners = [];
 const posted = [];
 const timers = new Map();
