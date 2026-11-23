@@ -205,6 +205,53 @@ def test_web_chat_conversation_api_auth_ownership_sync_and_conflicts(tmp_path: P
         )
         assert rejected_user.status_code == 422
 
+        # Server history retains up to 100 ordered messages; the browser's
+        # smaller offline cache must not impose the server-side conversation cap.
+        long_history_id = "c2a_history_100_0001"
+        long_history = _conversation(long_history_id)
+        long_history["apiKeyId"] = key_id
+        long_history["messages"] = [
+            {
+                "id": f"message_history_{index:04d}",
+                "role": "user" if index % 2 == 0 else "assistant",
+                "content": f"历史消息 {index}",
+                "createdAt": f"2026-11-20T00:{index // 60:02d}:{index % 60:02d}Z",
+                "requestId": "",
+                "pending": False,
+                "recoveryStatus": "",
+                "lastEventId": 0,
+            }
+            for index in range(100)
+        ]
+        long_history_saved = client.put(
+            f"/api/user/chat/conversations/{long_history_id}",
+            json={"expected_revision": 0, "conversation": long_history},
+        )
+        assert long_history_saved.status_code == 200, long_history_saved.text
+        assert len(long_history_saved.json()["conversation"]["messages"]) == 100
+        assert long_history_saved.json()["conversation"]["messages"][0]["id"] == "message_history_0000"
+
+        too_many_history = _conversation("c2a_history_101_0001")
+        too_many_history["apiKeyId"] = key_id
+        too_many_history["messages"] = [
+            {
+                "id": f"message_history_{index:04d}",
+                "role": "user" if index % 2 == 0 else "assistant",
+                "content": f"历史消息 {index}",
+                "createdAt": "2026-11-20T00:00:00Z",
+                "requestId": "",
+                "pending": False,
+                "recoveryStatus": "",
+                "lastEventId": 0,
+            }
+            for index in range(101)
+        ]
+        rejected_history = client.put(
+            f"/api/user/chat/conversations/{too_many_history['id']}",
+            json={"expected_revision": 0, "conversation": too_many_history},
+        )
+        assert rejected_history.status_code == 422
+
         # A stale browser tab cannot silently overwrite a newer server revision.
         stale = client.put(
             f"/api/user/chat/conversations/{conversation_id}",
