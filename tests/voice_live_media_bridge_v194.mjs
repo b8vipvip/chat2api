@@ -264,6 +264,9 @@ const startupChrome = {
 const startupSandbox = vm.createContext({
   window:startupWindow,
   chrome:startupChrome,
+  __CHAT2API_VOICE_LIVE_TEXT_V24__:{
+    prepareContext:async()=>({acknowledged:true,responseText:"已准备好"}),
+  },
   document:{
     visibilityState:"visible",
     querySelectorAll(selector){

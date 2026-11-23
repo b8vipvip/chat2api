@@ -1,7 +1,6 @@
 (() => {
   const KEY = "__CHAT2API_VOICE_LIVE_TEXT_V24__";
   if (globalThis[KEY]) return;
-  globalThis[KEY] = true;
 
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
   const normalize = value => String(value || "")
@@ -251,6 +250,49 @@
     } catch (_) {}
   }
 
+  function stopButton() {
+    for (const selector of [
+      "button[data-testid='stop-button']",
+      "button[aria-label='Stop streaming']",
+      "button[aria-label='Stop generating']",
+      "button[aria-label*='停止生成']",
+    ]) {
+      const button = [...document.querySelectorAll(selector)].find(item => visible(item) && !item.disabled);
+      if (button) return button;
+    }
+    return null;
+  }
+
+  async function waitForAssistantCompletion(active, baselineText, timeout = 45000) {
+    const deadline = Date.now() + timeout;
+    let lastText = "";
+    let stableSince = 0;
+    while (Date.now() < deadline) {
+      assertLiveTurnOwner(active);
+      const nodes = [...document.querySelectorAll("[data-message-author-role='assistant']")].filter(visible);
+      const current = normalize(nodes[nodes.length - 1]?.innerText || nodes[nodes.length - 1]?.textContent || "");
+      if (current && current !== baselineText) {
+        if (current !== lastText) {
+          lastText = current;
+          stableSince = Date.now();
+        }
+        if (!stopButton() && buttonReady(sendButton()) && stableSince && Date.now() - stableSince >= 1800) return current;
+      }
+      await delay(120);
+    }
+    throw new Error("ChatGPT did not finish the isolated Voice context setup turn");
+  }
+
+  async function prepareContext(active, text) {
+    assertLiveTurnOwner(active);
+    const baselineNodes = [...document.querySelectorAll("[data-message-author-role='assistant']")].filter(visible);
+    const baselineText = normalize(baselineNodes[baselineNodes.length - 1]?.innerText
+      || baselineNodes[baselineNodes.length - 1]?.textContent || "");
+    await queueTurn(() => sendLiveText(active,"session-context",String(text || "")));
+    const responseText = await waitForAssistantCompletion(active,baselineText);
+    return {acknowledged:true,responseText:responseText.slice(0,1200)};
+  }
+
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     const state = globalThis.__CHAT2API_VOICE_LIVE_CONTENT_V2__;
     if (message.type === "chat2api.voice.live.text") {
@@ -282,5 +324,10 @@
       return false;
     }
     return false;
+  });
+
+  globalThis[KEY] = Object.freeze({
+    prepareContext,
+    sendText:(active,itemId,text) => queueTurn(() => sendLiveText(active,itemId,text)),
   });
 })();

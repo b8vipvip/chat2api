@@ -56,6 +56,11 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         assert "MAX_ASSISTANT_MESSAGE_CHARS = 32000" in script.text
         assert "MAX_LOCAL_MESSAGE_CHARS = 8000" in script.text
         assert "MAX_MESSAGES = 100" in script.text
+        assert "MAX_VOICE_CONTEXT_CHARS = 8000" in script.text
+        assert "buildVoiceContext(voiceConversation)" in script.text
+        assert "instructions:DEFAULT_VOICE_INSTRUCTIONS" in script.text
+        assert "已载入当前对话背景" in script.text
+        assert "payload.context_injected === true" in script.text
         assert "MAX_LOCAL_MESSAGES = 30" in script.text
         assert "normalizeConversationRow(row, MAX_LOCAL_MESSAGES)" in script.text
         assert "slice(-MAX_LOCAL_MESSAGES)" in script.text
@@ -94,6 +99,14 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         assert "state.apiToken" in script.text
         assert "prompt_mode" not in script.text
         assert 'await apiJson("/api/user/me")' in script.text
+        voice_content = (Path(__file__).resolve().parents[1] / "chrome_extension" / "content_voice_live.js").read_text(encoding="utf-8")
+        voice_text = (Path(__file__).resolve().parents[1] / "chrome_extension" / "content_voice_live_text_v24.js").read_text(encoding="utf-8")
+        live_start = voice_content[voice_content.index("  async function startLive(message) {"):voice_content.index("  async function stopLive(")]
+        assert "textBridge.prepareContext(active,primer)" in live_start
+        assert live_start.index("textBridge.prepareContext(active,primer)") < live_start.index("await openVoice(active)")
+        assert live_start.index("await openVoice(active)") < live_start.index("startTranscriptPolling(active)")
+        assert "async function prepareContext(active, text)" in voice_text
+        assert "waitForAssistantCompletion(active,baselineText)" in voice_text
 
         stylesheet = client.get("/assets/chat2api-chat-client-v1.css")
         assert stylesheet.status_code == 200

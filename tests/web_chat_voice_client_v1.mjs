@@ -4,11 +4,60 @@ import vm from "node:vm";
 
 const source = readFileSync("app/chat_voice_client_v1.js","utf8");
 const chatClientSource = readFileSync("app/chat_client_v1.js","utf8");
+const liveContentSource = readFileSync("chrome_extension/content_voice_live.js","utf8");
+const liveTextSource = readFileSync("chrome_extension/content_voice_live_text_v24.js","utf8");
+new vm.Script(liveContentSource);
+new vm.Script(liveTextSource);
 new vm.Script(source);
 new vm.Script(chatClientSource);
+
+const voiceContextStart = chatClientSource.indexOf("  function buildVoiceContext(");
+const voiceContextEnd = chatClientSource.indexOf("  async function startVoiceCall(",voiceContextStart);
+assert.ok(voiceContextStart >= 0 && voiceContextEnd > voiceContextStart,
+  "production voice context builder must remain extractable");
+const primerStart = liveContentSource.indexOf("  function buildSessionPrimer(active) {");
+const primerEnd = liveContentSource.indexOf("  async function startLive(message) {",primerStart);
+assert.ok(primerStart >= 0 && primerEnd > primerStart);
+const buildSessionPrimer = vm.runInNewContext(
+  liveContentSource.slice(primerStart,primerEnd) + "\nbuildSessionPrimer",
+  {},
+);
+const primer = buildSessionPrimer({
+  instructions:"用简洁中文回答。",
+  context:"用户：上一轮问题\n助手：上一轮回答",
+});
+assert.ok(primer.includes("用简洁中文回答。"));
+assert.ok(primer.includes("上一轮问题"));
+assert.ok(primer.includes("已准备好"));
+assert.ok(primer.length <= 12000);
+const buildVoiceContext = vm.runInNewContext(
+  chatClientSource.slice(voiceContextStart,voiceContextEnd) + "\nbuildVoiceContext",
+  {MAX_VOICE_CONTEXT_CHARS:8000},
+);
+const contextFixture = buildVoiceContext({messages:[
+  {role:"user",content:"请帮我分析这个接口。"},
+  {role:"assistant",content:"可以，先看接口定义。"},
+  {role:"user",content:[
+    {type:"text",text:"这里还有附件。"},
+    {type:"file",filename:"接口说明.pdf"},
+    {type:"image_url",image_url:{url:"file_abcdefgh"}},
+  ]},
+]});
+assert.ok(contextFixture.indexOf("用户：请帮我分析这个接口。") < contextFixture.indexOf("助手：可以，先看接口定义。"));
+assert.ok(contextFixture.includes("接口说明.pdf"));
+assert.ok(contextFixture.includes("重新发送图片"));
+assert.ok(contextFixture.length <= 8000);
+const boundedContext = buildVoiceContext({
+  messages:[{role:"user",content:"x".repeat(10000)}],
+});
+assert.ok(boundedContext.length <= 8000);
+assert.ok(boundedContext.length >= 7990);
 const closeTimeout = Number(source.match(/SESSION_CLOSE_TIMEOUT_MS\s*=\s*(\d+)/)?.[1] || 0);
 assert.ok(closeTimeout > 5000,
   "the browser must leave margin beyond the Broker's five-second Worker stop-drain timeout");
+const readyTimeout = Number(source.match(/SESSION_READY_TIMEOUT_MS\s*=\s*(\d+)/)?.[1] || 0);
+assert.ok(readyTimeout >= 90000,
+  "the client must allow enough time for isolated context setup before Voice becomes ready");
 
 class FakeWebSocket {
   static OPEN = 1;
@@ -214,6 +263,8 @@ const events = [];
 let beforeConnectCalls = 0;
 const client = api.create({
   apiToken:"managed-key",
+  instructions:"Use concise Chinese responses.",
+  context:"用户：我正在调试 Web Chat。\n助手：可以继续讨论 SSE 恢复。",
   beforeConnect:async()=>{beforeConnectCalls+=1;assert.ok(audioContexts.length>0);},
   fetcher,
   WebSocketImpl:FakeWebSocket,
@@ -233,7 +284,11 @@ assert.equal(socket.binaryType,"arraybuffer");
 assert.match(socket.url,/wss:\/\/chat\.example\/v1\/audio\/realtime/);
 assert.ok(!socket.url.includes("managed-key"),"the long-lived API Key must never appear in the WebSocket URL");
 assert.ok(socket.url.includes("one-time-token"),"only the short-lived one-time session token belongs in the URL");
-assert.ok(socket.sent.some(value=>typeof value==="string" && JSON.parse(value).type==="session.start"));
+const sessionStart = socket.sent.map(value=>typeof value==="string" ? JSON.parse(value) : null)
+  .find(value=>value?.type==="session.start");
+assert.ok(sessionStart);
+assert.equal(sessionStart.instructions,"Use concise Chinese responses.");
+assert.equal(sessionStart.context,"用户：我正在调试 Web Chat。\n助手：可以继续讨论 SSE 恢复。");
 
 const input = new Float32Array(4096).fill(0.1);
 processors[0].onaudioprocess({inputBuffer:{getChannelData:()=>input}});

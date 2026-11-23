@@ -454,6 +454,8 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         "effective_model": effective_model,
                         "input_audio_format": "pcm16le-16000-mono",
                         "output_audio_format": "pcm16le-24000-mono",
+                        "context_injected": event.get("context_injected") is True,
+                        "context_mode": str(event.get("context_mode") or "none")[:80],
                         "supports": [
                             "input_text", "conversation.item.create", "input_media",
                             "input_video.frame", "sampled_video_frames",
@@ -716,9 +718,20 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
             requested_client = str(start.get("client_id") or client_id or "").strip() or None
             selected_client = resolve_idle_client(requested_client, principal, requested_model)
             state = await broker.create(request_id, selected_client)
+            instructions = str(start.get("instructions") or "").strip()[:12000]
+            context = str(start.get("context") or "").strip()
+            if len(context) > 8000 or len(instructions) + len(context) > 12000:
+                await send_json({
+                    "type": "error",
+                    "code": "SESSION_CONTEXT_TOO_LARGE",
+                    "message": "Live session instructions and conversation context are limited to 12000 characters total (context max 8000)",
+                    "retryable": False,
+                })
+                return
+            session_prompt = "\n\n".join(part for part in (instructions, context) if part)
             quota_reservation = await reserve_audio_request_quota(
                 app, request_id, principal,
-                str(start.get("instructions") or "")[:12000],
+                session_prompt,
                 model_id=effective_model,
             )
             if quota_reservation:
@@ -728,9 +741,6 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     "estimate_policy": "text_input_tokens_plus_4096_audio_admission_floor_v1",
                     "provider_usage_verified": False,
                 }
-            instructions = str(start.get("instructions") or "").strip()[:12000]
-            if instructions:
-                observed_prompt_parts.append(instructions)
             registry.busy_clients.add(selected_client)
             await telemetry.append({
                 "request_id": request_id,
@@ -742,7 +752,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 "requested_model": effective_model,
                 "request_type": "voice_call",
                 "stream": True, "prompt_mode": "voice-call",
-                "prompt_chars": len(str(start.get("instructions") or "")),
+                "prompt_chars": len(session_prompt),
                 "attachments_count": 0,
                 "status": "running",
                 "diagnostics": {"route": "chatgpt-voice-live", "session_id": session_id},
@@ -765,7 +775,8 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         "model": effective_model,
                         "requested_model": requested_model,
                         "model_alias_of": effective_model if requested_model != effective_model else None,
-                        "instructions": str(start.get("instructions") or "")[:12000],
+                        "instructions": instructions,
+                        "context": context,
                         "input_sample_rate": 16000,
                         "output_sample_rate": 24000,
                     },

@@ -79,6 +79,28 @@ def acknowledge_live_stop(live, extension, request_id: str, final_events: list[d
     raise AssertionError("Live session did not send its terminal session.closed event")
 
 
+
+def test_live_voice_rejects_oversized_session_context(tmp_path: Path) -> None:
+    with TestClient(app_live(tmp_path)) as client:
+        managed_key = create_managed_key(client)
+        client_id, extension_token = pair_extension(client)
+        with client.websocket_connect(f"/ws/extensions/{client_id}?token={extension_token}") as extension:
+            assert extension.receive_json()["type"] == "server.hello"
+            with client.websocket_connect(
+                f"/v1/audio/realtime?client_id={client_id}",
+                headers={"Authorization": f"Bearer {managed_key}"},
+            ) as live:
+                live.send_json({
+                    "type":"session.start",
+                    "model":"gpt-live",
+                    "instructions":"请简洁回答。",
+                    "context":"x" * 8001,
+                })
+                error = live.receive_json()
+                assert error["type"] == "error"
+                assert error["code"] == "SESSION_CONTEXT_TOO_LARGE"
+
+
 def test_live_voice_stream_relays_pcm_both_directions(tmp_path: Path) -> None:
     with TestClient(app_live(tmp_path)) as client:
         managed_key = create_managed_key(client)
@@ -89,11 +111,13 @@ def test_live_voice_stream_relays_pcm_both_directions(tmp_path: Path) -> None:
                 f"/v1/audio/realtime?client_id={client_id}",
                 headers={"Authorization": f"Bearer {managed_key}"},
             ) as live:
-                live.send_json({"type": "session.start", "model": "gpt-live", "instructions": "自然聊天"})
+                live.send_json({"type": "session.start", "model": "gpt-live", "instructions": "自然聊天", "context": "用户：你好\n助手：你好，我可以继续帮你。"})
                 started = extension.receive_json()
                 assert started["type"] == "voice.live.start"
                 assert started["options"]["model"] == "gpt-live"
                 assert started["options"]["requested_model"] == "gpt-live"
+                assert started["options"]["instructions"] == "自然聊天"
+                assert started["options"]["context"] == "用户：你好\n助手：你好，我可以继续帮你。"
                 request_id = started["request_id"]
                 session_id = started["session_id"]
 
@@ -103,12 +127,16 @@ def test_live_voice_stream_relays_pcm_both_directions(tmp_path: Path) -> None:
                     "request_id": request_id,
                     "live_event": "session.ready",
                     "model": "gpt-live",
+                    "context_injected": True,
+                    "context_mode": "request_scoped_chatgpt_setup_turn",
                 })
                 ready = live.receive_json()
                 assert ready["type"] == "session.ready"
                 assert ready["session_id"] == session_id
                 assert ready["model"] == "gpt-live"
                 assert ready["effective_model"] == "gpt-live"
+                assert ready["context_injected"] is True
+                assert ready["context_mode"] == "request_scoped_chatgpt_setup_turn"
                 assert ready["input_audio_format"] == "pcm16le-16000-mono"
                 assert ready["output_audio_format"] == "pcm16le-24000-mono"
 
@@ -276,6 +304,7 @@ def test_live_extension_assets_are_wired() -> None:
     main = (root / "chrome_extension" / "voice_live_main.js").read_text(encoding="utf-8")
     content = (root / "chrome_extension" / "content_voice_live.js").read_text(encoding="utf-8")
     router = (root / "chrome_extension" / "audio_routing_live.js").read_text(encoding="utf-8")
+    conversation_router = (root / "chrome_extension" / "conversation_routing.js").read_text(encoding="utf-8")
     assert "install_live_voice_patch(app)" in entry
     assert "audio_routing_live.js" in background
     assert "voice.live.audio" in main and "24000" in main
@@ -283,6 +312,9 @@ def test_live_extension_assets_are_wired() -> None:
     assert "chat2api.voice.live.start" in content
     assert "input.speech_started" in content
     assert "voice.live.start" in router
+    assert 'const liveSession = message?.type === "voice.live.start"' in conversation_router
+    assert 'key = liveSession ? `${baseKey}::live::${requestId}`' in conversation_router
+    assert "route.request_scoped = isolated || liveSession" in conversation_router
 
 def test_live_finish_before_browser_ready_never_reports_completed(tmp_path: Path) -> None:
     """A client finish cannot turn an unstarted/failed WebRTC call green."""
