@@ -36,6 +36,8 @@ MAX_LIVE_VIDEO_FRAMES = 64
 MAX_LIVE_VIDEO_FRAME_BYTES = 2 * 1024 * 1024
 MAX_LIVE_VIDEO_DURATION_MS = 6 * 60 * 60 * 1000
 MIN_LIVE_VIDEO_FRAME_INTERVAL_SECONDS = 0.2
+LIVE_VIDEO_FRAME_ACK_TIMEOUT_SECONDS = 15.0
+LIVE_VIDEO_FRAME_MONITOR_INTERVAL_SECONDS = 0.5
 LIVE_KEY_REVALIDATE_SECONDS = 5.0
 
 
@@ -370,8 +372,62 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
             nonlocal finished, observed_audio_bytes, observed_response_count, observed_media_count, input_confirmed, session_ready, error_message, observed_media_ids
             assert state is not None
             text_by_response: dict[str, str] = {}
+
+            async def rollback_unconfirmed_media(item_id: str) -> None:
+                failed_media_ids = pending_input_media_ids.pop(item_id, [])
+                if not failed_media_ids:
+                    return
+                remaining_pending_ids = {
+                    file_id
+                    for values in pending_input_media_ids.values()
+                    for file_id in values
+                }
+                keep_media_ids = confirmed_media_ids | remaining_pending_ids
+                updated_media_ids = [
+                    file_id for file_id in observed_media_ids
+                    if file_id in keep_media_ids
+                ]
+                if updated_media_ids != observed_media_ids:
+                    observed_media_ids[:] = updated_media_ids
+                    try:
+                        await telemetry.upsert({
+                            "request_id": request_id,
+                            "input_file_ids": updated_media_ids,
+                            "attachments_count": len(updated_media_ids),
+                        })
+                    except Exception as rollback_error:
+                        logger.warning(
+                            "Live media grant rollback deferred request_id=%s item_id=%s error_type=%s",
+                            request_id, item_id, type(rollback_error).__name__,
+                        )
+
             while not finished:
-                event = await state.queue.get()
+                try:
+                    event = await asyncio.wait_for(
+                        state.queue.get(),
+                        timeout=LIVE_VIDEO_FRAME_MONITOR_INTERVAL_SECONDS,
+                    )
+                except asyncio.TimeoutError:
+                    now = time.monotonic()
+                    expired_frames = [
+                        (item_id, frame)
+                        for item_id, frame in list(pending_video_frames.items())
+                        if now - frame[2] >= LIVE_VIDEO_FRAME_ACK_TIMEOUT_SECONDS
+                    ]
+                    for item_id, frame in expired_frames:
+                        pending_video_frames.pop(item_id, None)
+                        pending_input_text.pop(item_id, None)
+                        await rollback_unconfirmed_media(item_id)
+                        await send_json({
+                            "type": "error",
+                            "code": "LIVE_VIDEO_FRAME_ACK_TIMEOUT",
+                            "item_id": item_id,
+                            "video_sequence": frame[0],
+                            "timestamp_ms": frame[1],
+                            "message": "Worker did not acknowledge the camera frame before the timeout; the in-flight frame slot was released",
+                            "retryable": True,
+                        })
+                    continue
                 # The extension emits its existing terminal image.error with
                 # kind="voice-live". Previously that event fell through the
                 # voice-live branch (empty live_event) and was swallowed. The
@@ -473,31 +529,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     # Worker failure so the client can retry with the next
                     # monotonically increasing sequence number.
                     failed_video_frame = pending_video_frames.pop(failed_item_id, None)
-                    failed_media_ids = pending_input_media_ids.pop(failed_item_id, [])
-                    if failed_media_ids:
-                        remaining_pending_ids = {
-                            file_id
-                            for values in pending_input_media_ids.values()
-                            for file_id in values
-                        }
-                        keep_media_ids = confirmed_media_ids | remaining_pending_ids
-                        updated_media_ids = [
-                            file_id for file_id in observed_media_ids
-                            if file_id in keep_media_ids
-                        ]
-                        if updated_media_ids != observed_media_ids:
-                            observed_media_ids[:] = updated_media_ids
-                            try:
-                                await telemetry.upsert({
-                                    "request_id": request_id,
-                                    "input_file_ids": updated_media_ids,
-                                    "attachments_count": len(updated_media_ids),
-                                })
-                            except Exception as rollback_error:
-                                logger.warning(
-                                    "Live media grant rollback deferred request_id=%s item_id=%s error_type=%s",
-                                    request_id, failed_item_id, type(rollback_error).__name__,
-                                )
+                    await rollback_unconfirmed_media(failed_item_id)
                     failure: dict[str, object] = {
                         "type": "error", "code": "VOICE_CALL_INPUT_FAILED",
                         "item_id": failed_item_id,
@@ -974,7 +1006,9 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         ]
                     pending_input_text[item_id] = input_text
                     if video_frame:
-                        pending_video_frames[item_id] = (video_frame[0], video_frame[1])
+                        pending_video_frames[item_id] = (
+                            video_frame[0], video_frame[1], time.monotonic(),
+                        )
                     try:
                         await registry.send(selected_client, {
                             "type": "voice.live.multimodal" if attachments else "voice.live.text",
