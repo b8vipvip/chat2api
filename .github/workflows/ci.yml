@@ -300,6 +300,12 @@ jobs:
           node tests/web_chat_tool_status_v1.mjs
       - name: Web Chat citation cross-device merge
         run: node tests/web_chat_reference_sync_v1.mjs
+
+      - name: Web Chat Live Voice and rich citation regressions
+        run: |
+          node --check app/chat_voice_client_v1.js
+          node tests/web_chat_voice_client_v1.mjs
+          pytest -q tests/test_chat_voice_client_v1.py tests/test_web_chat_renderer_v2.py tests/test_web_chat_production_entry_integration.py --timeout=120
       - name: Worker probe observer regression
         run: node tests/worker_probe_supervisor_v1.mjs
 
