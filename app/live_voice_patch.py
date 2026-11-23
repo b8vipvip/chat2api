@@ -38,6 +38,7 @@ MAX_LIVE_VIDEO_DURATION_MS = 6 * 60 * 60 * 1000
 MIN_LIVE_VIDEO_FRAME_INTERVAL_SECONDS = 0.2
 LIVE_VIDEO_FRAME_ACK_TIMEOUT_SECONDS = 15.0
 LIVE_VIDEO_FRAME_MONITOR_INTERVAL_SECONDS = 0.5
+LIVE_SESSION_STOP_TIMEOUT_SECONDS = 5.0
 LIVE_KEY_REVALIDATE_SECONDS = 5.0
 
 
@@ -327,6 +328,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
         relay_task: asyncio.Task[None] | None = None
         started = False
         finished = False
+        worker_stop_sent = False
         requested_model = "gpt-live"
         effective_model = "gpt-live"
         observed_audio_bytes = 0
@@ -646,7 +648,9 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                             "text": partial_text,
                         })
                 elif event_type == "session.closed":
-                    await send_json({"type": "session.closed", "session_id": session_id})
+                    # The Worker has drained its final transcript/interruption
+                    # events. The request coroutine owns the single terminal
+                    # session.closed message after usage/status reconciliation.
                     return
                 elif event_type == "error":
                     error_message = str(event.get("message") or "GPT-Live bridge error")
@@ -1067,6 +1071,29 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                             "type": "error", "code": "VOICE_SESSION_NOT_READY",
                             "message": error_message, "retryable": True,
                         })
+                        break
+                    # Ask the extension to stop first, then keep the relay alive
+                    # until it has flushed response.interrupted/partial DOM text
+                    # and acknowledged session.closed. Closing immediately here
+                    # races the Worker and loses the final transcript snapshot.
+                    await registry.send(selected_client, {
+                        "type": "voice.live.stop",
+                        "request_id": request_id,
+                        "session_id": session_id,
+                    })
+                    worker_stop_sent = True
+                    try:
+                        if relay_task:
+                            await asyncio.wait_for(
+                                asyncio.shield(relay_task),
+                                timeout=LIVE_SESSION_STOP_TIMEOUT_SECONDS,
+                            )
+                    except asyncio.TimeoutError:
+                        error_message = "Timed out waiting for the ChatGPT Voice worker to drain its final events"
+                        await send_json({
+                            "type": "error", "code": "VOICE_STOP_TIMEOUT",
+                            "message": error_message, "retryable": True,
+                        })
                     break
                 elif control_type == "ping":
                     await send_json({"type": "pong", "timestamp": control.get("timestamp")})
@@ -1122,7 +1149,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         "error": error_message or None,
                     })
             finished = True
-            if started and selected_client:
+            if started and selected_client and not worker_stop_sent:
                 with suppress(Exception):
                     await registry.send(selected_client, {
                         "type": "voice.live.stop",
