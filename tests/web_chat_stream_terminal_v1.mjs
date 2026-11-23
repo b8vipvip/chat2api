@@ -364,3 +364,86 @@ test("bounds a stalled same-origin cancellation handshake", async () => {
   assert.equal(result.cancel_requested,false);
   assert.equal(result.terminal,false);
 });
+
+
+test("cross-device conversation merge never revives terminal requests from stale pending snapshots", () => {
+  const extractFunction = name => {
+    const start = source.indexOf("  function " + name + "(");
+    assert.ok(start >= 0, "missing " + name);
+    const next = source.slice(start + 1).search(/\\n  (?:(?:async )?function |class )/);
+    return source.slice(start, next < 0 ? source.length : start + 1 + next);
+  };
+  const context = vm.createContext({
+    MAX_MESSAGES:100,
+    normalizeToolReferences:value => Array.isArray(value) ? value : [],
+  });
+  const merge = vm.runInNewContext([
+    extractFunction("toolActivityWeight"),
+    extractFunction("messageContentWeight"),
+    extractFunction("messageBodyWeight"),
+    extractFunction("mergeConversation"),
+    "mergeConversation",
+  ].join("\\n"),context);
+
+  const stalled = merge({
+    id:"conversation",updatedAt:"2026-11-23T10:00:00.000Z",serverRevision:4,
+    messages:[{
+      id:"assistant-1",role:"assistant",content:"partial",pending:false,
+      recoveryStatus:"stalled",toolEvents:[],createdAt:"2026-11-23T09:00:00.000Z",
+    }],
+  },{
+    id:"conversation",updatedAt:"2026-11-23T10:01:00.000Z",
+    messages:[{
+      id:"assistant-1",role:"assistant",content:"partial answer recovered from another device",
+      pending:true,recoveryStatus:"recovery_pending",
+      toolEvents:[{status:"running",arguments:"longer tool state"}],
+      createdAt:"2026-11-23T09:00:00.000Z",
+    }],
+  }).messages[0];
+  assert.equal(stalled.pending,false);
+  assert.equal(stalled.recoveryStatus,"stalled");
+  assert.equal(stalled.content,"partial answer recovered from another device");
+  assert.equal(stalled.toolEvents.length,1);
+
+  const cancelled = merge({
+    id:"conversation",updatedAt:"2026-11-23T10:01:00.000Z",serverRevision:5,
+    messages:[{
+      id:"assistant-2",role:"assistant",content:"a longer partial answer from server",
+      pending:true,recoveryStatus:"recovery_pending",
+      toolEvents:[{status:"completed",output:"authoritative tool result"}],
+      createdAt:"2026-11-23T09:02:00.000Z",
+    }],
+  },{
+    id:"conversation",updatedAt:"2026-11-23T10:02:00.000Z",
+    messages:[{
+      id:"assistant-2",role:"assistant",content:"partial",
+      pending:false,recoveryStatus:"cancelled",toolEvents:[],
+      createdAt:"2026-11-23T09:02:00.000Z",
+    }],
+  }).messages[0];
+  assert.equal(cancelled.pending,false);
+  assert.equal(cancelled.recoveryStatus,"cancelled");
+  assert.equal(cancelled.content,"a longer partial answer from server");
+  assert.equal(cancelled.toolEvents[0].output,"authoritative tool result");
+
+  const completed = merge({
+    id:"conversation",updatedAt:"2026-11-23T10:00:00.000Z",serverRevision:6,
+    messages:[{
+      id:"assistant-3",role:"assistant",content:"authoritative final answer",
+      pending:false,recoveryStatus:"completed",toolEvents:[],
+      createdAt:"2026-11-23T09:03:00.000Z",
+    }],
+  },{
+    id:"conversation",updatedAt:"2026-11-23T10:03:00.000Z",
+    messages:[{
+      id:"assistant-3",role:"assistant",content:"stale pending text that is longer than final",
+      pending:true,recoveryStatus:"recovery_pending",
+      toolEvents:[{status:"completed",output:"late tool observation"}],
+      createdAt:"2026-11-23T09:03:00.000Z",
+    }],
+  }).messages[0];
+  assert.equal(completed.pending,false);
+  assert.equal(completed.recoveryStatus,"completed");
+  assert.equal(completed.content,"authoritative final answer");
+  assert.equal(completed.toolEvents[0].output,"late tool observation");
+});
