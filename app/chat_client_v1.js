@@ -52,6 +52,8 @@
   const MAX_ASSISTANT_MESSAGE_CHARS = 32000;
   const MAX_LOCAL_MESSAGE_CHARS = 8000;
   const ASSISTANT_TRUNCATION_NOTICE = "\n\n[回答超过 Web Chat 的 32,000 字符上限，后续内容未保存]";
+  const MAX_VOICE_CONTEXT_CHARS = 8000;
+  const DEFAULT_VOICE_INSTRUCTIONS = "请用自然、清晰、简洁的中文与用户进行实时语音对话。需要时结合用户提供的摄像头画面回答。";
   const MAX_IMAGES_PER_MESSAGE = 4;
   const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
   const MAX_TOTAL_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -256,6 +258,36 @@
     }
   }
 
+  function buildVoiceContext(conversation) {
+    const messages = Array.isArray(conversation?.messages) ? conversation.messages.slice(-12) : [];
+    const rows = [];
+    let remaining = MAX_VOICE_CONTEXT_CHARS;
+    for (const message of messages.slice().reverse()) {
+      if (!message || (message.role !== "user" && message.role !== "assistant")) continue;
+      let content = "";
+      if (typeof message.content === "string") {
+        content = message.content;
+      } else if (Array.isArray(message.content)) {
+        content = message.content.map(part => {
+          if (part?.type === "text") return String(part.text || "");
+          if (part?.type === "image_url") return "[用户此前附加过图片；如需分析，请重新发送图片]";
+          if (part?.type === "file") return "[用户此前附加过文件：" + String(part.filename || "文件") + "；如需分析，请重新发送文件]";
+          return "";
+        }).filter(Boolean).join("\n");
+      }
+      content = String(content || "").replace(/\s+/g," ").trim();
+      if (!content) continue;
+      const prefix = message.role === "user" ? "用户" : "助手";
+      const available = Math.max(0,remaining - prefix.length - 2);
+      if (!available) break;
+      if (content.length > available) content = content.slice(-available);
+      rows.push(prefix + "：" + content);
+      remaining -= prefix.length + content.length + 2;
+      if (remaining <= 0) break;
+    }
+    return rows.reverse().join("\n").slice(-MAX_VOICE_CONTEXT_CHARS);
+  }
+
   async function startVoiceCall() {
     if (state.streaming || state.voiceActive) return;
     const activeConversation = currentConversation();
@@ -292,6 +324,8 @@
     state.voiceAssistantLine = null;
     const client = voiceApi.create({
       apiToken:state.apiToken,
+      instructions:DEFAULT_VOICE_INSTRUCTIONS,
+      context:buildVoiceContext(voiceConversation),
       beforeConnect:async () => {
         try {
           const session = await apiJson("/api/user/me");
