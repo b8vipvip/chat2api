@@ -95,6 +95,9 @@
     const onEvent = typeof options.onEvent === "function" ? options.onEvent : () => {};
     const onState = typeof options.onState === "function" ? options.onState : () => {};
     const timers = options.timers || window;
+    const clock = typeof options.now === "function"
+      ? options.now
+      : () => (typeof window.performance?.now === "function" ? window.performance.now() : Date.now());
 
     let socket = null;
     let audioContext = null;
@@ -123,13 +126,12 @@
     let videoFrameCount = 0;
     let sessionStartedAt = 0;
     let lastVideoTimestampMs = -1;
+    let lastVideoCaptureAt = -Infinity;
     let supportsVideoFrames = false;
     let readyTimeoutId = null;
     let closeTimeoutId = null;
 
-    function monotonicNow() {
-      return typeof window.performance?.now === "function" ? window.performance.now() : Date.now();
-    }
+    function monotonicNow() { return clock(); }
     function state(status, detail = "") {
       try { onState(status, detail); } catch {}
     }
@@ -386,9 +388,12 @@
     }
     async function captureAndSendFrame() {
       if (!ready || stopping || !cameraStream || videoPending || videoFrameCount >= MAX_VIDEO_FRAMES) return;
+      const captureAt = monotonicNow();
+      if (captureAt - lastVideoCaptureAt < 1000) return;
       const width = Number(videoElement?.videoWidth || 0);
       const height = Number(videoElement?.videoHeight || 0);
       if (!width || !height) return;
+      lastVideoCaptureAt = captureAt;
       videoPending = true;
       const sequence = videoSequence++;
       const itemId = "webchat-video-" + sequence;
@@ -436,7 +441,7 @@
           sequence,
           timestamp_ms:(lastVideoTimestampMs = Math.max(
             lastVideoTimestampMs + 1,
-            Math.floor(monotonicNow() - sessionStartedAt),
+            Math.floor(captureAt - sessionStartedAt),
           )),
           file_id:fileId,
           text:"摄像头画面",
