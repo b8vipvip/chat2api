@@ -452,13 +452,15 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     # before opening Voice. Include that confirmed input in the
                     # final usage estimate once, rather than reserving it and then
                     # dropping it from settlement.
-                    if not setup_prompt_accounted and (
-                        event.get("instructions_applied") is True
-                        or event.get("context_injected") is True
-                    ):
-                        if session_prompt:
-                            observed_prompt_parts.append(session_prompt)
-                        setup_prompt_accounted = True
+                    if not setup_prompt_accounted:
+                        if event.get("context_injected") is True:
+                            if session_prompt:
+                                observed_prompt_parts.append(session_prompt)
+                            setup_prompt_accounted = True
+                        elif event.get("instructions_applied") is True:
+                            if instructions:
+                                observed_prompt_parts.append(instructions)
+                            setup_prompt_accounted = True
                     payload: dict[str, object] = {
                         "type": "session.ready",
                         "session_id": session_id,
