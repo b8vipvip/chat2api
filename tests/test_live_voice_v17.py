@@ -394,12 +394,18 @@ def test_live_voice_bounds_pcm16_frames_and_keeps_session_after_bad_input(tmp_pa
                 f"/v1/audio/realtime?client_id={client_id}",
                 headers={"Authorization": f"Bearer {managed_key}"},
             ) as live:
-                live.send_json({"type": "session.start", "model": "gpt-live"})
+                live.send_json({
+                    "type": "session.start",
+                    "model": "gpt-live",
+                    "instructions": "自然聊天",
+                    "context": "用户：你好\\n助手：你好，我可以继续帮你。",
+                })
                 started = extension.receive_json()
                 request_id = started["request_id"]
                 extension.send_json({
                     "type": "image.progress", "kind": "voice-live",
                     "request_id": request_id, "live_event": "session.ready",
+                    "context_injected": True, "instructions_applied": True,
                 })
                 assert live.receive_json()["type"] == "session.ready"
 
