@@ -12,7 +12,7 @@ const voiceContextEnd = chatClientSource.indexOf("  async function startVoiceCal
 assert.ok(voiceContextStart >= 0 && voiceContextEnd > voiceContextStart,
   "production voice context builder must remain extractable");
 const buildVoiceContext = vm.runInNewContext(
-  chatClientSource.slice(voiceContextStart,voiceContextEnd) + "\\nbuildVoiceContext",
+  chatClientSource.slice(voiceContextStart,voiceContextEnd) + "\nbuildVoiceContext",
   {MAX_VOICE_CONTEXT_CHARS:8000},
 );
 const contextFixture = buildVoiceContext({messages:[
