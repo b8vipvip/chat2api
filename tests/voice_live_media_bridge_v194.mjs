@@ -66,7 +66,7 @@ const currentVoiceState = {
   },
 };
 class FakeAudioContext {
-  constructor(){this.state="running";this.sampleRate=48000;this.destination={};}
+  constructor(){this.state="running";this.sampleRate=44100;this.destination={};}
   createMediaStreamSource(stream){realAudioSource=stream;remoteSources.push(stream.tracks[0]);return {connect(){},disconnect(){}};}
   createScriptProcessor(){remoteProcessor={connect(v){return v;},disconnect(){},onaudioprocess:null};remoteProcessors.push(remoteProcessor);return remoteProcessor;}
   createGain(){return {gain:{value:1},connect(){},disconnect(){}};}
@@ -125,6 +125,20 @@ assert.ok(posted.some(x=>x.type==="voice.live.response.started"));
 const packet=posted.find(x=>x.type==="voice.live.audio");
 assert.ok(packet && packet.pcm_base64 && packet.sample_rate===24000);
 assert.ok(Buffer.from(packet.pcm_base64,"base64").byteLength>0);
+
+// 44.1 kHz -> 24 kHz is a fractional ratio. Resampling each 2048-sample
+// callback independently would round every frame and accumulate clock drift.
+const beforeLongRun = posted.length;
+const blockCount = 500;
+for (let index = 0; index < blockCount; index += 1) {
+  remoteProcessor.onaudioprocess({inputBuffer:{getChannelData:()=>audio}});
+}
+const longRunPackets = posted.slice(beforeLongRun).filter(item=>item.type==="voice.live.audio");
+const longRunSamples = longRunPackets.reduce((sum,item)=>
+  sum + Buffer.from(item.pcm_base64,"base64").byteLength / 2,0);
+const expectedLongRunSamples = audio.length * blockCount * 24000 / 44100;
+assert.ok(Math.abs(longRunSamples - expectedLongRunSamples) <= 2,
+  "remote PCM resampling must preserve the aggregate 44.1 kHz to 24 kHz clock");
 
 // Small PCM WebSocket frames must be played in arrival order by the fake mic,
 // despite each AudioContext.resume() being asynchronous.
