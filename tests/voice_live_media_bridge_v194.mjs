@@ -12,6 +12,10 @@ assert.ok(!liveMain.includes("recorderChunks.splice"), "live stream cannot mutat
 assert.ok(liveContent.includes('voice.live.remote.ready'), "ready only after PCM processor starts");
 assert.ok(liveContent.includes('voice.mic.synthetic'), "ready only after microphone acquisition");
 assert.ok(!liveContent.includes("ready when you are"), "generic body text is not Voice UI readiness");
+assert.ok(liveContent.includes("function latestRoleMessage(role)"), "Voice transcript polling tracks the actual ChatGPT message node");
+assert.ok(liveContent.includes("lastUserMessageKey"), "Voice transcript polling remembers the last user message identity");
+assert.ok(liveContent.includes("userMessageKey !== state.lastUserMessageKey || userText !== state.lastUserText"),
+  "two consecutive identical user utterances must still produce two transcript events");
 assert.ok(liveText.includes("baselineUsers"), "text receipt needs a real new ChatGPT user turn");
 assert.ok(liveText.includes("assertComposerDraftSafe"), "live input must not overwrite a user-owned composer draft");
 assert.ok(liveText.includes("refusing to overwrite it"), "draft conflicts must fail closed");
