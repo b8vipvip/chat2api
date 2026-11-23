@@ -272,21 +272,60 @@
     if (first.ordered && first.start > 1) list.start = first.start;
     let index = start;
     let lastItem = null;
+    let currentParagraph = null;
+    let blankBeforeContinuation = false;
     while (index < lines.length) {
-      const marker = listMarker(lines[index]);
-      if (!marker || marker.indent < first.indent) break;
-      if (marker.indent > first.indent) {
-        if (!lastItem) break;
-        const next = renderList(lastItem,lines,index,references);
-        if (next <= index) break;
-        index = next;
+      const line = lines[index];
+      const marker = listMarker(line);
+      if (marker) {
+        if (marker.indent < first.indent) break;
+        if (marker.indent > first.indent) {
+          if (!lastItem) break;
+          const next = renderList(lastItem,lines,index,references);
+          if (next <= index) break;
+          index = next;
+          currentParagraph = null;
+          blankBeforeContinuation = false;
+          continue;
+        }
+        if (marker.ordered !== first.ordered) break;
+        const item = node("li");
+        appendListItem(item,marker.text,references);
+        list.appendChild(item);
+        lastItem = item;
+        currentParagraph = item;
+        blankBeforeContinuation = false;
+        index++;
         continue;
       }
-      if (marker.ordered !== first.ordered) break;
-      const item = node("li");
-      appendListItem(item,marker.text,references);
-      list.appendChild(item);
-      lastItem = item;
+
+      if (!line.trim()) {
+        let nextIndex = index + 1;
+        while (nextIndex < lines.length && !lines[nextIndex].trim()) nextIndex++;
+        if (nextIndex >= lines.length || !lastItem) break;
+        const nextMarker = listMarker(lines[nextIndex]);
+        const nextIndent = (String(lines[nextIndex]).match(/^[ \t]*/) || [""])[0].replace(/\t/g,"  ").length;
+        if ((nextMarker && nextMarker.indent > first.indent) ||
+            (!nextMarker && nextIndent > first.indent)) {
+          blankBeforeContinuation = true;
+          index = nextIndex;
+          continue;
+        }
+        break;
+      }
+
+      const indent = (String(line).match(/^[ \t]*/) || [""])[0].replace(/\t/g,"  ").length;
+      if (!lastItem || indent <= first.indent) break;
+      const continuation = line.slice((String(line).match(/^[ \t]*/) || [""])[0].length);
+      if (blankBeforeContinuation || !currentParagraph) {
+        currentParagraph = node("p");
+        inline(currentParagraph,continuation,references);
+        lastItem.appendChild(currentParagraph);
+      } else {
+        currentParagraph.appendChild(document.createTextNode(" "));
+        inline(currentParagraph,continuation,references);
+      }
+      blankBeforeContinuation = false;
       index++;
     }
     host.appendChild(list);

@@ -92,6 +92,27 @@ assert(markdownListNodes.some(x => x.tag === "ul" && x.children.some(
 )));
 assert(markdownListNodes.some(x => x.tag === "ol" && x.start === 3));
 assert(markdownListNodes.some(x => x.tag === "del" && x.textContent === "deleted text"));
+
+const continuationHost = new Element("root");
+renderer.renderMarkdown(continuationHost,
+  "- first item\n" +
+  "  same paragraph line\n" +
+  "\n" +
+  "  second paragraph\n" +
+  "  - nested item\n" +
+  "    nested continuation\n" +
+  "- second item\n" +
+  "\n" +
+  "outside paragraph");
+const continuationNodes = all(continuationHost);
+const topList = continuationHost.children[0];
+const firstItem = topList.children[0];
+assert(firstItem.textContent.includes("first item same paragraph line"));
+assert(firstItem.children.some(child => child.tag === "p" && child.textContent === "second paragraph"));
+assert(firstItem.children.some(child => child.tag === "ul" &&
+  child.children[0].textContent.includes("nested item nested continuation")));
+assert.equal(topList.children[1].textContent,"second item");
+assert(continuationHost.children.some(child => child.tag === "p" && child.textContent === "outside paragraph"));
 assert(nodes.some(x => x.tag === "a" && x.href === "https://example.org/x"));
 assert(nodes.some(x => x.tag === "table"));
 assert(nodes.some(x => x.tag === "span" && x.className === "math-inline"));
