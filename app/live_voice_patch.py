@@ -520,7 +520,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         "attachment_count": len(confirmed_item_media_ids),
                     }
                     if video_frame:
-                        ack["sequence"], ack["timestamp_ms"] = video_frame
+                        ack["sequence"], ack["timestamp_ms"] = video_frame[:2]
                     await send_json(ack)
                 elif event_type == "input.error":
                     failed_item_id = str(event.get("item_id") or "")
@@ -537,7 +537,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         "retryable": True,
                     }
                     if failed_video_frame:
-                        failure["video_sequence"], failure["timestamp_ms"] = failed_video_frame
+                        failure["video_sequence"], failure["timestamp_ms"] = failed_video_frame[:2]
                     await send_json(failure)
                 elif event_type == "transcript.final":
                     text = str(event.get("text") or "").strip()
