@@ -10,6 +10,9 @@
   // interruption snapshot. Leave network/terminal-delivery margin before the
   // browser gives up and closes the public WebSocket.
   const SESSION_CLOSE_TIMEOUT_MS = 8000;
+  const DEFAULT_SESSION_INSTRUCTIONS = "请用自然、清晰、简洁的中文与用户进行实时语音对话。需要时结合用户提供的摄像头画面回答。";
+  const MAX_SESSION_INSTRUCTIONS_CHARS = 4000;
+  const MAX_SESSION_CONTEXT_CHARS = 8000;
 
   function resamplePcm16(input, inputRate, outputRate = INPUT_RATE) {
     if (!input || typeof input.length !== "number" || !Number.isFinite(inputRate) ||
@@ -91,6 +94,8 @@
 
   function create(options = {}) {
     const token = String(options.apiToken || "");
+    const instructions = String(options.instructions || DEFAULT_SESSION_INSTRUCTIONS).trim().slice(0,MAX_SESSION_INSTRUCTIONS_CHARS);
+    const context = String(options.context || "").trim().slice(0,MAX_SESSION_CONTEXT_CHARS);
     const beforeConnect = typeof options.beforeConnect === "function" ? options.beforeConnect : null;
     const fetcher = options.fetcher || window.fetch.bind(window);
     const WebSocketImpl = options.WebSocketImpl || window.WebSocket;
@@ -383,7 +388,8 @@
           socket.send(JSON.stringify({
             type:"session.start",
             model:"gpt-live",
-            instructions:"请用自然、清晰、简洁的中文与用户进行实时语音对话。需要时结合用户提供的摄像头画面回答。",
+            instructions,
+            context,
           }));
         };
         socket.onmessage = handleMessage;
