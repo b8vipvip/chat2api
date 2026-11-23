@@ -96,11 +96,10 @@ const repeatedLocalRow = {
   }],
 };
 const mergedRepeatedTurns = mergeConversation(repeatedServerRow,repeatedLocalRow);
-assert.deepEqual(
-  Array.from(mergedRepeatedTurns.messages, message=>message.id),
-  ["voice-user-turn-1","voice-user-turn-2"],
-  "cross-device merge must preserve distinct Voice turns even when their text is identical",
-);
+assert.equal(mergedRepeatedTurns.messages.length,2,
+  "cross-device merge must preserve both distinct Voice turns");
+assert.equal(mergedRepeatedTurns.messages[0].id,"voice-user-turn-1");
+assert.equal(mergedRepeatedTurns.messages[1].id,"voice-user-turn-2");
 
 
 const citationMatch = source.match(/function citationTextForMessage\(message\) \{[\s\S]*?\n  \}/);
