@@ -356,6 +356,7 @@
       context: String(message.options?.context || "").slice(0,8000),
       contextInjected: false,
       instructionsApplied: false,
+      setupResponseText: "",
       stopped: false,
     };
     state.active = active;
