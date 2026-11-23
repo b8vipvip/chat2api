@@ -42,6 +42,7 @@
     voicePanelVisible: false,
     voiceAssistantLine: null,
     voiceAuthTimer: null,
+    voiceConversationId: "",
   };
   const MAX_CONVERSATIONS = 15;
   const MAX_MESSAGES = 30;
@@ -122,6 +123,7 @@
       $("voiceCameraButton").textContent = "开启摄像头";
       state.voiceAssistantLine = null;
       state.voiceClient = null;
+      state.voiceConversationId = "";
       if (state.voiceAuthTimer !== null) window.clearInterval(state.voiceAuthTimer);
       state.voiceAuthTimer = null;
     }
@@ -149,10 +151,31 @@
     return body;
   }
 
+  function persistVoiceTranscript(role, value) {
+    if (role !== "user" && role !== "assistant") return false;
+    const content = String(value || "").trim().slice(0,MAX_MESSAGE_CHARS);
+    if (!content) return false;
+    let conversation = state.conversations.find(row => row.id === state.voiceConversationId) || null;
+    if (!conversation) return false;
+    conversation.messages.push({
+      id:id(),
+      role,
+      content,
+      createdAt:new Date().toISOString(),
+    });
+    conversation.messages = conversation.messages.slice(-MAX_MESSAGES);
+    if (role === "user") autoTitle(conversation);
+    conversation.updatedAt = new Date().toISOString();
+    saveHistory();
+    if (currentConversation()?.id === conversation.id) renderAll();
+    return true;
+  }
+
   function handleVoiceEvent(payload) {
     if (!payload || typeof payload !== "object") return;
     if (payload.type === "transcript.final") {
       appendVoiceTranscript("user",payload.text);
+      persistVoiceTranscript("user",payload.text);
     } else if (payload.type === "response.text.delta") {
       if (!state.voiceAssistantLine) {
         state.voiceAssistantLine = appendVoiceTranscript("assistant","");
@@ -162,13 +185,15 @@
         $("voiceTranscript").scrollTop = $("voiceTranscript").scrollHeight;
       }
     } else if (payload.type === "response.done") {
-      if (!state.voiceAssistantLine && payload.text) {
-        state.voiceAssistantLine = appendVoiceTranscript("assistant",payload.text);
-      } else if (state.voiceAssistantLine && payload.text) {
+      const finalText = String(payload.text || state.voiceAssistantLine?.textContent || "");
+      if (!state.voiceAssistantLine && finalText) {
+        state.voiceAssistantLine = appendVoiceTranscript("assistant",finalText);
+      } else if (state.voiceAssistantLine && finalText) {
         // response.done is the authoritative final transcript; replace a
         // partial delta snapshot if any intermediate frame was lost.
-        state.voiceAssistantLine.textContent = payload.text;
+        state.voiceAssistantLine.textContent = finalText;
       }
+      if (finalText) persistVoiceTranscript("assistant",finalText);
       state.voiceAssistantLine = null;
     } else if (payload.type === "input_video.frame.sent") {
       $("voiceStatus").textContent = "摄像头画面已送达 ChatGPT Voice";
@@ -216,6 +241,17 @@
       toast("实时语音模块尚未加载，请刷新页面后重试。");
       return;
     }
+    let voiceConversation = currentConversation();
+    if (!voiceConversation) voiceConversation = createConversation();
+    if (!voiceConversation) {
+      toast("无法为语音会话创建聊天记录。");
+      return;
+    }
+    if (voiceConversation.apiKeyId && voiceConversation.apiKeyId !== selectedKeyId()) {
+      toast("当前对话绑定了另一个 API Key，请切换到该 Key 后再开始语音。");
+      return;
+    }
+    state.voiceConversationId = voiceConversation.id;
     state.voicePanelVisible = true;
     $("voicePanel").classList.remove("hidden");
     $("voiceTranscript").replaceChildren();
