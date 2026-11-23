@@ -254,9 +254,10 @@ const startupEndButton = {
     startupAssistantNode.textContent="";
   },
 };
+let startupRuntimeListener = null;
 const startupChrome = {
   runtime:{
-    onMessage:{addListener(){}},
+    onMessage:{addListener(listener){startupRuntimeListener=listener;}},
     sendMessage:async message=>{startupMessages.push(message);return {ok:true};},
   },
 };
@@ -291,7 +292,14 @@ const pendingStartup = startupTest.startLive({
 await new Promise(resolve=>setTimeout(resolve,80));
 const startupActive = startupTest.state.active;
 assert.ok(startupActive,"the extension should have entered the Voice UI readiness phase");
-await startupTest.stopLive(startupActive,true);
+const stopAckResult = await new Promise(resolve=>{
+  const handled = startupRuntimeListener({
+    type:"chat2api.voice.live.stop",
+    requestId:startupActive.requestId,
+  },{},resolve);
+  assert.equal(handled,true,"background stop message must keep the response channel open while draining");
+});
+assert.equal(stopAckResult?.ok,true,"background stop receives the drained content-script acknowledgement");
 await pendingStartup;
 const startupLiveEvents = startupMessages.map(message=>message.event?.live_event);
 assert.equal(startupLiveEvents.includes("session.ready"),false,
