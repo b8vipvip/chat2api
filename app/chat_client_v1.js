@@ -174,8 +174,16 @@
       $("voiceStatus").textContent = "摄像头画面已送达 ChatGPT Voice";
     } else if (payload.type === "error" || payload.type === "client.error") {
       $("voiceStatus").textContent = "语音提示：" + String(payload.message || payload.code || "未知错误");
+      if (payload.type === "client.error" && state.voiceClient && !state.voiceClient.isCameraActive()) {
+        $("voiceCameraPreview").classList.add("hidden");
+        $("voiceCameraButton").textContent = "开启摄像头";
+      }
     } else if (payload.type === "client.notice") {
       $("voiceStatus").textContent = String(payload.message || "摄像头抽帧已停止");
+      if (state.voiceClient && !state.voiceClient.isCameraActive()) {
+        $("voiceCameraPreview").classList.add("hidden");
+        $("voiceCameraButton").textContent = "开启摄像头";
+      }
     }
   }
 
