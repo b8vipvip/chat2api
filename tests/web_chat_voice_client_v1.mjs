@@ -189,6 +189,18 @@ assert.equal(pcm.byteLength,160*2);
 const decoded = api.decodePcm16(pcm);
 assert.equal(decoded.length,160);
 assert.ok(decoded.every(value => value > 0.24 && value < 0.26));
+const stream48 = {pending:new Float32Array(0),position:0};
+let samples48 = 0;
+for(let index=0;index<12;index+=1) {
+  samples48 += api.resamplePcm16Stream(new Float32Array(4096).fill(0.1),48000,stream48).byteLength/2;
+}
+assert.equal(samples48,16384,"48 kHz callback boundaries must not accumulate resampling drift");
+const stream441 = {pending:new Float32Array(0),position:0};
+let samples441 = 0;
+for(let index=0;index<10;index+=1) {
+  samples441 += api.resamplePcm16Stream(new Float32Array(4410).fill(0.1),44100,stream441).byteLength/2;
+}
+assert.equal(samples441,16000,"44.1 kHz callback boundaries must preserve the 16 kHz clock");
 
 const states = [];
 const events = [];
