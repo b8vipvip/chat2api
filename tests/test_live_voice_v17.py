@@ -58,20 +58,24 @@ def create_managed_key(client: TestClient, name: str = "voice-test") -> str:
     return response.json()["token"]
 
 
-def acknowledge_live_stop(live, extension, request_id: str) -> None:
+def acknowledge_live_stop(live, extension, request_id: str, final_events: list[dict] | None = None) -> list[dict]:
     stopped = extension.receive_json()
     assert stopped["type"] == "voice.live.stop"
     assert stopped["request_id"] == request_id
+    for event in final_events or []:
+        extension.send_json(event)
     extension.send_json({
         "type": "image.progress",
         "kind": "voice-live",
         "request_id": request_id,
         "live_event": "session.closed",
     })
+    received = []
     for _ in range(5):
-        terminal = live.receive_json()
-        if terminal.get("type") == "session.closed":
-            return
+        message = live.receive_json()
+        received.append(message)
+        if message.get("type") == "session.closed":
+            return received
     raise AssertionError("Live session did not send its terminal session.closed event")
 
 
@@ -470,7 +474,30 @@ def test_live_voice_ready_session_without_response_is_not_completed(tmp_path: Pa
                 assert live.receive_bytes() == b"\x05\x06" * 120
                 # Partial PCM delivery is not proof of a completed response.
                 live.send_json({"type": "session.finish"})
-                acknowledge_live_stop(live, extension, request_id)
+                final_messages = acknowledge_live_stop(
+                    live,
+                    extension,
+                    request_id,
+                    final_events=[{
+                        "type": "image.progress",
+                        "kind": "voice-live",
+                        "request_id": request_id,
+                        "live_event": "response.interrupted",
+                        "response_id": "partial-audio-only",
+                        "reason": "session_stop",
+                        "text": "最后一段未被轮询捕获的文本",
+                    }],
+                )
+                interrupted_index = next(
+                    index for index, message in enumerate(final_messages)
+                    if message.get("type") == "response.interrupted"
+                )
+                closed_index = next(
+                    index for index, message in enumerate(final_messages)
+                    if message.get("type") == "session.closed"
+                )
+                assert final_messages[interrupted_index]["text"] == "最后一段未被轮询捕获的文本"
+                assert interrupted_index < closed_index, "final partial text must reach Web Chat before session.closed"
 
         row = app.state.telemetry.get(request_id)
         assert row["status"] == "error"
