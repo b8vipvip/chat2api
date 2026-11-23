@@ -170,7 +170,7 @@
       "|\\\\\\([^\\n]+?\\\\\\)" +
       "|\\$(?!\\$)[^$\\n]+\\$(?!\\$)" +
       "|\\[[^\\]\\n]{1,160}\\]\\([^\\s)]+\\)" +
-      "|\\*\\*[^*\\n]+\\*\\*|\\*[^*\\n]+\\*" +
+      "|~~[^~\\n]+~~|\\*\\*[^*\\n]+\\*\\*|\\*[^*\\n]+\\*" +
       "|https?:\\/\\/[^\\s<>]+)", "g"
     );
     let last = 0;
@@ -187,6 +187,8 @@
         renderMath(parent, token.slice(2, -2), false);
       } else if (token.startsWith("$")) {
         renderMath(parent, token.slice(1, -1), false);
+      } else if (token.startsWith("~~")) {
+        parent.appendChild(node("del", "", token.slice(2, -2)));
       } else if (token.startsWith("**")) {
         parent.appendChild(node("strong", "", token.slice(2, -2)));
       } else if (token.startsWith("*")) {
@@ -235,6 +237,60 @@
     pre.appendChild(node("code", "", value));
     wrapper.append(toolbar, pre);
     host.appendChild(wrapper);
+  }
+
+  function listMarker(line) {
+    const match = String(line || "").match(/^([ \t]*)(?:([-*+] )|(\d+\. ))(.*)$/);
+    if (!match) return null;
+    return {
+      indent:match[1].replace(/\t/g,"  ").length,
+      ordered:Boolean(match[3]),
+      start:match[3] ? parseInt(match[3],10) : 1,
+      text:match[4],
+    };
+  }
+
+  function appendListItem(item, text, references) {
+    const task = String(text || "").match(/^\[([ xX])\]\s+(.*)$/);
+    if (task) {
+      const checkbox = node("input","task-checkbox");
+      checkbox.type = "checkbox";
+      checkbox.checked = task[1].toLowerCase() === "x";
+      checkbox.disabled = true;
+      checkbox.setAttribute("aria-label",checkbox.checked ? "已完成" : "未完成");
+      item.appendChild(checkbox);
+      inline(item,task[2],references);
+      return;
+    }
+    inline(item,text,references);
+  }
+
+  function renderList(host, lines, start, references) {
+    const first = listMarker(lines[start]);
+    if (!first) return start;
+    const list = node(first.ordered ? "ol" : "ul");
+    if (first.ordered && first.start > 1) list.start = first.start;
+    let index = start;
+    let lastItem = null;
+    while (index < lines.length) {
+      const marker = listMarker(lines[index]);
+      if (!marker || marker.indent < first.indent) break;
+      if (marker.indent > first.indent) {
+        if (!lastItem) break;
+        const next = renderList(lastItem,lines,index,references);
+        if (next <= index) break;
+        index = next;
+        continue;
+      }
+      if (marker.ordered !== first.ordered) break;
+      const item = node("li");
+      appendListItem(item,marker.text,references);
+      list.appendChild(item);
+      lastItem = item;
+      index++;
+    }
+    host.appendChild(list);
+    return index;
   }
 
   function renderMarkdown(host, source, sourceReferences = []) {
@@ -299,17 +355,7 @@
         continue;
       }
       if (/^\s*(?:[-*+] |\d+\. )/.test(line)) {
-        const ordered = /^\s*\d+\. /.test(line);
-        const list = node(ordered ? "ol" : "ul");
-        while (i < lines.length) {
-          const match = lines[i].match(/^\s*(?:[-*+] |\d+\. )(.*)$/);
-          if (!match) break;
-          const item = node("li");
-          inline(item, match[1], references);
-          list.appendChild(item);
-          i++;
-        }
-        host.appendChild(list);
+        i = renderList(host,lines,i,references);
         continue;
       }
       if (line.includes("|") && i + 1 < lines.length &&

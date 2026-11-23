@@ -76,6 +76,7 @@ a{color:inherit}
 .message-body h1{font-size:1.45em}.message-body h2{font-size:1.25em}.message-body h3{font-size:1.1em}
 .message-body ul,.message-body ol{padding-left:24px;margin:8px 0 14px}
 .message-body li{padding:2px 0}
+.message-body li>.task-checkbox{margin:0 .45rem 0 0;vertical-align:middle}
 .message-body blockquote{margin:10px 0;padding:5px 13px;border-left:3px solid var(--muted);color:var(--muted)}
 .message-body a{color:#75b8ff;text-decoration:underline;text-underline-offset:2px}
 .message-body code{padding:2px 5px;border-radius:5px;background:var(--code);font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}
