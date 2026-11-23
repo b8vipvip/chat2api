@@ -342,6 +342,9 @@ const voiceUi = vm.runInContext(
 );
 voiceUi.handleVoiceEvent({type:"response.text.delta",delta:"部分"});
 assert.equal(clientContext.state.voiceAssistantLine.textContent,"部分");
+voiceUi.handleVoiceEvent({type:"response.text.replace",text:"修订后的部分回复"});
+assert.equal(clientContext.state.voiceAssistantLine.textContent,"修订后的部分回复",
+  "a corrected in-progress snapshot must replace rather than append duplicate text");
 voiceUi.handleVoiceEvent({type:"response.done",text:"完整的最终语音回复"});
 assert.equal(transcript.children[0].children[1].textContent,"完整的最终语音回复");
 assert.equal(clientContext.state.voiceAssistantLine,null);
