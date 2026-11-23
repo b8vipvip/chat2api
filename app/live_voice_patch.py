@@ -342,7 +342,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
         observed_completion_parts: list[str] = []
         pending_input_text: dict[str, str] = {}
         pending_input_media_ids: dict[str, list[str]] = {}
-        pending_video_frames: dict[str, tuple[int, int]] = {}
+        pending_video_frames: dict[str, tuple[int, int, float]] = {}
         last_video_sequence = -1
         last_video_timestamp_ms = -1
         last_video_dispatch_mono = 0.0
