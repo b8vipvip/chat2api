@@ -726,7 +726,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     "retryable": False,
                 })
                 return
-            session_prompt = "\\n\\n".join(part for part in (instructions, context) if part)
+            session_prompt = "\n\n".join(part for part in (instructions, context) if part)
             quota_reservation = await reserve_audio_request_quota(
                 app, request_id, principal,
                 session_prompt,
