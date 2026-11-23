@@ -51,6 +51,13 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         assert "/api/user/chat/completions" in script.text
         assert "/v1/chat/completions" not in script.text
         assert "streamNativeContent" in script.text
+        assert "MAX_USER_MESSAGE_CHARS = 8000" in script.text
+        assert "MAX_ASSISTANT_MESSAGE_CHARS = 32000" in script.text
+        assert "MAX_LOCAL_MESSAGE_CHARS = 8000" in script.text
+        assert "ASSISTANT_TRUNCATION_NOTICE" in script.text
+        assert "limitAssistantText" in script.text
+        assert "normalizeMessageContent(message.content, message.role, MAX_LOCAL_MESSAGE_CHARS)" in script.text
+        assert "5 * 1024 * 1024" in script.text
         assert "shouldAutoScroll(screen)" in script.text
         assert "state.forceScrollToBottom" in script.text
         assert "else screen.scrollTop = previousScrollTop" in script.text
