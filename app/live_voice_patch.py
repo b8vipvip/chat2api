@@ -739,10 +739,6 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     "estimate_policy": "text_input_tokens_plus_4096_audio_admission_floor_v1",
                     "provider_usage_verified": False,
                 }
-            if instructions:
-                observed_prompt_parts.append(instructions)
-            if context:
-                observed_prompt_parts.append(context)
             registry.busy_clients.add(selected_client)
             await telemetry.append({
                 "request_id": request_id,
