@@ -195,7 +195,7 @@ def test_json_import_rejects_unsupported_format_and_oversized_body(tmp_path: Pat
 
         oversized = client.post(
             "/api/user/chat/conversations/import",
-            content=json.dumps({"padding": "x" * (540 * 1024)}),
+            content=json.dumps({"padding": "x" * (5 * 1024 * 1024 + 16 * 1024)}),
             headers={"Content-Type": "application/json"},
         )
         assert oversized.status_code == 413
@@ -259,7 +259,7 @@ def test_conversation_mutations_require_same_origin_and_bound_put_body(tmp_path:
             "conversation": {
                 **conversation,
                 "messages": [],
-                "padding": "x" * (540 * 1024),
+                "padding": "x" * (5 * 1024 * 1024 + 16 * 1024),
             },
         })
         oversized = client.put(
