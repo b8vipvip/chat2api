@@ -58,8 +58,11 @@ const transcriptSandbox = vm.createContext({
   clearTimeout,
   Date,Math,Promise,String,Number,Set,Array,
 });
-const instrumentedContent = liveContent.replace(/\\}\\)\\(\\);\\s*$/, 
-  "globalThis.__voiceTranscriptTest = {startTranscriptPolling,state}; })();");
+const closingIife = liveContent.lastIndexOf("})();");
+assert.ok(closingIife >= 0,"content script IIFE terminator exists");
+const instrumentedContent = liveContent.slice(0,closingIife) +
+  "globalThis.__voiceTranscriptTest = {startTranscriptPolling,state}; " +
+  liveContent.slice(closingIife);
 assert.notEqual(instrumentedContent,liveContent,"transcript poller test hook must be injected");
 vm.runInContext(instrumentedContent,transcriptSandbox);
 const transcriptTest = transcriptSandbox.__voiceTranscriptTest;
