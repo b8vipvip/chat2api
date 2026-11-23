@@ -276,7 +276,7 @@
           lastText = current;
           stableSince = Date.now();
         }
-        if (!stopButton() && stableSince && Date.now() - stableSince >= 1800) return current;
+        if (!stopButton() && buttonReady(sendButton()) && stableSince && Date.now() - stableSince >= 1800) return current;
       }
       await delay(120);
     }
