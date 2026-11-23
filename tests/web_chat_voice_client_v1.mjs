@@ -242,7 +242,7 @@ let beforeConnectCalls = 0;
 const client = api.create({
   apiToken:"managed-key",
   instructions:"Use concise Chinese responses.",
-  context:"用户：我正在调试 Web Chat。\\n助手：可以继续讨论 SSE 恢复。",
+  context:"用户：我正在调试 Web Chat。\n助手：可以继续讨论 SSE 恢复。",
   beforeConnect:async()=>{beforeConnectCalls+=1;assert.ok(audioContexts.length>0);},
   fetcher,
   WebSocketImpl:FakeWebSocket,
@@ -266,7 +266,7 @@ const sessionStart = socket.sent.map(value=>typeof value==="string" ? JSON.parse
   .find(value=>value?.type==="session.start");
 assert.ok(sessionStart);
 assert.equal(sessionStart.instructions,"Use concise Chinese responses.");
-assert.equal(sessionStart.context,"用户：我正在调试 Web Chat。\\n助手：可以继续讨论 SSE 恢复。");
+assert.equal(sessionStart.context,"用户：我正在调试 Web Chat。\n助手：可以继续讨论 SSE 恢复。");
 
 const input = new Float32Array(4096).fill(0.1);
 processors[0].onaudioprocess({inputBuffer:{getChannelData:()=>input}});
