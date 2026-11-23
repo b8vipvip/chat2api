@@ -108,7 +108,8 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         assert live_start.index("textBridge.prepareContext(active,primer)") < live_start.index("await openVoice(active)")
         assert live_start.index("await openVoice(active)") < live_start.index("startTranscriptPolling(active)")
         assert "async function prepareContext(active, text)" in voice_text
-        assert "waitForAssistantCompletion(active,baselineText)" in voice_text
+        assert "function messageIdentity(node)" in voice_text
+        assert "waitForAssistantCompletion(active,baselineIdentity,baselineText)" in voice_text
         assert "active.instructionsApplied = true" in live_start
         assert "active.contextInjected = Boolean(active.context.trim())" in live_start
         assert '"instructions_only_setup_turn"' in live_start
