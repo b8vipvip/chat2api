@@ -2331,36 +2331,57 @@
     if (!requestId || state.nativeStreams.has(requestId)) return;
     const controller = new AbortController();
     state.nativeStreams.set(requestId,controller);
-    let reader = null, ended = false;
+    let reconnects = 0, ended = false;
+    const maxReconnects = 8;
     try {
-      const response = await fetch("/api/user/chat/requests/" + encodeURIComponent(requestId) + "/native-content/events",
-        {method:"GET",credentials:"same-origin",cache:"no-store",headers:{Accept:"text/event-stream"},signal:controller.signal});
-      if (!response.ok || !response.body) return;
-      reader = response.body.getReader();
-      const decoder = new TextDecoder("utf-8");
-      let buffer = "";
-      while (!ended) {
-        const part = await reader.read();
-        if (part.done) break;
-        buffer += decoder.decode(part.value,{stream:true});
-        let boundary;
-        while ((boundary = /\r?\n\r?\n/.exec(buffer))) {
-          const frame = buffer.slice(0,boundary.index);
-          buffer = buffer.slice(boundary.index + boundary[0].length);
-          if (consumeNativeSseFrame(frame,requestId)) { ended = true; break; }
+      while (!ended && !controller.signal.aborted) {
+        let reader = null;
+        try {
+          const response = await fetch("/api/user/chat/requests/" + encodeURIComponent(requestId) + "/native-content/events",
+            {method:"GET",credentials:"same-origin",cache:"no-store",headers:{Accept:"text/event-stream"},signal:controller.signal});
+          // Authentication/ownership failures are terminal for this observer;
+          // retrying them would only create an endless request loop.
+          if ([401,403,404].includes(response.status)) break;
+          if (!response.ok || !response.body) {
+            throw new Error("Native content stream unavailable: HTTP " + response.status);
+          }
+          reader = response.body.getReader();
+          const decoder = new TextDecoder("utf-8");
+          let buffer = "";
+          while (!ended) {
+            const part = await reader.read();
+            if (part.done) break;
+            buffer += decoder.decode(part.value,{stream:true});
+            let boundary;
+            while ((boundary = /\\r?\\n\\r?\\n/.exec(buffer))) {
+              const frame = buffer.slice(0,boundary.index);
+              buffer = buffer.slice(boundary.index + boundary[0].length);
+              if (consumeNativeSseFrame(frame,requestId)) { ended = true; break; }
+            }
+          }
+        } catch (_) {
+          if (controller.signal.aborted) break;
+          // A failed native sidecar must not affect the authoritative chat
+          // response. Reconnect below and hydrate the latest snapshot first.
+        } finally {
+          if (reader) {
+            if (!ended) void reader.cancel().catch(() => {});
+            try { reader.releaseLock(); } catch (_) {}
+          }
         }
+        if (ended || controller.signal.aborted) break;
+        reconnects += 1;
+        await refreshNativeSnapshot(requestId);
+        if (reconnects > maxReconnects) break;
+        const delayMs = Math.min(10000,500 * (2 ** Math.min(reconnects - 1,5)));
+        await new Promise(resolve => window.setTimeout(resolve,delayMs));
       }
-    } catch (_) {
-      // A presentation-sidecar failure never changes the authoritative chat terminal.
     } finally {
-      if (reader) {
-        if (!ended) void reader.cancel().catch(() => {});
-        try { reader.releaseLock(); } catch (_) {}
-      }
       state.nativeStreams.delete(requestId);
       if (!controller.signal.aborted) await refreshNativeSnapshot(requestId);
     }
   }
+
   async function hydrateNativeSnapshots() {
     const candidates = [], seen = new Set();
     for (const conversation of state.conversations) {
