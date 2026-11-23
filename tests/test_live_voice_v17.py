@@ -336,17 +336,27 @@ def test_live_voice_bounds_pcm16_frames_and_keeps_session_after_bad_input(tmp_pa
                     "type": "image.progress", "kind": "voice-live",
                     "request_id": request_id, "live_event": "response.audio.delta",
                     "response_id": response_id, "sample_rate": 24000,
-                    "pcm_base64": base64.b64encode(b"\x03\x04" * 480).decode("ascii"),
+                    "pcm_base64": base64.b64encode(b"\\x03\\x04" * 480).decode("ascii"),
                 })
-                assert live.receive_bytes() == b"\x03\x04" * 480
+                assert live.receive_bytes() == b"\\x03\\x04" * 480
+                extension.send_json({
+                    "type": "image.progress", "kind": "voice-live",
+                    "request_id": request_id, "live_event": "response.text.snapshot",
+                    "response_id": response_id, "text": "这是尚未完成的部分",
+                })
+                assert live.receive_json() == {
+                    "type": "response.text.delta", "response_id": response_id,
+                    "delta": "这是尚未完成的部分",
+                }
                 extension.send_json({
                     "type": "image.progress", "kind": "voice-live",
                     "request_id": request_id, "live_event": "response.done",
-                    "response_id": response_id, "text": "你好",
+                    "response_id": response_id, "text": "这是完整的最终回答",
                 })
                 assert live.receive_json() == {
-                    "type": "response.done", "response_id": response_id, "text": "你好",
-                }
+                    "type": "response.done", "response_id": response_id,
+                    "text": "这是完整的最终回答",
+                }, "response.done must supersede an older partial text snapshot"
                 live.send_json({"type": "session.finish"})
                 assert extension.receive_json()["type"] == "voice.live.stop"
 
