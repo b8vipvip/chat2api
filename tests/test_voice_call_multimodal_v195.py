@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import create_app
+import app.live_voice_patch as live_voice_patch_module
 from app.voice_patch import install_voice_patch
 from app.live_voice_patch import install_live_voice_patch
 from app.prompt_config import PromptConfigStore, SPEECH_DEFAULT_PREFIX, build_speech_prompt
@@ -425,3 +426,86 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
         assert row["diagnostics"]["input_confirmed_turns"] == 5
         assert row["input_file_ids"] == [file_a, video_frame_file]
         assert row["diagnostics"]["audio_bytes"] == 1600
+
+def test_live_video_frame_ack_timeout_releases_slot_and_unconfirmed_grant(tmp_path, monkeypatch):
+    monkeypatch.setattr(live_voice_patch_module, "LIVE_VIDEO_FRAME_ACK_TIMEOUT_SECONDS", 0.05)
+    app = app_live(tmp_path)
+    with TestClient(app) as client:
+        token = issue_key(client, "video-timeout-caller")
+        ext_id, secret = pair(client)
+        frame_id = client.post(
+            "/v1/files",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "filename": "timeout-frame.png",
+                "mime_type": "image/png",
+                "purpose": "vision",
+                "data_base64": base64.b64encode(_tiny_png()).decode(),
+            },
+        ).json()["id"]
+        request_id = "voice-video-ack-timeout"
+        with client.websocket_connect(f"/ws/extensions/{ext_id}?token={secret}") as ext:
+            ext.receive_json()
+            with client.websocket_connect(
+                f"/v1/audio/realtime?client_id={ext_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            ) as live:
+                live.send_json({"type": "session.start", "model": "gpt-live", "request_id": request_id})
+                assert ext.receive_json()["request_id"] == request_id
+                ext.send_json({
+                    "type": "image.progress", "kind": "voice-live",
+                    "request_id": request_id, "live_event": "session.ready",
+                })
+                assert live.receive_json()["type"] == "session.ready"
+
+                live.send_json({
+                    "type": "input_video.frame", "item_id": "frame-timeout",
+                    "sequence": 0, "timestamp_ms": 1000,
+                    "file_id": frame_id, "text": "观察画面",
+                })
+                first_dispatch = ext.receive_json()
+                assert first_dispatch["type"] == "voice.live.multimodal"
+                assert live.receive_json()["type"] == "input_video.frame.queued"
+
+                timeout = live.receive_json()
+                assert timeout["type"] == "error"
+                assert timeout["code"] == "LIVE_VIDEO_FRAME_ACK_TIMEOUT"
+                assert timeout["item_id"] == "frame-timeout"
+                assert timeout["video_sequence"] == 0
+                assert timeout["timestamp_ms"] == 1000
+
+                # The timed-out frame's pending slot and unconfirmed grant must
+                # be released so a later monotonically increasing frame can proceed.
+                time.sleep(0.21)
+                live.send_json({
+                    "type": "input_video.frame", "item_id": "frame-after-timeout",
+                    "sequence": 1, "timestamp_ms": 1200,
+                    "file_id": frame_id, "text": "观察下一帧",
+                })
+                second_dispatch = ext.receive_json()
+                assert second_dispatch["type"] == "voice.live.multimodal"
+                assert live.receive_json()["type"] == "input_video.frame.queued"
+                ext.send_json({
+                    "type": "image.progress", "kind": "voice-live",
+                    "request_id": request_id, "live_event": "input.media.sent",
+                    "item_id": "frame-after-timeout", "attachment_count": 1,
+                    "text": second_dispatch["text"],
+                })
+                ack = live.receive_json()
+                assert ack["type"] == "input_video.frame.sent"
+                assert ack["sequence"] == 1
+
+                ext.send_json({
+                    "type": "image.progress", "kind": "voice-live",
+                    "request_id": request_id, "live_event": "response.done",
+                    "response_id": "video-timeout-response", "text": "已看清第二帧",
+                })
+                assert live.receive_json()["type"] == "response.done"
+                live.send_json({"type": "session.finish"})
+                assert ext.receive_json()["type"] == "voice.live.stop"
+
+        row = app.state.telemetry.get(request_id)
+        assert row["status"] == "completed"
+        assert row["input_file_ids"] == [frame_id]
+        assert row["diagnostics"]["attachments_confirmed"] == 1
+
