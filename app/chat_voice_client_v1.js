@@ -258,6 +258,7 @@
       cleaned = false;
       stopping = false;
       state("requesting_microphone", "等待麦克风授权");
+      try {
       microphoneStream = await mediaDevices.getUserMedia({
         audio:{channelCount:1,echoCancellation:true,noiseSuppression:true,autoGainControl:true},
         video:false,
