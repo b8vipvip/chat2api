@@ -372,7 +372,8 @@
         const textBridge = globalThis.__CHAT2API_VOICE_LIVE_TEXT_V24__;
         if (typeof textBridge?.prepareContext !== "function")
           throw new Error("Live Voice context bridge is not available");
-        await textBridge.prepareContext(active,primer);
+        const setupResult = await textBridge.prepareContext(active,primer);
+        active.setupResponseText = String(setupResult?.responseText || "").slice(0,1200);
         assertActiveSession(active);
         active.instructionsApplied = true;
         active.contextInjected = Boolean(active.context.trim());
@@ -400,6 +401,7 @@
         requested_model: active.requestedModel,
         context_injected: active.contextInjected === true,
         instructions_applied: active.instructionsApplied === true,
+        setup_response_text: active.setupResponseText || "",
         context_mode: active.contextInjected
           ? "request_scoped_chatgpt_setup_turn"
           : active.instructionsApplied ? "instructions_only_setup_turn" : "none",
