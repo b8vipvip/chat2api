@@ -51,6 +51,9 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         assert "/api/user/chat/completions" in script.text
         assert "/v1/chat/completions" not in script.text
         assert "streamNativeContent" in script.text
+        assert "shouldAutoScroll(screen)" in script.text
+        assert "state.forceScrollToBottom" in script.text
+        assert "else screen.scrollTop = previousScrollTop" in script.text
         assert "/api/user/chat/requests/" in script.text
         assert "/api/user/chat/requests/" in script.text
         assert "localStorage" in script.text
