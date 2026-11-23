@@ -41,6 +41,7 @@
     voiceActive: false,
     voicePanelVisible: false,
     voiceAssistantLine: null,
+    voiceAuthTimer: null,
   };
   const MAX_CONVERSATIONS = 15;
   const MAX_MESSAGES = 30;
@@ -121,6 +122,8 @@
       $("voiceCameraButton").textContent = "开启摄像头";
       state.voiceAssistantLine = null;
       state.voiceClient = null;
+      if (state.voiceAuthTimer !== null) window.clearInterval(state.voiceAuthTimer);
+      state.voiceAuthTimer = null;
     }
     updateVoiceControls();
     resizeComposer();
@@ -191,6 +194,9 @@
     } catch {
       state.apiToken = "";
       state.user = null;
+      state.voicePanelVisible = false;
+      $("voiceTranscript").replaceChildren();
+      $("voicePanel").classList.add("hidden");
       showOnly("authRequired");
       setConnection("登录已失效","error");
       toast("用户登录状态已失效，请重新登录后再使用实时语音。");
@@ -215,6 +221,20 @@
     setVoiceUi("requesting_microphone","正在请求麦克风权限…");
     try {
       await client.start();
+      state.voiceAuthTimer = window.setInterval(async () => {
+        try {
+          const current = await apiJson("/api/user/me");
+          if (String(current.user?.user_id || "") === String(state.user?.user_id || "")) return;
+        } catch {}
+        state.apiToken = "";
+        state.user = null;
+        showOnly("authRequired");
+        $("composerArea").classList.add("hidden");
+        $("voiceTranscript").replaceChildren();
+        state.voicePanelVisible = false;
+        toast("登录已失效，实时语音已停止。请重新登录。");
+        await stopVoiceCall();
+      },60000);
     } catch (error) {
       await client.stop();
       if (state.voiceClient === client) state.voiceClient = null;
@@ -2865,6 +2885,7 @@
     if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
   } catch {}
   window.addEventListener("beforeunload", () => {
+    if (state.voiceAuthTimer !== null) window.clearInterval(state.voiceAuthTimer);
     if (state.voiceClient) void state.voiceClient.stop();
     if (state.searchTimer) window.clearTimeout(state.searchTimer);
     if (state.searchController) state.searchController.abort();
