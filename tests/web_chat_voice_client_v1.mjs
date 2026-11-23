@@ -341,4 +341,48 @@ assert.equal(clientContext.state.voiceAssistantLine.textContent,"部分");
 voiceUi.handleVoiceEvent({type:"response.done",text:"完整的最终语音回复"});
 assert.equal(transcript.children[0].children[1].textContent,"完整的最终语音回复");
 assert.equal(clientContext.state.voiceAssistantLine,null);
+
+const voiceConversation = {
+  id:"conversation-voice-history",
+  title:"新对话",
+  messages:[],
+  updatedAt:"",
+};
+const historyState = {
+  voiceAssistantLine:null,
+  voiceConversationId:voiceConversation.id,
+  conversations:[voiceConversation],
+  activeConversationId:voiceConversation.id,
+};
+let persisted = 0;
+let rendered = 0;
+let nextMessageId = 0;
+const historyContext = vm.createContext({
+  state:historyState,
+  MAX_MESSAGE_CHARS:8000,
+  MAX_MESSAGES:30,
+  $:id=>id==="voiceTranscript" ? transcript : new FakeElement("status"),
+  document:{createElement:tag=>new FakeElement(tag)},
+  id:()=> "voice-message-"+(++nextMessageId),
+  currentConversation:()=>historyState.conversations.find(row=>row.id===historyState.activeConversationId)||null,
+  autoTitle:row=>{if(row.title==="新对话")row.title="语音会话";},
+  saveHistory:()=>{persisted+=1;},
+  renderAll:()=>{rendered+=1;},
+  String,
+  Date,
+});
+const historyUi = vm.runInContext(
+  chatClientSource.slice(appendStart,appendEnd) + "\n({persistVoiceTranscript,handleVoiceEvent})",
+  historyContext,
+);
+historyUi.handleVoiceEvent({type:"transcript.final",text:"请帮我总结今天的会议"});
+historyUi.handleVoiceEvent({type:"response.text.delta",delta:"会议主要讨论"});
+historyUi.handleVoiceEvent({type:"response.done",text:"会议主要讨论项目进度和下周安排。"});
+assert.deepEqual(voiceConversation.messages.map(row=>row.role),["user","assistant"]);
+assert.deepEqual(voiceConversation.messages.map(row=>row.content),[
+  "请帮我总结今天的会议","会议主要讨论项目进度和下周安排。",
+]);
+assert.equal(voiceConversation.title,"语音会话");
+assert.equal(persisted,2,"each final voice turn must be saved for server sync");
+assert.equal(rendered,2,"active conversation should render persisted voice turns");
 console.log("web-chat-voice-client-v1-passed");
