@@ -39,7 +39,7 @@ _ALLOWED_DOCUMENT_MIME_TYPES = frozenset({
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 })
-_MAX_CONVERSATIONS_RETURNED = 15
+_MAX_CONVERSATIONS_RETURNED = 100
 _MAX_MESSAGES = 30
 _MAX_USER_MESSAGE_CHARS = 8000
 _MAX_ASSISTANT_MESSAGE_CHARS = 32000
@@ -48,7 +48,7 @@ _MAX_ATTACHMENTS_PER_MESSAGE = 4
 _MAX_DOCUMENT_BYTES = 20 * 1024 * 1024
 _MAX_CONVERSATION_BYTES = 5 * 1024 * 1024
 _MAX_SEARCH_QUERY_CHARS = 120
-_MAX_SEARCH_RESULTS = 20
+_MAX_SEARCH_RESULTS = 100
 _CONVERSATION_EXPORT_FORMAT = "chat2api.web-chat-conversation"
 _MAX_RETENTION_DAYS = 3650
 
@@ -558,7 +558,7 @@ class WebChatConversationStoreV1:
             return decoded
 
     def search_for_user(
-        self, user_id: str, query: str, limit: int = 20,
+        self, user_id: str, query: str, limit: int = 50,
     ) -> list[dict[str, Any]]:
         normalized = query.strip()
         if not normalized or len(normalized) > _MAX_SEARCH_QUERY_CHARS:
@@ -848,7 +848,7 @@ def install_web_chat_conversations_v1(app: FastAPI) -> None:
         _, user = current_user(request)
         query = str(request.query_params.get("q") or "")
         try:
-            limit = int(request.query_params.get("limit") or "20")
+            limit = int(request.query_params.get("limit") or "50")
             rows = store.search_for_user(str(user["user_id"]), query, limit)
         except (TypeError, ValueError):
             raise HTTPException(status_code=422, detail="search query or limit is invalid", headers=_PRIVATE_HEADERS)
