@@ -141,6 +141,7 @@ def test_mode1_chat_ingress_requires_session_and_selected_key_ownership(tmp_path
 
     app.state.chat_completions_adapter = shared_adapter
     with TestClient(app) as client:
+        client.headers.update({"Origin": "http://testserver"})
         registered = client.post(
             "/api/user/register",
             headers={"Origin": "http://testserver"},
