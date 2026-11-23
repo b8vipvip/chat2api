@@ -87,7 +87,6 @@
 
   function create(options = {}) {
     const token = String(options.apiToken || "");
-    const extraInstructions = String(options.instructions || "").trim().slice(0,9000);
     const fetcher = options.fetcher || window.fetch.bind(window);
     const WebSocketImpl = options.WebSocketImpl || window.WebSocket;
     const AudioContextImpl = options.AudioContextImpl || window.AudioContext || window.webkitAudioContext;
@@ -345,10 +344,7 @@
           socket.send(JSON.stringify({
             type:"session.start",
             model:"gpt-live",
-            instructions:[
-              "请用自然、清晰、简洁的中文与用户进行实时语音对话。需要时结合用户提供的摄像头画面回答。",
-              extraInstructions,
-            ].filter(Boolean).join("\n\n"),
+            instructions:"请用自然、清晰、简洁的中文与用户进行实时语音对话。需要时结合用户提供的摄像头画面回答。",
           }));
         };
         socket.onmessage = handleMessage;
