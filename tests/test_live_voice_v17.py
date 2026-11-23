@@ -135,6 +135,14 @@ def test_live_voice_stream_relays_pcm_both_directions(tmp_path: Path) -> None:
                 })
                 text = live.receive_json()
                 assert text == {"type": "response.text.delta", "response_id": response_id, "delta": "你好呀"}
+                extension.send_json({
+                    "type": "image.progress", "kind": "voice-live", "request_id": request_id,
+                    "live_event": "response.text.snapshot", "response_id": response_id,
+                    "text": "你好",
+                })
+                assert live.receive_json() == {
+                    "type": "response.text.replace", "response_id": response_id, "text": "你好",
+                }, "a revised DOM snapshot must replace, not append to, the prior transcript"
 
                 live.send_json({"type": "response.cancel"})
                 cancel = extension.receive_json()
