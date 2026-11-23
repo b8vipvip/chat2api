@@ -135,6 +135,16 @@
     return text;
   }
 
+  function currentAssistantResponseText() {
+    const message = latestRoleMessage("assistant");
+    const fullText = textOf(message);
+    const text = assistantTextForResponse(message);
+    const key = messageIdentity(message);
+    const belongsToCurrentResponse = key !== state.assistantBaselineMessageKey ||
+      fullText !== state.assistantBaselineText;
+    return belongsToCurrentResponse && text ? text : state.lastAssistantText;
+  }
+
   function startTranscriptPolling(active) {
     clearInterval(state.transcriptTimer);
     const initialUserMessage = latestRoleMessage("user");
@@ -350,14 +360,7 @@
         // Only the normal end-of-utterance signal proves that ChatGPT finished
         // speaking. Session shutdown and WebRTC track loss are interruptions:
         // persist their visible text as voice_partial, never as a completed turn.
-        const finalAssistant = latestRoleMessage("assistant");
-        const finalAssistantFullText = textOf(finalAssistant);
-        const finalAssistantText = assistantTextForResponse(finalAssistant);
-        const finalAssistantKey = messageIdentity(finalAssistant);
-        const hasCurrentResponseText = Boolean(finalAssistantText) &&
-          (finalAssistantKey !== state.assistantBaselineMessageKey ||
-            finalAssistantFullText !== state.assistantBaselineText);
-        const finalText = hasCurrentResponseText ? finalAssistantText : state.lastAssistantText;
+        const finalText = currentAssistantResponseText();
         emitLive(active, "response.done", {
           response_id: responseId,
           text: finalText || "",
@@ -369,6 +372,7 @@
         emitLive(active, "response.interrupted", {
           response_id: responseId,
           reason: item.reason || "transport_lost",
+          text: currentAssistantResponseText() || "",
         }).catch(() => {});
       }
       if (state.currentResponseId === responseId) {
@@ -382,6 +386,7 @@
       emitLive(active, "response.interrupted", {
         response_id: item.response_id,
         reason: item.reason || "client_cancel",
+        text: currentAssistantResponseText() || "",
       }).catch(() => {});
       if (state.currentResponseId === item.response_id) {
         state.currentResponseId = null;
