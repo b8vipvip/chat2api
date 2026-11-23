@@ -374,12 +374,13 @@
     stopTranscriptPolling();
     const mainStopAck = waitForMainStop(active);
     postMain("voice.live.stop", active);
+    // Do not click ChatGPT's End Voice button until the MAIN-world bridge has
+    // synchronously captured and posted its final assistant DOM snapshot. The
+    // button can tear down/rewrite the DOM before the queued postMessage event
+    // is handled, which would otherwise erase the last partial text.
+    const mainStopAcknowledged = await mainStopAck;
     postMain("voice.reset", active);
     try { endVoiceButton()?.click(); } catch (_) {}
-    // The MAIN-world bridge emits response.stopped during reset, then sends
-    // voice.live.stopped. Only after that acknowledgement can we know the
-    // interruption snapshot had a chance to enter pendingEmits.
-    const mainStopAcknowledged = await mainStopAck;
     await flushPendingEmits();
     if (notify) {
       if (mainStopAcknowledged) {
