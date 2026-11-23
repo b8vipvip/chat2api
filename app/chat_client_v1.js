@@ -1456,7 +1456,7 @@
     const keyMatchesConversation = !conversation?.apiKeyId || conversation.apiKeyId === selectedKeyId();
     const unresolvedRequest = Boolean(conversation?.messages?.some((message) => message.role === "assistant" && message.pending === true));
     $("sendButton").disabled = state.streaming || state.voiceActive || unresolvedRequest || (!input.value.trim() && !pendingForConversation) ||
-      !state.apiToken || !keyMatchesConversation;
+      !state.apiToken || !selectedKeyHasScope("chat") || !keyMatchesConversation;
     $("attachButton").disabled = state.streaming || state.voiceActive || !state.apiToken || !selectedKeyHasScope("files");
     $("fileButton").disabled = state.streaming || state.voiceActive || !state.apiToken || !selectedKeyHasScope("files");
     updateVoiceControls();
@@ -2302,6 +2302,7 @@
   }
   async function sendMessage(text) {
     if (state.voiceActive) { toast("请先结束实时语音，再发送普通聊天消息。"); return; }
+    if (!selectedKeyHasScope("chat")) { toast("当前 API Key 没有 chat 权限。"); return; }
     const clean = String(text || "").trim();
     if (state.streaming) return;
     const conversation = currentConversation() || createConversation();
@@ -2576,7 +2577,8 @@
   async function loadKeys() {
     const payload = await apiJson("/api/user/keys");
     state.keys = Array.isArray(payload.data) ? payload.data : [];
-    const usable = state.keys.filter((key) => key.enabled && !key.expired && !key.revoked_at && key.secret_recoverable && (!Array.isArray(key.scopes) || key.scopes.includes("chat")));
+    const usable = state.keys.filter((key) => key.enabled && !key.expired && !key.revoked_at && key.secret_recoverable &&
+      (!Array.isArray(key.scopes) || key.scopes.includes("chat") || key.scopes.includes("audio")));
     const select = $("apiKeySelect");
     select.replaceChildren();
     if (!usable.length) {
