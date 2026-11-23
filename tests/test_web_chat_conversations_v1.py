@@ -90,6 +90,7 @@ def test_web_chat_conversation_api_auth_ownership_sync_and_conflicts(tmp_path: P
     install_web_chat_features_v1(app)
 
     with TestClient(app) as client:
+        client.headers.update({"Origin": "http://testserver"})
         unauthenticated = client.get("/api/user/chat/conversations")
         assert unauthenticated.status_code == 401
         assert unauthenticated.headers["cache-control"] == "private, no-store"
@@ -229,6 +230,7 @@ def test_conversation_api_rejects_foreign_api_key_and_invalid_pending_message(tm
     install_web_chat_features_v1(app)
 
     with TestClient(app) as client:
+        client.headers.update({"Origin": "http://testserver"})
         first = client.post(
             "/api/user/register",
             headers={"Origin": "http://testserver"},
@@ -298,6 +300,7 @@ def test_conversation_attachment_references_protect_files_until_last_cross_devic
     install_web_chat_features_v1(app)
 
     with TestClient(app) as client:
+        client.headers.update({"Origin": "http://testserver"})
         registered = client.post(
             "/api/user/register",
             headers={"Origin": "http://testserver"},
