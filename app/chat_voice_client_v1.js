@@ -285,8 +285,12 @@
       if (!response.ok || typeof session.websocket_path !== "string") {
         throw new Error(session.detail || "无法创建 GPT-Live 会话，HTTP " + response.status);
       }
-      const url = new URL(session.websocket_path, location.href);
-      url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+      const pageUrl = new URL(location.href);
+      const url = new URL(session.websocket_path, pageUrl);
+      if (url.origin !== pageUrl.origin) {
+        throw new Error("Live WebSocket must use the same-origin Chat2API endpoint");
+      }
+      url.protocol = pageUrl.protocol === "https:" ? "wss:" : "ws:";
       socket = new WebSocketImpl(url.href);
       socket.binaryType = "arraybuffer";
       const readyPromise = new Promise((resolve,reject) => {
