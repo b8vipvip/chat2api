@@ -75,11 +75,11 @@ assert(!nodes.some(x => ["script", "iframe", "svg", "img", "object", "style"].in
 assert(!nodes.some(x => x.tag === "a" && !x.href.startsWith("https://")));
 const markdownListHost = new Element("root");
 renderer.renderMarkdown(markdownListHost,
-  "- [x] completed task\\n" +
-  "- [ ] pending task\\n" +
-  "  - nested bullet\\n" +
-  "    3. deep ordered item\\n" +
-  "- sibling item\\n\\n" +
+  "- [x] completed task\n" +
+  "- [ ] pending task\n" +
+  "  - nested bullet\n" +
+  "    3. deep ordered item\n" +
+  "- sibling item\n\n" +
   "~~deleted text~~");
 const markdownListNodes = all(markdownListHost);
 const taskCheckboxes = markdownListNodes.filter(x => x.tag === "input" && x.className === "task-checkbox");
