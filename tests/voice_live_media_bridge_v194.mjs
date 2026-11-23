@@ -28,6 +28,10 @@ assert.ok(liveContent.includes("belongsToCurrentResponse"),
   "a completed response must not reuse the previous assistant turn's text");
 assert.ok(liveContent.includes("function assistantTextForResponse(node)"),
   "a reused ChatGPT assistant DOM node must contribute only the new response suffix");
+assert.ok(liveContent.includes("waitForMainStop(active"),
+  "the isolated-world bridge must wait for main-world shutdown acknowledgement");
+assert.ok(liveMain.includes('post("voice.live.stopped"'),
+  "the main-world bridge acknowledges after final response stop events");
 
 // Exercise the transcript poller with two distinct ChatGPT user message nodes
 // containing the same text. The second utterance must not be deduplicated.
@@ -197,7 +201,8 @@ const startupMessages = [];
 const startupWindow = {
   addEventListener(type,listener){if(type==="message")startupListeners.push(listener);},
   postMessage(message) {
-    if(message?.source==="chat2api-isolated" && message.type==="voice.live.prepare") {
+    if(message?.source!=="chat2api-isolated") return;
+    if(message.type==="voice.live.prepare") {
       queueMicrotask(()=>startupListeners.forEach(listener=>listener({
         source:startupWindow,
         data:{
@@ -207,8 +212,32 @@ const startupWindow = {
           type:"voice.live.prepared",
         },
       })));
+    } else if(message.type==="voice.live.stop") {
+      queueMicrotask(()=>{
+        const sendMainEvent=(type,more={})=>startupListeners.forEach(listener=>listener({
+          source:startupWindow,
+          data:{
+            source:"chat2api-main",
+            request_id:message.request_id,
+            session_id:message.session_id,
+            type,
+            ...more,
+          },
+        }));
+        sendMainEvent("voice.live.response.started",{response_id:"startup-partial"});
+        startupAssistantNode.innerText="partial answer captured at stop";
+        startupAssistantNode.textContent="partial answer captured at stop";
+        sendMainEvent("voice.live.response.stopped",{response_id:"startup-partial",reason:"session_stop"});
+        sendMainEvent("voice.live.stopped");
+      });
     }
   },
+};
+const startupAssistantNode = {
+  innerText:"",
+  textContent:"",
+  getAttribute(name){return name==="data-message-id" ? "startup-assistant" : null;},
+  getBoundingClientRect(){return {width:100,height:20};},
 };
 const startupChrome = {
   runtime:{
@@ -219,13 +248,18 @@ const startupChrome = {
 const startupSandbox = vm.createContext({
   window:startupWindow,
   chrome:startupChrome,
-  document:{querySelectorAll(){return [];},visibilityState:"visible"},
+  document:{
+    visibilityState:"visible",
+    querySelectorAll(selector){
+      return selector.includes("data-message-author-role='assistant'") ? [startupAssistantNode] : [];
+    },
+  },
   getComputedStyle:()=>({display:"block",visibility:"visible"}),
   setTimeout,
   clearTimeout,
   setInterval,
   clearInterval,
-  Date,Math,Promise,String,Number,Set,Array,
+  Date,Math,Promise,String,Number,Set,Array,Map,
 });
 const instrumentedStartup = liveContent.slice(0,closingIife) +
   "globalThis.__voiceStartupTest = {startLive,stopLive,state}; " +
@@ -240,13 +274,17 @@ const pendingStartup = startupTest.startLive({
 await new Promise(resolve=>setTimeout(resolve,80));
 const startupActive = startupTest.state.active;
 assert.ok(startupActive,"the extension should have entered the Voice UI readiness phase");
-await startupTest.stopLive(startupActive,false);
+await startupTest.stopLive(startupActive,true);
 await pendingStartup;
 const startupLiveEvents = startupMessages.map(message=>message.event?.live_event);
 assert.equal(startupLiveEvents.includes("session.ready"),false,
   "a stopped extension startup must never publish a late session.ready");
 assert.equal(startupMessages.some(message=>message.event?.type==="image.started"),false,
   "a stopped extension startup must never publish a late image.started event");
+const partialIndex = startupLiveEvents.indexOf("response.interrupted");
+const closedIndex = startupLiveEvents.indexOf("session.closed");
+assert.ok(partialIndex >= 0 && closedIndex > partialIndex,
+  "session.closed must wait until the final interruption snapshot is forwarded");
 
 const listeners = [];
 const posted = [];
@@ -382,6 +420,14 @@ assert.equal(sources.length,3);
 assert.ok(sources[0]<sources[1] && sources[1]<sources[2], "PCM frames in same order as received");
 assert.equal(currentVoiceState.recorder,null, "live mode must not start batch recorder");
 assert.deepEqual(currentVoiceState.recorderChunks,[], "live stream must not touch recorder chunks");
+const stopEventStart = posted.length;
 send("voice.live.stop");
 assert.equal(timers.size,0, "stop terminates PCM and speech timers");
+const stopEvents = posted.slice(stopEventStart);
+const stoppedResponseIndex = stopEvents.findIndex(item=>item.type==="voice.live.response.stopped");
+const stopAckIndex = stopEvents.findIndex(item=>item.type==="voice.live.stopped");
+assert.ok(stoppedResponseIndex >= 0 && stopAckIndex > stoppedResponseIndex,
+  "main-world stop acknowledgement must follow the final response.stopped snapshot");
+assert.equal(stopEvents[stopAckIndex].request_id,"live-v194");
+assert.equal(stopEvents[stopAckIndex].session_id,"session-v194");
 console.log("Live Voice binds WebRTC track directly, streams PCM and preserves ordered microphone input");
