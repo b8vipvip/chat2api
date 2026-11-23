@@ -4,6 +4,10 @@ import vm from "node:vm";
 
 const source = readFileSync("app/chat_voice_client_v1.js","utf8");
 const chatClientSource = readFileSync("app/chat_client_v1.js","utf8");
+const liveContentSource = readFileSync("chrome_extension/content_voice_live.js","utf8");
+const liveTextSource = readFileSync("chrome_extension/content_voice_live_text_v24.js","utf8");
+new vm.Script(liveContentSource);
+new vm.Script(liveTextSource);
 new vm.Script(source);
 new vm.Script(chatClientSource);
 
@@ -11,6 +15,21 @@ const voiceContextStart = chatClientSource.indexOf("  function buildVoiceContext
 const voiceContextEnd = chatClientSource.indexOf("  async function startVoiceCall(",voiceContextStart);
 assert.ok(voiceContextStart >= 0 && voiceContextEnd > voiceContextStart,
   "production voice context builder must remain extractable");
+const primerStart = liveContentSource.indexOf("  function buildSessionPrimer(active) {");
+const primerEnd = liveContentSource.indexOf("  async function startLive(message) {",primerStart);
+assert.ok(primerStart >= 0 && primerEnd > primerStart);
+const buildSessionPrimer = vm.runInNewContext(
+  liveContentSource.slice(primerStart,primerEnd) + "\nbuildSessionPrimer",
+  {},
+);
+const primer = buildSessionPrimer({
+  instructions:"用简洁中文回答。",
+  context:"用户：上一轮问题\n助手：上一轮回答",
+});
+assert.ok(primer.includes("用简洁中文回答。"));
+assert.ok(primer.includes("上一轮问题"));
+assert.ok(primer.includes("已准备好"));
+assert.ok(primer.length <= 12000);
 const buildVoiceContext = vm.runInNewContext(
   chatClientSource.slice(voiceContextStart,voiceContextEnd) + "\nbuildVoiceContext",
   {MAX_VOICE_CONTEXT_CHARS:8000},
