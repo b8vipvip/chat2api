@@ -481,4 +481,61 @@ const completedCloseUi = vm.runInContext(
 );
 completedCloseUi("closed");
 assert.equal(duplicateCloseWrites,0,"closing after response.done must not persist the same answer twice");
+
+// A server-side camera ACK timeout must release the browser's one-frame
+// in-flight guard so the next timestamped frame can be sent.
+class NoAckWebSocket extends FakeWebSocket {
+  send(value) {
+    this.sent.push(value);
+    if (typeof value !== "string") return;
+    const payload = JSON.parse(value);
+    if (payload.type === "session.start") {
+      queueMicrotask(() => this.onmessage?.({data:JSON.stringify({
+        type:"session.ready",session_id:"session-no-ack",
+        supports:["input_text","input_media","input_video.frame"],
+      })}));
+    } else if (payload.type === "session.finish") {
+      queueMicrotask(() => {
+        this.onmessage?.({data:JSON.stringify({type:"session.closed",status:"completed"})});
+        this.readyState = NoAckWebSocket.CLOSED;
+        this.onclose?.();
+      });
+    }
+  }
+}
+const noAckClient = api.create({
+  apiToken:"managed-key",
+  fetcher,
+  WebSocketImpl:NoAckWebSocket,
+  AudioContextImpl:FakeAudioContext,
+  mediaDevices,
+  location:window.location,
+  timers,
+  now:()=>clock,
+  onEvent:event=>events.push(event),
+});
+await noAckClient.start();
+const noAckSocket = NoAckWebSocket.last;
+await noAckClient.startCamera(video);
+await new Promise(resolve=>setTimeout(resolve,10));
+await new Promise(resolve=>setImmediate(resolve));
+let noAckFrames = noAckSocket.sent.map(value=>typeof value==="string" ? JSON.parse(value) : null)
+  .filter(value=>value?.type==="input_video.frame");
+assert.equal(noAckFrames.length,1);
+noAckSocket.onmessage({data:JSON.stringify({
+  type:"error",code:"LIVE_VIDEO_FRAME_ACK_TIMEOUT",item_id:noAckFrames[0].item_id,
+})});
+clock += 1000;
+const noAckCameraTimer = [...intervalCallbacks.values()].find(value=>value.ms===1000);
+assert.ok(noAckCameraTimer);
+noAckCameraTimer.fn();
+await new Promise(resolve=>setTimeout(resolve,10));
+await new Promise(resolve=>setImmediate(resolve));
+noAckFrames = noAckSocket.sent.map(value=>typeof value==="string" ? JSON.parse(value) : null)
+  .filter(value=>value?.type==="input_video.frame");
+assert.equal(noAckFrames.length,2,
+  "camera capture must resume after the server releases a timed-out in-flight frame");
+assert.equal(noAckFrames[1].sequence,1);
+await noAckClient.stop();
+
 console.log("web-chat-voice-client-v1-passed");
