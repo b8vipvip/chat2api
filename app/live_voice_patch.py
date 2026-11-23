@@ -31,8 +31,9 @@ LIVE_SETUP_ACKNOWLEDGEMENT = "请只简短回复“已准备好”，随后等�
 def _build_live_session_setup_prompt(instructions: str, context: str) -> str:
     """Mirror the extension setup turn so quota and final usage count the same text."""
     instruction = str(instructions or DEFAULT_LIVE_SESSION_INSTRUCTIONS).strip()
+    context_text = str(context or "").strip()
     sections = [LIVE_SETUP_INSTRUCTIONS_PREFIX, instruction]
-    if context:
+    if context_text:
         fixed_length = (
             len("\n\n".join(sections))
             + len(LIVE_SETUP_CONTEXT_PREFIX)
@@ -41,13 +42,15 @@ def _build_live_session_setup_prompt(instructions: str, context: str) -> str:
         )
         available = max(0, 12000 - fixed_length)
         bounded_context = (
-            context[-available:]
-            if available > 0 and len(context) > available
-            else context if available > 0 else ""
+            context_text[-available:]
+            if available > 0 and len(context_text) > available
+            else context_text if available > 0 else ""
         )
         sections.append(LIVE_SETUP_CONTEXT_PREFIX + bounded_context)
     sections.append(LIVE_SETUP_ACKNOWLEDGEMENT)
     return "\n\n".join(part for part in sections if part)[:12000]
+
+
 SUPPORTED_MODELS = {"gpt-live", "gpt-live-mini"}
 MODEL_ALIASES = {"gpt-live-mini": "gpt-live"}
 REALTIME_SESSION_TTL_SECONDS = 60
