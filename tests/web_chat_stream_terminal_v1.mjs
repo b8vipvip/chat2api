@@ -542,13 +542,13 @@ test("persists longer assistant responses while keeping user and local-cache bou
   const extractFunction = name => {
     const start = source.indexOf("  function " + name + "(");
     assert.ok(start >= 0, "missing " + name);
-    const next = source.slice(start + 1).search(/\\n  (?:(?:async )?function |class )/);
+    const next = source.slice(start + 1).search(/\n  (?:(?:async )?function |class )/);
     return source.slice(start, next < 0 ? source.length : start + 1 + next);
   };
   const context = vm.createContext({
     MAX_ASSISTANT_MESSAGE_CHARS:32000,
     MAX_USER_MESSAGE_CHARS:8000,
-    ASSISTANT_TRUNCATION_NOTICE:"\\n\\n[回答超过 Web Chat 的 32,000 字符上限，后续内容未保存]",
+    ASSISTANT_TRUNCATION_NOTICE:"\n\n[回答超过 Web Chat 的 32,000 字符上限，后续内容未保存]",
   });
   const helpers = vm.runInNewContext([
     extractFunction("limitAssistantText"),
@@ -556,7 +556,7 @@ test("persists longer assistant responses while keeping user and local-cache bou
     extractFunction("normalizeMessageContent"),
     extractFunction("appendDelta"),
     "({limitAssistantText,normalizeMessageContent,appendDelta})",
-  ].join("\\n"),context);
+  ].join("\n"),context);
 
   assert.equal(helpers.normalizeMessageContent("a".repeat(20000),"assistant").length,20000);
   assert.equal(helpers.normalizeMessageContent("u".repeat(9000),"user").length,8000);
