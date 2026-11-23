@@ -375,13 +375,13 @@ test("reconnects an interrupted native-content sidecar and receives its terminal
   const encoder = new TextEncoder();
   const interruptedBody = new ReadableStream({
     start(controller) {
-      controller.enqueue(encoder.encode("event: native.snapshot\\ndata: {}\\n\\n"));
+      controller.enqueue(encoder.encode("event: native.snapshot\ndata: {}\n\n"));
       controller.error(new Error("simulated network interruption"));
     },
   });
   const terminalBody = new ReadableStream({
     start(controller) {
-      controller.enqueue(encoder.encode("event: native.end\\ndata: {}\\n\\n"));
+      controller.enqueue(encoder.encode("event: native.end\ndata: {}\n\n"));
       controller.close();
     },
   });
@@ -404,7 +404,7 @@ test("reconnects an interrupted native-content sidecar and receives its terminal
     window:{setTimeout(callback) { callback(); return 0; }},
   });
   const stream = vm.runInNewContext(
-    source.slice(start,end) + "\\nstreamNativeContent",
+    source.slice(start,end) + "\nstreamNativeContent",
     context,
   );
   await stream("req_native_reconnect");
@@ -426,7 +426,7 @@ test("does not retry a native-content sidecar after an owner/auth 404", async ()
     refreshNativeSnapshot:async () => false,
     window:{setTimeout(callback) { callback(); return 0; }},
   });
-  const stream = vm.runInNewContext(source.slice(start,end) + "\\nstreamNativeContent",context);
+  const stream = vm.runInNewContext(source.slice(start,end) + "\nstreamNativeContent",context);
   await stream("req_native_missing");
   assert.equal(fetchCalls,1);
   assert.equal(context.state.nativeStreams.size,0);
