@@ -412,17 +412,40 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
                                "live_event": "input.text.sent", "item_id": "followup", "text": "通话仍然在吗？"})
                 assert live.receive_json()["type"] == "input_text.sent"
                 ext.send_json({"type": "image.progress", "kind": "voice-live", "request_id": request_id,
+                               "live_event": "response.created", "response_id": "r195"})
+                assert live.receive_json() == {"type": "response.created", "response_id": "r195"}
+                ext.send_json({"type": "image.progress", "kind": "voice-live", "request_id": request_id,
+                               "live_event": "response.text.snapshot", "response_id": "r195",
+                               "text": "这是一段尚未完成的回答"})
+                partial_delta = live.receive_json()
+                assert partial_delta["type"] == "response.text.delta"
+                assert partial_delta["delta"] == "这是一段尚未完成的回答"
+                ext.send_json({"type": "image.progress", "kind": "voice-live", "request_id": request_id,
                                "live_event": "response.audio.delta", "response_id": "r195",
                                "pcm_base64": base64.b64encode(b"\x01\x02" * 800).decode()})
                 assert live.receive_bytes() == b"\x01\x02" * 800
                 live.send_json({"type": "session.finish"})
+                # Graceful shutdown drains the Worker before the Broker closes.
+                stopped = ext.receive_json()
+                assert stopped["type"] == "voice.live.stop"
+                assert stopped["request_id"] == request_id
+                ext.send_json({"type": "image.progress", "kind": "voice-live",
+                               "request_id": request_id, "live_event": "response.interrupted",
+                               "response_id": "r195", "reason": "session_stop",
+                               "text": "这是一段尚未完成的回答"})
+                interrupted = live.receive_json()
+                assert interrupted == {
+                    "type": "response.interrupted", "response_id": "r195",
+                    "reason": "session_stop", "text": "这是一段尚未完成的回答",
+                }
+                ext.send_json({"type": "image.progress", "kind": "voice-live",
+                               "request_id": request_id, "live_event": "session.closed"})
                 no_response = live.receive_json()
                 assert no_response["type"] == "error"
                 assert no_response["code"] == "GPT_LIVE_NO_COMPLETED_RESPONSE"
                 closed = live.receive_json()
                 assert closed["type"] == "session.closed"
                 assert closed["status"] == "error"
-                assert ext.receive_json()["type"] == "voice.live.stop"
         assert not app.state.broker.requests
         row = app.state.telemetry.get(request_id)
         assert row and row["request_type"] == "voice_call"
