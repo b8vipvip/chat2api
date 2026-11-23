@@ -972,6 +972,7 @@
     };
     state.conversations.unshift(conversation);
     state.activeConversationId = conversation.id;
+    state.forceScrollToBottom = true;
     saveHistory();
     renderAll();
     $("messageInput").focus();
@@ -994,6 +995,7 @@
       return;
     }
     state.activeConversationId = conversationId;
+    state.forceScrollToBottom = true;
     const conversation = currentConversation();
     if (conversation) state.selectedModel = conversation.model || state.selectedModel;
     $("modelSelect").value = state.selectedModel;
@@ -1358,7 +1360,18 @@
     }
   }
 
+  function shouldAutoScroll(screen, threshold = 96) {
+    if (!screen) return true;
+    const remaining = Number(screen.scrollHeight || 0) -
+      Number(screen.scrollTop || 0) - Number(screen.clientHeight || 0);
+    return !Number.isFinite(remaining) || remaining <= threshold;
+  }
+
   function renderMessages() {
+    const screen = $("chatScreen");
+    const previousScrollTop = screen.scrollTop;
+    const stickToBottom = Boolean(state.forceScrollToBottom) || shouldAutoScroll(screen);
+    state.forceScrollToBottom = false;
     const root = $("messages");
     root.replaceChildren();
     const conversation = currentConversation();
@@ -1513,8 +1526,8 @@
       article.append(avatar, content);
       root.appendChild(article);
     });
-    const screen = $("chatScreen");
-    screen.scrollTop = screen.scrollHeight;
+    if (stickToBottom) screen.scrollTop = screen.scrollHeight;
+    else screen.scrollTop = previousScrollTop;
   }
 
   function renderAll() {
@@ -2475,6 +2488,7 @@
       const userParts = [...(clean ? [{type:"text",text:clean}] : []), ...imageParts, ...fileParts];
       const userContent = userParts.length ? userParts : clean;
       userMessage = {id:id(),role:"user",content:userContent,createdAt:new Date().toISOString()};
+      state.forceScrollToBottom = true;
       conversation.messages.push(userMessage);
       autoTitle(conversation);
       assistant = {id:id(),role:"assistant",content:"",createdAt:new Date().toISOString(),requestId,pending:true,recoveryStatus:"streaming",toolEvents:[],lastEventId:0};
@@ -2810,6 +2824,7 @@
     state.conversations = [imported, ...state.conversations.filter((row) => row.id !== imported.id)]
       .slice(0, MAX_CONVERSATIONS);
     state.activeConversationId = imported.id;
+    state.forceScrollToBottom = true;
     state.searchResults = null;
     state.searchQuery = "";
     $("conversationSearch").value = "";
@@ -2840,6 +2855,7 @@
       state.remoteSyncReady = false;
       toast("暂时无法同步服务端会话，当前先显示本地历史：" + error.message);
     }
+    state.forceScrollToBottom = true;
     renderAll();
     const ready = await loadKeys();
     resumePendingMessages();
