@@ -462,6 +462,8 @@
     async function startCamera(targetVideo) {
       if (!ready || stopping) throw new Error("请先连接 GPT-Live 语音");
       if (!supportsVideoFrames) throw new Error("当前 Worker 会话不支持摄像头抽帧");
+      if (videoFrameCount >= MAX_VIDEO_FRAMES) throw new Error("本次语音会话已达到 64 帧上限");
+      if (videoPending) throw new Error("上一张摄像头画面尚未得到 Worker 确认，请稍后重试");
       if (cameraStream) return;
       if (!mediaDevices || typeof mediaDevices.getUserMedia !== "function") {
         throw new Error("当前浏览器无法访问摄像头");
