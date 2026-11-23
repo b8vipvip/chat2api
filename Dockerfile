@@ -11,7 +11,7 @@ RUN npm pack --ignore-scripts --silent katex@0.19.1 \
     && cp /tmp/package/dist/katex-swap.min.css /out/katex.min.css \
     && cp -R /tmp/package/dist/fonts/. /out/fonts/ \
     && cp /tmp/package/LICENSE /out/LICENSE \
-    && printf '0.19.1\\n' > /out/VERSION
+    && printf '0.19.1\n' > /out/VERSION
 
 FROM python:3.12-slim
 
