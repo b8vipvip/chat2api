@@ -69,9 +69,18 @@
       .find(button => /(end voice|exit voice|结束语音|退出语音|关闭语音)/i.test(labelOf(button))) || null;
   }
 
-  async function waitFor(fn, timeout = 20000, interval = 100) {
+  function isActiveSession(active) {
+    return Boolean(active && state.active === active && !active.stopped);
+  }
+
+  function assertActiveSession(active) {
+    if (!isActiveSession(active)) throw new Error("Live Voice startup was cancelled");
+  }
+
+  async function waitFor(fn, timeout = 20000, interval = 100, active = null) {
     const deadline = Date.now() + timeout;
     while (Date.now() < deadline) {
+      if (active && !isActiveSession(active)) return null;
       try {
         const value = fn();
         if (value) return value;
@@ -222,11 +231,12 @@
     throw new Error(failure.code + ": " + failure.message);
   }
 
-  async function settleVoiceWelcome() {
+  async function settleVoiceWelcome(active) {
     const gate = globalThis.__CHAT2API_VOICE_UI_GATE_V185__;
     let clicked = false;
     const deadline = Date.now() + 3400;
     while (Date.now() < deadline) {
+      assertActiveSession(active);
       const failure = gate?.connectionFailure?.();
       if (failure) await failLiveVoiceConnection(failure);
       if (!clicked && gate?.welcomeDialog?.()) {
@@ -234,12 +244,14 @@
       }
       await delay(120);
     }
+    assertActiveSession(active);
     return clicked;
   }
 
-  async function waitLiveTransport(type, timeout) {
+  async function waitLiveTransport(type, timeout, active) {
     const deadline = Date.now() + timeout;
     while (Date.now() < deadline) {
+      assertActiveSession(active);
       const failure = globalThis.__CHAT2API_VOICE_UI_GATE_V185__?.connectionFailure?.();
       if (failure) await failLiveVoiceConnection(failure);
       const found = state.mainEvents.find(item => item.type === type);
@@ -251,21 +263,27 @@
 
   async function openVoice(active) {
     // Visibility is only evidence: virtual-display windows may report hidden.
+    assertActiveSession(active);
     const existing = voiceUiReady();
     if (!existing) {
-      const trigger = await waitFor(voiceTrigger, 15000, 120);
+      const trigger = await waitFor(voiceTrigger, 15000, 120, active);
+      assertActiveSession(active);
       if (!trigger) throw new Error("ChatGPT Voice button was not found");
       trigger.button.click();
     }
-    await settleVoiceWelcome();
-    const ready = existing || await waitFor(() => voiceUiReady(), 20000, 120);
+    await settleVoiceWelcome(active);
+    assertActiveSession(active);
+    const ready = existing || await waitFor(() => voiceUiReady(), 20000, 120, active);
+    assertActiveSession(active);
     if (!ready) throw new Error("ChatGPT Voice UI did not become ready");
     // A UI orb or WebRTC track by itself is not proof that the client can
     // send microphone PCM and receive actual audio chunks. Both halves
     // must be active before the external WebSocket receives session.ready.
-    const remote = await waitLiveTransport("voice.live.remote.ready", 15000);
+    const remote = await waitLiveTransport("voice.live.remote.ready", 15000, active);
+    assertActiveSession(active);
     if (!remote) throw new Error("ChatGPT Voice remote WebRTC PCM processor did not become ready");
-    const microphone = await waitLiveTransport("voice.mic.synthetic", 9000);
+    const microphone = await waitLiveTransport("voice.mic.synthetic", 9000, active);
+    assertActiveSession(active);
     if (microphone && Number(microphone.track_count || 0) <= 0)
       throw new Error("ChatGPT Voice returned no usable bridged microphone track");
     if (!microphone) throw new Error("ChatGPT Voice did not acquire the bridged microphone for live input");
@@ -287,9 +305,11 @@
     try {
       postMain("voice.prepare", active, { mode: "live" });
       postMain("voice.live.prepare", active);
-      const prepared = await waitFor(() => state.mainEvents.find(item => item.type === "voice.live.prepared"), 5000, 50);
+      const prepared = await waitFor(() => state.mainEvents.find(item => item.type === "voice.live.prepared"), 5000, 50, active);
+      assertActiveSession(active);
       if (!prepared) throw new Error("Live MAIN-world bridge did not acknowledge preparation");
       await openVoice(active);
+      assertActiveSession(active);
       startTranscriptPolling(active);
       await emit({
         type: "image.started",
@@ -302,9 +322,12 @@
           effective_model: active.model,
         },
       });
+      assertActiveSession(active);
       await emitLive(active, "session.ready", { model: active.model, requested_model: active.requestedModel });
     } catch (error) {
+      const wasCancelled = !isActiveSession(active);
       await stopLive(active, false);
+      if (wasCancelled) return;
       throw error;
     }
   }
