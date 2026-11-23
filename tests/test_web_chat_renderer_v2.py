@@ -112,6 +112,22 @@ assert(!citationHost.textContent.includes(citeOpen));
 const unresolvedHost = new Element("root");
 renderer.renderMarkdown(unresolvedHost,"Missing "+citeOpen+"turn-missing"+citeClose,[]);
 assert(all(unresolvedHost).some(x => x.className === "citation-unresolved"));
+const richCitationHost = new Element("root");
+renderer.renderRichBlocks(richCitationHost, [
+  {type:"text",text:"Rich answer "+citeOpen+"turn0search0"+citeClose},
+  {type:"citation",citation_id:"turn0search1",title:"Second source",url:"https://example.org/second"},
+], [
+  {id:"turn0search0",url:"https://docs.python.org/3/",title:"Python docs",snippet:"Official Python language documentation."},
+  {id:"turn0search1",url:"https://example.org/second",title:"Second source",snippet:"A second verified reference."},
+]);
+const richCitationLinks = all(richCitationHost).filter(
+  x => x.tag === "a" && x.className === "inline-citation",
+);
+assert.deepEqual(richCitationLinks.map(x => x.href), [
+  "https://docs.python.org/3/","https://example.org/second",
+]);
+assert.deepEqual(richCitationLinks.map(x => x.textContent), ["[1]","[2]"]);
+assert(!richCitationHost.textContent.includes("引用链接（未验证）"));
 const unclosedMath = new Element("root");
 renderer.renderMarkdown(unclosedMath,twoDollar + "\\nnot closed");
 assert(unclosedMath.textContent.includes(twoDollar));

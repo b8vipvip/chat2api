@@ -363,6 +363,7 @@
   }
 
   function renderRichBlocks(host, blocks, sourceReferences = []) {
+    const references = normalizeCitationReferences(sourceReferences);
     // Only display evidence supplied by an authorized API; this method does
     // not fetch external media, execute tools or claim any request is final.
     if (!Array.isArray(blocks)) return;
@@ -370,15 +371,34 @@
       if (!part || typeof part !== "object") return;
       const type = String(part.type || "");
       if (type === "text") {
-        renderMarkdown(host, part.text);
+        // Rich text blocks share the same authorized citation envelope as the
+        // parent assistant message. Dropping it here rendered valid inline
+        // citation markers as unresolved placeholders.
+        renderMarkdown(host, part.text, sourceReferences);
       } else if (type === "code") {
         codeBlock(host, String(part.language || "code"), String(part.text || "").slice(0, MAX_TEXT).split("\n"));
       } else if (type === "math") {
         renderMath(host, String(part.tex || ""), true);
       } else if (type === "citation") {
         const div = node("div", "rich-citation");
-        div.appendChild(node("span", "", "引用链接（未验证）："));
-        appendLink(div, String(part.title || part.url || "查看来源").slice(0, 240), part.url);
+        const referenceId = String(
+          part.id || part.citation_id || part.reference_id || part.ref_id || "",
+        ).trim();
+        const candidateUrl = safeCitationUrl(part.url);
+        const verified = references.find(item =>
+          (referenceId && item.id === referenceId) ||
+          (candidateUrl && item.url === candidateUrl)
+        );
+        if (verified) {
+          appendCitationMarker(
+            div,
+            CITE_OPEN + verified.id + CITE_CLOSE,
+            references,
+          );
+        } else {
+          div.appendChild(node("span", "", "引用链接（未验证）："));
+          appendLink(div, String(part.title || part.url || "查看来源").slice(0, 240), part.url);
+        }
         host.appendChild(div);
       } else if (type === "file") {
         const fileId = String(part.file_id || "");

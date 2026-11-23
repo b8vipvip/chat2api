@@ -11,6 +11,7 @@
   <script defer src="/assets/chat2api-chat-renderer-v2.js"></script>
   <script defer src="/assets/chat2api-chat-native-renderer-v1.js"></script>
   <script defer src="/assets/chat2api-chat-stream-recovery-v1.js"></script>
+  <script defer src="/assets/chat2api-chat-voice-client-v1.js"></script>
   <script defer src="/assets/chat2api-image-drop-v1.js"></script>
   <script defer src="/assets/chat2api-chat-client-v1.js"></script>
 </head>
@@ -116,6 +117,15 @@
           <div class="composer" id="composer">
             <div class="attachment-preview hidden" id="pendingImages" aria-label="待发送图片"></div>
             <div class="attachment-file-list hidden" id="pendingFiles" aria-label="待发送文件"></div>
+            <section class="voice-panel hidden" id="voicePanel" aria-label="实时语音会话">
+              <div class="voice-panel-header">
+                <span id="voiceStatus" role="status" aria-live="polite">实时语音尚未连接</span>
+                <button class="text-button" id="voiceClearButton" type="button">清空记录</button>
+              </div>
+              <video id="voiceCameraPreview" class="voice-camera-preview hidden" autoplay playsinline muted></video>
+              <div class="voice-transcript" id="voiceTranscript" aria-live="polite"></div>
+              <p class="voice-disclaimer">语音通过已配对的 Chrome Worker 和当前登录的 ChatGPT Voice 会话处理。摄像头以每秒最多一张快照的方式发送，不是连续视频轨道。</p>
+            </section>
             <input id="fileInput" class="sr-only" type="file" accept=".pdf,.txt,.md,.csv,.json,.rtf,.docx,.xlsx,.pptx" multiple>
             <input id="imageInput" class="sr-only" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple>
             <textarea id="messageInput" rows="1" maxlength="8000" placeholder="向 Chat2API 发送消息" aria-label="输入消息"></textarea>
@@ -124,6 +134,9 @@
               <div class="composer-controls">
                 <button class="attach-button" id="attachButton" type="button" title="添加图片（PNG、JPEG、WebP、GIF）" aria-label="添加图片">＋ 图片</button>
                 <button class="attach-button" id="fileButton" type="button" title="添加文档（PDF、Office、文本）" aria-label="添加文档">＋ 文件</button>
+                <button class="attach-button voice-start-button" id="voiceStartButton" type="button" title="开始实时语音通话">语音通话</button>
+                <button class="attach-button hidden" id="voiceStopButton" type="button">结束语音</button>
+                <button class="attach-button hidden" id="voiceCameraButton" type="button" disabled>开启摄像头</button>
                 <button class="stop-button hidden" id="stopButton" type="button">停止生成</button>
                 <button class="send-button" id="sendButton" type="button" aria-label="发送消息" disabled>
                   <span>↑</span>

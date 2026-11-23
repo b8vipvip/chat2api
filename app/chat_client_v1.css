@@ -194,3 +194,19 @@ a{color:inherit}
 .native-source-reference:hover{border-color:var(--accent)}
 .native-source-reference strong{font-size:11px;font-weight:650}
 .native-source-reference span{font-size:11px;color:var(--muted);line-height:1.45}
+
+
+/* Web Chat real-time GPT-Live panel */
+.voice-panel{display:grid;gap:9px;max-height:260px;overflow:auto;margin:0 0 10px;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
+.voice-panel-header{display:flex;align-items:center;justify-content:space-between;gap:10px;color:var(--muted);font-size:11px}
+.voice-transcript{display:grid;gap:7px;min-height:0;max-height:150px;overflow:auto}
+.voice-transcript-line{display:grid;grid-template-columns:52px minmax(0,1fr);gap:8px;font-size:12px;line-height:1.5}
+.voice-transcript-role{color:var(--muted);font-weight:650}
+.voice-transcript-text{min-width:0;white-space:pre-wrap;overflow-wrap:anywhere}
+.voice-transcript-line.assistant .voice-transcript-role{color:var(--accent)}
+.voice-camera-preview{display:block;width:min(100%,360px);max-height:190px;object-fit:contain;border:1px solid var(--line);border-radius:8px;background:#000}
+.voice-camera-preview.hidden{display:none}
+.voice-disclaimer{margin:0;color:var(--muted);font-size:10px;line-height:1.4}
+.voice-start-button{border-color:var(--accent);color:var(--accent)}
+.voice-start-button:hover{background:var(--panel-hover)}
+@media(max-width:760px){.voice-panel{max-height:220px;padding:8px}.voice-camera-preview{max-height:140px}.voice-disclaimer{font-size:9px}}

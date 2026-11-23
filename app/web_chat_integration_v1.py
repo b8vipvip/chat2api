@@ -159,6 +159,7 @@ def install_web_chat_features_v1(app: Any) -> Any:
         "/assets/chat2api-chat-renderer-v2.js": ("chat_renderer_v2.js", "application/javascript"),
         "/assets/chat2api-chat-native-renderer-v1.js": ("chat_native_renderer_v1.js", "application/javascript"),
         "/assets/chat2api-chat-stream-recovery-v1.js": ("chat_stream_recovery_v1.js", "application/javascript"),
+        "/assets/chat2api-chat-voice-client-v1.js": ("chat_voice_client_v1.js", "application/javascript"),
         "/assets/katex/0.19.1/katex.min.js": (
             "vendor/katex/katex.min.js", "application/javascript",
             "public, max-age=31536000, immutable",

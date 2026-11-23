@@ -43,6 +43,7 @@ expected = {
     ("GET", "/assets/chat2api-chat-renderer-v2.js"),
     ("GET", "/assets/chat2api-chat-native-renderer-v1.js"),
     ("GET", "/assets/chat2api-chat-stream-recovery-v1.js"),
+    ("GET", "/assets/chat2api-chat-voice-client-v1.js"),
 }
 for method, path in expected:
     matches = [
@@ -121,16 +122,24 @@ with TestClient(app) as client:
     recovery_js = client.get("/assets/chat2api-chat-stream-recovery-v1.js")
     assert recovery_js.status_code == 200
     assert "Chat2APIStreamRecoveryV1" in recovery_js.text
+    voice_js = client.get("/assets/chat2api-chat-voice-client-v1.js")
+    assert voice_js.status_code == 200
+    assert "Chat2APIVoiceClientV1" in voice_js.text
     image_drop = client.get("/assets/chat2api-image-drop-v1.js")
     assert image_drop.status_code == 200
     assert "Chat2APIImageDropV1" in image_drop.text
     page = client.get("/chat")
     assert page.status_code == 200
+    assert "connect-src 'self' ws://testserver;" in page.headers["content-security-policy"]
+    assert "ws: wss:" not in page.headers["content-security-policy"]
     assert "imageInput" in page.text
     assert "attachButton" in page.text
+    assert "voiceStartButton" in page.text
+    assert "voiceCameraButton" in page.text
     assert page.text.index("chat2api-chat-renderer-v2.js") < page.text.index("chat2api-chat-client-v1.js")
     assert page.text.index("chat2api-chat-native-renderer-v1.js") < page.text.index("chat2api-chat-client-v1.js")
     assert page.text.index("chat2api-chat-stream-recovery-v1.js") < page.text.index("chat2api-chat-client-v1.js")
+    assert page.text.index("chat2api-chat-voice-client-v1.js") < page.text.index("chat2api-chat-client-v1.js")
     assert page.text.index("chat2api-image-drop-v1.js") < page.text.index("chat2api-chat-client-v1.js")
     assert page.text.index("chat2api-chat-renderer-v2.js") < page.text.index("chat2api-chat-client-v1.js")
     assert page.text.index("chat2api-chat-stream-recovery-v1.js") < page.text.index("chat2api-chat-client-v1.js")
