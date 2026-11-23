@@ -346,10 +346,10 @@
     } else if (item.type === "voice.live.response.stopped") {
       const responseId = item.response_id;
       emitLive(active, "response.audio.done", { response_id: responseId }).catch(() => {});
-      if (item.reason !== "client_cancel") {
-        // Capture the DOM synchronously at stop: the 250 ms poller can lag the
-        // final ChatGPT mutation. Never fall back to the previous assistant
-        // turn, which was the initial value of lastAssistantText before this fix.
+      if (item.reason === "silence") {
+        // Only the normal end-of-utterance signal proves that ChatGPT finished
+        // speaking. Session shutdown and WebRTC track loss are interruptions:
+        // persist their visible text as voice_partial, never as a completed turn.
         const finalAssistant = latestRoleMessage("assistant");
         const finalAssistantFullText = textOf(finalAssistant);
         const finalAssistantText = assistantTextForResponse(finalAssistant);
@@ -361,6 +361,14 @@
         emitLive(active, "response.done", {
           response_id: responseId,
           text: finalText || "",
+        }).catch(() => {});
+      } else if (item.reason !== "client_cancel") {
+        // client_cancel is followed by the explicit interrupted event below.
+        // Other stop reasons (session_stop, track_ended, track_replaced) must
+        // not be promoted to a completed assistant answer.
+        emitLive(active, "response.interrupted", {
+          response_id: responseId,
+          reason: item.reason || "transport_lost",
         }).catch(() => {});
       }
       if (state.currentResponseId === responseId) {
