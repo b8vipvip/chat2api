@@ -79,6 +79,28 @@ def acknowledge_live_stop(live, extension, request_id: str, final_events: list[d
     raise AssertionError("Live session did not send its terminal session.closed event")
 
 
+
+def test_live_voice_rejects_oversized_session_context(tmp_path: Path) -> None:
+    with TestClient(app_live(tmp_path)) as client:
+        managed_key = create_managed_key(client)
+        client_id, extension_token = pair_extension(client)
+        with client.websocket_connect(f"/ws/extensions/{client_id}?token={extension_token}") as extension:
+            assert extension.receive_json()["type"] == "server.hello"
+            with client.websocket_connect(
+                f"/v1/audio/realtime?client_id={client_id}",
+                headers={"Authorization": f"Bearer {managed_key}"},
+            ) as live:
+                live.send_json({
+                    "type":"session.start",
+                    "model":"gpt-live",
+                    "instructions":"请简洁回答。",
+                    "context":"x" * 8001,
+                })
+                error = live.receive_json()
+                assert error["type"] == "error"
+                assert error["code"] == "SESSION_CONTEXT_TOO_LARGE"
+
+
 def test_live_voice_stream_relays_pcm_both_directions(tmp_path: Path) -> None:
     with TestClient(app_live(tmp_path)) as client:
         managed_key = create_managed_key(client)
