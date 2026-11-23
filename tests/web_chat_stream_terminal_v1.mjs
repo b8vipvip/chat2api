@@ -374,8 +374,13 @@ test("reconnects an interrupted native-content sidecar and receives its terminal
   let fetchCalls = 0, refreshCalls = 0, snapshotFrames = 0;
   const encoder = new TextEncoder();
   const interruptedBody = new ReadableStream({
-    start(controller) {
-      controller.enqueue(encoder.encode("event: native.snapshot\ndata: {}\n\n"));
+    emitted:false,
+    pull(controller) {
+      if (!this.emitted) {
+        this.emitted = true;
+        controller.enqueue(encoder.encode("event: native.snapshot\ndata: {}\n\n"));
+        return;
+      }
       controller.error(new Error("simulated network interruption"));
     },
   });
