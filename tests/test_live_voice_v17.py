@@ -101,6 +101,43 @@ def test_live_voice_rejects_oversized_session_context(tmp_path: Path) -> None:
                 assert error["code"] == "SESSION_CONTEXT_TOO_LARGE"
 
 
+
+def test_live_voice_ready_distinguishes_instructions_from_empty_context(tmp_path: Path) -> None:
+    with TestClient(app_live(tmp_path)) as client:
+        managed_key = create_managed_key(client)
+        client_id, extension_token = pair_extension(client)
+        with client.websocket_connect(f"/ws/extensions/{client_id}?token={extension_token}") as extension:
+            assert extension.receive_json()["type"] == "server.hello"
+            with client.websocket_connect(
+                f"/v1/audio/realtime?client_id={client_id}",
+                headers={"Authorization": f"Bearer {managed_key}"},
+            ) as live:
+                live.send_json({
+                    "type":"session.start",
+                    "model":"gpt-live",
+                    "instructions":"请简洁回答。",
+                })
+                started = extension.receive_json()
+                assert started["type"] == "voice.live.start"
+                request_id = started["request_id"]
+                extension.send_json({
+                    "type":"image.progress",
+                    "kind":"voice-live",
+                    "request_id":request_id,
+                    "live_event":"session.ready",
+                    "context_injected":False,
+                    "instructions_applied":True,
+                    "context_mode":"instructions_only_setup_turn",
+                })
+                ready = live.receive_json()
+                assert ready["type"] == "session.ready"
+                assert ready["context_injected"] is False
+                assert ready["instructions_applied"] is True
+                assert ready["context_mode"] == "instructions_only_setup_turn"
+                live.send_json({"type":"session.finish"})
+                acknowledge_live_stop(live,extension,request_id)
+
+
 def test_live_voice_stream_relays_pcm_both_directions(tmp_path: Path) -> None:
     with TestClient(app_live(tmp_path)) as client:
         managed_key = create_managed_key(client)
@@ -128,6 +165,7 @@ def test_live_voice_stream_relays_pcm_both_directions(tmp_path: Path) -> None:
                     "live_event": "session.ready",
                     "model": "gpt-live",
                     "context_injected": True,
+                    "instructions_applied": True,
                     "context_mode": "request_scoped_chatgpt_setup_turn",
                 })
                 ready = live.receive_json()
@@ -136,6 +174,7 @@ def test_live_voice_stream_relays_pcm_both_directions(tmp_path: Path) -> None:
                 assert ready["model"] == "gpt-live"
                 assert ready["effective_model"] == "gpt-live"
                 assert ready["context_injected"] is True
+                assert ready["instructions_applied"] is True
                 assert ready["context_mode"] == "request_scoped_chatgpt_setup_turn"
                 assert ready["input_audio_format"] == "pcm16le-16000-mono"
                 assert ready["output_audio_format"] == "pcm16le-24000-mono"

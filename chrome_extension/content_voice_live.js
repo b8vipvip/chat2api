@@ -355,6 +355,7 @@
       instructions: String(message.options?.instructions || "").slice(0,12000),
       context: String(message.options?.context || "").slice(0,8000),
       contextInjected: false,
+      instructionsApplied: false,
       stopped: false,
     };
     state.active = active;
@@ -373,7 +374,8 @@
           throw new Error("Live Voice context bridge is not available");
         await textBridge.prepareContext(active,primer);
         assertActiveSession(active);
-        active.contextInjected = true;
+        active.instructionsApplied = true;
+        active.contextInjected = Boolean(active.context.trim());
       }
       await openVoice(active);
       assertActiveSession(active);
@@ -397,7 +399,10 @@
         model: active.model,
         requested_model: active.requestedModel,
         context_injected: active.contextInjected === true,
-        context_mode: active.contextInjected ? "request_scoped_chatgpt_setup_turn" : "none",
+        instructions_applied: active.instructionsApplied === true,
+        context_mode: active.contextInjected
+          ? "request_scoped_chatgpt_setup_turn"
+          : active.instructionsApplied ? "instructions_only_setup_turn" : "none",
       });
     } catch (error) {
       const wasCancelled = !isActiveSession(active);
