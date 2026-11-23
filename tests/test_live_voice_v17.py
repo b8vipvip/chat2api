@@ -398,7 +398,7 @@ def test_live_voice_bounds_pcm16_frames_and_keeps_session_after_bad_input(tmp_pa
                     "type": "session.start",
                     "model": "gpt-live",
                     "instructions": "自然聊天",
-                    "context": "用户：你好\\n助手：你好，我可以继续帮你。",
+                    "context": "用户：你好\n助手：你好，我可以继续帮你。",
                 })
                 started = extension.receive_json()
                 request_id = started["request_id"]
