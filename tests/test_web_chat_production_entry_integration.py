@@ -130,8 +130,8 @@ with TestClient(app) as client:
     assert "Chat2APIImageDropV1" in image_drop.text
     page = client.get("/chat")
     assert page.status_code == 200
-    assert "ws://testserver" in page.headers["content-security-policy"]
-    assert "connect-src 'self' ws: wss:" not in page.headers["content-security-policy"]
+    assert "connect-src 'self' ws://testserver;" in page.headers["content-security-policy"]
+    assert "ws: wss:" not in page.headers["content-security-policy"]
     assert "imageInput" in page.text
     assert "attachButton" in page.text
     assert "voiceStartButton" in page.text
