@@ -29,6 +29,43 @@
     return buffer;
   }
 
+  function encodePcm16(samples) {
+    const buffer = new ArrayBuffer(samples.length * 2);
+    const view = new DataView(buffer);
+    for (let index = 0; index < samples.length; index += 1) {
+      const value = Math.max(-1,Math.min(1,samples[index]));
+      view.setInt16(index * 2,value < 0 ? value * 0x8000 : value * 0x7fff,true);
+    }
+    return buffer;
+  }
+
+  // Keep the fractional input position and one previous sample across audio
+  // callbacks. Stateless per-buffer rounding otherwise accumulates clock drift.
+  function resamplePcm16Stream(input,inputRate,state,outputRate = INPUT_RATE) {
+    if (!input || typeof input.length !== "number" || !state ||
+        !Number.isFinite(inputRate) || inputRate < outputRate ||
+        outputRate < 8000 || outputRate > 48000) {
+      throw new TypeError("Invalid streaming PCM resampling input");
+    }
+    const pending = state.pending instanceof Float32Array ? state.pending : new Float32Array(0);
+    const combined = new Float32Array(pending.length + input.length);
+    combined.set(pending,0);
+    combined.set(input,pending.length);
+    let position = Math.max(0,Number(state.position) || 0);
+    const step = inputRate / outputRate;
+    const output = [];
+    while (position + 1 < combined.length) {
+      const index = Math.floor(position);
+      const fraction = position - index;
+      output.push(combined[index] * (1 - fraction) + combined[index + 1] * fraction);
+      position += step;
+    }
+    const drop = Math.max(0,Math.floor(position) - 1);
+    state.pending = combined.slice(drop);
+    state.position = position - drop;
+    return encodePcm16(output);
+  }
+
   function decodePcm16(buffer) {
     if (!(buffer instanceof ArrayBuffer) || buffer.byteLength % 2 !== 0) return null;
     const view = new DataView(buffer);
@@ -136,6 +173,7 @@
       }
       microphoneSource = audioContext.createMediaStreamSource(microphoneStream);
       microphoneProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+      const resamplerState = {pending:new Float32Array(0),position:0};
       silentGain = audioContext.createGain();
       silentGain.gain.value = 0;
       microphoneProcessor.onaudioprocess = input => {
@@ -143,7 +181,7 @@
         const channel = input.inputBuffer?.getChannelData?.(0);
         if (!channel || !channel.length) return;
         try {
-          const frame = resamplePcm16(channel, audioContext.sampleRate, INPUT_RATE);
+          const frame = resamplePcm16Stream(channel, audioContext.sampleRate, resamplerState, INPUT_RATE);
           if (frame.byteLength && frame.byteLength <= 64 * 1024) socket.send(frame);
         } catch (error) {
           event({type:"client.error",message:String(error?.message || error)});
@@ -475,5 +513,5 @@
     });
   }
 
-  window.Chat2APIVoiceClientV1 = Object.freeze({create,resamplePcm16,decodePcm16});
+  window.Chat2APIVoiceClientV1 = Object.freeze({create,resamplePcm16,resamplePcm16Stream,decodePcm16});
 })();
