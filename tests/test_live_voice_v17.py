@@ -116,10 +116,10 @@ def test_live_voice_ready_distinguishes_instructions_from_empty_context(tmp_path
                 live.send_json({
                     "type":"session.start",
                     "model":"gpt-live",
-                    "instructions":"请简洁回答。",
                 })
                 started = extension.receive_json()
                 assert started["type"] == "voice.live.start"
+                assert started["options"]["instructions"] == "请用自然、清晰、简洁的中文回答。"
                 request_id = started["request_id"]
                 extension.send_json({
                     "type":"image.progress",
