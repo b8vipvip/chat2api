@@ -194,6 +194,24 @@
         state.voiceAssistantLine.textContent += String(payload.delta || "");
         $("voiceTranscript").scrollTop = $("voiceTranscript").scrollHeight;
       }
+    } else if (payload.type === "response.text.replace") {
+      if (!state.voiceAssistantLine) {
+        state.voiceAssistantLine = appendVoiceTranscript("assistant","");
+        state.voiceAssistantPersisted = false;
+      }
+      if (state.voiceAssistantLine) {
+        state.voiceAssistantLine.textContent = String(payload.text || "");
+        $("voiceTranscript").scrollTop = $("voiceTranscript").scrollHeight;
+      }
+    } else if (payload.type === "response.interrupted") {
+      const partialText = String(state.voiceAssistantLine?.textContent || "").trim();
+      if (partialText && !state.voiceAssistantPersisted) {
+        persistVoiceTranscript("assistant",partialText,"voice_partial");
+      }
+      // A barge-in interrupts only this response, not the whole Voice
+      // session. Detach its partial line so the next response starts clean.
+      state.voiceAssistantLine = null;
+      state.voiceAssistantPersisted = false;
     } else if (payload.type === "response.done") {
       const finalText = String(payload.text || state.voiceAssistantLine?.textContent || "");
       if (!state.voiceAssistantLine && finalText) {

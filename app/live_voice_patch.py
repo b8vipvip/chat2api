@@ -524,11 +524,19 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     previous = text_by_response.get(response_id, "")
                     if text.startswith(previous):
                         delta = text[len(previous):]
+                        text_by_response[response_id] = text
+                        if delta:
+                            await send_json({"type": "response.text.delta", "response_id": response_id, "delta": delta})
                     else:
-                        delta = text
-                    text_by_response[response_id] = text
-                    if delta:
-                        await send_json({"type": "response.text.delta", "response_id": response_id, "delta": delta})
+                        # ChatGPT may revise an in-progress DOM transcript.
+                        # Sending the whole revised snapshot as a delta makes
+                        # the client append duplicated text on interruption.
+                        text_by_response[response_id] = text
+                        await send_json({
+                            "type": "response.text.replace",
+                            "response_id": response_id,
+                            "text": text,
+                        })
                 elif event_type == "response.audio.started":
                     response_id = str(event.get("response_id") or "")
                     if response_id:
@@ -580,10 +588,11 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     response_id = str(event.get("response_id") or "")
                     if response_id:
                         observed_response_count += 1
-                        completed_text = (
-                            text_by_response.pop(response_id, "")
-                            or str(event.get("text") or "")
-                        )
+                        snapshot_text = text_by_response.pop(response_id, "")
+                        # response.done carries the authoritative final DOM
+                        # snapshot. Earlier 250 ms snapshots are only deltas;
+                        # preferring them here can truncate the saved answer.
+                        completed_text = str(event.get("text") or "") or snapshot_text
                         if completed_text:
                             observed_completion_parts.append(completed_text)
                         await send_json({
@@ -594,6 +603,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 elif event_type == "response.interrupted":
                     response_id = str(event.get("response_id") or "")
                     if response_id:
+                        text_by_response.pop(response_id, None)
                         await send_json({
                             "type": "response.interrupted",
                             "response_id": response_id,

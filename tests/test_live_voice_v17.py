@@ -135,6 +135,14 @@ def test_live_voice_stream_relays_pcm_both_directions(tmp_path: Path) -> None:
                 })
                 text = live.receive_json()
                 assert text == {"type": "response.text.delta", "response_id": response_id, "delta": "你好呀"}
+                extension.send_json({
+                    "type": "image.progress", "kind": "voice-live", "request_id": request_id,
+                    "live_event": "response.text.snapshot", "response_id": response_id,
+                    "text": "你好",
+                })
+                assert live.receive_json() == {
+                    "type": "response.text.replace", "response_id": response_id, "text": "你好",
+                }, "a revised DOM snapshot must replace, not append to, the prior transcript"
 
                 live.send_json({"type": "response.cancel"})
                 cancel = extension.receive_json()
@@ -341,12 +349,22 @@ def test_live_voice_bounds_pcm16_frames_and_keeps_session_after_bad_input(tmp_pa
                 assert live.receive_bytes() == b"\x03\x04" * 480
                 extension.send_json({
                     "type": "image.progress", "kind": "voice-live",
-                    "request_id": request_id, "live_event": "response.done",
-                    "response_id": response_id, "text": "你好",
+                    "request_id": request_id, "live_event": "response.text.snapshot",
+                    "response_id": response_id, "text": "这是尚未完成的部分",
                 })
                 assert live.receive_json() == {
-                    "type": "response.done", "response_id": response_id, "text": "你好",
+                    "type": "response.text.delta", "response_id": response_id,
+                    "delta": "这是尚未完成的部分",
                 }
+                extension.send_json({
+                    "type": "image.progress", "kind": "voice-live",
+                    "request_id": request_id, "live_event": "response.done",
+                    "response_id": response_id, "text": "这是完整的最终回答",
+                })
+                assert live.receive_json() == {
+                    "type": "response.done", "response_id": response_id,
+                    "text": "这是完整的最终回答",
+                }, "response.done must supersede an older partial text snapshot"
                 live.send_json({"type": "session.finish"})
                 assert extension.receive_json()["type"] == "voice.live.stop"
 

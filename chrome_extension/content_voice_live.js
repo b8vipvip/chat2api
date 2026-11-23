@@ -10,6 +10,9 @@
     lastUserText: "",
     lastUserMessageKey: null,
     lastAssistantText: "",
+    lastAssistantMessageKey: null,
+    assistantBaselineMessageKey: null,
+    assistantBaselineText: "",
     currentResponseId: null,
   };
   globalThis[KEY] = state;
@@ -119,12 +122,28 @@
     return messageId ? "id:" + messageId : node;
   }
 
+  function assistantTextForResponse(node) {
+    const text = textOf(node);
+    const messageKey = messageIdentity(node);
+    // Some ChatGPT Voice layouts reuse one assistant DOM node across a
+    // barge-in. If the next response extends that node, send only its suffix
+    // so the previously persisted partial answer is not duplicated.
+    if (messageKey === state.assistantBaselineMessageKey &&
+        state.assistantBaselineText && text.startsWith(state.assistantBaselineText)) {
+      return text.slice(state.assistantBaselineText.length).trimStart();
+    }
+    return text;
+  }
+
   function startTranscriptPolling(active) {
     clearInterval(state.transcriptTimer);
     const initialUserMessage = latestRoleMessage("user");
     state.lastUserText = textOf(initialUserMessage);
     state.lastUserMessageKey = messageIdentity(initialUserMessage);
-    state.lastAssistantText = latestRoleText("assistant");
+    state.lastAssistantText = "";
+    state.lastAssistantMessageKey = null;
+    state.assistantBaselineMessageKey = null;
+    state.assistantBaselineText = "";
     state.transcriptTimer = setInterval(() => {
       if (state.active !== active) return;
       const userMessage = latestRoleMessage("user");
@@ -137,10 +156,17 @@
         state.lastUserText = userText;
         emitLive(active, "transcript.final", { text: userText }).catch(() => {});
       }
-      const assistantText = latestRoleText("assistant");
-      if (assistantText && assistantText !== state.lastAssistantText) {
-        state.lastAssistantText = assistantText;
-        if (state.currentResponseId) {
+      if (state.currentResponseId) {
+        const assistantMessage = latestRoleMessage("assistant");
+        const fullAssistantText = textOf(assistantMessage);
+        const assistantText = assistantTextForResponse(assistantMessage);
+        const assistantMessageKey = messageIdentity(assistantMessage);
+        const belongsToCurrentResponse = assistantMessageKey !== state.assistantBaselineMessageKey ||
+          fullAssistantText !== state.assistantBaselineText;
+        if (assistantText && belongsToCurrentResponse &&
+            (assistantMessageKey !== state.lastAssistantMessageKey || assistantText !== state.lastAssistantText)) {
+          state.lastAssistantMessageKey = assistantMessageKey;
+          state.lastAssistantText = assistantText;
           emitLive(active, "response.text.snapshot", {
             response_id: state.currentResponseId,
             text: assistantText,
@@ -303,7 +329,11 @@
       emitLive(active, "input.speech_stopped").catch(() => {});
     } else if (item.type === "voice.live.response.started") {
       state.currentResponseId = item.response_id || null;
-      state.lastAssistantText = latestRoleText("assistant");
+      const baselineAssistant = latestRoleMessage("assistant");
+      state.assistantBaselineMessageKey = messageIdentity(baselineAssistant);
+      state.assistantBaselineText = textOf(baselineAssistant);
+      state.lastAssistantMessageKey = null;
+      state.lastAssistantText = "";
       emitLive(active, "response.created", { response_id: item.response_id }).catch(() => {});
       emitLive(active, "response.audio.started", { response_id: item.response_id }).catch(() => {});
     } else if (item.type === "voice.live.audio") {
@@ -317,18 +347,41 @@
       const responseId = item.response_id;
       emitLive(active, "response.audio.done", { response_id: responseId }).catch(() => {});
       if (item.reason !== "client_cancel") {
+        // Capture the DOM synchronously at stop: the 250 ms poller can lag the
+        // final ChatGPT mutation. Never fall back to the previous assistant
+        // turn, which was the initial value of lastAssistantText before this fix.
+        const finalAssistant = latestRoleMessage("assistant");
+        const finalAssistantFullText = textOf(finalAssistant);
+        const finalAssistantText = assistantTextForResponse(finalAssistant);
+        const finalAssistantKey = messageIdentity(finalAssistant);
+        const hasCurrentResponseText = Boolean(finalAssistantText) &&
+          (finalAssistantKey !== state.assistantBaselineMessageKey ||
+            finalAssistantFullText !== state.assistantBaselineText);
+        const finalText = hasCurrentResponseText ? finalAssistantText : state.lastAssistantText;
         emitLive(active, "response.done", {
           response_id: responseId,
-          text: state.lastAssistantText || "",
+          text: finalText || "",
         }).catch(() => {});
       }
-      if (state.currentResponseId === responseId) state.currentResponseId = null;
+      if (state.currentResponseId === responseId) {
+        state.currentResponseId = null;
+        state.assistantBaselineMessageKey = null;
+        state.assistantBaselineText = "";
+        state.lastAssistantMessageKey = null;
+        state.lastAssistantText = "";
+      }
     } else if (item.type === "voice.live.response.interrupted") {
       emitLive(active, "response.interrupted", {
         response_id: item.response_id,
         reason: item.reason || "client_cancel",
       }).catch(() => {});
-      if (state.currentResponseId === item.response_id) state.currentResponseId = null;
+      if (state.currentResponseId === item.response_id) {
+        state.currentResponseId = null;
+        state.assistantBaselineMessageKey = null;
+        state.assistantBaselineText = "";
+        state.lastAssistantMessageKey = null;
+        state.lastAssistantText = "";
+      }
     } else if (item.type === "voice.live.error") {
       emitLive(active, "error", { code: "GPT_LIVE_MEDIA_ERROR", message: item.error || "Live media bridge error" }).catch(() => {});
     }
