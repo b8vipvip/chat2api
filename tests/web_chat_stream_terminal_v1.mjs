@@ -4,6 +4,7 @@ import test from "node:test";
 import vm from "node:vm";
 
 const source = readFileSync("app/chat_client_v1.js", "utf8");
+const recoverySource = readFileSync("app/chat_stream_recovery_v1.js", "utf8");
 const start = source.indexOf("  function appendDelta(");
 const end = source.indexOf("  async function selectApiKey(", start);
 assert.ok(start >= 0 && end > start);
@@ -240,4 +241,126 @@ test("normalizes persisted tool events without accepting unsafe IDs or control c
   assert.equal(rows[0].references.length, 1);
   assert.equal(rows[0].references[0].url, "https://docs.python.org/3/library/");
   assert.deepEqual(JSON.parse(JSON.stringify(normalizeToolEvents(rows, "user"))), []);
+});
+
+
+
+test("keeps nonterminal recovery-unavailable turns pending for a later retry", async () => {
+  const start = source.indexOf("  async function recoverPendingMessage(");
+  const end = source.indexOf("  function assistantMessageForRequest(", start);
+  assert.ok(start >= 0 && end > start);
+
+  const conversation = {id:"conversation-recovery",messages:[],updatedAt:""};
+  const assistant = {
+    id:"message-recovery",role:"assistant",requestId:"req_12345678",
+    pending:true,content:"partial",lastEventId:0,
+  };
+  const context = vm.createContext({
+    state:{recoveryInFlight:new Set()},
+    MAX_MESSAGE_CHARS:8000,
+    currentConversation:() => conversation,
+    makeRecoveryController:() => null,
+    saveHistory() {},
+    renderMessages() {},
+    resizeComposer() {},
+    applyMessageReferences() {},
+  });
+  const recover = vm.runInContext(
+    source.slice(start,end) + "\nrecoverPendingMessage",
+    context,
+  );
+
+  const missingTransport = await recover(conversation,assistant);
+  assert.equal(missingTransport.status,"recovery_unavailable");
+  assert.equal(assistant.pending,true);
+  assert.equal(assistant.recoveryStatus,"recovery_unavailable");
+
+  const laterController = {
+    replay:async () => ({status:"replay_unavailable",terminal:false}),
+    resume:async () => ({status:"recovery_unavailable",terminal:false}),
+  };
+  const unavailable = await recover(conversation,assistant,laterController);
+  assert.equal(unavailable.status,"recovery_unavailable");
+  assert.equal(assistant.pending,true);
+  assert.equal(assistant.recoveryStatus,"recovery_unavailable");
+  assert.equal(context.state.recoveryInFlight.size,0);
+});
+
+
+
+test("hydrates the authoritative answer snapshot after a replay terminal marker", async () => {
+  const start = source.indexOf("  async function recoverPendingMessage(");
+  const end = source.indexOf("  function assistantMessageForRequest(", start);
+  assert.ok(start >= 0 && end > start);
+
+  const conversation = {id:"conversation-terminal",messages:[],updatedAt:""};
+  const assistant = {
+    id:"message-terminal",role:"assistant",requestId:"req_87654321",
+    pending:true,content:"",lastEventId:0,
+  };
+  let snapshotCalls = 0;
+  const context = vm.createContext({
+    state:{recoveryInFlight:new Set()},
+    MAX_MESSAGE_CHARS:8000,
+    currentConversation:() => conversation,
+    makeRecoveryController:() => null,
+    saveHistory() {},
+    renderMessages() {},
+    resizeComposer() {},
+    applyMessageReferences() {},
+  });
+  const recover = vm.runInContext(
+    source.slice(start,end) + "\nrecoverPendingMessage",
+    context,
+  );
+  const controller = {
+    replay:async () => ({status:"completed",terminal:true,active:false}),
+    resume:async () => {
+      snapshotCalls += 1;
+      return {
+        status:"completed",terminal:true,active:false,
+        response_text:"完整的最终回复",
+        references:[],
+      };
+    },
+  };
+
+  const result = await recover(conversation,assistant,controller);
+  assert.equal(snapshotCalls,1);
+  assert.equal(result.status,"completed");
+  assert.equal(assistant.pending,false);
+  assert.equal(assistant.content,"完整的最终回复");
+});
+
+
+
+test("bounds a stalled same-origin cancellation handshake", async () => {
+  const context = vm.createContext({
+    window:{},
+    AbortController,
+    setTimeout,
+    clearTimeout,
+  });
+  const api = vm.runInContext(
+    recoverySource + "\nwindow.Chat2APIStreamRecoveryV1",
+    context,
+  );
+  const controller = api.create({
+    AbortController,
+    cancelTimeoutMs:25,
+    fetcher:(_url,options) => new Promise((_resolve,reject) => {
+      options.signal.addEventListener("abort",() => {
+        const error = new Error("cancel transport timed out");
+        error.name = "AbortError";
+        reject(error);
+      },{once:true});
+    }),
+  });
+  const result = await controller.cancel({
+    request_id:"req_cancel_test123",
+    assistant_message_id:"message_cancel_123",
+  });
+  assert.equal(result.status,"cancel_unavailable");
+  assert.equal(result.cancel_requested,false);
+  assert.equal(result.terminal,false);
 });

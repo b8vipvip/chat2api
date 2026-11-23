@@ -25,6 +25,7 @@
     const baseDelay = Math.max(250, Math.min(10000, Number(config.pollIntervalMs) || 1000));
     const maxDuration = Math.max(1000, Math.min(30 * 60 * 1000, Number(config.maxDurationMs) || 15 * 60 * 1000));
     const maxReplayDuration = Math.max(1000, Math.min(30 * 60 * 1000, Number(config.maxReplayDurationMs) || maxDuration));
+    const cancelTimeout = Math.max(1000, Math.min(30000, Number(config.cancelTimeoutMs) || 10000));
     let activeController = null;
     let activeReplayController = null;
 
@@ -358,6 +359,9 @@
         throw new TypeError("Invalid pending chat recovery record");
       }
       const safeRecord = {request_id:requestId, assistant_message_id:assistantId};
+      const cancelController = AbortControllerImpl ? new AbortControllerImpl() : null;
+      const cancelTimer = cancelController
+        ? setTimeout(() => cancelController.abort(), cancelTimeout) : null;
       let response;
       try {
         response = await fetcher(
@@ -366,12 +370,15 @@
             method:"POST",
             credentials:"same-origin",
             headers:{Accept:"application/json"},
+            ...(cancelController ? {signal:cancelController.signal} : {}),
           }
         );
       } catch {
         const result = {status:"cancel_unavailable", active:true, terminal:false, cancel_requested:false};
         emit(safeRecord, result);
         return result;
+      } finally {
+        if (cancelTimer !== null) clearTimeout(cancelTimer);
       }
       if (response.status === 401 || response.status === 403) {
         const result = {status:"auth_required", active:false, terminal:false, cancel_requested:false};

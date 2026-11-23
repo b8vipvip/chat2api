@@ -29,6 +29,7 @@
     remoteSyncInFlight: new Map(),
     remoteSyncAgain: new Set(),
     remoteSyncFingerprints: new Map(),
+    remoteSyncRetryCounts: new Map(),
     remoteSyncWarned: false,
     searchResults: null,
     searchQuery: "",
@@ -508,6 +509,9 @@
   function scheduleConversationSync(conversationId, delay = 450) {
     if (!state.remoteSyncReady || !conversationId) return;
     if (!state.conversations.some((row) => row.id === conversationId)) return;
+    // A fresh user edit starts a new retry budget; automatic backoff calls use
+    // a distinct delay and preserve the accumulated retry count.
+    if (delay === 450) state.remoteSyncRetryCounts.delete(conversationId);
     const previous = state.remoteSyncTimers.get(conversationId);
     if (previous) window.clearTimeout(previous);
     const timer = window.setTimeout(() => {
@@ -545,6 +549,7 @@
           if (result.conversation.deleted === true) {
             state.conversations = state.conversations.filter((row) => row.id !== conversationId);
             state.remoteSyncFingerprints.delete(conversationId);
+            state.remoteSyncRetryCounts.delete(conversationId);
             if (state.activeConversationId === conversationId) {
               state.activeConversationId = state.conversations[0]?.id || "";
             }
@@ -560,7 +565,9 @@
           continue;
         }
         if (!response.ok || !result.conversation) {
-          throw new Error(result.detail || "HTTP " + response.status);
+          const error = new Error(result.detail || "HTTP " + response.status);
+          error.status = response.ok ? 0 : response.status;
+          throw error;
         }
         const currentFingerprint = JSON.stringify(serverConversationPayload(conversation));
         const serverUpdatedAt = String(result.conversation.updatedAt || conversation.updatedAt);
@@ -568,6 +575,7 @@
         if (currentFingerprint === fingerprint) conversation.updatedAt = serverUpdatedAt;
         const savedFingerprint = JSON.stringify({...body, updatedAt:serverUpdatedAt});
         state.remoteSyncFingerprints.set(conversationId, savedFingerprint);
+        state.remoteSyncRetryCounts.delete(conversationId);
         persistHistorySnapshot();
         if (JSON.stringify(serverConversationPayload(conversation)) !== savedFingerprint) {
           state.remoteSyncAgain.add(conversationId);
@@ -584,6 +592,15 @@
         state.remoteSyncWarned = true;
         toast("服务端会话同步暂时失败，已保留本地记录：" + error.message);
       }
+      const status = Number(error && error.status || 0);
+      const retryable = !status || status === 408 || status === 425 || status === 429 || status >= 500;
+      const stillPresent = state.conversations.some((row) => row.id === conversationId);
+      const retries = Number(state.remoteSyncRetryCounts.get(conversationId) || 0);
+      if (retryable && stillPresent && retries < 6) {
+        const delay = Math.min(30000, 1000 * (2 ** retries));
+        state.remoteSyncRetryCounts.set(conversationId, retries + 1);
+        scheduleConversationSync(conversationId, delay);
+      }
     } finally {
       state.remoteSyncInFlight.delete(conversationId);
       if (state.remoteSyncAgain.delete(conversationId)) scheduleConversationSync(conversationId, 150);
@@ -595,6 +612,7 @@
     const timer = state.remoteSyncTimers.get(conversationId);
     if (timer) window.clearTimeout(timer);
     state.remoteSyncTimers.delete(conversationId);
+    state.remoteSyncRetryCounts.delete(conversationId);
     const inFlight = state.remoteSyncInFlight.get(conversationId);
     if (inFlight) {
       try { await inFlight; } catch {}
@@ -1852,7 +1870,7 @@
       completed: "已完成", completed_without_text: "已完成，但无可恢复文本",
       cancellation_requested: "正在确认停止", cancelled: "已取消", error: "请求失败",
       stalled: "请求停滞", auth_required: "需要重新登录", not_found: "请求记录不存在",
-      recovery_unavailable: "暂不可恢复", recovery_timeout: "恢复超时",
+      recovery_unavailable: "暂时无法恢复，可稍后重试", recovery_timeout: "恢复超时",
       recovery_failed: "恢复失败", recovery_error: "恢复连接异常",
       invalid_response: "恢复响应无效", request_mismatch: "请求身份不匹配",
       invalid_request: "请求记录无效", polling_stopped: "恢复已停止",
@@ -1913,7 +1931,9 @@
     if (state.recoveryInFlight.has(recoveryKey)) return {status:"already_recovering"};
     const controller = existingController || makeRecoveryController(conversation, assistant);
     if (!controller) {
-      assistant.pending = false;
+      // Keep the request recoverable in the UI. A temporarily missing asset or
+      // unavailable recovery transport must not permanently hide the retry action.
+      assistant.pending = true;
       assistant.recoveryStatus = "recovery_unavailable";
       saveHistory();
       if (currentConversation()?.id === conversation.id) renderMessages();
@@ -1927,7 +1947,17 @@
       let result = null;
       if (typeof controller.replay === "function") {
         const replay = await controller.replay(record, Number(assistant.lastEventId || 0));
-        if (replay?.terminal === true) result = replay;
+        if (replay?.terminal === true) {
+          result = replay;
+          // A delivery.completed journal event is a terminal marker, not
+          // necessarily the complete answer body. Fetch the owner-scoped
+          // snapshot before closing the turn so a compacted/replayed stream
+          // cannot leave an empty assistant message marked as completed.
+          if (replay.status === "completed" && typeof replay.response_text !== "string") {
+            const snapshot = await controller.resume(record);
+            if (snapshot?.terminal === true) result = snapshot;
+          }
+        }
       }
       if (!result) result = await controller.resume(record);
       const status = String(result?.status || "recovery_failed");
@@ -1937,7 +1967,9 @@
         assistant.recoveryStatus = status;
         if (status === "completed" && typeof result.response_text === "string") assistant.content = result.response_text.slice(0, MAX_MESSAGE_CHARS);
         else if (status === "stalled" && typeof result.partial_text === "string" && result.partial_text) assistant.content = result.partial_text.slice(0, MAX_MESSAGE_CHARS);
-      } else if (["recovery_timeout", "polling_stopped", "auth_required"].includes(status)) {
+      } else if (["recovery_timeout", "polling_stopped", "auth_required", "recovery_unavailable"].includes(status)) {
+        // An unknown Broker lease is not a terminal result. A Worker outbox may
+        // still reconcile it later, so keep the turn pending and allow a retry.
         assistant.pending = true;
         assistant.recoveryStatus = status;
       } else {

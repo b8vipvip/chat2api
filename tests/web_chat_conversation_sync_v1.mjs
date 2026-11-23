@@ -93,3 +93,140 @@ test("a locally completed reply wins over a stale pending server placeholder", (
   assert.equal(merged.messages[0].content, "final local reply");
   assert.equal(merged.messages[0].pending, false);
 });
+
+
+
+test("conversation sync retries transient transport failures with bounded backoff", async () => {
+  const syncStart = source.indexOf("  function scheduleConversationSync(");
+  const syncEnd = source.indexOf("  async function deleteConversationFromServer(", syncStart);
+  assert.ok(syncStart >= 0 && syncEnd > syncStart);
+
+  const conversation = {
+    id:"c2a_sync_retry_0001",
+    title:"retry me",
+    model:"gpt-5.6-sol",
+    apiKeyId:"",
+    createdAt:"2026-11-23T00:00:00Z",
+    updatedAt:"2026-11-23T00:00:01Z",
+    messages:[],
+    serverRevision:0,
+  };
+  const state = {
+    remoteSyncReady:true,
+    remoteSyncTimers:new Map(),
+    remoteSyncInFlight:new Map(),
+    remoteSyncAgain:new Set(),
+    remoteSyncFingerprints:new Map(),
+    remoteSyncRetryCounts:new Map(),
+    remoteSyncWarned:false,
+    conversations:[conversation],
+    activeConversationId:conversation.id,
+  };
+  const timers = new Map();
+  let nextTimerId = 0;
+  let calls = 0;
+  const context = vm.createContext({
+    state,
+    window:{
+      setTimeout(callback,delay) {
+        const id = ++nextTimerId;
+        timers.set(id,{callback,delay});
+        return id;
+      },
+      clearTimeout(id) { timers.delete(id); },
+    },
+    fetch:async (_url,options) => {
+      calls += 1;
+      if (calls === 1) throw new TypeError("network offline");
+      const body = JSON.parse(options.body);
+      return {
+        ok:true,status:200,
+        json:async () => ({
+          conversation:{
+            ...body.conversation,
+            revision:1,
+            updatedAt:body.conversation.updatedAt,
+          },
+        }),
+      };
+    },
+    serverConversationPayload:row => ({
+      id:row.id,title:row.title,model:row.model,apiKeyId:row.apiKeyId,
+      createdAt:row.createdAt,updatedAt:row.updatedAt,messages:row.messages,
+    }),
+    normalizeConversationRow:row => ({...row,serverRevision:Number(row.revision || 0)}),
+    mergeConversation:(_server,local) => local,
+    persistHistorySnapshot() {},
+    renderAll() {},
+    toast() {},
+  });
+  const api = vm.runInContext(
+    source.slice(syncStart,syncEnd) + "\n({scheduleConversationSync,syncConversationToServer})",
+    context,
+  );
+
+  await api.syncConversationToServer(conversation.id);
+  assert.equal(calls,1);
+  assert.equal(state.remoteSyncRetryCounts.get(conversation.id),1);
+  assert.equal(timers.size,1);
+  assert.equal([...timers.values()][0].delay,1000);
+
+  const timerId = state.remoteSyncTimers.get(conversation.id);
+  context.window.clearTimeout(timerId);
+  state.remoteSyncTimers.delete(conversation.id);
+  await api.syncConversationToServer(conversation.id);
+
+  assert.equal(calls,2);
+  assert.equal(conversation.serverRevision,1);
+  assert.equal(state.remoteSyncRetryCounts.has(conversation.id),false);
+  assert.equal(state.remoteSyncFingerprints.has(conversation.id),true);
+});
+
+
+test("conversation sync does not retry permanent client errors", async () => {
+  const syncStart = source.indexOf("  function scheduleConversationSync(");
+  const syncEnd = source.indexOf("  async function deleteConversationFromServer(", syncStart);
+  assert.ok(syncStart >= 0 && syncEnd > syncStart);
+
+  const conversation = {
+    id:"c2a_sync_retry_0002",title:"oversized",model:"gpt-5.6-sol",
+    apiKeyId:"",createdAt:"2026-11-23T00:00:00Z",
+    updatedAt:"2026-11-23T00:00:01Z",messages:[],serverRevision:0,
+  };
+  const state = {
+    remoteSyncReady:true,remoteSyncTimers:new Map(),
+    remoteSyncInFlight:new Map(),remoteSyncAgain:new Set(),
+    remoteSyncFingerprints:new Map(),remoteSyncRetryCounts:new Map(),
+    remoteSyncWarned:false,conversations:[conversation],
+    activeConversationId:conversation.id,
+  };
+  const timers = new Map();
+  let nextTimerId = 0;
+  const context = vm.createContext({
+    state,
+    window:{
+      setTimeout(callback,delay) { const id=++nextTimerId;timers.set(id,{callback,delay});return id; },
+      clearTimeout(id) { timers.delete(id); },
+    },
+    fetch:async () => ({
+      ok:false,status:413,json:async () => ({detail:"conversation is too large"}),
+    }),
+    serverConversationPayload:row => ({
+      id:row.id,title:row.title,model:row.model,apiKeyId:row.apiKeyId,
+      createdAt:row.createdAt,updatedAt:row.updatedAt,messages:row.messages,
+    }),
+    normalizeConversationRow:row => ({...row,serverRevision:Number(row.revision || 0)}),
+    mergeConversation:(_server,local) => local,
+    persistHistorySnapshot() {},
+    renderAll() {},
+    toast() {},
+  });
+  const api = vm.runInContext(
+    source.slice(syncStart,syncEnd) + "\n({scheduleConversationSync,syncConversationToServer})",
+    context,
+  );
+
+  await api.syncConversationToServer(conversation.id);
+  assert.equal(timers.size,0);
+  assert.equal(state.remoteSyncRetryCounts.has(conversation.id),false);
+});
