@@ -18,6 +18,68 @@ assert.ok(liveText.includes("refusing to overwrite it"), "draft conflicts must f
 assert.ok(liveText.includes("const hasNewUserTurn = () =>"), "composer lag must be checked against the new user turn");
 assert.ok(liveText.includes("if (!sent && !hasNewUserTurn() && !dispatchedEnter)"),
   "a second Enter must never be sent after ChatGPT already accepted the turn");
+assert.ok(liveContent.includes("function latestRoleMessage(role)"), "Voice transcript polling tracks the actual ChatGPT message node");
+assert.ok(liveContent.includes("lastUserMessageKey"), "Voice transcript polling remembers the last user message identity");
+assert.ok(liveContent.includes("userMessageKey !== state.lastUserMessageKey || userText !== state.lastUserText"),
+  "two consecutive identical user utterances must still produce two transcript events");
+
+// Exercise the transcript poller with two distinct ChatGPT user message nodes
+// containing the same text. The second utterance must not be deduplicated.
+const transcriptIntervals = new Map();
+const transcriptEvents = [];
+let transcriptTimerId = 0;
+let userNodes = [makeTranscriptNode("repeat this phrase", "user-1")];
+function makeTranscriptNode(text, messageId) {
+  return {
+    innerText:text,
+    textContent:text,
+    getAttribute(name){return name==="data-message-id" ? messageId : null;},
+    getBoundingClientRect(){return {width:100,height:20};},
+  };
+}
+const transcriptWindow = {addEventListener(){}};
+const transcriptChrome = {
+  runtime:{
+    onMessage:{addListener(){}},
+    sendMessage:async message=>{transcriptEvents.push(message);return {ok:true};},
+  },
+};
+const transcriptSandbox = vm.createContext({
+  window:transcriptWindow,
+  chrome:transcriptChrome,
+  document:{querySelectorAll(selector){
+    if(selector.includes("data-message-author-role='user'")) return userNodes;
+    return [];
+  }},
+  getComputedStyle:()=>({display:"block",visibility:"visible"}),
+  setInterval(fn){const id=++transcriptTimerId;transcriptIntervals.set(id,fn);return id;},
+  clearInterval(id){transcriptIntervals.delete(id);},
+  setTimeout,
+  clearTimeout,
+  Date,Math,Promise,String,Number,Set,Array,
+});
+const closingIife = liveContent.lastIndexOf("})();");
+assert.ok(closingIife >= 0,"content script IIFE terminator exists");
+const instrumentedContent = liveContent.slice(0,closingIife) +
+  "globalThis.__voiceTranscriptTest = {startTranscriptPolling,state}; " +
+  liveContent.slice(closingIife);
+assert.notEqual(instrumentedContent,liveContent,"transcript poller test hook must be injected");
+vm.runInContext(instrumentedContent,transcriptSandbox);
+const transcriptTest = transcriptSandbox.__voiceTranscriptTest;
+const transcriptSession = {};
+transcriptTest.state.active = transcriptSession;
+transcriptTest.startTranscriptPolling(transcriptSession);
+const pollTranscript = [...transcriptIntervals.values()][0];
+pollTranscript();
+userNodes = [makeTranscriptNode("repeat this phrase", "user-2")];
+pollTranscript();
+await flush();
+const repeatedTurns = transcriptEvents
+  .map(message=>message.event)
+  .filter(event=>event?.live_event==="transcript.final");
+assert.equal(repeatedTurns.length,1);
+assert.equal(repeatedTurns[0].text,"repeat this phrase");
+
 
 const listeners = [];
 const posted = [];
