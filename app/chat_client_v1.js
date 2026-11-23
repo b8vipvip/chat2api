@@ -41,6 +41,7 @@
     voiceActive: false,
     voicePanelVisible: false,
     voiceAssistantLine: null,
+    voiceAssistantPersisted: false,
     voiceAuthTimer: null,
     voiceConversationId: "",
   };
@@ -119,9 +120,16 @@
       $("voiceStatus").textContent = labels[status] || "实时语音";
     }
     if (status === "closed") {
+      const partialAssistantText = String(state.voiceAssistantLine?.textContent || "").trim();
+      if (partialAssistantText && !state.voiceAssistantPersisted) {
+        // The user may stop Voice mid-response or the upstream socket may
+        // close before response.done. Preserve the visible partial transcript.
+        state.voiceAssistantPersisted = persistVoiceTranscript("assistant",partialAssistantText);
+      }
       $("voiceCameraPreview").classList.add("hidden");
       $("voiceCameraButton").textContent = "开启摄像头";
       state.voiceAssistantLine = null;
+      state.voiceAssistantPersisted = false;
       state.voiceClient = null;
       state.voiceConversationId = "";
       if (state.voiceAuthTimer !== null) window.clearInterval(state.voiceAuthTimer);
@@ -179,6 +187,7 @@
     } else if (payload.type === "response.text.delta") {
       if (!state.voiceAssistantLine) {
         state.voiceAssistantLine = appendVoiceTranscript("assistant","");
+        state.voiceAssistantPersisted = false;
       }
       if (state.voiceAssistantLine) {
         state.voiceAssistantLine.textContent += String(payload.delta || "");
@@ -193,7 +202,9 @@
         // partial delta snapshot if any intermediate frame was lost.
         state.voiceAssistantLine.textContent = finalText;
       }
-      if (finalText) persistVoiceTranscript("assistant",finalText);
+      if (finalText) {
+        state.voiceAssistantPersisted = persistVoiceTranscript("assistant",finalText);
+      }
       state.voiceAssistantLine = null;
     } else if (payload.type === "input_video.frame.sent") {
       $("voiceStatus").textContent = "摄像头画面已送达 ChatGPT Voice";
@@ -240,6 +251,8 @@
       return;
     }
     state.voiceConversationId = voiceConversation.id;
+    state.voiceAssistantLine = null;
+    state.voiceAssistantPersisted = false;
     state.voicePanelVisible = true;
     $("voicePanel").classList.remove("hidden");
     $("voiceTranscript").replaceChildren();
