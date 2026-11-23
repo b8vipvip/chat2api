@@ -239,6 +239,21 @@ const startupAssistantNode = {
   getAttribute(name){return name==="data-message-id" ? "startup-assistant" : null;},
   getBoundingClientRect(){return {width:100,height:20};},
 };
+let endVoiceClickedAfterPartial = false;
+const startupEndButton = {
+  innerText:"End voice",
+  textContent:"End voice",
+  disabled:false,
+  getAttribute(name){return name==="aria-label" ? "End voice" : null;},
+  getBoundingClientRect(){return {width:100,height:20};},
+  click(){
+    endVoiceClickedAfterPartial = startupMessages.some(message=>
+      message.event?.live_event==="response.interrupted");
+    // Simulate ChatGPT tearing down its visible response DOM when End Voice is clicked.
+    startupAssistantNode.innerText="";
+    startupAssistantNode.textContent="";
+  },
+};
 const startupChrome = {
   runtime:{
     onMessage:{addListener(){}},
@@ -251,7 +266,9 @@ const startupSandbox = vm.createContext({
   document:{
     visibilityState:"visible",
     querySelectorAll(selector){
-      return selector.includes("data-message-author-role='assistant'") ? [startupAssistantNode] : [];
+      if(selector.includes("data-message-author-role='assistant'")) return [startupAssistantNode];
+      if(selector==="button") return [startupEndButton];
+      return [];
     },
   },
   getComputedStyle:()=>({display:"block",visibility:"visible"}),
@@ -285,6 +302,8 @@ const partialIndex = startupLiveEvents.indexOf("response.interrupted");
 const closedIndex = startupLiveEvents.indexOf("session.closed");
 assert.ok(partialIndex >= 0 && closedIndex > partialIndex,
   "session.closed must wait until the final interruption snapshot is forwarded");
+assert.equal(endVoiceClickedAfterPartial,true,
+  "ChatGPT's End Voice button must not clear the DOM before the final partial snapshot is captured");
 
 // If the main-world stop acknowledgement never arrives, do not fabricate a
 // successful session.closed event; surface a bounded terminal error instead.
