@@ -122,6 +122,19 @@
     return messageId ? "id:" + messageId : node;
   }
 
+  function assistantTextForResponse(node) {
+    const text = textOf(node);
+    const messageKey = messageIdentity(node);
+    // Some ChatGPT Voice layouts reuse one assistant DOM node across a
+    // barge-in. If the next response extends that node, send only its suffix
+    // so the previously persisted partial answer is not duplicated.
+    if (messageKey === state.assistantBaselineMessageKey &&
+        state.assistantBaselineText && text.startsWith(state.assistantBaselineText)) {
+      return text.slice(state.assistantBaselineText.length).trimStart();
+    }
+    return text;
+  }
+
   function startTranscriptPolling(active) {
     clearInterval(state.transcriptTimer);
     const initialUserMessage = latestRoleMessage("user");
@@ -145,10 +158,11 @@
       }
       if (state.currentResponseId) {
         const assistantMessage = latestRoleMessage("assistant");
-        const assistantText = textOf(assistantMessage);
+        const fullAssistantText = textOf(assistantMessage);
+        const assistantText = assistantTextForResponse(assistantMessage);
         const assistantMessageKey = messageIdentity(assistantMessage);
         const belongsToCurrentResponse = assistantMessageKey !== state.assistantBaselineMessageKey ||
-          assistantText !== state.assistantBaselineText;
+          fullAssistantText !== state.assistantBaselineText;
         if (assistantText && belongsToCurrentResponse &&
             (assistantMessageKey !== state.lastAssistantMessageKey || assistantText !== state.lastAssistantText)) {
           state.lastAssistantMessageKey = assistantMessageKey;
@@ -337,11 +351,12 @@
         // final ChatGPT mutation. Never fall back to the previous assistant
         // turn, which was the initial value of lastAssistantText before this fix.
         const finalAssistant = latestRoleMessage("assistant");
-        const finalAssistantText = textOf(finalAssistant);
+        const finalAssistantFullText = textOf(finalAssistant);
+        const finalAssistantText = assistantTextForResponse(finalAssistant);
         const finalAssistantKey = messageIdentity(finalAssistant);
         const hasCurrentResponseText = Boolean(finalAssistantText) &&
           (finalAssistantKey !== state.assistantBaselineMessageKey ||
-            finalAssistantText !== state.assistantBaselineText);
+            finalAssistantFullText !== state.assistantBaselineText);
         const finalText = hasCurrentResponseText ? finalAssistantText : state.lastAssistantText;
         emitLive(active, "response.done", {
           response_id: responseId,
