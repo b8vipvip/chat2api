@@ -161,8 +161,9 @@
     } else if (payload.type === "response.done") {
       if (!state.voiceAssistantLine && payload.text) {
         state.voiceAssistantLine = appendVoiceTranscript("assistant",payload.text);
-      } else if (state.voiceAssistantLine && payload.text &&
-          !state.voiceAssistantLine.textContent) {
+      } else if (state.voiceAssistantLine && payload.text) {
+        // response.done is the authoritative final transcript; replace a
+        // partial delta snapshot if any intermediate frame was lost.
         state.voiceAssistantLine.textContent = payload.text;
       }
       state.voiceAssistantLine = null;
