@@ -363,7 +363,7 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
             template,
             headers={
                 "Cache-Control": "no-store, no-cache, must-revalidate",
-                "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+                "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' ws: wss:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
                 "X-Content-Type-Options": "nosniff",
                 "Referrer-Policy": "no-referrer",
             },
