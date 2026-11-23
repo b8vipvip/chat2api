@@ -286,6 +286,42 @@ const closedIndex = startupLiveEvents.indexOf("session.closed");
 assert.ok(partialIndex >= 0 && closedIndex > partialIndex,
   "session.closed must wait until the final interruption snapshot is forwarded");
 
+// If the main-world stop acknowledgement never arrives, do not fabricate a
+// successful session.closed event; surface a bounded terminal error instead.
+const noAckMessages = [];
+const noAckWindow = {addEventListener(){},postMessage(){}};
+const noAckChrome = {
+  runtime:{
+    onMessage:{addListener(){}},
+    sendMessage:async message=>{noAckMessages.push(message);return {ok:true};},
+  },
+};
+const noAckSandbox = vm.createContext({
+  window:noAckWindow,
+  chrome:noAckChrome,
+  document:{querySelectorAll(){return [];}},
+  getComputedStyle:()=>({display:"block",visibility:"visible"}),
+  setTimeout:(fn,ms)=>setTimeout(fn,Math.min(ms,5)),
+  clearTimeout,
+  setInterval,
+  clearInterval,
+  Date,Math,Promise,String,Number,Set,Array,Map,
+});
+const instrumentedNoAck = liveContent.slice(0,closingIife) +
+  "globalThis.__voiceStopTimeoutTest = {stopLive,state}; " +
+  liveContent.slice(closingIife);
+vm.runInContext(instrumentedNoAck,noAckSandbox);
+const noAckTest = noAckSandbox.__voiceStopTimeoutTest;
+const noAckActive = {requestId:"voice-stop-no-ack",sessionId:"voice-stop-no-ack-session",stopped:false};
+noAckTest.state.active = noAckActive;
+await noAckTest.stopLive(noAckActive,true);
+const noAckEvents = noAckMessages.map(message=>message.event?.live_event);
+assert.ok(noAckEvents.includes("error"));
+assert.equal(noAckEvents.includes("session.closed"),false,
+  "a missing main-world acknowledgement must never be reported as a drained close");
+assert.equal(noAckMessages.find(message=>message.event?.live_event==="error")?.event?.code,
+  "VOICE_STOP_ACK_TIMEOUT");
+
 const listeners = [];
 const posted = [];
 const timers = new Map();
