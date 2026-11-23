@@ -284,6 +284,67 @@ assert.equal(intervalCallbacks.size,0,"heartbeat and camera timers must be clear
 assert.ok(states.some(value=>value.status==="ready"));
 assert.ok(states.some(value=>value.status==="closed"));
 
+// Stopping while the microphone permission prompt is open must cancel startup.
+// A late permission grant must have its tracks stopped and must not create a
+// server session or WebSocket.
+let resolveMicrophonePermission;
+let delayedMicFetchCalls = 0;
+const delayedMicClient = api.create({
+  apiToken:"managed-key",
+  fetcher:async()=>{delayedMicFetchCalls+=1;return {ok:true,status:200,json:async()=>({websocket_path:"/v1/audio/realtime"})};},
+  WebSocketImpl:FakeWebSocket,
+  AudioContextImpl:FakeAudioContext,
+  mediaDevices:{getUserMedia:()=>new Promise(resolve=>{resolveMicrophonePermission=resolve;})},
+  location:window.location,
+  timers,
+});
+const delayedMicStart = delayedMicClient.start();
+await new Promise(resolve=>setImmediate(resolve));
+assert.equal(typeof resolveMicrophonePermission,"function");
+await delayedMicClient.stop();
+const delayedMicTrack = {stopped:false,stop(){this.stopped=true;}};
+resolveMicrophonePermission({getTracks:()=>[delayedMicTrack]});
+await assert.rejects(delayedMicStart,/cancelled/i);
+assert.equal(delayedMicTrack.stopped,true,"late microphone permission must release its track");
+assert.equal(delayedMicFetchCalls,0,"cancelled microphone startup must not create a server session");
+
+// The same cancellation rule applies to a camera permission prompt. Stopping
+// the camera before getUserMedia resolves must not attach a late stream or
+// install a capture timer.
+let resolveCameraPermission;
+const cameraPermissionTracks = [];
+const cameraRaceClient = api.create({
+  apiToken:"managed-key",
+  fetcher,
+  WebSocketImpl:FakeWebSocket,
+  AudioContextImpl:FakeAudioContext,
+  mediaDevices:{
+    getUserMedia:constraints=>{
+      if(constraints.audio) {
+        const track={stopped:false,stop(){this.stopped=true;cameraPermissionTracks.push(this);}};
+        return Promise.resolve({getTracks:()=>[track]});
+      }
+      return new Promise(resolve=>{resolveCameraPermission=resolve;});
+    },
+  },
+  location:window.location,
+  timers,
+});
+await cameraRaceClient.start();
+const pendingCameraStart = cameraRaceClient.startCamera(video);
+await new Promise(resolve=>setImmediate(resolve));
+assert.equal(typeof resolveCameraPermission,"function");
+cameraRaceClient.stopCamera();
+const delayedCameraTrack = {stopped:false,stop(){this.stopped=true;}};
+resolveCameraPermission({getTracks:()=>[delayedCameraTrack]});
+await assert.rejects(pendingCameraStart,/已取消/);
+assert.equal(delayedCameraTrack.stopped,true,"late camera permission must release its track");
+assert.equal(cameraRaceClient.isCameraActive(),false);
+assert.equal(video.srcObject,null);
+assert.equal([...intervalCallbacks.values()].some(value=>value.ms===1000),false,
+  "cancelled camera startup must not install a capture timer");
+await cameraRaceClient.stop();
+
 const deniedStates = [];
 const denied = api.create({
   apiToken:"managed-key",

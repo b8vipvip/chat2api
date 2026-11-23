@@ -115,8 +115,11 @@
     let activePlaybackSources = new Set();
     let ready = false;
     let started = false;
+    let starting = false;
     let stopping = false;
     let cleaned = false;
+    let cameraGeneration = 0;
+    let cameraStartingGeneration = null;
     let cleanupPromise = null;
     let readyResolve = null;
     let readyReject = null;
@@ -214,6 +217,9 @@
       microphoneStream = null;
     }
     function stopCamera() {
+      // Invalidate a getUserMedia()/play()/frame-upload continuation that is
+      // still awaiting permission or I/O. It must not resurrect a stopped camera.
+      cameraGeneration += 1;
       if (cameraTimer !== null) timers.clearInterval(cameraTimer);
       cameraTimer = null;
       if (cameraStream) cameraStream.getTracks().forEach(track => { try { track.stop(); } catch {} });
@@ -257,6 +263,12 @@
     function handleJson(payload) {
       if (!payload || typeof payload !== "object") return;
       if (payload.type === "session.ready") {
+        if (cleaned || stopping) {
+          // A late ready frame must not resurrect a session that the user has
+          // already stopped while the permission/socket handshake was pending.
+          try { socket?.close(); } catch {}
+          return;
+        }
         ready = true;
         supportsVideoFrames = Array.isArray(payload.supports) && payload.supports.includes("input_video.frame");
         sessionStartedAt = monotonicNow();
@@ -299,33 +311,47 @@
       catch { event({type:"client.error",message:"服务端返回了无效的实时语音事件"}); }
     }
     async function start() {
-      if (started) return;
+      if (started || starting) return;
       if (!token) throw new Error("请先选择一个 API Key");
       if (!mediaDevices || typeof mediaDevices.getUserMedia !== "function") {
         throw new Error("当前浏览器无法访问麦克风");
       }
       if (!WebSocketImpl || !AudioContextImpl) throw new Error("当前浏览器缺少 WebSocket 或 Web Audio 支持");
+      starting = true;
       cleaned = false;
       cleanupPromise = null;
       stopping = false;
+      const cancelled = () => cleaned || stopping;
+      const assertNotCancelled = () => {
+        if (cancelled()) throw new Error("GPT-Live startup was cancelled");
+      };
       state("requesting_microphone", "等待麦克风授权");
       try {
       // Unlock the browser audio graph synchronously from the user's click
       // before any network or permission prompt can consume transient activation.
       audioContext = new AudioContextImpl();
       if (typeof audioContext.resume === "function") await audioContext.resume();
+      assertNotCancelled();
       if (beforeConnect) await beforeConnect();
-      microphoneStream = await mediaDevices.getUserMedia({
+      assertNotCancelled();
+      const requestedMicrophoneStream = await mediaDevices.getUserMedia({
         audio:{channelCount:1,echoCancellation:true,noiseSuppression:true,autoGainControl:true},
         video:false,
       });
+      if (cancelled()) {
+        requestedMicrophoneStream?.getTracks?.().forEach(track => { try { track.stop(); } catch {} });
+        throw new Error("GPT-Live startup was cancelled");
+      }
+      microphoneStream = requestedMicrophoneStream;
       const response = await fetcher("/v1/audio/realtime/sessions", {
         method:"POST",
         credentials:"same-origin",
         headers:{Authorization:"Bearer " + token,Accept:"application/json"},
       });
+      assertNotCancelled();
       let session = {};
       try { session = await response.json(); } catch {}
+      assertNotCancelled();
       if (!response.ok || typeof session.websocket_path !== "string") {
         throw new Error(session.detail || "无法创建 GPT-Live 会话，HTTP " + response.status);
       }
@@ -335,6 +361,7 @@
         throw new Error("Live WebSocket must use the same-origin Chat2API endpoint");
       }
       url.protocol = pageUrl.protocol === "https:" ? "wss:" : "ws:";
+      assertNotCancelled();
       socket = new WebSocketImpl(url.href);
       socket.binaryType = "arraybuffer";
       const readyPromise = new Promise((resolve,reject) => {
@@ -345,6 +372,10 @@
           readyReject = null;
         },30000);
         socket.onopen = () => {
+          if (cancelled()) {
+            try { socket.close(); } catch {}
+            return;
+          }
           socket.send(JSON.stringify({
             type:"session.start",
             model:"gpt-live",
@@ -374,7 +405,8 @@
         };
       });
       await readyPromise;
-      if (cleaned || !ready) throw new Error("GPT-Live 会话未能保持连接");
+      assertNotCancelled();
+      if (!ready) throw new Error("GPT-Live 会话未能保持连接");
       startMicrophonePipeline();
       heartbeatTimer = timers.setInterval(() => {
         sendJson({type:"ping",timestamp:Date.now()});
@@ -384,14 +416,26 @@
       } catch (error) {
         await cleanup();
         throw error;
+      } finally {
+        starting = false;
       }
     }
     async function blobBase64(blob) {
       const buffer = await blob.arrayBuffer();
       return arrayBufferToBase64(buffer, value => window.btoa(value));
     }
+    function releaseUnsentVideoFrame(itemId) {
+      if (pendingVideoItemId !== itemId) return;
+      videoPending = false;
+      pendingVideoItemId = "";
+    }
+    function cameraCaptureIsCurrent(generation,itemId) {
+      return generation === cameraGeneration &&
+        pendingVideoItemId === itemId && ready && !stopping && Boolean(cameraStream);
+    }
     async function captureAndSendFrame() {
       if (!ready || stopping || !cameraStream || videoPending || videoFrameCount >= MAX_VIDEO_FRAMES) return;
+      const captureGeneration = cameraGeneration;
       const captureAt = monotonicNow();
       if (captureAt - lastVideoCaptureAt < 1000) return;
       const width = Number(videoElement?.videoWidth || 0);
@@ -412,12 +456,24 @@
         const context = canvas.getContext("2d",{alpha:false});
         context.drawImage(videoElement,0,0,targetWidth,targetHeight);
         let blob = await new Promise(resolve => canvas.toBlob(resolve,"image/jpeg",0.72));
+        if (!cameraCaptureIsCurrent(captureGeneration,itemId)) {
+          releaseUnsentVideoFrame(itemId);
+          return;
+        }
         if (!blob) throw new Error("无法编码摄像头画面");
         if (blob.size > MAX_VIDEO_FRAME_BYTES) {
           blob = await new Promise(resolve => canvas.toBlob(resolve,"image/jpeg",0.48));
+          if (!cameraCaptureIsCurrent(captureGeneration,itemId)) {
+            releaseUnsentVideoFrame(itemId);
+            return;
+          }
         }
         if (!blob || blob.size > MAX_VIDEO_FRAME_BYTES) throw new Error("摄像头画面超过 2 MiB 限制");
         const dataBase64 = await blobBase64(blob);
+        if (!cameraCaptureIsCurrent(captureGeneration,itemId)) {
+          releaseUnsentVideoFrame(itemId);
+          return;
+        }
         const upload = await fetcher("/v1/files", {
           method:"POST",
           credentials:"same-origin",
@@ -433,8 +489,16 @@
             purpose:"vision",
           }),
         });
+        if (!cameraCaptureIsCurrent(captureGeneration,itemId)) {
+          releaseUnsentVideoFrame(itemId);
+          return;
+        }
         let file = {};
         try { file = await upload.json(); } catch {}
+        if (!cameraCaptureIsCurrent(captureGeneration,itemId)) {
+          releaseUnsentVideoFrame(itemId);
+          return;
+        }
         const fileId = String(file.id || "");
         if (!upload.ok || !/^file_[A-Za-z0-9]{8,64}$/.test(fileId)) {
           throw new Error(file.detail || "摄像头画面上传失败");
@@ -457,37 +521,56 @@
           event({type:"client.notice",message:"已达到本次语音会话 64 帧上限，摄像头抽帧已停止"});
         }
       } catch (error) {
-        videoPending = false;
-        pendingVideoItemId = "";
+        const stillCurrent = cameraCaptureIsCurrent(captureGeneration,itemId);
+        releaseUnsentVideoFrame(itemId);
+        if (!stillCurrent) return;
         event({type:"client.error",message:String(error?.message || error)});
         stopCamera();
       }
     }
     async function startCamera(targetVideo) {
-      if (!ready || stopping) throw new Error("请先连接 GPT-Live 语音");
+      if (!ready || stopping || cleaned) throw new Error("请先连接 GPT-Live 语音");
       if (!supportsVideoFrames) throw new Error("当前 Worker 会话不支持摄像头抽帧");
       if (videoFrameCount >= MAX_VIDEO_FRAMES) throw new Error("本次语音会话已达到 64 帧上限");
       if (videoPending) throw new Error("上一张摄像头画面尚未得到 Worker 确认，请稍后重试");
       if (cameraStream) return;
+      if (cameraStartingGeneration !== null) throw new Error("摄像头权限请求正在进行，请稍后重试");
       if (!mediaDevices || typeof mediaDevices.getUserMedia !== "function") {
         throw new Error("当前浏览器无法访问摄像头");
       }
       if (!targetVideo) throw new Error("摄像头预览元素不可用");
+      const generation = ++cameraGeneration;
+      cameraStartingGeneration = generation;
+      const cancelled = () => generation !== cameraGeneration || stopping || cleaned || !ready;
       state("camera_starting","正在请求摄像头权限");
       videoElement = targetVideo;
+      let requestedCameraStream = null;
       try {
-        cameraStream = await mediaDevices.getUserMedia({
+        requestedCameraStream = await mediaDevices.getUserMedia({
           video:{facingMode:"environment",width:{ideal:1280},height:{ideal:720}},
           audio:false,
         });
+        if (cancelled()) {
+          requestedCameraStream.getTracks().forEach(track => { try { track.stop(); } catch {} });
+          throw new Error("摄像头启动已取消");
+        }
+        cameraStream = requestedCameraStream;
         videoElement.srcObject = cameraStream;
         if (typeof videoElement.play === "function") await videoElement.play();
+        if (cancelled()) {
+          requestedCameraStream.getTracks().forEach(track => { try { track.stop(); } catch {} });
+          if (cameraStream === requestedCameraStream) cameraStream = null;
+          if (videoElement?.srcObject === requestedCameraStream) videoElement.srcObject = null;
+          throw new Error("摄像头启动已取消");
+        }
         cameraTimer = timers.setInterval(() => { void captureAndSendFrame(); },1000);
         void captureAndSendFrame();
         state("camera_ready","摄像头已开启（每秒最多发送一张快照）");
       } catch (error) {
-        stopCamera();
+        if (generation === cameraGeneration) stopCamera();
         throw error;
+      } finally {
+        if (cameraStartingGeneration === generation) cameraStartingGeneration = null;
       }
     }
     async function stop() {
