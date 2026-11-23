@@ -549,6 +549,7 @@
           if (result.conversation.deleted === true) {
             state.conversations = state.conversations.filter((row) => row.id !== conversationId);
             state.remoteSyncFingerprints.delete(conversationId);
+            state.remoteSyncRetryCounts.delete(conversationId);
             if (state.activeConversationId === conversationId) {
               state.activeConversationId = state.conversations[0]?.id || "";
             }
@@ -611,6 +612,7 @@
     const timer = state.remoteSyncTimers.get(conversationId);
     if (timer) window.clearTimeout(timer);
     state.remoteSyncTimers.delete(conversationId);
+    state.remoteSyncRetryCounts.delete(conversationId);
     const inFlight = state.remoteSyncInFlight.get(conversationId);
     if (inFlight) {
       try { await inFlight; } catch {}
