@@ -420,7 +420,7 @@ const closeContext = vm.createContext({
   state:closeState,
   $:id=>closeElementsMap[id],
   window:{clearInterval(){}},
-  persistVoiceTranscript:(role,value)=>{partialWrites.push({role,value});return true;},
+  persistVoiceTranscript:(role,value,recoveryStatus)=>{partialWrites.push({role,value,recoveryStatus});return true;},
   updateVoiceControls(){},
   resizeComposer(){},
   String,
@@ -434,6 +434,8 @@ closeUi("closed");
 assert.equal(partialWrites.length,1,"closing mid-response must persist the visible partial assistant text");
 assert.equal(partialWrites[0].role,"assistant");
 assert.equal(partialWrites[0].value,"尚未完成的回复");
+assert.equal(partialWrites[0].recoveryStatus,"voice_partial",
+  "interrupted Voice text must be visibly labeled as a partial reply in synchronized history");
 assert.equal(closeState.voiceAssistantLine,null);
 assert.equal(closeState.voiceConversationId,"");
 assert.equal(closeState.voiceAssistantPersisted,false);
