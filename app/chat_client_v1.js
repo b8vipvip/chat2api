@@ -2728,6 +2728,14 @@
     );
   }
 
+  $("voiceStartButton").addEventListener("click", () => { void startVoiceCall(); });
+  $("voiceStopButton").addEventListener("click", () => { void stopVoiceCall(); });
+  $("voiceCameraButton").addEventListener("click", () => { void toggleVoiceCamera(); });
+  $("voiceClearButton").addEventListener("click", () => {
+    $("voiceTranscript").replaceChildren();
+    state.voiceAssistantLine = null;
+  });
+
   $("newChatButton").addEventListener("click", createConversation);
   $("conversationSearch").addEventListener("input", onConversationSearchInput);
   $("exportJsonButton").addEventListener("click", exportConversationJson);
@@ -2747,6 +2755,10 @@
     if ((state.pendingImages.length || state.pendingFiles.length) && conversation?.apiKeyId && conversation.apiKeyId !== event.target.value) {
       event.target.value = conversation.apiKeyId;
       toast("待发送附件已绑定当前 API Key；请先移除附件再切换 Key。");
+      return;
+    }
+    if (state.voiceActive) {
+      void stopVoiceCall().then(() => selectApiKey(event.target.value));
       return;
     }
     selectApiKey(event.target.value);
@@ -2838,6 +2850,7 @@
     if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
   } catch {}
   window.addEventListener("beforeunload", () => {
+    if (state.voiceClient) void state.voiceClient.stop();
     if (state.searchTimer) window.clearTimeout(state.searchTimer);
     if (state.searchController) state.searchController.abort();
     state.nativeStreams.forEach(controller => controller.abort());
