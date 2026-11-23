@@ -375,7 +375,9 @@
           text: currentAssistantResponseText() || "",
         }).catch(() => {});
       }
-      if (state.currentResponseId === responseId) {
+      // client_cancel is followed by a separate response.interrupted event.
+      // Keep the baseline until that event can capture the last DOM snapshot.
+      if (state.currentResponseId === responseId && item.reason !== "client_cancel") {
         state.currentResponseId = null;
         state.assistantBaselineMessageKey = null;
         state.assistantBaselineText = "";
