@@ -12,7 +12,7 @@ const referenceHelpersEnd = source.indexOf("  function toolReferencesEqual(", re
 assert.ok(referenceHelpersStart >= 0 && referenceHelpersEnd > referenceHelpersStart,
   "production citation normalization helpers must remain extractable");
 const context = vm.createContext({
-  MAX_MESSAGES:30,
+  MAX_MESSAGES:100,
   URL,
   window:{location:{origin:"https://chat.example"}},
 });
@@ -21,6 +21,33 @@ const mergeConversation = vm.runInContext(
   source.slice(start, end) + "\nmergeConversation",
   context,
 );
+
+
+test("conversation merge preserves 100 server messages when local cache has only 30", () => {
+  const messages = Array.from({length:100},(_,index)=>({
+    id:"message_server_" + String(index).padStart(4,"0"),
+    role:index % 2 ? "assistant" : "user",
+    content:"message " + index,
+    createdAt:"2026-11-20T00:" + String(Math.floor(index / 60)).padStart(2,"0") + ":" + String(index % 60).padStart(2,"0") + "Z",
+    pending:false,
+  }));
+  const server = {
+    id:"c2a_long_history_0001",
+    title:"long server history",
+    updatedAt:"2026-11-20T02:00:00Z",
+    serverRevision:8,
+    messages,
+  };
+  const local = {
+    ...server,
+    updatedAt:"2026-11-20T02:00:01Z",
+    messages:messages.slice(-30),
+  };
+  const merged = mergeConversation(server,local);
+  assert.equal(merged.messages.length,100);
+  assert.equal(merged.messages[0].id,"message_server_0000");
+  assert.equal(merged.messages.at(-1).id,"message_server_0099");
+});
 
 test("conversation merge keeps remote messages and local-only turns", () => {
   const server = {
