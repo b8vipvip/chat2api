@@ -67,7 +67,7 @@ const liveCtx=vm.createContext({
   settleVoiceWelcome:async()=>false,
   waitLiveTransport:async type=>({type,track_count:1}),
 });
-vm.runInContext(liveSessionHelpers+"\\n"+liveBlock+"\\nglobalThis.tryLive=openVoice;",liveCtx);
+vm.runInContext(liveSessionHelpers+"\n"+liveBlock+"\nglobalThis.tryLive=openVoice;",liveCtx);
 await liveCtx.tryLive(liveActive);
 // A stale/stopped session must fail before it can open or publish readiness.
 await assert.rejects(
