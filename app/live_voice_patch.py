@@ -872,6 +872,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                             await send_json({
                                 "type": "error",
                                 "code": "LIVE_VIDEO_FRAME_BACKPRESSURE",
+                                "item_id": str(control.get("item_id") or ""),
                                 "message": "Wait for input_video.frame.sent before sending the next frame",
                                 "retryable": True,
                             })
@@ -891,6 +892,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         except ValueError as error:
                             await send_json({
                                 "type": "error", "code": "INVALID_VIDEO_FRAME",
+                                "item_id": str(control.get("item_id") or ""),
                                 "message": str(error), "retryable": True,
                             })
                             continue
@@ -974,10 +976,18 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         if len(next_media_ids) > 64:
                             raise ValueError("A Live session may attach at most 64 unique files")
                     except HTTPException as error:
-                        await send_json({"type": "error", "code": "MEDIA_ACCESS_DENIED", "message": str(error.detail), "retryable": False})
+                        await send_json({
+                            "type": "error", "code": "MEDIA_ACCESS_DENIED",
+                            **({"item_id": str(control.get("item_id") or "")} if control_type == "input_video.frame" else {}),
+                            "message": str(error.detail), "retryable": False,
+                        })
                         continue
                     except ValueError as error:
-                        await send_json({"type": "error", "code": "INVALID_MEDIA_INPUT", "message": str(error), "retryable": False})
+                        await send_json({
+                            "type": "error", "code": "INVALID_MEDIA_INPUT",
+                            **({"item_id": str(control.get("item_id") or "")} if control_type == "input_video.frame" else {}),
+                            "message": str(error), "retryable": False,
+                        })
                         continue
                     if attachments:
                         # The extension download route requires a durable,
@@ -994,6 +1004,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                             await send_json({
                                 "type": "error",
                                 "code": "MEDIA_GRANT_PERSIST_FAILED",
+                                **({"item_id": item_id} if control_type == "input_video.frame" else {}),
                                 "message": "Live media authorization could not be persisted",
                                 "retryable": True,
                             })
