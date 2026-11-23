@@ -202,7 +202,7 @@
         state.voiceAssistantPersisted = false;
       }
       if (state.voiceAssistantLine) {
-        state.voiceAssistantLine.textContent += String(payload.delta || "");
+        state.voiceAssistantLine.textContent = limitAssistantText(String(state.voiceAssistantLine.textContent || "") + String(payload.delta || ""));
         $("voiceTranscript").scrollTop = $("voiceTranscript").scrollHeight;
       }
     } else if (payload.type === "response.text.replace") {
@@ -211,7 +211,7 @@
         state.voiceAssistantPersisted = false;
       }
       if (state.voiceAssistantLine) {
-        state.voiceAssistantLine.textContent = String(payload.text || "");
+        state.voiceAssistantLine.textContent = limitAssistantText(payload.text || "");
         $("voiceTranscript").scrollTop = $("voiceTranscript").scrollHeight;
       }
     } else if (payload.type === "response.interrupted") {
