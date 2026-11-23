@@ -300,6 +300,7 @@ def test_live_extension_assets_are_wired() -> None:
     main = (root / "chrome_extension" / "voice_live_main.js").read_text(encoding="utf-8")
     content = (root / "chrome_extension" / "content_voice_live.js").read_text(encoding="utf-8")
     router = (root / "chrome_extension" / "audio_routing_live.js").read_text(encoding="utf-8")
+    conversation_router = (root / "chrome_extension" / "conversation_routing.js").read_text(encoding="utf-8")
     assert "install_live_voice_patch(app)" in entry
     assert "audio_routing_live.js" in background
     assert "voice.live.audio" in main and "24000" in main
@@ -307,6 +308,9 @@ def test_live_extension_assets_are_wired() -> None:
     assert "chat2api.voice.live.start" in content
     assert "input.speech_started" in content
     assert "voice.live.start" in router
+    assert 'const liveSession = message?.type === "voice.live.start"' in conversation_router
+    assert 'key = liveSession ? `${baseKey}::live::${requestId}`' in conversation_router
+    assert "route.request_scoped = isolated || liveSession" in conversation_router
 
 def test_live_finish_before_browser_ready_never_reports_completed(tmp_path: Path) -> None:
     """A client finish cannot turn an unstarted/failed WebRTC call green."""
