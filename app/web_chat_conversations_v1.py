@@ -848,7 +848,7 @@ def install_web_chat_conversations_v1(app: FastAPI) -> None:
         _, user = current_user(request)
         query = str(request.query_params.get("q") or "")
         try:
-            limit = int(request.query_params.get("limit") or "50")
+            limit = int(request.query_params.get("limit") or "20")
             rows = store.search_for_user(str(user["user_id"]), query, limit)
         except (TypeError, ValueError):
             raise HTTPException(status_code=422, detail="search query or limit is invalid", headers=_PRIVATE_HEADERS)
