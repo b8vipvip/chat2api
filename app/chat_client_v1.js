@@ -1929,7 +1929,17 @@
       let result = null;
       if (typeof controller.replay === "function") {
         const replay = await controller.replay(record, Number(assistant.lastEventId || 0));
-        if (replay?.terminal === true) result = replay;
+        if (replay?.terminal === true) {
+          result = replay;
+          // A delivery.completed journal event is a terminal marker, not
+          // necessarily the complete answer body. Fetch the owner-scoped
+          // snapshot before closing the turn so a compacted/replayed stream
+          // cannot leave an empty assistant message marked as completed.
+          if (replay.status === "completed" && typeof replay.response_text !== "string") {
+            const snapshot = await controller.resume(record);
+            if (snapshot?.terminal === true) result = snapshot;
+          }
+        }
       }
       if (!result) result = await controller.resume(record);
       const status = String(result?.status || "recovery_failed");
