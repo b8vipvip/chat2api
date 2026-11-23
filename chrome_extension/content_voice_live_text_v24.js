@@ -266,20 +266,39 @@
     return null;
   }
 
-  async function waitForAssistantCompletion(active, baselineText, timeout = 45000) {
+  function messageIdentity(node) {
+    const owner = node?.closest?.("[data-message-id]") || node;
+    const messageId = String(owner?.getAttribute?.("data-message-id") || "").trim();
+    return messageId ? "id:" + messageId : node;
+  }
+
+  async function waitForAssistantCompletion(active, baselineIdentity, baselineText, timeout = 45000) {
     const deadline = Date.now() + timeout;
+    let lastIdentity = null;
     let lastText = "";
     let stableSince = 0;
     while (Date.now() < deadline) {
       assertLiveTurnOwner(active);
       const nodes = [...document.querySelectorAll("[data-message-author-role='assistant']")].filter(visible);
-      const current = normalize(nodes[nodes.length - 1]?.innerText || nodes[nodes.length - 1]?.textContent || "");
-      if (current && current !== baselineText) {
-        if (current !== lastText) {
+      const currentNode = nodes[nodes.length - 1] || null;
+      const currentIdentity = messageIdentity(currentNode);
+      const current = normalize(currentNode?.innerText || currentNode?.textContent || "");
+      // Two consecutive assistant turns may legitimately have identical text
+      // (the setup prompt explicitly asks for "已准备好"). Compare message
+      // identity as well as text so a valid new acknowledgement is not
+      // mistaken for the previous assistant answer and timed out.
+      const isNewAssistantTurn = Boolean(currentNode) && currentIdentity !== baselineIdentity;
+      if (current && (isNewAssistantTurn || current !== baselineText)) {
+        if (currentIdentity !== lastIdentity || current !== lastText) {
+          lastIdentity = currentIdentity;
           lastText = current;
           stableSince = Date.now();
         }
         if (!stopButton() && buttonReady(sendButton()) && stableSince && Date.now() - stableSince >= 1800) return current;
+      } else {
+        lastIdentity = null;
+        lastText = "";
+        stableSince = 0;
       }
       await delay(120);
     }
@@ -289,10 +308,11 @@
   async function prepareContext(active, text) {
     assertLiveTurnOwner(active);
     const baselineNodes = [...document.querySelectorAll("[data-message-author-role='assistant']")].filter(visible);
-    const baselineText = normalize(baselineNodes[baselineNodes.length - 1]?.innerText
-      || baselineNodes[baselineNodes.length - 1]?.textContent || "");
+    const baselineNode = baselineNodes[baselineNodes.length - 1] || null;
+    const baselineIdentity = messageIdentity(baselineNode);
+    const baselineText = normalize(baselineNode?.innerText || baselineNode?.textContent || "");
     await queueTurn(() => sendLiveText(active,"session-context",String(text || "")));
-    const responseText = await waitForAssistantCompletion(active,baselineText);
+    const responseText = await waitForAssistantCompletion(active,baselineIdentity,baselineText);
     return {acknowledged:true,responseText:sliceCodePoints(responseText,0,1200)};
   }
 
