@@ -10,6 +10,7 @@
   // interruption snapshot. Leave network/terminal-delivery margin before the
   // browser gives up and closes the public WebSocket.
   const SESSION_CLOSE_TIMEOUT_MS = 8000;
+  const SESSION_READY_TIMEOUT_MS = 90000;
   const DEFAULT_SESSION_INSTRUCTIONS = "请用自然、清晰、简洁的中文与用户进行实时语音对话。需要时结合用户提供的摄像头画面回答。";
   const MAX_SESSION_INSTRUCTIONS_CHARS = 4000;
   const MAX_SESSION_CONTEXT_CHARS = 8000;
@@ -379,7 +380,7 @@
         readyTimeoutId = timers.setTimeout(() => {
           readyReject?.(new Error("等待 GPT-Live 就绪超时"));
           readyReject = null;
-        },30000);
+        },SESSION_READY_TIMEOUT_MS);
         socket.onopen = () => {
           if (cancelled()) {
             try { socket.close(); } catch {}
