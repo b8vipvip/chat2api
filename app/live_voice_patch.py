@@ -343,6 +343,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
         error_message = ""
         quota_reservation = None
         observed_prompt_parts: list[str] = []
+        observed_setup_completion_parts: list[str] = []
         observed_completion_parts: list[str] = []
         pending_input_text: dict[str, str] = {}
         pending_input_media_ids: dict[str, list[str]] = {}
@@ -453,13 +454,19 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     # final usage estimate once, rather than reserving it and then
                     # dropping it from settlement.
                     if not setup_prompt_accounted:
+                        setup_applied = False
                         if event.get("context_injected") is True:
                             if session_prompt:
                                 observed_prompt_parts.append(session_prompt)
-                            setup_prompt_accounted = True
+                            setup_applied = True
                         elif event.get("instructions_applied") is True:
                             if instructions:
                                 observed_prompt_parts.append(instructions)
+                            setup_applied = True
+                        if setup_applied:
+                            setup_response_text = str(event.get("setup_response_text") or "").strip()
+                            if setup_response_text:
+                                observed_setup_completion_parts.append(setup_response_text[:1200])
                             setup_prompt_accounted = True
                     payload: dict[str, object] = {
                         "type": "session.ready",
@@ -1201,7 +1208,13 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 )
                 prompt_text = "\n".join(part for part in observed_prompt_parts if part).strip()
                 completion_text = "\n".join(part for part in observed_completion_parts if part).strip()
-                usage_estimate = usage_for(prompt_text, completion_text)
+                setup_completion_text = "\n".join(
+                    part for part in observed_setup_completion_parts if part
+                ).strip()
+                usage_completion_text = "\n".join(
+                    part for part in (setup_completion_text, completion_text) if part
+                )
+                usage_estimate = usage_for(prompt_text, usage_completion_text)
                 confirmed_file_ids = [
                     file_id for file_id in observed_media_ids
                     if file_id in confirmed_media_ids
@@ -1245,6 +1258,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         "attachments_confirmed": observed_media_count,
                         "audio_usage_provider_verified": False,
                         "usage_estimator": usage_estimate.estimator,
+                        "setup_completion_chars": len(setup_completion_text),
                         "browser_startup_error": error_message if error_message and not session_ready else None,
                     },
                     "timings": state.timings(),
