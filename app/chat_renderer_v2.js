@@ -245,6 +245,7 @@
     return {
       indent:match[1].replace(/\t/g,"  ").length,
       ordered:Boolean(match[3]),
+      start:match[3] ? parseInt(match[3],10) : 1,
       text:match[4],
     };
   }
@@ -268,6 +269,7 @@
     const first = listMarker(lines[start]);
     if (!first) return start;
     const list = node(first.ordered ? "ol" : "ul");
+    if (first.ordered && first.start > 1) list.start = first.start;
     let index = start;
     let lastItem = null;
     while (index < lines.length) {
