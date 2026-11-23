@@ -396,6 +396,22 @@ assert.equal(rendered,2,"active conversation should render persisted voice turns
 assert.equal(historyState.voiceAssistantPersisted,true,
   "response.done must mark the final assistant transcript as already persisted");
 
+// A barge-in ends the current assistant turn but keeps the Voice session open.
+// Persist that partial turn separately before accepting the next response.
+historyUi.handleVoiceEvent({type:"response.text.delta",delta:"中断前的部分回复"});
+historyUi.handleVoiceEvent({type:"response.interrupted",reason:"barge_in"});
+assert.equal(voiceConversation.messages.length,3);
+assert.equal(voiceConversation.messages[2].content,"中断前的部分回复");
+assert.equal(voiceConversation.messages[2].recoveryStatus,"voice_partial");
+assert.equal(historyState.voiceAssistantLine,null);
+historyUi.handleVoiceEvent({type:"response.text.delta",delta:"下一轮新回复"});
+assert.equal(historyState.voiceAssistantLine.textContent,"下一轮新回复",
+  "a new response after barge-in must not append to the previous partial line");
+historyUi.handleVoiceEvent({type:"response.done",text:"下一轮完整回复"});
+assert.equal(voiceConversation.messages.length,4);
+assert.equal(voiceConversation.messages[3].content,"下一轮完整回复");
+assert.notEqual(voiceConversation.messages[3].recoveryStatus,"voice_partial");
+
 const setVoiceUiStart = chatClientSource.indexOf("  function setVoiceUi(");
 const setVoiceUiEnd = chatClientSource.indexOf("  function appendVoiceTranscript(",setVoiceUiStart);
 assert.ok(setVoiceUiStart>=0 && setVoiceUiEnd>setVoiceUiStart);
