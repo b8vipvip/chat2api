@@ -364,3 +364,70 @@ test("bounds a stalled same-origin cancellation handshake", async () => {
   assert.equal(result.cancel_requested,false);
   assert.equal(result.terminal,false);
 });
+
+
+test("reconnects an interrupted native-content sidecar and receives its terminal marker", async () => {
+  const start = source.indexOf("  async function streamNativeContent(");
+  const end = source.indexOf("  async function hydrateNativeSnapshots(", start);
+  assert.ok(start >= 0 && end > start);
+
+  let fetchCalls = 0, refreshCalls = 0, snapshotFrames = 0;
+  const encoder = new TextEncoder();
+  const interruptedBody = new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode("event: native.snapshot\\ndata: {}\\n\\n"));
+      controller.error(new Error("simulated network interruption"));
+    },
+  });
+  const terminalBody = new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode("event: native.end\\ndata: {}\\n\\n"));
+      controller.close();
+    },
+  });
+  const context = vm.createContext({
+    state:{nativeStreams:new Map()},
+    AbortController, TextDecoder, TextEncoder, ReadableStream,
+    encodeURIComponent,
+    fetch:async (_url,options) => {
+      assert.equal(options.credentials,"same-origin");
+      fetchCalls += 1;
+      return fetchCalls === 1
+        ? {ok:true,status:200,body:interruptedBody}
+        : {ok:true,status:200,body:terminalBody};
+    },
+    consumeNativeSseFrame(frame) {
+      if (frame.includes("native.snapshot")) snapshotFrames += 1;
+      return frame.includes("event: native.end");
+    },
+    refreshNativeSnapshot:async () => { refreshCalls += 1; return true; },
+    window:{setTimeout(callback) { callback(); return 0; }},
+  });
+  const stream = vm.runInNewContext(
+    source.slice(start,end) + "\\nstreamNativeContent",
+    context,
+  );
+  await stream("req_native_reconnect");
+  assert.equal(fetchCalls,2);
+  assert.equal(snapshotFrames,1);
+  assert.ok(refreshCalls >= 2);
+  assert.equal(context.state.nativeStreams.size,0);
+});
+
+test("does not retry a native-content sidecar after an owner/auth 404", async () => {
+  const start = source.indexOf("  async function streamNativeContent(");
+  const end = source.indexOf("  async function hydrateNativeSnapshots(", start);
+  let fetchCalls = 0;
+  const context = vm.createContext({
+    state:{nativeStreams:new Map()},
+    AbortController, TextDecoder, encodeURIComponent,
+    fetch:async () => { fetchCalls += 1; return {ok:false,status:404,body:null}; },
+    consumeNativeSseFrame:() => false,
+    refreshNativeSnapshot:async () => false,
+    window:{setTimeout(callback) { callback(); return 0; }},
+  });
+  const stream = vm.runInNewContext(source.slice(start,end) + "\\nstreamNativeContent",context);
+  await stream("req_native_missing");
+  assert.equal(fetchCalls,1);
+  assert.equal(context.state.nativeStreams.size,0);
+});
