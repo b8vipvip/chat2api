@@ -55,6 +55,9 @@ assert.ok(boundedContext.length >= 7990);
 const closeTimeout = Number(source.match(/SESSION_CLOSE_TIMEOUT_MS\s*=\s*(\d+)/)?.[1] || 0);
 assert.ok(closeTimeout > 5000,
   "the browser must leave margin beyond the Broker's five-second Worker stop-drain timeout");
+const readyTimeout = Number(source.match(/SESSION_READY_TIMEOUT_MS\s*=\s*(\d+)/)?.[1] || 0);
+assert.ok(readyTimeout >= 90000,
+  "the client must allow enough time for isolated context setup before Voice becomes ready");
 
 class FakeWebSocket {
   static OPEN = 1;
