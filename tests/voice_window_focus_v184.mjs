@@ -52,15 +52,28 @@ assert.equal(response.transport.type,"voice.remote.track");
 assert.equal(stages[0].stage,"page-visibility-observed");
 assert.equal(stages[0].browser_visibility,"hidden");
 
+const liveSessionHelpers=live.slice(
+  live.indexOf("  function isActiveSession("),
+  live.indexOf("  async function waitFor("),
+);
+assert.ok(liveSessionHelpers.includes("state.active === active"));
+assert.ok(liveSessionHelpers.includes("Live Voice startup was cancelled"));
 const liveBlock=live.slice(live.indexOf("  async function openVoice("),live.indexOf("  async function startLive("));
+const liveActive={requestId:"live-hidden",stopped:false};
 const liveCtx=vm.createContext({
+  state:{active:liveActive},
   document:{visibilityState:"hidden"},
   voiceUiReady:()=>true,
   settleVoiceWelcome:async()=>false,
   waitLiveTransport:async type=>({type,track_count:1}),
 });
-vm.runInContext(liveBlock+"\nglobalThis.tryLive=openVoice;",liveCtx);
-await liveCtx.tryLive({requestId:"live-hidden"});
+vm.runInContext(liveSessionHelpers+"\\n"+liveBlock+"\\nglobalThis.tryLive=openVoice;",liveCtx);
+await liveCtx.tryLive(liveActive);
+// A stale/stopped session must fail before it can open or publish readiness.
+await assert.rejects(
+  () => liveCtx.tryLive({requestId:"live-stale",stopped:true}),
+  /Live Voice startup was cancelled/,
+);
 assert.ok(liveRouting.includes("chat2apiActivateVoiceTabV184"));
 assert.ok(liveRouting.includes("VOICE_WINDOW_NOT_FOCUSED"));
 console.log("Voice speech/live share foreground routing; hidden is evidence, not a terminal veto");
