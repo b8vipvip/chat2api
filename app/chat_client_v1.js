@@ -182,6 +182,20 @@
       toast("当前 API Key 没有 audio 或 chat 权限。");
       return;
     }
+    try {
+      const session = await apiJson("/api/user/me");
+      if (String(session.user?.user_id || "") !== String(state.user?.user_id || "")) {
+        throw new Error("当前登录账户已变化");
+      }
+    } catch {
+      state.apiToken = "";
+      state.user = null;
+      showOnly("authRequired");
+      setConnection("登录已失效","error");
+      toast("用户登录状态已失效，请重新登录后再使用实时语音。");
+      resizeComposer();
+      return;
+    }
     const voiceApi = window.Chat2APIVoiceClientV1;
     if (!voiceApi || typeof voiceApi.create !== "function") {
       toast("实时语音模块尚未加载，请刷新页面后重试。");
