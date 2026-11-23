@@ -3,7 +3,9 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
 const source = readFileSync("app/chat_voice_client_v1.js","utf8");
+const chatClientSource = readFileSync("app/chat_client_v1.js","utf8");
 new vm.Script(source);
+new vm.Script(chatClientSource);
 
 class FakeWebSocket {
   static OPEN = 1;
@@ -279,4 +281,39 @@ const externalSocket = api.create({
   timers,
 });
 await assert.rejects(externalSocket.start(),/无法创建 GPT-Live 会话|same-origin/i);
+
+// The main Web Chat panel must create an assistant transcript node on the
+// first delta and replace partial deltas with the authoritative response.done text.
+class FakeElement {
+  constructor(tag) { this.tag=tag;this.className="";this.children=[];this.textContent=""; }
+  append(...nodes) { this.children.push(...nodes); }
+  appendChild(node) { this.children.push(node);return node; }
+  remove() {}
+}
+const transcript = {
+  children:[],
+  scrollTop:0,
+  scrollHeight:0,
+  get childElementCount(){return this.children.length;},
+  get firstElementChild(){return this.children[0] || null;},
+  appendChild(node){this.children.push(node);return node;},
+};
+const clientContext = vm.createContext({
+  state:{voiceAssistantLine:null},
+  $:id=>id==="voiceTranscript" ? transcript : new FakeElement("status"),
+  document:{createElement:tag=>new FakeElement(tag)},
+  String,
+});
+const appendStart = chatClientSource.indexOf("  function appendVoiceTranscript(");
+const appendEnd = chatClientSource.indexOf("  async function startVoiceCall(",appendStart);
+assert.ok(appendStart>=0 && appendEnd>appendStart);
+const voiceUi = vm.runInContext(
+  chatClientSource.slice(appendStart,appendEnd) + "\\n({appendVoiceTranscript,handleVoiceEvent})",
+  clientContext,
+);
+voiceUi.handleVoiceEvent({type:"response.text.delta",delta:"部分"});
+assert.equal(clientContext.state.voiceAssistantLine.textContent,"部分");
+voiceUi.handleVoiceEvent({type:"response.done",text:"完整的最终语音回复"});
+assert.equal(transcript.children[0].children[1].textContent,"完整的最终语音回复");
+assert.equal(clientContext.state.voiceAssistantLine,null);
 console.log("web-chat-voice-client-v1-passed");
