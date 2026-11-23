@@ -415,15 +415,21 @@
       if (!targetVideo) throw new Error("摄像头预览元素不可用");
       state("camera_starting","正在请求摄像头权限");
       videoElement = targetVideo;
-      cameraStream = await mediaDevices.getUserMedia({
-        video:{facingMode:"environment",width:{ideal:1280},height:{ideal:720}},
-        audio:false,
-      });
-      videoElement.srcObject = cameraStream;
-      if (typeof videoElement.play === "function") await videoElement.play();
-      cameraTimer = timers.setInterval(() => { void captureAndSendFrame(); },1000);
-      void captureAndSendFrame();
-      state("camera_ready","摄像头已开启（每秒最多发送一张快照）");
+      try {
+        cameraStream = await mediaDevices.getUserMedia({
+          video:{facingMode:"environment",width:{ideal:1280},height:{ideal:720}},
+          audio:false,
+        });
+        videoElement.srcObject = cameraStream;
+        if (typeof videoElement.play === "function") await videoElement.play();
+        cameraTimer = timers.setInterval(() => { void captureAndSendFrame(); },1000);
+        void captureAndSendFrame();
+        state("camera_ready","摄像头已开启（每秒最多发送一张快照）");
+      } catch (error) {
+        stopCamera();
+        state("ready","摄像头未开启");
+        throw error;
+      }
     }
     async function stop() {
       if (!socket || !socketOpen()) {
