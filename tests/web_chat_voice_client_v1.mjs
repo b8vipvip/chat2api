@@ -19,6 +19,8 @@ assert.ok(source.includes("const context = sliceCodePoints("));
 const chatClientSource = readFileSync("app/chat_client_v1.js","utf8");
 const liveContentSource = readFileSync("chrome_extension/content_voice_live.js","utf8");
 const liveTextSource = readFileSync("chrome_extension/content_voice_live_text_v24.js","utf8");
+assert.ok(liveTextSource.includes("sliceCodePoints(responseText,0,1200)"));
+assert.ok(liveContentSource.includes("sliceCodePoints(String(setupResult.responseText || \"\"),0,1200)"));
 new vm.Script(liveContentSource);
 new vm.Script(liveTextSource);
 new vm.Script(source);
