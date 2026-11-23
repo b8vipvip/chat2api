@@ -32,6 +32,8 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         page = client.get("/chat")
         assert page.status_code == 200
         assert 'id="messageInput"' in page.text
+        assert "会话会同步保存在你的 Chat2API 账户中" in page.text
+        assert "聊天记录保存在当前浏览器" not in page.text
         assert 'id="exportJsonButton"' in page.text
         assert 'id="importButton"' in page.text
         assert 'id="conversationImportInput"' in page.text
