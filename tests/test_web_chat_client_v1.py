@@ -59,10 +59,10 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         assert "MAX_VOICE_CONTEXT_CHARS = 8000" in script.text
         assert "buildVoiceContext(voiceConversation)" in script.text
         assert "instructions:DEFAULT_VOICE_INSTRUCTIONS" in script.text
-        assert "已载入当前对话背景" in script.text
+        assert "已将当前对话背景作为开场消息发送" in script.text
         assert "payload.context_injected === true" in script.text
         assert "payload.instructions_applied === true" in script.text
-        assert "已应用语音指令（当前对话暂无历史背景）" in script.text
+        assert "已发送语音开场指令" in script.text
         assert "MAX_LOCAL_MESSAGES = 30" in script.text
         assert "normalizeConversationRow(row, MAX_LOCAL_MESSAGES)" in script.text
         assert "slice(-MAX_LOCAL_MESSAGES)" in script.text
