@@ -414,6 +414,7 @@ assert.notEqual(voiceConversation.messages[3].recoveryStatus,"voice_partial");
 
 // A session/track stop may deliver its only final partial snapshot in the
 // interruption event, before the 250 ms DOM poller has emitted any delta.
+historyUi.handleVoiceEvent({type:"response.created",response_id:"response-no-delta"});
 historyUi.handleVoiceEvent({
   type:"response.interrupted",
   reason:"session_stop",
