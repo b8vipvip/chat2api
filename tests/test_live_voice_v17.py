@@ -58,6 +58,23 @@ def create_managed_key(client: TestClient, name: str = "voice-test") -> str:
     return response.json()["token"]
 
 
+def acknowledge_live_stop(live, extension, request_id: str) -> None:
+    stopped = extension.receive_json()
+    assert stopped["type"] == "voice.live.stop"
+    assert stopped["request_id"] == request_id
+    extension.send_json({
+        "type": "image.progress",
+        "kind": "voice-live",
+        "request_id": request_id,
+        "live_event": "session.closed",
+    })
+    for _ in range(5):
+        terminal = live.receive_json()
+        if terminal.get("type") == "session.closed":
+            return
+    raise AssertionError("Live session did not send its terminal session.closed event")
+
+
 def test_live_voice_stream_relays_pcm_both_directions(tmp_path: Path) -> None:
     with TestClient(app_live(tmp_path)) as client:
         managed_key = create_managed_key(client)
@@ -158,8 +175,7 @@ def test_live_voice_stream_relays_pcm_both_directions(tmp_path: Path) -> None:
                 assert cancel["type"] == "voice.live.cancel_response"
 
                 live.send_json({"type": "session.finish"})
-                stopped = extension.receive_json()
-                assert stopped["type"] == "voice.live.stop"
+                acknowledge_live_stop(live, extension, request_id)
 
 
 def test_live_mini_is_explicit_alias_of_gpt_live(tmp_path: Path) -> None:
@@ -189,7 +205,7 @@ def test_live_mini_is_explicit_alias_of_gpt_live(tmp_path: Path) -> None:
                 assert ready["effective_model"] == "gpt-live"
                 assert ready["model_alias_of"] == "gpt-live"
                 live.send_json({"type": "session.finish"})
-                assert extension.receive_json()["type"] == "voice.live.stop"
+                acknowledge_live_stop(live, extension, started["request_id"])
 
 
 def test_browser_webapp_can_use_one_time_realtime_session_token(tmp_path: Path) -> None:
@@ -216,7 +232,7 @@ def test_browser_webapp_can_use_one_time_realtime_session_token(tmp_path: Path) 
                 started = extension.receive_json()
                 assert started["type"] == "voice.live.start"
                 live.send_json({"type": "session.finish"})
-                assert extension.receive_json()["type"] == "voice.live.stop"
+                acknowledge_live_stop(live, extension, started["request_id"])
 
         try:
             with client.websocket_connect(token_payload["websocket_path"]) as socket:
@@ -284,9 +300,7 @@ def test_live_finish_before_browser_ready_never_reports_completed(tmp_path: Path
                 message = live.receive_json()
                 assert message["type"] == "error"
                 assert message["code"] == "VOICE_SESSION_NOT_READY"
-                stopped = extension.receive_json()
-                assert stopped["type"] == "voice.live.stop"
-                assert stopped["request_id"] == request_id
+                acknowledge_live_stop(live, extension, request_id)
         record = app.state.telemetry.get(request_id)
         assert record["status"] == "error"
         assert "not ready" in record["error"].lower()
@@ -375,7 +389,7 @@ def test_live_voice_bounds_pcm16_frames_and_keeps_session_after_bad_input(tmp_pa
                     "text": "这是完整的最终回答",
                 }, "response.done must supersede an older partial text snapshot"
                 live.send_json({"type": "session.finish"})
-                assert extension.receive_json()["type"] == "voice.live.stop"
+                acknowledge_live_stop(live, extension, request_id)
 
         row = app.state.telemetry.get(request_id)
         assert row["status"] == "completed"
@@ -456,7 +470,7 @@ def test_live_voice_ready_session_without_response_is_not_completed(tmp_path: Pa
                 assert live.receive_bytes() == b"\x05\x06" * 120
                 # Partial PCM delivery is not proof of a completed response.
                 live.send_json({"type": "session.finish"})
-                assert extension.receive_json()["type"] == "voice.live.stop"
+                acknowledge_live_stop(live, extension, request_id)
 
         row = app.state.telemetry.get(request_id)
         assert row["status"] == "error"
@@ -512,7 +526,7 @@ def test_live_voice_malformed_control_frames_do_not_terminate_session(tmp_path: 
                 assert live.receive_json() == {"type": "pong", "timestamp": 123}
 
                 live.send_json({"type": "session.finish"})
-                assert extension.receive_json()["type"] == "voice.live.stop"
+                acknowledge_live_stop(live, extension, request_id)
 
         row = app.state.telemetry.get(request_id)
         assert row["status"] == "error"
