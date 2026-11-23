@@ -181,6 +181,11 @@ def test_web_chat_conversation_api_auth_ownership_sync_and_conflicts(tmp_path: P
         )
         assert long_reply_saved.status_code == 200, long_reply_saved.text
         assert long_reply_saved.json()["conversation"]["messages"][1]["content"] == long_reply_text
+        long_reply_search = client.get(
+            "/api/user/chat/conversations/search", params={"q": "长回答内容"}
+        )
+        assert long_reply_search.status_code == 200, long_reply_search.text
+        assert any(row["id"] == long_reply_id for row in long_reply_search.json()["data"])
 
         too_long_reply = _conversation("c2a_longreply_bad_0001")
         too_long_reply["apiKeyId"] = key_id
