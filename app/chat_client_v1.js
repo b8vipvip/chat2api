@@ -1852,7 +1852,7 @@
       completed: "已完成", completed_without_text: "已完成，但无可恢复文本",
       cancellation_requested: "正在确认停止", cancelled: "已取消", error: "请求失败",
       stalled: "请求停滞", auth_required: "需要重新登录", not_found: "请求记录不存在",
-      recovery_unavailable: "暂不可恢复", recovery_timeout: "恢复超时",
+      recovery_unavailable: "暂时无法恢复，可稍后重试", recovery_timeout: "恢复超时",
       recovery_failed: "恢复失败", recovery_error: "恢复连接异常",
       invalid_response: "恢复响应无效", request_mismatch: "请求身份不匹配",
       invalid_request: "请求记录无效", polling_stopped: "恢复已停止",
@@ -1913,7 +1913,9 @@
     if (state.recoveryInFlight.has(recoveryKey)) return {status:"already_recovering"};
     const controller = existingController || makeRecoveryController(conversation, assistant);
     if (!controller) {
-      assistant.pending = false;
+      // Keep the request recoverable in the UI. A temporarily missing asset or
+      // unavailable recovery transport must not permanently hide the retry action.
+      assistant.pending = true;
       assistant.recoveryStatus = "recovery_unavailable";
       saveHistory();
       if (currentConversation()?.id === conversation.id) renderMessages();
@@ -1937,7 +1939,9 @@
         assistant.recoveryStatus = status;
         if (status === "completed" && typeof result.response_text === "string") assistant.content = result.response_text.slice(0, MAX_MESSAGE_CHARS);
         else if (status === "stalled" && typeof result.partial_text === "string" && result.partial_text) assistant.content = result.partial_text.slice(0, MAX_MESSAGE_CHARS);
-      } else if (["recovery_timeout", "polling_stopped", "auth_required"].includes(status)) {
+      } else if (["recovery_timeout", "polling_stopped", "auth_required", "recovery_unavailable"].includes(status)) {
+        // An unknown Broker lease is not a terminal result. A Worker outbox may
+        // still reconcile it later, so keep the turn pending and allow a retry.
         assistant.pending = true;
         assistant.recoveryStatus = status;
       } else {
