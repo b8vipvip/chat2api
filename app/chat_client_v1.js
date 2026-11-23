@@ -182,7 +182,13 @@
 
   function handleVoiceEvent(payload) {
     if (!payload || typeof payload !== "object") return;
-    if (payload.type === "transcript.final") {
+    if (payload.type === "response.created") {
+      // Start a fresh persistence boundary for each assistant turn. Keep the
+      // completed turn's guard set until this event so session-close cleanup
+      // cannot accidentally re-save the previous completed transcript.
+      state.voiceAssistantLine = null;
+      state.voiceAssistantPersisted = false;
+    } else if (payload.type === "transcript.final") {
       appendVoiceTranscript("user",payload.text);
       persistVoiceTranscript("user",payload.text);
     } else if (payload.type === "response.text.delta") {
@@ -227,10 +233,6 @@
         state.voiceAssistantPersisted = persistVoiceTranscript("assistant",finalText);
       }
       state.voiceAssistantLine = null;
-      // Reset the per-response guard after a completed turn. A later response
-      // may be interrupted before its first text delta, with its final DOM
-      // snapshot arriving only in response.interrupted.
-      state.voiceAssistantPersisted = false;
     } else if (payload.type === "input_video.frame.sent") {
       $("voiceStatus").textContent = "摄像头画面已送达 ChatGPT Voice";
     } else if (payload.type === "error" || payload.type === "client.error") {
