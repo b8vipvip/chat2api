@@ -204,7 +204,9 @@
         $("voiceTranscript").scrollTop = $("voiceTranscript").scrollHeight;
       }
     } else if (payload.type === "response.interrupted") {
-      const partialText = String(state.voiceAssistantLine?.textContent || "").trim();
+      // The extension sends a synchronous final DOM snapshot with interruption
+      // events because the periodic 250 ms poller may not have seen the last text.
+      const partialText = String(payload.text || state.voiceAssistantLine?.textContent || "").trim();
       if (partialText && !state.voiceAssistantPersisted) {
         persistVoiceTranscript("assistant",partialText,"voice_partial");
       }
