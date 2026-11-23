@@ -14,7 +14,7 @@ from app.user_commerce import USER_SESSION_COOKIE
 from app.config import Settings
 from app.main import create_app
 from app.user_console_v104_patch import install_user_console_v104_patch
-from app.web_chat_recovery_api import install_web_chat_recovery_api
+from app.web_chat_recovery_api import install_web_chat_recovery_api, _completed_delivery_text
 from app.web_chat_cancellation_v1 import (
     WebChatAdmissionCancelled, WebChatCancellationSignal,
     await_worker_admission_or_cancel,
@@ -108,6 +108,27 @@ def remember(app, request_id: str, user_key: str, **changes):
         "updated_at": "2026-11-12T08:00:00+00:00",
         **changes,
     })
+
+
+
+def test_completed_recovery_prefers_canonical_text_when_delivery_journal_was_truncated():
+    canonical = "authoritative response " * 150_000
+    truncated = canonical[:2_000_000]
+    row = {"response_text":canonical}
+    snapshot = {
+        "terminal_status":"completed",
+        "delivered_text":truncated,
+        "delivered_text_truncated":True,
+    }
+    assert len(truncated) < len(canonical)
+    assert _completed_delivery_text(row,snapshot) == canonical
+
+    complete_snapshot = {
+        **snapshot,
+        "delivered_text":canonical,
+        "delivered_text_truncated":False,
+    }
+    assert _completed_delivery_text(row,complete_snapshot) == canonical
 
 
 def test_sse_event_replay_is_owner_scoped_and_honors_last_event_id(tmp_path):
