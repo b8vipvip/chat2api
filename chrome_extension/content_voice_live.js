@@ -374,7 +374,9 @@
         if (typeof textBridge?.prepareContext !== "function")
           throw new Error("Live Voice context bridge is not available");
         const setupResult = await textBridge.prepareContext(active,primer);
-        active.setupResponseText = String(setupResult?.responseText || "").slice(0,1200);
+        if (setupResult?.acknowledged !== true)
+          throw new Error("ChatGPT did not acknowledge the Live Voice setup turn");
+        active.setupResponseText = String(setupResult.responseText || "").slice(0,1200);
         assertActiveSession(active);
         active.instructionsApplied = true;
         active.contextInjected = Boolean(active.context.trim());
