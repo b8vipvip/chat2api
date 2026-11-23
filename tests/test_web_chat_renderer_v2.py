@@ -73,6 +73,25 @@ const all = node => [node, ...node.children.flatMap(all)];
 const nodes = all(host);
 assert(!nodes.some(x => ["script", "iframe", "svg", "img", "object", "style"].includes(x.tag)));
 assert(!nodes.some(x => x.tag === "a" && !x.href.startsWith("https://")));
+const markdownListHost = new Element("root");
+renderer.renderMarkdown(markdownListHost,
+  "- [x] completed task\\n" +
+  "- [ ] pending task\\n" +
+  "  - nested bullet\\n" +
+  "    1. deep ordered item\\n" +
+  "- sibling item\\n\\n" +
+  "~~deleted text~~");
+const markdownListNodes = all(markdownListHost);
+const taskCheckboxes = markdownListNodes.filter(x => x.tag === "input" && x.className === "task-checkbox");
+assert.equal(taskCheckboxes.length,2);
+assert.equal(taskCheckboxes[0].checked,true);
+assert.equal(taskCheckboxes[1].checked,false);
+assert(taskCheckboxes.every(x => x.disabled === true));
+assert(markdownListNodes.some(x => x.tag === "ul" && x.children.some(
+  item => item.tag === "li" && item.children.some(child => child.tag === "ul")
+)));
+assert(markdownListNodes.some(x => x.tag === "ol"));
+assert(markdownListNodes.some(x => x.tag === "del" && x.textContent === "deleted text"));
 assert(nodes.some(x => x.tag === "a" && x.href === "https://example.org/x"));
 assert(nodes.some(x => x.tag === "table"));
 assert(nodes.some(x => x.tag === "span" && x.className === "math-inline"));
