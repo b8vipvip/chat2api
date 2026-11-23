@@ -47,6 +47,7 @@ def _completed_delivery_text(row: dict, snapshot: dict) -> str:
     delivered = snapshot.get("delivered_text")
     if (
         snapshot.get("terminal_status") == "completed"
+        and snapshot.get("delivered_text_truncated") is not True
         and isinstance(delivered, str)
         and (delivered or not canonical)
     ):
