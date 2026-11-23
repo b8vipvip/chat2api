@@ -7,7 +7,7 @@ const statusMatch = source.match(/function normalizeToolStatus\(value\) \{[\s\S]
 const eventsMatch = source.match(/function normalizeToolEvents\(value, role\) \{[\s\S]*?\n  \}/);
 const applyMatch = source.match(/function applyToolEvent\(assistant, event\) \{[\s\S]*?\n  \}/);
 const refsMatch = source.match(/function referencesForMessage\(message\) \{[\s\S]*?\n  \}/);
-const rowMatch = source.match(/function normalizeConversationRow\(row\) \{[\s\S]*?\n  \}/);
+const rowMatch = source.match(/function normalizeConversationRow\(row(?:, maxMessages = MAX_MESSAGES)?\) \{[\s\S]*?\n  \}/);
 assert.ok(statusMatch, "production normalizeToolStatus function must remain extractable");
 assert.ok(eventsMatch, "production normalizeToolEvents function must remain extractable");
 assert.ok(applyMatch, "production applyToolEvent function must remain extractable");
