@@ -127,12 +127,16 @@ def test_live_voice_stream_relays_pcm_both_directions(tmp_path: Path) -> None:
                     "request_id": request_id,
                     "live_event": "session.ready",
                     "model": "gpt-live",
+                    "context_injected": True,
+                    "context_mode": "request_scoped_chatgpt_setup_turn",
                 })
                 ready = live.receive_json()
                 assert ready["type"] == "session.ready"
                 assert ready["session_id"] == session_id
                 assert ready["model"] == "gpt-live"
                 assert ready["effective_model"] == "gpt-live"
+                assert ready["context_injected"] is True
+                assert ready["context_mode"] == "request_scoped_chatgpt_setup_turn"
                 assert ready["input_audio_format"] == "pcm16le-16000-mono"
                 assert ready["output_audio_format"] == "pcm16le-24000-mono"
 
