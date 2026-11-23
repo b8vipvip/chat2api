@@ -370,7 +370,7 @@ test("cross-device conversation merge never revives terminal requests from stale
   const extractFunction = name => {
     const start = source.indexOf("  function " + name + "(");
     assert.ok(start >= 0, "missing " + name);
-    const next = source.slice(start + 1).search(/\\n  (?:(?:async )?function |class )/);
+    const next = source.slice(start + 1).search(/\n  (?:(?:async )?function |class )/);
     return source.slice(start, next < 0 ? source.length : start + 1 + next);
   };
   const context = vm.createContext({
@@ -383,7 +383,7 @@ test("cross-device conversation merge never revives terminal requests from stale
     extractFunction("messageBodyWeight"),
     extractFunction("mergeConversation"),
     "mergeConversation",
-  ].join("\\n"),context);
+  ].join("\n"),context);
 
   const stalled = merge({
     id:"conversation",updatedAt:"2026-11-23T10:00:00.000Z",serverRevision:4,
