@@ -284,3 +284,49 @@ test("keeps nonterminal recovery-unavailable turns pending for a later retry", a
   assert.equal(assistant.recoveryStatus,"recovery_unavailable");
   assert.equal(context.state.recoveryInFlight.size,0);
 });
+
+
+
+test("hydrates the authoritative answer snapshot after a replay terminal marker", async () => {
+  const start = source.indexOf("  async function recoverPendingMessage(");
+  const end = source.indexOf("  function assistantMessageForRequest(", start);
+  assert.ok(start >= 0 && end > start);
+
+  const conversation = {id:"conversation-terminal",messages:[],updatedAt:""};
+  const assistant = {
+    id:"message-terminal",role:"assistant",requestId:"req_87654321",
+    pending:true,content:"",lastEventId:0,
+  };
+  let snapshotCalls = 0;
+  const context = vm.createContext({
+    state:{recoveryInFlight:new Set()},
+    MAX_MESSAGE_CHARS:8000,
+    currentConversation:() => conversation,
+    makeRecoveryController:() => null,
+    saveHistory() {},
+    renderMessages() {},
+    resizeComposer() {},
+    applyMessageReferences() {},
+  });
+  const recover = vm.runInContext(
+    source.slice(start,end) + "\nrecoverPendingMessage",
+    context,
+  );
+  const controller = {
+    replay:async () => ({status:"completed",terminal:true,active:false}),
+    resume:async () => {
+      snapshotCalls += 1;
+      return {
+        status:"completed",terminal:true,active:false,
+        response_text:"完整的最终回复",
+        references:[],
+      };
+    },
+  };
+
+  const result = await recover(conversation,assistant,controller);
+  assert.equal(snapshotCalls,1);
+  assert.equal(result.status,"completed");
+  assert.equal(assistant.pending,false);
+  assert.equal(assistant.content,"完整的最终回复");
+});
