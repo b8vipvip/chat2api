@@ -161,7 +161,12 @@ def test_live_remote_closed_reclaims_lease_without_client_finish(tmp_path: Path)
                 assert live.receive_json()["type"] == "session.ready"
                 ext.send_json({"type": "image.progress", "kind": "voice-live",
                                "request_id": request_id, "live_event": "session.closed"})
-                assert live.receive_json()["type"] == "session.closed"
+                no_response = live.receive_json()
+                assert no_response["type"] == "error"
+                assert no_response["code"] == "GPT_LIVE_NO_COMPLETED_RESPONSE"
+                closed = live.receive_json()
+                assert closed["type"] == "session.closed"
+                assert closed["status"] == "error"
                 stopped = ext.receive_json()
                 assert stopped["type"] == "voice.live.stop"
                 assert stopped["request_id"] == request_id

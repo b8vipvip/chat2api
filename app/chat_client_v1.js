@@ -182,7 +182,13 @@
 
   function handleVoiceEvent(payload) {
     if (!payload || typeof payload !== "object") return;
-    if (payload.type === "transcript.final") {
+    if (payload.type === "response.created") {
+      // Start a fresh persistence boundary for each assistant turn. Keep the
+      // completed turn's guard set until this event so session-close cleanup
+      // cannot accidentally re-save the previous completed transcript.
+      state.voiceAssistantLine = null;
+      state.voiceAssistantPersisted = false;
+    } else if (payload.type === "transcript.final") {
       appendVoiceTranscript("user",payload.text);
       persistVoiceTranscript("user",payload.text);
     } else if (payload.type === "response.text.delta") {
@@ -204,7 +210,9 @@
         $("voiceTranscript").scrollTop = $("voiceTranscript").scrollHeight;
       }
     } else if (payload.type === "response.interrupted") {
-      const partialText = String(state.voiceAssistantLine?.textContent || "").trim();
+      // The extension sends a synchronous final DOM snapshot with interruption
+      // events because the periodic 250 ms poller may not have seen the last text.
+      const partialText = String(payload.text || state.voiceAssistantLine?.textContent || "").trim();
       if (partialText && !state.voiceAssistantPersisted) {
         persistVoiceTranscript("assistant",partialText,"voice_partial");
       }

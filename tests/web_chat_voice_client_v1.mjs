@@ -6,6 +6,9 @@ const source = readFileSync("app/chat_voice_client_v1.js","utf8");
 const chatClientSource = readFileSync("app/chat_client_v1.js","utf8");
 new vm.Script(source);
 new vm.Script(chatClientSource);
+const closeTimeout = Number(source.match(/SESSION_CLOSE_TIMEOUT_MS\s*=\s*(\d+)/)?.[1] || 0);
+assert.ok(closeTimeout > 5000,
+  "the browser must leave margin beyond the Broker's five-second Worker stop-drain timeout");
 
 class FakeWebSocket {
   static OPEN = 1;
@@ -472,6 +475,20 @@ historyUi.handleVoiceEvent({type:"response.done",text:"下一轮完整回复"});
 assert.equal(voiceConversation.messages.length,4);
 assert.equal(voiceConversation.messages[3].content,"下一轮完整回复");
 assert.notEqual(voiceConversation.messages[3].recoveryStatus,"voice_partial");
+
+// A session/track stop may deliver its only final partial snapshot in the
+// interruption event, before the 250 ms DOM poller has emitted any delta.
+historyUi.handleVoiceEvent({type:"response.created",response_id:"response-no-delta"});
+historyUi.handleVoiceEvent({
+  type:"response.interrupted",
+  reason:"session_stop",
+  text:"最后一个未被轮询捕获的部分片段",
+});
+assert.equal(voiceConversation.messages.length,5);
+assert.equal(voiceConversation.messages[4].content,"最后一个未被轮询捕获的部分片段");
+assert.equal(voiceConversation.messages[4].recoveryStatus,"voice_partial");
+assert.equal(historyState.voiceAssistantPersisted,false,
+  "the persistence guard must reset after a completed turn before the next interruption");
 
 const setVoiceUiStart = chatClientSource.indexOf("  function setVoiceUi(");
 const setVoiceUiEnd = chatClientSource.indexOf("  function appendVoiceTranscript(",setVoiceUiStart);
