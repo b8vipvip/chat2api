@@ -373,11 +373,11 @@ test("reconnects an interrupted native-content sidecar and receives its terminal
 
   let fetchCalls = 0, refreshCalls = 0, snapshotFrames = 0;
   const encoder = new TextEncoder();
+  let interruptedChunkDelivered = false;
   const interruptedBody = new ReadableStream({
-    emitted:false,
     pull(controller) {
-      if (!this.emitted) {
-        this.emitted = true;
+      if (!interruptedChunkDelivered) {
+        interruptedChunkDelivered = true;
         controller.enqueue(encoder.encode("event: native.snapshot\ndata: {}\n\n"));
         return;
       }
