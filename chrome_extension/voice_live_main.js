@@ -358,7 +358,13 @@
         post("voice.live.response.interrupted", { response_id: responseId, reason: "client_cancel" });
       }
     } else if (message.type === "voice.live.stop" && message.request_id === live.requestId) {
+      // reset() emits response.stopped synchronously when an answer is still
+      // playing. Acknowledge only after that final event has been posted so
+      // the isolated-world bridge can drain it before session.closed.
+      const requestId = live.requestId;
+      const sessionId = live.sessionId;
       reset();
+      post("voice.live.stopped", { request_id: requestId, session_id: sessionId });
     }
   });
 })();
