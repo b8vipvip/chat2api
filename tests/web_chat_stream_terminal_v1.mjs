@@ -536,3 +536,39 @@ test("keeps the reader anchored unless the viewport is already near the bottom",
   viewport.scrollTop = 1080;
   assert.equal(shouldAutoScroll(viewport),false);
 });
+
+
+test("persists longer assistant responses while keeping user and local-cache bounds", () => {
+  const extractFunction = name => {
+    const start = source.indexOf("  function " + name + "(");
+    assert.ok(start >= 0, "missing " + name);
+    const next = source.slice(start + 1).search(/\\n  (?:(?:async )?function |class )/);
+    return source.slice(start, next < 0 ? source.length : start + 1 + next);
+  };
+  const context = vm.createContext({
+    MAX_ASSISTANT_MESSAGE_CHARS:32000,
+    MAX_USER_MESSAGE_CHARS:8000,
+    ASSISTANT_TRUNCATION_NOTICE:"\\n\\n[回答超过 Web Chat 的 32,000 字符上限，后续内容未保存]",
+  });
+  const helpers = vm.runInNewContext([
+    extractFunction("limitAssistantText"),
+    extractFunction("appendAssistantText"),
+    extractFunction("normalizeMessageContent"),
+    extractFunction("appendDelta"),
+    "({limitAssistantText,normalizeMessageContent,appendDelta})",
+  ].join("\\n"),context);
+
+  assert.equal(helpers.normalizeMessageContent("a".repeat(20000),"assistant").length,20000);
+  assert.equal(helpers.normalizeMessageContent("u".repeat(9000),"user").length,8000);
+  assert.equal(helpers.normalizeMessageContent("a".repeat(20000),"assistant",8000).length,8000);
+
+  const truncated = helpers.limitAssistantText("a".repeat(40000));
+  assert.equal(truncated.length,32000);
+  assert.ok(truncated.includes("后续内容未保存"));
+
+  const assistant = {content:""};
+  helpers.appendDelta(assistant,"a".repeat(20000));
+  helpers.appendDelta(assistant,"b".repeat(20000));
+  assert.equal(assistant.content.length,32000);
+  assert.ok(assistant.content.includes("后续内容未保存"));
+});
