@@ -472,9 +472,9 @@ def test_live_voice_bounds_pcm16_frames_and_keeps_session_after_bad_input(tmp_pa
         assert row["diagnostics"]["input_audio_bytes"] == len(valid_pcm)
         assert row["diagnostics"]["audio_bytes"] == 960
         assert row["diagnostics"]["audio_usage_provider_verified"] is False
-        expected_prompt = "\\n".join((
+        expected_prompt = "\n".join((
             "自然聊天",
-            "用户：你好\\n助手：你好，我可以继续帮你。",
+            "用户：你好\n助手：你好，我可以继续帮你。",
             "请总结今天的天气",
             "今天天气晴朗",
         ))
