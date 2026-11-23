@@ -194,6 +194,15 @@
         state.voiceAssistantLine.textContent += String(payload.delta || "");
         $("voiceTranscript").scrollTop = $("voiceTranscript").scrollHeight;
       }
+    } else if (payload.type === "response.text.replace") {
+      if (!state.voiceAssistantLine) {
+        state.voiceAssistantLine = appendVoiceTranscript("assistant","");
+        state.voiceAssistantPersisted = false;
+      }
+      if (state.voiceAssistantLine) {
+        state.voiceAssistantLine.textContent = String(payload.text || "");
+        $("voiceTranscript").scrollTop = $("voiceTranscript").scrollHeight;
+      }
     } else if (payload.type === "response.done") {
       const finalText = String(payload.text || state.voiceAssistantLine?.textContent || "");
       if (!state.voiceAssistantLine && finalText) {
