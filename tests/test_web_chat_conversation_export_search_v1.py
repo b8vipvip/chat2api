@@ -57,7 +57,9 @@ def _client(tmp_path: Path) -> TestClient:
     ))
     install_user_console_v104_patch(app)
     install_web_chat_features_v1(app)
-    return TestClient(app)
+    client = TestClient(app)
+    client.headers.update({"Origin": "http://testserver"})
+    return client
 
 
 def _register(client: TestClient, email: str) -> str:
