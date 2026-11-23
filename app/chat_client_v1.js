@@ -47,7 +47,10 @@
   };
   const MAX_CONVERSATIONS = 15;
   const MAX_MESSAGES = 30;
-  const MAX_MESSAGE_CHARS = 8000;
+  const MAX_USER_MESSAGE_CHARS = 8000;
+  const MAX_ASSISTANT_MESSAGE_CHARS = 32000;
+  const MAX_LOCAL_MESSAGE_CHARS = 8000;
+  const ASSISTANT_TRUNCATION_NOTICE = "\n\n[回答超过 Web Chat 的 32,000 字符上限，后续内容未保存]";
   const MAX_IMAGES_PER_MESSAGE = 4;
   const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
   const MAX_TOTAL_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -161,7 +164,9 @@
 
   function persistVoiceTranscript(role, value, recoveryStatus = "") {
     if ((role !== "user" && role !== "assistant") || !state.voiceConversationId) return false;
-    const content = String(value || "").trim().slice(0,MAX_MESSAGE_CHARS);
+    const content = role === "assistant"
+      ? limitAssistantText(value)
+      : String(value || "").trim().slice(0,MAX_USER_MESSAGE_CHARS);
     if (!content) return false;
     let conversation = state.conversations.find(row => row.id === state.voiceConversationId) || null;
     if (!conversation) return false;
@@ -197,7 +202,7 @@
         state.voiceAssistantPersisted = false;
       }
       if (state.voiceAssistantLine) {
-        state.voiceAssistantLine.textContent += String(payload.delta || "");
+        state.voiceAssistantLine.textContent = limitAssistantText(String(state.voiceAssistantLine.textContent || "") + String(payload.delta || ""));
         $("voiceTranscript").scrollTop = $("voiceTranscript").scrollHeight;
       }
     } else if (payload.type === "response.text.replace") {
@@ -206,7 +211,7 @@
         state.voiceAssistantPersisted = false;
       }
       if (state.voiceAssistantLine) {
-        state.voiceAssistantLine.textContent = String(payload.text || "");
+        state.voiceAssistantLine.textContent = limitAssistantText(payload.text || "");
         $("voiceTranscript").scrollTop = $("voiceTranscript").scrollHeight;
       }
     } else if (payload.type === "response.interrupted") {
@@ -403,15 +408,33 @@
     return {type:"file",file_id:fileId,filename,mime_type:mimeType,size};
   }
 
-  function normalizeMessageContent(content, role) {
-    if (typeof content === "string") return content.slice(0, MAX_MESSAGE_CHARS);
+  function limitAssistantText(value) {
+    const text = String(value || "");
+    if (text.length <= MAX_ASSISTANT_MESSAGE_CHARS) return text;
+    const available = Math.max(0,MAX_ASSISTANT_MESSAGE_CHARS - ASSISTANT_TRUNCATION_NOTICE.length);
+    return text.slice(0,available) + ASSISTANT_TRUNCATION_NOTICE;
+  }
+
+  function appendAssistantText(assistant, value) {
+    if (typeof value !== "string" || !value) return;
+    assistant.content = limitAssistantText(String(assistant.content || "") + value);
+  }
+
+  function normalizeMessageContent(
+    content, role,
+    limit = role === "assistant" ? MAX_ASSISTANT_MESSAGE_CHARS : MAX_USER_MESSAGE_CHARS,
+  ) {
+    if (typeof content === "string") {
+      return role === "assistant" && limit === MAX_ASSISTANT_MESSAGE_CHARS
+        ? limitAssistantText(content) : content.slice(0,limit);
+    }
     if (role !== "user" || !Array.isArray(content)) return "";
     const parts = [];
     let imageCount = 0;
     let fileCount = 0;
     for (const part of content) {
       if (part?.type === "text" && typeof part.text === "string") {
-        parts.push({type:"text",text:part.text.slice(0,MAX_MESSAGE_CHARS)});
+        parts.push({type:"text",text:part.text.slice(0,limit)});
       } else if (part?.type === "image_url" && imageCount + fileCount < MAX_FILES_PER_MESSAGE) {
         const fileId = imageFileId(part);
         if (fileId) {
@@ -649,7 +672,7 @@
       ...conversation,
       messages: (conversation.messages || []).slice(-MAX_MESSAGES).map((message) => ({
         ...message,
-        content: normalizeMessageContent(message.content, message.role),
+        content: normalizeMessageContent(message.content, message.role, MAX_LOCAL_MESSAGE_CHARS),
       })),
     }));
     try {
@@ -750,7 +773,7 @@
       }
       if (localCompleted || (!localPending && serverPending)) {
         const merged = {...message};
-        if (!localCompleted && messageBodyWeight(existing) > messageBodyWeight(message)) {
+        if (messageBodyWeight(existing) > messageBodyWeight(message)) {
           merged.content = existing.content;
         }
         if (serverToolWeight > localToolWeight) merged.toolEvents = existing.toolEvents;
@@ -1861,13 +1884,13 @@
 
   function appendDelta(assistant, delta) {
     if (typeof delta === "string") {
-      assistant.content += delta;
+      appendAssistantText(assistant,delta);
       return;
     }
     if (Array.isArray(delta)) {
       for (const part of delta) {
-        if (typeof part?.text === "string") assistant.content += part.text;
-        else if (typeof part?.content === "string") assistant.content += part.content;
+        if (typeof part?.text === "string") appendAssistantText(assistant,part.text);
+        else if (typeof part?.content === "string") appendAssistantText(assistant,part.content);
       }
     }
   }
@@ -2138,7 +2161,7 @@
         applyMessageReferences(assistant, event.references);
       }
       if (event.partial_text_unverified === true && typeof event.partial_text === "string") {
-        const candidate = event.partial_text.slice(0, MAX_MESSAGE_CHARS);
+        const candidate = limitAssistantText(event.partial_text);
         // Worker and delivery snapshots are unverified candidates. Never let
         // a shorter replay page overwrite progress already shown to the user.
         if (candidate.length > String(assistant.content || "").length) {
@@ -2161,9 +2184,9 @@
         eventName === "recovery.stalled" ? "stalled" : "unknown"
       ));
       if (status === "completed" && typeof event.response_text === "string") {
-        assistant.content = event.response_text.slice(0, MAX_MESSAGE_CHARS);
+        assistant.content = limitAssistantText(event.response_text);
       } else if (typeof event.partial_text === "string" && event.partial_text) {
-        assistant.content = event.partial_text.slice(0, MAX_MESSAGE_CHARS);
+        assistant.content = limitAssistantText(event.partial_text);
       }
       assistant.replayTerminalStatus = status;
       return true;
@@ -2171,12 +2194,12 @@
     if (eventName === "replay.reset") {
       if (Array.isArray(event.references)) applyMessageReferences(assistant, event.references);
       if (event.status === "completed" && typeof event.response_text === "string") {
-        assistant.content = event.response_text.slice(0, MAX_MESSAGE_CHARS);
+        assistant.content = limitAssistantText(event.response_text);
         assistant.replayTerminalStatus = "completed";
         return true;
       }
       if (event.status === "stalled" && typeof event.partial_text === "string") {
-        assistant.content = event.partial_text.slice(0, MAX_MESSAGE_CHARS);
+        assistant.content = limitAssistantText(event.partial_text);
         assistant.replayTerminalStatus = "stalled";
         return true;
       }
@@ -2230,15 +2253,15 @@
           assistant.lastEventId = update.last_event_id;
         }
         if (update.status === "completed" && update.terminal === true && typeof update.response_text === "string") {
-          assistant.content = update.response_text.slice(0, MAX_MESSAGE_CHARS);
+          assistant.content = limitAssistantText(update.response_text);
         } else if (update.status === "stalled" && update.terminal === true
             && typeof update.partial_text === "string" && update.partial_text) {
-          assistant.content = update.partial_text.slice(0, MAX_MESSAGE_CHARS);
+          assistant.content = limitAssistantText(update.partial_text);
         } else if (update.partial_text_unverified === true
             && typeof update.partial_text === "string" && update.partial_text.length > assistant.content.length) {
           // Show durable Worker/delivery progress during the restart grace,
           // but keep it explicitly provisional until terminal reconciliation.
-          assistant.content = update.partial_text.slice(0, MAX_MESSAGE_CHARS);
+          assistant.content = limitAssistantText(update.partial_text);
         }
         saveHistory();
         if (currentConversation()?.id === conversation.id) renderMessages();
@@ -2304,8 +2327,8 @@
         if (Array.isArray(result.references)) applyMessageReferences(assistant, result.references);
         assistant.pending = false;
         assistant.recoveryStatus = status;
-        if (status === "completed" && typeof result.response_text === "string") assistant.content = result.response_text.slice(0, MAX_MESSAGE_CHARS);
-        else if (status === "stalled" && typeof result.partial_text === "string" && result.partial_text) assistant.content = result.partial_text.slice(0, MAX_MESSAGE_CHARS);
+        if (status === "completed" && typeof result.response_text === "string") assistant.content = limitAssistantText(result.response_text);
+        else if (status === "stalled" && typeof result.partial_text === "string" && result.partial_text) assistant.content = limitAssistantText(result.partial_text);
       } else if (["recovery_timeout", "polling_stopped", "auth_required", "recovery_unavailable"].includes(status)) {
         // An unknown Broker lease is not a terminal result. A Worker outbox may
         // still reconcile it later, so keep the turn pending and allow a retry.
@@ -2833,8 +2856,8 @@
     const blob = new Blob([JSON.stringify(payload)], {
       type: "application/json;charset=utf-8",
     });
-    if (blob.size > 520 * 1024) {
-      toast("当前会话 JSON 超过 520 KiB 导出限制，请先精简会话内容。");
+    if (blob.size > 5 * 1024 * 1024) {
+      toast("当前会话 JSON 超过 5 MiB 导出限制，请先精简会话内容。");
       return;
     }
     const url = URL.createObjectURL(blob);
@@ -2850,7 +2873,7 @@
 
   async function importConversationJson(file) {
     if (!file) return;
-    if (file.size > 520 * 1024) throw new Error("JSON 会话文件超过 520 KiB 限制");
+    if (file.size > 5 * 1024 * 1024) throw new Error("JSON 会话文件超过 5 MiB 限制");
     let payload;
     try {
       payload = JSON.parse(await file.text());

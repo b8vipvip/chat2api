@@ -25,6 +25,7 @@ const mergeConversation = runInNewContext("(" + match[0] + ")", {
   normalizeToolReferences: normalizeMergeReferences,
   toolActivityWeight:events => Array.isArray(events) ? events.length : 0,
   messageContentWeight:message => String(message?.content || "").length,
+  messageBodyWeight:message => String(message?.content || "").length,
   MAX_MESSAGES:100,
 });
 

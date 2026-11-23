@@ -41,11 +41,12 @@ _ALLOWED_DOCUMENT_MIME_TYPES = frozenset({
 })
 _MAX_CONVERSATIONS_RETURNED = 100
 _MAX_MESSAGES = 30
-_MAX_MESSAGE_CHARS = 8000
+_MAX_USER_MESSAGE_CHARS = 8000
+_MAX_ASSISTANT_MESSAGE_CHARS = 32000
 _MAX_MESSAGE_PARTS = 8
 _MAX_ATTACHMENTS_PER_MESSAGE = 4
 _MAX_DOCUMENT_BYTES = 20 * 1024 * 1024
-_MAX_CONVERSATION_BYTES = 512 * 1024
+_MAX_CONVERSATION_BYTES = 5 * 1024 * 1024
 _MAX_SEARCH_QUERY_CHARS = 120
 _MAX_SEARCH_RESULTS = 100
 _CONVERSATION_EXPORT_FORMAT = "chat2api.web-chat-conversation"
@@ -81,7 +82,8 @@ def _bounded_string(value: Any, field: str, limit: int, *, default: str = "") ->
 
 def _normalize_content(value: Any, role: str) -> tuple[str | list[dict[str, Any]], bool]:
     if isinstance(value, str):
-        if len(value) > _MAX_MESSAGE_CHARS:
+        limit = _MAX_ASSISTANT_MESSAGE_CHARS if role == "assistant" else _MAX_USER_MESSAGE_CHARS
+        if len(value) > limit:
             raise ValueError("message content is too large")
         return value, False
     if role != "user" or not isinstance(value, list) or len(value) > _MAX_MESSAGE_PARTS:
@@ -94,7 +96,7 @@ def _normalize_content(value: Any, role: str) -> tuple[str | list[dict[str, Any]
         kind = part.get("type")
         if kind == "text":
             text = part.get("text")
-            if not isinstance(text, str) or len(text) > _MAX_MESSAGE_CHARS:
+            if not isinstance(text, str) or len(text) > _MAX_USER_MESSAGE_CHARS:
                 raise ValueError("message text part is invalid")
             parts.append({"type": "text", "text": text})
         elif kind == "image_url":
