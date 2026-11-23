@@ -87,6 +87,7 @@
 
   function create(options = {}) {
     const token = String(options.apiToken || "");
+    const beforeConnect = typeof options.beforeConnect === "function" ? options.beforeConnect : null;
     const fetcher = options.fetcher || window.fetch.bind(window);
     const WebSocketImpl = options.WebSocketImpl || window.WebSocket;
     const AudioContextImpl = options.AudioContextImpl || window.AudioContext || window.webkitAudioContext;
@@ -309,12 +310,15 @@
       stopping = false;
       state("requesting_microphone", "等待麦克风授权");
       try {
+      // Unlock the browser audio graph synchronously from the user's click
+      // before any network or permission prompt can consume transient activation.
+      audioContext = new AudioContextImpl();
+      if (typeof audioContext.resume === "function") await audioContext.resume();
+      if (beforeConnect) await beforeConnect();
       microphoneStream = await mediaDevices.getUserMedia({
         audio:{channelCount:1,echoCancellation:true,noiseSuppression:true,autoGainControl:true},
         video:false,
       });
-      audioContext = new AudioContextImpl();
-      if (typeof audioContext.resume === "function") await audioContext.resume();
       const response = await fetcher("/v1/audio/realtime/sessions", {
         method:"POST",
         credentials:"same-origin",
