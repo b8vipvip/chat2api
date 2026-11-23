@@ -603,6 +603,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 elif event_type == "response.interrupted":
                     response_id = str(event.get("response_id") or "")
                     if response_id:
+                        text_by_response.pop(response_id, None)
                         await send_json({
                             "type": "response.interrupted",
                             "response_id": response_id,
