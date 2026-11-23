@@ -422,6 +422,8 @@ historyUi.handleVoiceEvent({
 assert.equal(voiceConversation.messages.length,5);
 assert.equal(voiceConversation.messages[4].content,"最后一个未被轮询捕获的部分片段");
 assert.equal(voiceConversation.messages[4].recoveryStatus,"voice_partial");
+assert.equal(historyState.voiceAssistantPersisted,false,
+  "the persistence guard must reset after a completed turn before the next interruption");
 
 const setVoiceUiStart = chatClientSource.indexOf("  function setVoiceUi(");
 const setVoiceUiEnd = chatClientSource.indexOf("  function appendVoiceTranscript(",setVoiceUiStart);
