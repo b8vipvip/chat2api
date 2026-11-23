@@ -366,6 +366,161 @@ test("bounds a stalled same-origin cancellation handshake", async () => {
 });
 
 
+test("cross-device conversation merge never revives terminal requests from stale pending snapshots", () => {
+  const extractFunction = name => {
+    const start = source.indexOf("  function " + name + "(");
+    assert.ok(start >= 0, "missing " + name);
+    const next = source.slice(start + 1).search(/\n  (?:(?:async )?function |class )/);
+    return source.slice(start, next < 0 ? source.length : start + 1 + next);
+  };
+  const context = vm.createContext({
+    MAX_MESSAGES:100,
+    normalizeToolReferences:value => Array.isArray(value) ? value : [],
+  });
+  const merge = vm.runInNewContext([
+    extractFunction("toolActivityWeight"),
+    extractFunction("messageContentWeight"),
+    extractFunction("messageBodyWeight"),
+    extractFunction("mergeConversation"),
+    "mergeConversation",
+  ].join("\n"),context);
+
+  const stalled = merge({
+    id:"conversation",updatedAt:"2026-11-23T10:00:00.000Z",serverRevision:4,
+    messages:[{
+      id:"assistant-1",role:"assistant",content:"partial",pending:false,
+      recoveryStatus:"stalled",toolEvents:[],createdAt:"2026-11-23T09:00:00.000Z",
+    }],
+  },{
+    id:"conversation",updatedAt:"2026-11-23T10:01:00.000Z",
+    messages:[{
+      id:"assistant-1",role:"assistant",content:"partial answer recovered from another device",
+      pending:true,recoveryStatus:"recovery_pending",
+      toolEvents:[{status:"running",arguments:"longer tool state"}],
+      createdAt:"2026-11-23T09:00:00.000Z",
+    }],
+  }).messages[0];
+  assert.equal(stalled.pending,false);
+  assert.equal(stalled.recoveryStatus,"stalled");
+  assert.equal(stalled.content,"partial answer recovered from another device");
+  assert.equal(stalled.toolEvents.length,1);
+
+  const cancelled = merge({
+    id:"conversation",updatedAt:"2026-11-23T10:01:00.000Z",serverRevision:5,
+    messages:[{
+      id:"assistant-2",role:"assistant",content:"a longer partial answer from server",
+      pending:true,recoveryStatus:"recovery_pending",
+      toolEvents:[{status:"completed",output:"authoritative tool result"}],
+      createdAt:"2026-11-23T09:02:00.000Z",
+    }],
+  },{
+    id:"conversation",updatedAt:"2026-11-23T10:02:00.000Z",
+    messages:[{
+      id:"assistant-2",role:"assistant",content:"partial",
+      pending:false,recoveryStatus:"cancelled",toolEvents:[],
+      createdAt:"2026-11-23T09:02:00.000Z",
+    }],
+  }).messages[0];
+  assert.equal(cancelled.pending,false);
+  assert.equal(cancelled.recoveryStatus,"cancelled");
+  assert.equal(cancelled.content,"a longer partial answer from server");
+  assert.equal(cancelled.toolEvents[0].output,"authoritative tool result");
+
+  const completed = merge({
+    id:"conversation",updatedAt:"2026-11-23T10:00:00.000Z",serverRevision:6,
+    messages:[{
+      id:"assistant-3",role:"assistant",content:"authoritative final answer",
+      pending:false,recoveryStatus:"completed",toolEvents:[],
+      createdAt:"2026-11-23T09:03:00.000Z",
+    }],
+  },{
+    id:"conversation",updatedAt:"2026-11-23T10:03:00.000Z",
+    messages:[{
+      id:"assistant-3",role:"assistant",content:"stale pending text that is longer than final",
+      pending:true,recoveryStatus:"recovery_pending",
+      toolEvents:[{status:"completed",output:"late tool observation"}],
+      createdAt:"2026-11-23T09:03:00.000Z",
+    }],
+  }).messages[0];
+  assert.equal(completed.pending,false);
+  assert.equal(completed.recoveryStatus,"completed");
+  assert.equal(completed.content,"authoritative final answer");
+  assert.equal(completed.toolEvents[0].output,"late tool observation");
+});
+
+
+test("reconnects an interrupted native-content sidecar and receives its terminal marker", async () => {
+  const start = source.indexOf("  async function streamNativeContent(");
+  const end = source.indexOf("  async function hydrateNativeSnapshots(", start);
+  assert.ok(start >= 0 && end > start);
+
+  let fetchCalls = 0, refreshCalls = 0, snapshotFrames = 0;
+  const encoder = new TextEncoder();
+  let interruptedChunkDelivered = false;
+  const interruptedBody = new ReadableStream({
+    pull(controller) {
+      if (!interruptedChunkDelivered) {
+        interruptedChunkDelivered = true;
+        controller.enqueue(encoder.encode("event: native.snapshot\ndata: {}\n\n"));
+        return;
+      }
+      controller.error(new Error("simulated network interruption"));
+    },
+  });
+  const terminalBody = new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode("event: native.end\ndata: {}\n\n"));
+      controller.close();
+    },
+  });
+  const context = vm.createContext({
+    state:{nativeStreams:new Map()},
+    AbortController, TextDecoder, TextEncoder, ReadableStream,
+    encodeURIComponent,
+    fetch:async (_url,options) => {
+      assert.equal(options.credentials,"same-origin");
+      fetchCalls += 1;
+      return fetchCalls === 1
+        ? {ok:true,status:200,body:interruptedBody}
+        : {ok:true,status:200,body:terminalBody};
+    },
+    consumeNativeSseFrame(frame) {
+      if (frame.includes("native.snapshot")) snapshotFrames += 1;
+      return frame.includes("event: native.end");
+    },
+    refreshNativeSnapshot:async () => { refreshCalls += 1; return true; },
+    window:{setTimeout(callback) { callback(); return 0; }},
+  });
+  const stream = vm.runInNewContext(
+    source.slice(start,end) + "\nstreamNativeContent",
+    context,
+  );
+  await stream("req_native_reconnect");
+  assert.equal(fetchCalls,2);
+  assert.equal(snapshotFrames,1);
+  assert.ok(refreshCalls >= 2);
+  assert.equal(context.state.nativeStreams.size,0);
+});
+
+test("does not retry a native-content sidecar after an owner/auth 404", async () => {
+  const start = source.indexOf("  async function streamNativeContent(");
+  const end = source.indexOf("  async function hydrateNativeSnapshots(", start);
+  let fetchCalls = 0;
+  const context = vm.createContext({
+    state:{nativeStreams:new Map()},
+    AbortController, TextDecoder, encodeURIComponent,
+    fetch:async () => { fetchCalls += 1; return {ok:false,status:404,body:null}; },
+    consumeNativeSseFrame:() => false,
+    refreshNativeSnapshot:async () => false,
+    window:{setTimeout(callback) { callback(); return 0; }},
+  });
+  const stream = vm.runInNewContext(source.slice(start,end) + "\nstreamNativeContent",context);
+  await stream("req_native_missing");
+  assert.equal(fetchCalls,1);
+  assert.equal(context.state.nativeStreams.size,0);
+});
+
+
 test("keeps the reader anchored unless the viewport is already near the bottom", () => {
   const start = source.indexOf("  function shouldAutoScroll(");
   const end = source.indexOf("  function renderMessages(", start);
