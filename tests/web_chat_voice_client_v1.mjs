@@ -3,6 +3,19 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
 const source = readFileSync("app/chat_voice_client_v1.js","utf8");
+const voiceSliceStart = source.indexOf("  function sliceCodePoints(value, start, end) {");
+const voiceSliceEnd = source.indexOf("  function resamplePcm16(",voiceSliceStart);
+assert.ok(voiceSliceStart >= 0 && voiceSliceEnd > voiceSliceStart);
+const sliceVoiceCodePoints = vm.runInNewContext(
+  source.slice(voiceSliceStart,voiceSliceEnd) + "\nsliceCodePoints",
+  {},
+);
+const mixedUnicode = "x".repeat(7999) + "😀";
+const safeVoiceSlice = sliceVoiceCodePoints(mixedUnicode,0,8000);
+assert.equal(Array.from(safeVoiceSlice).length,8000);
+assert.ok(safeVoiceSlice.endsWith("😀"),
+  "Voice client bounds must not split a supplementary character at the UTF-16 boundary");
+assert.ok(source.includes("const context = sliceCodePoints("));
 const chatClientSource = readFileSync("app/chat_client_v1.js","utf8");
 const liveContentSource = readFileSync("chrome_extension/content_voice_live.js","utf8");
 const liveTextSource = readFileSync("chrome_extension/content_voice_live_text_v24.js","utf8");
@@ -68,6 +81,13 @@ const boundedContext = buildVoiceContext({
 });
 assert.ok(boundedContext.length <= 8000);
 assert.ok(boundedContext.length >= 7990);
+const emojiConversationContext = buildVoiceContext({
+  messages:[{role:"user",content:"😀".repeat(9000)}],
+});
+assert.ok(Array.from(emojiConversationContext).length <= 8000);
+assert.ok(emojiConversationContext.endsWith("😀".repeat(7996)),
+  "Web Chat context budgeting must preserve complete supplementary Unicode characters");
+assert.ok(!/[\uD800-\uDBFF]$/.test(emojiConversationContext));
 const closeTimeout = Number(source.match(/SESSION_CLOSE_TIMEOUT_MS\s*=\s*(\d+)/)?.[1] || 0);
 assert.ok(closeTimeout > 5000,
   "the browser must leave margin beyond the Broker's five-second Worker stop-drain timeout");
