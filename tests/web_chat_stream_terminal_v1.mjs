@@ -371,7 +371,7 @@ test("keeps the reader anchored unless the viewport is already near the bottom",
   const end = source.indexOf("  function renderMessages(", start);
   assert.ok(start >= 0 && end > start);
   const shouldAutoScroll = vm.runInNewContext(
-    source.slice(start,end) + "\\nshouldAutoScroll",
+    source.slice(start,end) + "\nshouldAutoScroll",
     vm.createContext({}),
   );
   const viewport = {scrollHeight:1800,scrollTop:220,clientHeight:600};
