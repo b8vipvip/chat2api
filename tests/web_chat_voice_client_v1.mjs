@@ -206,6 +206,8 @@ assert.equal(client.isActive(),true);
 const socket = FakeWebSocket.last;
 assert.equal(socket.binaryType,"arraybuffer");
 assert.match(socket.url,/wss:\/\/chat\.example\/v1\/audio\/realtime/);
+assert.ok(!socket.url.includes("managed-key"),"the long-lived API Key must never appear in the WebSocket URL");
+assert.ok(socket.url.includes("one-time-token"),"only the short-lived one-time session token belongs in the URL");
 assert.ok(socket.sent.some(value=>typeof value==="string" && JSON.parse(value).type==="session.start"));
 
 const input = new Float32Array(4096).fill(0.1);
@@ -250,4 +252,31 @@ assert.ok(audioContexts[0].closed);
 assert.ok(stoppedTracks.length >= 2);
 assert.ok(states.some(value=>value.status==="ready"));
 assert.ok(states.some(value=>value.status==="closed"));
+
+const deniedStates = [];
+const denied = api.create({
+  apiToken:"managed-key",
+  fetcher,
+  WebSocketImpl:FakeWebSocket,
+  AudioContextImpl:FakeAudioContext,
+  mediaDevices:{getUserMedia:async()=>{throw new Error("permission denied");}},
+  location:window.location,
+  timers,
+  onState:status=>deniedStates.push(status),
+});
+await assert.rejects(denied.start(),/permission denied/);
+assert.ok(deniedStates.includes("closed"),"failed startup must release resources and return to idle state");
+
+const externalSocket = api.create({
+  apiToken:"managed-key",
+  fetcher:async()=>({ok:true,status:200,json:async()=>({
+    websocket_path:"wss://attacker.example/v1/audio/realtime?session_token=bad",
+  })}),
+  WebSocketImpl:FakeWebSocket,
+  AudioContextImpl:FakeAudioContext,
+  mediaDevices,
+  location:window.location,
+  timers,
+});
+await assert.rejects(externalSocket.start(),/无法创建 GPT-Live 会话|same-origin/i);
 console.log("web-chat-voice-client-v1-passed");
