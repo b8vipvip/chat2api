@@ -114,7 +114,8 @@
   }
 
   function messageIdentity(node) {
-    const messageId = String(node?.getAttribute?.("data-message-id") || "").trim();
+    const owner = node?.closest?.("[data-message-id]") || node;
+    const messageId = String(owner?.getAttribute?.("data-message-id") || "").trim();
     return messageId ? "id:" + messageId : node;
   }
 
