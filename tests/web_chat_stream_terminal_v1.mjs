@@ -4,6 +4,7 @@ import test from "node:test";
 import vm from "node:vm";
 
 const source = readFileSync("app/chat_client_v1.js", "utf8");
+const recoverySource = readFileSync("app/chat_stream_recovery_v1.js", "utf8");
 const start = source.indexOf("  function appendDelta(");
 const end = source.indexOf("  async function selectApiKey(", start);
 assert.ok(start >= 0 && end > start);
@@ -329,4 +330,37 @@ test("hydrates the authoritative answer snapshot after a replay terminal marker"
   assert.equal(result.status,"completed");
   assert.equal(assistant.pending,false);
   assert.equal(assistant.content,"完整的最终回复");
+});
+
+
+
+test("bounds a stalled same-origin cancellation handshake", async () => {
+  const context = vm.createContext({
+    window:{},
+    AbortController,
+    setTimeout,
+    clearTimeout,
+  });
+  const api = vm.runInContext(
+    recoverySource + "\nwindow.Chat2APIStreamRecoveryV1",
+    context,
+  );
+  const controller = api.create({
+    AbortController,
+    cancelTimeoutMs:25,
+    fetcher:(_url,options) => new Promise((_resolve,reject) => {
+      options.signal.addEventListener("abort",() => {
+        const error = new Error("cancel transport timed out");
+        error.name = "AbortError";
+        reject(error);
+      },{once:true});
+    }),
+  });
+  const result = await controller.cancel({
+    request_id:"req_cancel_test123",
+    assistant_message_id:"message_cancel_123",
+  });
+  assert.equal(result.status,"cancel_unavailable");
+  assert.equal(result.cancel_requested,false);
+  assert.equal(result.terminal,false);
 });
