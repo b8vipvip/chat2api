@@ -344,9 +344,9 @@ def test_live_voice_bounds_pcm16_frames_and_keeps_session_after_bad_input(tmp_pa
                     "type": "image.progress", "kind": "voice-live",
                     "request_id": request_id, "live_event": "response.audio.delta",
                     "response_id": response_id, "sample_rate": 24000,
-                    "pcm_base64": base64.b64encode(b"\\x03\\x04" * 480).decode("ascii"),
+                    "pcm_base64": base64.b64encode(b"\x03\x04" * 480).decode("ascii"),
                 })
-                assert live.receive_bytes() == b"\\x03\\x04" * 480
+                assert live.receive_bytes() == b"\x03\x04" * 480
                 extension.send_json({
                     "type": "image.progress", "kind": "voice-live",
                     "request_id": request_id, "live_event": "response.text.snapshot",
