@@ -2353,7 +2353,7 @@
             if (part.done) break;
             buffer += decoder.decode(part.value,{stream:true});
             let boundary;
-            while ((boundary = /\\r?\\n\\r?\\n/.exec(buffer))) {
+            while ((boundary = /\r?\n\r?\n/.exec(buffer))) {
               const frame = buffer.slice(0,boundary.index);
               buffer = buffer.slice(boundary.index + boundary[0].length);
               if (consumeNativeSseFrame(frame,requestId)) { ended = true; break; }
