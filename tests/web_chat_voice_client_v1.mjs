@@ -396,6 +396,7 @@ const clientContext = vm.createContext({
   $:id=>id==="voiceTranscript" ? transcript : new FakeElement("status"),
   document:{createElement:tag=>new FakeElement(tag)},
   String,
+  limitAssistantText:value=>String(value || "").slice(0,32000),
 });
 const appendStart = chatClientSource.indexOf("  function appendVoiceTranscript(");
 const appendEnd = chatClientSource.indexOf("  async function startVoiceCall(",appendStart);
@@ -431,8 +432,11 @@ let rendered = 0;
 let nextMessageId = 0;
 const historyContext = vm.createContext({
   state:historyState,
-  MAX_MESSAGE_CHARS:8000,
+  MAX_USER_MESSAGE_CHARS:8000,
+  MAX_ASSISTANT_MESSAGE_CHARS:32000,
+  ASSISTANT_TRUNCATION_NOTICE:"\n\n[回答超过 Web Chat 的 32,000 字符上限，后续内容未保存]",
   MAX_MESSAGES:30,
+  limitAssistantText:value=>String(value || "").slice(0,32000),
   $:id=>id==="voiceTranscript" ? transcript : new FakeElement("status"),
   document:{createElement:tag=>new FakeElement(tag)},
   id:()=> "voice-message-"+(++nextMessageId),

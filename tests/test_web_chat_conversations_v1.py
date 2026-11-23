@@ -168,6 +168,43 @@ def test_web_chat_conversation_api_auth_ownership_sync_and_conflicts(tmp_path: P
         assert tool_only_saved.status_code == 200, tool_only_saved.text
         assert tool_only_saved.json()["conversation"]["messages"][1]["toolEvents"][0]["status"] == "completed"
 
+        # Long assistant responses survive server-side conversation persistence,
+        # while user input remains bounded by the composer limit.
+        long_reply_id = "c2a_longreply_000001"
+        long_reply = _conversation(long_reply_id)
+        long_reply["apiKeyId"] = key_id
+        long_reply_text = "长回答内容" * 4000
+        long_reply["messages"][1]["content"] = long_reply_text
+        long_reply_saved = client.put(
+            f"/api/user/chat/conversations/{long_reply_id}",
+            json={"expected_revision": 0, "conversation": long_reply},
+        )
+        assert long_reply_saved.status_code == 200, long_reply_saved.text
+        assert long_reply_saved.json()["conversation"]["messages"][1]["content"] == long_reply_text
+        long_reply_search = client.get(
+            "/api/user/chat/conversations/search", params={"q": "长回答内容"}
+        )
+        assert long_reply_search.status_code == 200, long_reply_search.text
+        assert any(row["id"] == long_reply_id for row in long_reply_search.json()["data"])
+
+        too_long_reply = _conversation("c2a_longreply_bad_0001")
+        too_long_reply["apiKeyId"] = key_id
+        too_long_reply["messages"][1]["content"] = "x" * 32001
+        rejected_reply = client.put(
+            f"/api/user/chat/conversations/{too_long_reply['id']}",
+            json={"expected_revision": 0, "conversation": too_long_reply},
+        )
+        assert rejected_reply.status_code == 422
+
+        too_long_user = _conversation("c2a_longuser_bad_0001")
+        too_long_user["apiKeyId"] = key_id
+        too_long_user["messages"][0]["content"] = "x" * 8001
+        rejected_user = client.put(
+            f"/api/user/chat/conversations/{too_long_user['id']}",
+            json={"expected_revision": 0, "conversation": too_long_user},
+        )
+        assert rejected_user.status_code == 422
+
         # A stale browser tab cannot silently overwrite a newer server revision.
         stale = client.put(
             f"/api/user/chat/conversations/{conversation_id}",

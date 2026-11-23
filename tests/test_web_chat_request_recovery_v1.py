@@ -733,19 +733,17 @@ const vm = require('node:vm');
 const source = fs.readFileSync('app/chat_client_v1.js', 'utf8');
 const start = source.indexOf('  function appendDelta(');
 const end = source.indexOf('  function recoveryStatusLabel(', start);
-assert.ok(start >= 0 && end > start);
-const context = vm.createContext({MAX_MESSAGE_CHARS: 200000});
-const api = vm.runInContext(source.slice(start, end) + '\n({consumeSseFrame})', context);
-const assistant = {content:'longer worker progress', lastEventId:8};
-const frame = text => [
-  'id: 9',
-  'event: recovery.partial.snapshot',
-  'data: ' + JSON.stringify({partial_text:text,partial_text_unverified:true}),
-].join('\n');
-api.consumeSseFrame(frame('short'), assistant);
-assert.equal(assistant.content, 'longer worker progress');
-api.consumeSseFrame(frame('longer worker progress plus new text'), assistant);
-assert.equal(assistant.content, 'longer worker progress plus new text');
+const helperStart = source.indexOf('  function limitAssistantText(');
+const helperEnd = source.indexOf('  function normalizeMessageContent(', helperStart);
+assert.ok(start >= 0 && end > start && helperStart >= 0 && helperEnd > helperStart);
+const context = vm.createContext({
+  MAX_ASSISTANT_MESSAGE_CHARS: 32000,
+  ASSISTANT_TRUNCATION_NOTICE: '\n\n[回答超过 Web Chat 的 32,000 字符上限，后续内容未保存]',
+});
+const api = vm.runInContext(
+  source.slice(helperStart, helperEnd) + source.slice(start, end) + '\n({consumeSseFrame})',
+  context,
+);
 """;
     result = subprocess.run(
         ["node", "-e", harness], cwd=ROOT,

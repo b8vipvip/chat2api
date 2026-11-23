@@ -25,6 +25,10 @@ async function send(chunks, close = true, onCancel = () => {}) {
   });
   const node = {value: "", classList: {add() {}, remove() {}}, focus() {}};
   const context = vm.createContext({
+    MAX_ASSISTANT_MESSAGE_CHARS:32000,
+    ASSISTANT_TRUNCATION_NOTICE:"\n\n[回答超过 Web Chat 的 32,000 字符上限，后续内容未保存]",
+    limitAssistantText:value=>String(value || "").slice(0,32000),
+    appendAssistantText:(assistant,value)=>{assistant.content=String(assistant.content || "")+String(value || "");},
     state: {
       apiToken: "test-token", user: {user_id: "user-a"},
       selectedModel: "test-model", streaming: false,
@@ -131,7 +135,11 @@ test("preserves request-scoped tool calls and results as safe presentation state
   const referenceEnd = source.indexOf("  function normalizeToolEvents(", referenceStart);
   assert.ok(referenceStart >= 0 && referenceEnd > referenceStart);
   const context = vm.createContext({
-    saveHistory() { saved += 1; }, document, URL, MAX_MESSAGE_CHARS:200000,
+    saveHistory() { saved += 1; }, document, URL,
+    MAX_ASSISTANT_MESSAGE_CHARS:32000,
+    ASSISTANT_TRUNCATION_NOTICE:"\n\n[回答超过 Web Chat 的 32,000 字符上限，后续内容未保存]",
+    limitAssistantText:value=>String(value || "").slice(0,32000),
+    appendAssistantText:(assistant,value)=>{assistant.content=String(assistant.content || "")+String(value || "");},
     safeToolName(value) { return String(value || "tool").slice(0,80); },
   });
   const api = vm.runInContext(
@@ -257,7 +265,9 @@ test("keeps nonterminal recovery-unavailable turns pending for a later retry", a
   };
   const context = vm.createContext({
     state:{recoveryInFlight:new Set()},
-    MAX_MESSAGE_CHARS:8000,
+    MAX_ASSISTANT_MESSAGE_CHARS:32000,
+    ASSISTANT_TRUNCATION_NOTICE:"\n\n[回答超过 Web Chat 的 32,000 字符上限，后续内容未保存]",
+    limitAssistantText:value=>String(value || "").slice(0,32000),
     currentConversation:() => conversation,
     makeRecoveryController:() => null,
     saveHistory() {},
@@ -301,7 +311,9 @@ test("hydrates the authoritative answer snapshot after a replay terminal marker"
   let snapshotCalls = 0;
   const context = vm.createContext({
     state:{recoveryInFlight:new Set()},
-    MAX_MESSAGE_CHARS:8000,
+    MAX_ASSISTANT_MESSAGE_CHARS:32000,
+    ASSISTANT_TRUNCATION_NOTICE:"\n\n[回答超过 Web Chat 的 32,000 字符上限，后续内容未保存]",
+    limitAssistantText:value=>String(value || "").slice(0,32000),
     currentConversation:() => conversation,
     makeRecoveryController:() => null,
     saveHistory() {},
@@ -446,6 +458,25 @@ test("cross-device conversation merge never revives terminal requests from stale
   assert.equal(completed.recoveryStatus,"completed");
   assert.equal(completed.content,"authoritative final answer");
   assert.equal(completed.toolEvents[0].output,"late tool observation");
+
+  const localCompleted = merge({
+    id:"conversation",updatedAt:"2026-11-23T10:00:00.000Z",serverRevision:7,
+    messages:[{
+      id:"assistant-4",role:"assistant",content:"the full server-side partial response is longer",
+      pending:false,recoveryStatus:"stalled",toolEvents:[],
+      createdAt:"2026-11-23T09:04:00.000Z",
+    }],
+  },{
+    id:"conversation",updatedAt:"2026-11-23T10:04:00.000Z",
+    messages:[{
+      id:"assistant-4",role:"assistant",content:"short local cache copy",
+      pending:false,recoveryStatus:"completed",toolEvents:[],
+      createdAt:"2026-11-23T09:04:00.000Z",
+    }],
+  }).messages[0];
+  assert.equal(localCompleted.pending,false);
+  assert.equal(localCompleted.recoveryStatus,"completed");
+  assert.equal(localCompleted.content,"the full server-side partial response is longer");
 });
 
 
@@ -535,4 +566,40 @@ test("keeps the reader anchored unless the viewport is already near the bottom",
   assert.equal(shouldAutoScroll(viewport),true);
   viewport.scrollTop = 1080;
   assert.equal(shouldAutoScroll(viewport),false);
+});
+
+
+test("persists longer assistant responses while keeping user and local-cache bounds", () => {
+  const extractFunction = name => {
+    const start = source.indexOf("  function " + name + "(");
+    assert.ok(start >= 0, "missing " + name);
+    const next = source.slice(start + 1).search(/\n  (?:(?:async )?function |class )/);
+    return source.slice(start, next < 0 ? source.length : start + 1 + next);
+  };
+  const context = vm.createContext({
+    MAX_ASSISTANT_MESSAGE_CHARS:32000,
+    MAX_USER_MESSAGE_CHARS:8000,
+    ASSISTANT_TRUNCATION_NOTICE:"\n\n[回答超过 Web Chat 的 32,000 字符上限，后续内容未保存]",
+  });
+  const helpers = vm.runInNewContext([
+    extractFunction("limitAssistantText"),
+    extractFunction("appendAssistantText"),
+    extractFunction("normalizeMessageContent"),
+    extractFunction("appendDelta"),
+    "({limitAssistantText,normalizeMessageContent,appendDelta})",
+  ].join("\n"),context);
+
+  assert.equal(helpers.normalizeMessageContent("a".repeat(20000),"assistant").length,20000);
+  assert.equal(helpers.normalizeMessageContent("u".repeat(9000),"user").length,8000);
+  assert.equal(helpers.normalizeMessageContent("a".repeat(20000),"assistant",8000).length,8000);
+
+  const truncated = helpers.limitAssistantText("a".repeat(40000));
+  assert.equal(truncated.length,32000);
+  assert.ok(truncated.includes("后续内容未保存"));
+
+  const assistant = {content:""};
+  helpers.appendDelta(assistant,"a".repeat(20000));
+  helpers.appendDelta(assistant,"b".repeat(20000));
+  assert.equal(assistant.content.length,32000);
+  assert.ok(assistant.content.includes("后续内容未保存"));
 });
