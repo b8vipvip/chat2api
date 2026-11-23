@@ -132,7 +132,7 @@ The running Worker remains the terminal authority after dispatch; the Web Chat A
 
 The native-content protocol now carries a bounded `href` only on anchor nodes. The Worker capture, server snapshot validator and browser renderer independently allow only public HTTPS DNS destinations; they reject active schemes, credentials, IP literals, local/private hostnames, non-standard ports and ChatGPT session URLs. Links open in a new tab with `noopener noreferrer nofollow` and `no-referrer`. The legacy `/v1/native-content` projection converts anchors to inert spans so its existing protocol remains unchanged.
 
-The MathML allowlist has also been expanded for matrices, fences, phantom/space/style nodes and additional presentation structures. This preserves more native formula structure but is not a KaTeX typesetting engine.
+The MathML allowlist has also been expanded for matrices, fences, phantom/space/style nodes and additional presentation structures. TeX expressions in Markdown and native math blocks are rendered with the pinned KaTeX 0.19.1 browser runtime (`trust: false`, bounded expansion/size); the production Docker image and CI vendor the JS, stylesheet and font assets locally, so runtime rendering does not depend on a third-party CDN. A source checkout that has not run `sh scripts/vendor_katex.sh` intentionally falls back to the visible TeX text. This does not imply complete parity with every ChatGPT math component or every TeX package.
 
 ### W-03 — bounded generated audio/video file playback
 
@@ -146,4 +146,4 @@ The authenticated Worker socket now forwards bounded chat.tool.call and chat.too
 
 The Playwright regression now opens the same owner-scoped conversation in two isolated browser profiles, verifies a persisted tool-only assistant activity card, races two writes against the same server revision and confirms one succeeds while the stale writer receives a conflict, then verifies a deletion tombstone prevents resurrection on the second profile. This covers browser-level cross-device sync and optimistic-concurrency behavior.
 
-Full citation/reference cards, KaTeX typesetting, arbitrary live audio/video capture and complete ChatGPT component parity remain open acceptance items. Durable token-level SSE replay remains open before the issue is complete.
+Full citation/reference-card parity, arbitrary live audio/video capture and complete ChatGPT component parity remain open acceptance items. KaTeX rendering is implemented for supported TeX expressions with a MathML/text fallback for unsupported or invalid input. Durable token-level SSE replay remains open before the issue is complete.
