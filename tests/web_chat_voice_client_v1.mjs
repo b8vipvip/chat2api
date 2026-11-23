@@ -15,11 +15,15 @@ const voiceContextStart = chatClientSource.indexOf("  function buildVoiceContext
 const voiceContextEnd = chatClientSource.indexOf("  async function startVoiceCall(",voiceContextStart);
 assert.ok(voiceContextStart >= 0 && voiceContextEnd > voiceContextStart,
   "production voice context builder must remain extractable");
+const codePointHelpersStart = liveContentSource.indexOf("  function codePointLength(value) {");
+const codePointHelpersEnd = liveContentSource.indexOf("  const pendingEmits",codePointHelpersStart);
+assert.ok(codePointHelpersStart >= 0 && codePointHelpersEnd > codePointHelpersStart);
+const codePointHelpers = liveContentSource.slice(codePointHelpersStart,codePointHelpersEnd);
 const primerStart = liveContentSource.indexOf("  function buildSessionPrimer(active) {");
 const primerEnd = liveContentSource.indexOf("  async function startLive(message) {",primerStart);
 assert.ok(primerStart >= 0 && primerEnd > primerStart);
 const buildSessionPrimer = vm.runInNewContext(
-  liveContentSource.slice(primerStart,primerEnd) + "\nbuildSessionPrimer",
+  codePointHelpers + liveContentSource.slice(primerStart,primerEnd) + "\nbuildSessionPrimer",
   {},
 );
 const primer = buildSessionPrimer({
@@ -29,7 +33,16 @@ const primer = buildSessionPrimer({
 assert.ok(primer.includes("用简洁中文回答。"));
 assert.ok(primer.includes("上一轮问题"));
 assert.ok(primer.includes("已准备好"));
-assert.ok(primer.length <= 12000);
+assert.ok(Array.from(primer).length <= 12000);
+const emojiContext = "😀".repeat(8000);
+const emojiPrimer = buildSessionPrimer({instructions:"回答😀",context:emojiContext});
+assert.ok(emojiPrimer.includes(emojiContext),
+  "the 8,000-codepoint context limit must not truncate supplementary Unicode characters as UTF-16 halves");
+assert.ok(Array.from(emojiPrimer).length <= 12000);
+assert.ok(!/[\uD800-\uDBFF]$/.test(emojiPrimer),"setup prompt must not end with an unpaired high surrogate");
+const blankContextPrimer = buildSessionPrimer({instructions:"简洁回答",context:"   "});
+assert.ok(!blankContextPrimer.includes("以下是当前 Web Chat 会话最近的对话历史"),
+  "whitespace-only context must not create an empty history section");
 const buildVoiceContext = vm.runInNewContext(
   chatClientSource.slice(voiceContextStart,voiceContextEnd) + "\nbuildVoiceContext",
   {MAX_VOICE_CONTEXT_CHARS:8000},
