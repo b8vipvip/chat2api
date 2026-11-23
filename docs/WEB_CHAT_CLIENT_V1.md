@@ -56,7 +56,7 @@ The page sends the full ordered conversation using the Chat2API Web Chat request
 
 1. Open `/chat` in a secure browser context, choose a managed API Key with `chat` or `audio` scope, and make sure a paired Chrome Worker is online with its ChatGPT tab signed in.
 2. Click **语音通话** and grant microphone permission. The panel connects to `POST /v1/audio/realtime/sessions` and the one-time-token `/v1/audio/realtime` WebSocket; it does not expose the long-lived API Key in the URL.
-3. Speak naturally. The browser streams 16 kHz mono PCM16 input and plays 24 kHz mono PCM16 output. User transcripts and assistant text are shown in the panel; the microphone and audio context are released when the session ends.
+3. Speak naturally. The browser streams 16 kHz mono PCM16 input with a phase-preserving resampler and plays 24 kHz mono PCM16 output. User transcripts and assistant text are shown in the panel; the browser revalidates the user session every 60 seconds and releases the microphone/audio context when the session ends or the login expires.
 4. To include visual context, click **开启摄像头** and grant camera permission. The client sends at most one JPEG snapshot per second, waits for `input_video.frame.sent` before advancing, and stops after 64 accepted frames. The selected API Key must also have `files` scope.
 5. Click **结束语音** to finish the session and release microphone, camera, playback and WebSocket resources.
 
