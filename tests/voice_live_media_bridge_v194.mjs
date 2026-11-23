@@ -190,6 +190,64 @@ const clientCancelledResponse = transcriptEvents
 assert.equal(clientCancelledResponse?.text,"interrupted by user",
   "client_cancel must retain the baseline until the explicit interruption event captures its partial text");
 
+// Stopping while the extension is still waiting for ChatGPT's Voice UI
+// must abort startup instead of publishing a late image.started/session.ready.
+const startupListeners = [];
+const startupMessages = [];
+const startupWindow = {
+  addEventListener(type,listener){if(type==="message")startupListeners.push(listener);},
+  postMessage(message) {
+    if(message?.source==="chat2api-isolated" && message.type==="voice.live.prepare") {
+      queueMicrotask(()=>startupListeners.forEach(listener=>listener({
+        source:startupWindow,
+        data:{
+          source:"chat2api-main",
+          request_id:message.request_id,
+          session_id:message.session_id,
+          type:"voice.live.prepared",
+        },
+      })));
+    }
+  },
+};
+const startupChrome = {
+  runtime:{
+    onMessage:{addListener(){}},
+    sendMessage:async message=>{startupMessages.push(message);return {ok:true};},
+  },
+};
+const startupSandbox = vm.createContext({
+  window:startupWindow,
+  chrome:startupChrome,
+  document:{querySelectorAll(){return [];},visibilityState:"visible"},
+  getComputedStyle:()=>({display:"block",visibility:"visible"}),
+  setTimeout,
+  clearTimeout,
+  setInterval,
+  clearInterval,
+  Date,Math,Promise,String,Number,Set,Array,
+});
+const instrumentedStartup = liveContent.slice(0,closingIife) +
+  "globalThis.__voiceStartupTest = {startLive,stopLive,state}; " +
+  liveContent.slice(closingIife);
+vm.runInContext(instrumentedStartup,startupSandbox);
+const startupTest = startupSandbox.__voiceStartupTest;
+const pendingStartup = startupTest.startLive({
+  requestId:"voice-start-cancel",
+  sessionId:"voice-session-start-cancel",
+  options:{model:"gpt-live"},
+});
+await new Promise(resolve=>setTimeout(resolve,80));
+const startupActive = startupTest.state.active;
+assert.ok(startupActive,"the extension should have entered the Voice UI readiness phase");
+await startupTest.stopLive(startupActive,false);
+await pendingStartup;
+const startupLiveEvents = startupMessages.map(message=>message.event?.live_event);
+assert.equal(startupLiveEvents.includes("session.ready"),false,
+  "a stopped extension startup must never publish a late session.ready");
+assert.equal(startupMessages.some(message=>message.event?.type==="image.started"),false,
+  "a stopped extension startup must never publish a late image.started event");
+
 const listeners = [];
 const posted = [];
 const timers = new Map();
