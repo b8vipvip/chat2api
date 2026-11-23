@@ -241,3 +241,46 @@ test("normalizes persisted tool events without accepting unsafe IDs or control c
   assert.equal(rows[0].references[0].url, "https://docs.python.org/3/library/");
   assert.deepEqual(JSON.parse(JSON.stringify(normalizeToolEvents(rows, "user"))), []);
 });
+
+
+
+test("keeps nonterminal recovery-unavailable turns pending for a later retry", async () => {
+  const start = source.indexOf("  async function recoverPendingMessage(");
+  const end = source.indexOf("  function assistantMessageForRequest(", start);
+  assert.ok(start >= 0 && end > start);
+
+  const conversation = {id:"conversation-recovery",messages:[],updatedAt:""};
+  const assistant = {
+    id:"message-recovery",role:"assistant",requestId:"req_12345678",
+    pending:true,content:"partial",lastEventId:0,
+  };
+  const context = vm.createContext({
+    state:{recoveryInFlight:new Set()},
+    MAX_MESSAGE_CHARS:8000,
+    currentConversation:() => conversation,
+    makeRecoveryController:() => null,
+    saveHistory() {},
+    renderMessages() {},
+    resizeComposer() {},
+    applyMessageReferences() {},
+  });
+  const recover = vm.runInContext(
+    source.slice(start,end) + "\nrecoverPendingMessage",
+    context,
+  );
+
+  const missingTransport = await recover(conversation,assistant);
+  assert.equal(missingTransport.status,"recovery_unavailable");
+  assert.equal(assistant.pending,true);
+  assert.equal(assistant.recoveryStatus,"recovery_unavailable");
+
+  const laterController = {
+    replay:async () => ({status:"replay_unavailable",terminal:false}),
+    resume:async () => ({status:"recovery_unavailable",terminal:false}),
+  };
+  const unavailable = await recover(conversation,assistant,laterController);
+  assert.equal(unavailable.status,"recovery_unavailable");
+  assert.equal(assistant.pending,true);
+  assert.equal(assistant.recoveryStatus,"recovery_unavailable");
+  assert.equal(context.state.recoveryInFlight.size,0);
+});
