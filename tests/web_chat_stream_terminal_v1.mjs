@@ -364,3 +364,20 @@ test("bounds a stalled same-origin cancellation handshake", async () => {
   assert.equal(result.cancel_requested,false);
   assert.equal(result.terminal,false);
 });
+
+
+test("keeps the reader anchored unless the viewport is already near the bottom", () => {
+  const start = source.indexOf("  function shouldAutoScroll(");
+  const end = source.indexOf("  function renderMessages(", start);
+  assert.ok(start >= 0 && end > start);
+  const shouldAutoScroll = vm.runInNewContext(
+    source.slice(start,end) + "\\nshouldAutoScroll",
+    vm.createContext({}),
+  );
+  const viewport = {scrollHeight:1800,scrollTop:220,clientHeight:600};
+  assert.equal(shouldAutoScroll(viewport),false);
+  viewport.scrollTop = 1110;
+  assert.equal(shouldAutoScroll(viewport),true);
+  viewport.scrollTop = 1080;
+  assert.equal(shouldAutoScroll(viewport),false);
+});
