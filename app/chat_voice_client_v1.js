@@ -85,10 +85,14 @@
     let videoSequence = 0;
     let videoFrameCount = 0;
     let sessionStartedAt = 0;
+    let lastVideoTimestampMs = -1;
     let supportsVideoFrames = false;
     let readyTimeoutId = null;
     let closeTimeoutId = null;
 
+    function monotonicNow() {
+      return typeof window.performance?.now === "function" ? window.performance.now() : Date.now();
+    }
     function state(status, detail = "") {
       try { onState(status, detail); } catch {}
     }
@@ -214,7 +218,7 @@
       if (payload.type === "session.ready") {
         ready = true;
         supportsVideoFrames = Array.isArray(payload.supports) && payload.supports.includes("input_video.frame");
-        sessionStartedAt = Date.now();
+        sessionStartedAt = monotonicNow();
         if (readyResolve) readyResolve(payload);
         readyResolve = null;
         readyReject = null;
@@ -388,7 +392,10 @@
           type:"input_video.frame",
           item_id:itemId,
           sequence,
-          timestamp_ms:Math.max(0,Date.now() - sessionStartedAt),
+          timestamp_ms:(lastVideoTimestampMs = Math.max(
+            lastVideoTimestampMs + 1,
+            Math.floor(monotonicNow() - sessionStartedAt),
+          )),
           file_id:fileId,
           text:"摄像头画面",
         })) throw new Error("实时语音连接已断开");
@@ -427,7 +434,6 @@
         state("camera_ready","摄像头已开启（每秒最多发送一张快照）");
       } catch (error) {
         stopCamera();
-        state("ready","摄像头未开启");
         throw error;
       }
     }
