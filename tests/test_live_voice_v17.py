@@ -89,11 +89,13 @@ def test_live_voice_stream_relays_pcm_both_directions(tmp_path: Path) -> None:
                 f"/v1/audio/realtime?client_id={client_id}",
                 headers={"Authorization": f"Bearer {managed_key}"},
             ) as live:
-                live.send_json({"type": "session.start", "model": "gpt-live", "instructions": "自然聊天"})
+                live.send_json({"type": "session.start", "model": "gpt-live", "instructions": "自然聊天", "context": "用户：你好\\n助手：你好，我可以继续帮你。"})
                 started = extension.receive_json()
                 assert started["type"] == "voice.live.start"
                 assert started["options"]["model"] == "gpt-live"
                 assert started["options"]["requested_model"] == "gpt-live"
+                assert started["options"]["instructions"] == "自然聊天"
+                assert started["options"]["context"] == "用户：你好\\n助手：你好，我可以继续帮你。"
                 request_id = started["request_id"]
                 session_id = started["session_id"]
 
