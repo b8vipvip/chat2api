@@ -363,6 +363,12 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
         # ws:/wss: source would let injected script exfiltrate data to any host.
         scheme = "wss" if request.url.scheme == "https" else "ws"
         hostname = request.url.hostname or ""
+        try:
+            hostname = hostname.encode("idna").decode("ascii")
+        except UnicodeError:
+            hostname = ""
+        if not hostname or any(not (char.isalnum() or char in ".-:") for char in hostname):
+            hostname = ""
         if ":" in hostname and not hostname.startswith("["):
             hostname = "[" + hostname + "]"
         authority = hostname
