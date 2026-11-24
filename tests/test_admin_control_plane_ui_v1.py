@@ -17,7 +17,7 @@ def test_admin_console_exposes_c_views_and_one_control_plane_asset():
     assert 'id="cClientApiKey"' in html
     assert 'id="cClientClearApiKey"' in html
     assert "Web Chat 统一 API Key" in html
-    assert "服务端只保存密钥引用" in html
+    assert "客户端配置仅保存密钥 ID 引用" in html
     assert 'value="invite_only"' in html
     assert 'data-view="tenants"' in html
     assert 'data-view="user-roles"' in html
