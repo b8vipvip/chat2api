@@ -116,6 +116,7 @@
 
     let socket = null;
     let audioContext = null;
+    let audioContextStateListener = null;
     let microphoneStream = null;
     let microphoneSource = null;
     let microphoneProcessor = null;
@@ -171,16 +172,18 @@
       }
       activePlaybackSources.clear();
     }
+    function failIfAudioContextSuspended() {
+      if (!audioContext || cleaned || stopping ||
+          typeof audioContext.state !== "string" || audioContext.state === "running") return false;
+      event({
+        type:"client.error",
+        message:"浏览器音频输出上下文已暂停（" + audioContext.state + "），实时语音已停止，请重新连接",
+      });
+      void cleanup();
+      return true;
+    }
     function playPcm(buffer) {
-      if (!audioContext || cleaned) return;
-      if (typeof audioContext.state === "string" && audioContext.state !== "running") {
-        event({
-          type:"client.error",
-          message:"浏览器音频输出上下文已暂停（" + audioContext.state + "），实时语音已停止，请重新连接",
-        });
-        void cleanup();
-        return;
-      }
+      if (!audioContext || cleaned || failIfAudioContextSuspended()) return;
       const samples = decodePcm16(buffer);
       if (!samples || !samples.length) return;
       const audio = audioContext.createBuffer(1, samples.length, OUTPUT_RATE);
@@ -269,6 +272,10 @@
         stopCamera();
         stopMicrophone();
         stopPlayback();
+        if (audioContext && audioContextStateListener) {
+          try { audioContext.removeEventListener?.("statechange",audioContextStateListener); } catch {}
+        }
+        audioContextStateListener = null;
         if (audioContext && typeof audioContext.close === "function") {
           try { await audioContext.close(); } catch {}
         }
@@ -291,6 +298,7 @@
           try { socket?.close(); } catch {}
           return;
         }
+        if (failIfAudioContextSuspended()) return;
         ready = true;
         supportsVideoFrames = Array.isArray(payload.supports) && payload.supports.includes("input_video.frame");
         sessionStartedAt = monotonicNow();
@@ -352,6 +360,10 @@
       // Unlock the browser audio graph synchronously from the user's click
       // before any network or permission prompt can consume transient activation.
       audioContext = new AudioContextImpl();
+      audioContextStateListener = () => {
+        if (ready && !stopping && !cleaned) failIfAudioContextSuspended();
+      };
+      audioContext.addEventListener?.("statechange",audioContextStateListener);
       if (typeof audioContext.resume === "function") await audioContext.resume();
       if (typeof audioContext.state === "string" && audioContext.state !== "running") {
         throw new Error("浏览器音频输出上下文未进入运行状态（" + audioContext.state + "）");
