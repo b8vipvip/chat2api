@@ -5,6 +5,7 @@
   const C_ROLES = {
     "control-admins": ["super_admin"],
     "client-policy": ["super_admin", "system_admin"],
+    "client-logs": ["super_admin", "system_admin", "support"],
     "registration-invitations": ["super_admin", "system_admin", "user_admin"],
     "tenants": ["super_admin", "system_admin"],
     "user-roles": ["super_admin", "user_admin"],
@@ -18,7 +19,7 @@
     "admin-users": ["super_admin", "user_admin", "system_admin", "support"]
   };
   const WEB_USER_NAV_ITEMS = [
-    "client-policy", "registration-invitations", "tenants", "user-roles",
+    "client-policy", "client-logs", "registration-invitations", "tenants", "user-roles",
     "subscriptions", "model-entitlements", "plugins", "quota-ledger",
     "user-pricing", "user-payments", "admin-users"
   ];

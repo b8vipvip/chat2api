@@ -10,6 +10,11 @@ def test_admin_console_exposes_c_views_and_one_control_plane_asset():
     html = admin_response("tenants").body.decode("utf-8")
     assert 'data-view="control-admins"' in html
     assert 'data-view="client-policy"' in html
+    assert 'data-view="client-logs"' in html
+    assert 'id="view-client-logs"' in html
+    assert 'id="webChatClientLogExportCount"' in html
+    assert 'id="webChatClientLogExportRange"' in html
+    assert "/assets/chat2api-admin-web-chat-client-logs-v1.js" in html
     assert 'data-view="registration-invitations"' in html
     assert 'id="view-registration-invitations"' in html
     assert 'id="cClientDomain"' in html
@@ -219,3 +224,19 @@ def test_user_console_uses_configured_client_domain_for_api_docs():
     assert 'clientDomain: ""' in source
     assert 'state.clientDomain = typeof policy.client_domain === "string" ? policy.client_domain.trim() : ""' in source
     assert 'const base = state.clientDomain || location.origin;' in source
+
+
+def test_web_chat_client_diagnostics_admin_asset_uses_safe_dom_and_range_exports():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "app" / "admin_web_chat_client_logs_v1.js").read_text(encoding="utf-8")
+    assert 'credentials: "same-origin"' in source
+    assert "URL.createObjectURL(blob)" in source
+    assert "client-logs" in source
+    assert "textContent" in source
+    assert "innerHTML" not in source
+    assert "webChatClientLogExportCount" in source
+    assert "webChatClientLogExportRange" in source
+    assert "since" in source and "until" in source
+    assert 'DOMContentLoaded' in source
+    c_track = (root / "app" / "admin_control_plane_admin_v1.js").read_text(encoding="utf-8")
+    assert '"client-logs": ["super_admin", "system_admin", "support"]' in c_track

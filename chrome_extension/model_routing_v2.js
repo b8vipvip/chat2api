@@ -205,7 +205,13 @@
 
   sendExtensionStatus = async function sendDynamicModelStatus(forceModelDiscovery = false) {
     const authority = globalThis.__CHAT2API_BACKGROUND_MODEL_LIBRARY_V145__;
-    if (typeof authority?.publishStatus === "function") return authority.publishStatus(false);
+    if (typeof authority?.publishStatus === "function") {
+      const result = await authority.publishStatus(false);
+      if (typeof authority?.syncObservedChoices === "function") {
+        void authority.syncObservedChoices(forceModelDiscovery ? "forced-model-router-status" : "model-router-status");
+      }
+      return result;
+    }
     const settings = await config();
     const tabs = await chatTabs();
     let bound = null;

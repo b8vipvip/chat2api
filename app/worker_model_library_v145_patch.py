@@ -128,33 +128,50 @@ def _validated_model_rows(registry: Any, client_id: str) -> list[dict[str, Any]]
 
 
 
+def _selectable_observed_model_rows(registry: Any, client_id: str) -> list[dict[str, Any]]:
+    """Live ChatGPT picker options, explicitly separate from verified models."""
+    client = getattr(registry, "clients", {}).get(str(client_id))
+    metadata = getattr(client, "metadata", None) if client else None
+    if not isinstance(metadata, dict):
+        return []
+    try:
+        revision = int(metadata.get("model_validation_revision") or 0)
+    except (TypeError, ValueError):
+        return []
+    if revision < VALIDATION_REVISION or metadata.get("model_validation_state") not in {"discovered", "validated"}:
+        return []
+    observed = metadata.get("model_observed_choices")
+    if not isinstance(observed, list):
+        return []
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, raw in enumerate(observed):
+        if not isinstance(raw, dict) or raw.get("selectable") is not True:
+            continue
+        model_id = _model_id(raw)
+        if not model_id or model_id in STATIC_SPECIAL_MODELS or model_id in seen:
+            continue
+        seen.add(model_id)
+        result.append({
+            "id": model_id,
+            "label": str(raw.get("label") or model_id)[:160],
+            "source": "chatgpt-picker-observed",
+            "validated": False,
+            "selectable": True,
+            "capabilities": ["text"],
+            "picker_order": index,
+            "observed_at": raw.get("observed_at"),
+        })
+    return result
+
+
 def _selectable_observed_model_ids(registry: Any, client_id: str) -> set[str]:
     """Routing candidates, never a validated served-model catalog.
 
     Browser-side model switching must still verify the concrete selection.
     Pending/reconnected Workers must not reuse old observations.
     """
-    client = getattr(registry, "clients", {}).get(str(client_id))
-    metadata = getattr(client, "metadata", None) if client else None
-    if not isinstance(metadata, dict):
-        return set()
-    try:
-        revision = int(metadata.get("model_validation_revision") or 0)
-    except (TypeError, ValueError):
-        return set()
-    if revision < VALIDATION_REVISION or metadata.get("model_validation_state") not in {"discovered", "validated"}:
-        return set()
-    observed = metadata.get("model_observed_choices")
-    if not isinstance(observed, list):
-        return set()
-    return {
-        model_id
-        for item in observed
-        if isinstance(item, dict)
-        and item.get("selectable") is True
-        and (model_id := _model_id(item))
-        and model_id not in STATIC_SPECIAL_MODELS
-    }
+    return {str(row["id"]) for row in _selectable_observed_model_rows(registry, client_id)}
 
 
 def _mark_pending(registry: Any, client_id: str, trigger: str) -> None:
@@ -232,7 +249,8 @@ def _public_user_library(registry: Any, pricing_payload: dict[str, Any]) -> list
             "available_workers": len(model.get("clients") or []),
             "validated": bool(model.get("validated")) if not special else None,
             "validated_at": model.get("validated_at"),
-            "playground_eligible": bool(not special and "text" in capabilities),
+            "playground_eligible": bool(not special and model.get("validated") is True and "text" in capabilities),
+            "selectable": bool(special or model.get("validated") is True or model.get("selectable") is True),
         })
     return rows
 
@@ -345,6 +363,10 @@ def install_worker_model_library_v145_patch(app: FastAPI) -> FastAPI:
             client_id: {str(row["id"]): row for row in _validated_model_rows(registry, client_id)}
             for client_id in client_ids
         }
+        observed_by_worker = {
+            client_id: _selectable_observed_model_rows(registry, client_id)
+            for client_id in client_ids
+        }
         for client_id in client_ids:
             for special_id in STATIC_SPECIAL_MODELS:
                 special = catalog[special_id]
@@ -362,10 +384,44 @@ def install_worker_model_library_v145_patch(app: FastAPI) -> FastAPI:
                     "compatibility_clients": [],
                     "source": "free-default-compatibility-unverified",
                     "validated": False,
+                    "selectable": False,
                 })
                 if client_id not in entry["clients"]:
                     entry["clients"].append(client_id)
                 entry.setdefault("compatibility_clients", []).append(client_id)
+            for model in observed_by_worker[client_id]:
+                model_id = str(model["id"])
+                entry = catalog.setdefault(model_id, {
+                    "id": model_id,
+                    "object": "model",
+                    "created": 0,
+                    "owned_by": "chatgpt",
+                    "label": model.get("label") or model_id,
+                    "capabilities": ["text"],
+                    "clients": [],
+                    "observed_clients": [],
+                    "source": "chatgpt-picker-observed",
+                    "validated": False,
+                    "selectable": True,
+                    "picker_order": int(model.get("picker_order") or 0),
+                })
+                if client_id not in entry["clients"]:
+                    entry["clients"].append(client_id)
+                entry.setdefault("observed_clients", [])
+                if client_id not in entry["observed_clients"]:
+                    entry["observed_clients"].append(client_id)
+                entry["selectable"] = True
+                order = int(model.get("picker_order") or 0)
+                current_order = entry.get("picker_order")
+                if current_order is None or order < int(current_order):
+                    entry["picker_order"] = order
+                if entry.get("validated") is not True:
+                    entry.update(
+                        label=model.get("label") or model_id,
+                        source="chatgpt-picker-observed",
+                        validated=False,
+                        capabilities=["text"],
+                    )
             for model in validated_by_worker[client_id].values():
                 model_id = str(model["id"])
                 entry = catalog.setdefault(
@@ -385,9 +441,9 @@ def install_worker_model_library_v145_patch(app: FastAPI) -> FastAPI:
                         "validated": True,
                     },
                 )
-                if entry.get("source") == "free-default-compatibility-unverified":
+                if entry.get("source") == "free-default-compatibility-unverified" or entry.get("validated") is not True:
                     entry.update(source="worker-validated", validated=True,
-                                 label=model.get("label") or model_id)
+                                 selectable=True, label=model.get("label") or model_id)
                 if client_id not in entry["clients"]:
                     entry["clients"].append(client_id)
                 # The visible model's capability list is the union of distinct
@@ -405,7 +461,15 @@ def install_worker_model_library_v145_patch(app: FastAPI) -> FastAPI:
                 special_model=str(entry["id"]) in STATIC_SPECIAL_MODELS,
             )
         special_order = {"gpt-image": 0, "gpt-live": 1, "gpt-live-mini": 2}
-        return sorted(catalog.values(), key=lambda item: (special_order.get(str(item.get("id")), 10), str(item.get("id") or "")))
+        def picker_sort_key(item: dict[str, Any]) -> tuple[int, int, str]:
+            model_id = str(item.get("id") or "")
+            if model_id in special_order:
+                return (2, special_order[model_id], model_id)
+            order = item.get("picker_order")
+            if isinstance(order, int):
+                return (0, order, model_id)
+            return (1, 10_000, model_id)
+        return sorted(catalog.values(), key=picker_sort_key)
 
     def is_library_text_model(model: str) -> bool:
         value = str(model or "").strip().lower()

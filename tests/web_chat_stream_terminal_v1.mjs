@@ -44,6 +44,8 @@ async function send(chunks, close = true, onCancel = () => {}) {
     selectedKeyId: () => "test-key",
     selectedKeyHasScope: () => true,
     setConnection() {},
+    recordClientDiagnostic() {},
+    flushClientDiagnostics: async () => {},
     renderPendingImages() {},
     renderPendingFiles() {},
     showOnly() {},

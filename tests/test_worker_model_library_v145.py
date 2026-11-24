@@ -11,6 +11,7 @@ from app.worker_model_library_v145_patch import (
     _free_default_route,
     _validated_model_rows,
     _selectable_observed_model_ids,
+    _selectable_observed_model_rows,
 )
 
 
@@ -94,20 +95,32 @@ def test_worker_scripts_have_no_static_normal_model_catalog_fallback():
     assert "sendValidatedExtensionStatusV145" in background
 
 
-def test_worker_model_discovery_requires_explicit_administrator_task():
+def test_worker_model_catalog_auto_sync_is_read_only_and_admin_verification_remains_explicit():
     root = Path(__file__).resolve().parents[1] / "chrome_extension"
     background = (root / "background_model_library_v145.js").read_text(encoding="utf-8")
-    for automatic_trigger in (
-        'schedule("worker-restart"',
-        'schedule("worker-connect"',
-        'schedule("worker-bind"',
-        'schedule("worker-enable"',
-        'schedule("model-validation-retry"',
-    ):
-        assert automatic_trigger not in background
+    content = (root / "content_model_library_v145.js").read_text(encoding="utf-8")
+    assert "syncObservedChoices" in background
+    assert "chatgpt-tab-ready" in background
+    assert "chatgpt-tab-activated" in background
+    assert "periodic-chatgpt-picker-refresh" in background
+    assert "periodInMinutes: 5" in background
+    assert "automatic: options.automatic === true" in background
+    assert "automaticInspectionSafe" in content
+    sync_body = background.split("async function syncObservedChoices", 1)[1].split("function scheduleObservedSync", 1)[0]
+    assert "chat2api.model.select.v145" not in sync_body
     assert 'message?.type !== "model.task.v147"' in background
     assert "chat2api.models.validate.v145" in background
-    assert "chat2api.model.select.v145" in (root / "content_model_library_v145.js").read_text(encoding="utf-8")
+    assert "chat2api.model.select.v145" in content
+
+
+def test_worker_model_auto_catalog_sync_browser_integration():
+    import shutil
+    import subprocess
+    if shutil.which("node") is None:
+        return
+    path = Path(__file__).resolve().parents[1] / "tests" / "worker_model_auto_catalog_sync_v1.mjs"
+    run = subprocess.run([shutil.which("node"), str(path)], capture_output=True, text=True, check=False, timeout=30)
+    assert run.returncode == 0, run.stdout + run.stderr
 
 
 def test_free_default_mini_route_requires_ready_composer_and_reliable_plan() -> None:
@@ -248,3 +261,33 @@ def test_picker_observations_are_candidates_not_served_model_proof():
     assert _validated_model_rows(registry, "ext_test") == []
     _mark_pending(registry, "ext_test", "reconnect")
     assert _selectable_observed_model_ids(registry, "ext_test") == set()
+
+
+def test_observed_chatgpt_picker_rows_are_fresh_selectable_and_not_validated():
+    registry = _registry({
+        "model_validation_state": "discovered",
+        "model_validation_revision": VALIDATION_REVISION,
+        "model_observed_choices": [
+            {"id": "gpt-6", "label": "GPT-6", "selectable": True},
+            {"id": "gpt-6-reasoning", "label": "GPT-6 Reasoning", "selectable": True},
+            {"id": "gpt-retired", "label": "Retired", "selectable": False},
+            {"id": "gpt-ignored", "label": "Ignored", "selectable": "true"},
+        ],
+    })
+    rows = _selectable_observed_model_rows(registry, "ext_test")
+    assert [row["id"] for row in rows] == ["gpt-6", "gpt-6-reasoning"]
+    assert all(row["selectable"] is True and row["validated"] is False for row in rows)
+    assert _selectable_observed_model_ids(registry, "ext_test") == {"gpt-6", "gpt-6-reasoning"}
+
+    pending = _registry({
+        "model_validation_state": "pending",
+        "model_validation_revision": VALIDATION_REVISION,
+        "model_observed_choices": [{"id": "gpt-6", "selectable": True}],
+    })
+    assert _selectable_observed_model_rows(pending, "ext_test") == []
+
+
+def test_free_default_compatibility_catalog_entry_is_not_selectable_in_the_chat_picker():
+    source = (Path(__file__).resolve().parents[1] / "app" / "worker_model_library_v145_patch.py").read_text(encoding="utf-8")
+    block = source.split('"source": "free-default-compatibility-unverified"', 1)[1].split("})", 1)[0]
+    assert '"selectable": False' in block

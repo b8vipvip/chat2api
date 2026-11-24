@@ -5,7 +5,7 @@
   const REVISION = 145;
   const CHATGPT_URLS = ["https://chatgpt.com/*", "https://www.chatgpt.com/*", "https://chat.openai.com/*"];
   const runtimeNonce = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
-  const state = { timer: null, running: null, lastTrigger: "startup", runtimeNonce };
+  const state = { timer: null, running: null, discoveryRunning: null, lastDiscoveryAt: 0, lastTrigger: "startup", runtimeNonce };
   globalThis[KEY] = state;
 
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -92,21 +92,22 @@
     });
   }
 
-  async function ensureValidator(tabId) {
+  async function ensureValidator(tabId, options = {}) {
+    const message = { type: "chat2api.models.validate.v145", automatic: options.automatic === true };
     try {
-      const response = await chrome.tabs.sendMessage(tabId, { type: "chat2api.models.validate.v145" });
+      const response = await chrome.tabs.sendMessage(tabId, message);
       if (response) return response;
     } catch (_) {}
     await chrome.scripting.executeScript({ target: { tabId }, files: ["content_model_library_v145.js"] });
     await delay(120);
-    try { return await chrome.tabs.sendMessage(tabId, { type: "chat2api.models.validate.v145" }); }
+    try { return await chrome.tabs.sendMessage(tabId, message); }
     catch (error) {
       // ChatGPT may reload its content scripts while the picker is inspected.
       // Re-query the current tab and retry once after the new document settles.
       await delay(900);
       const live = await targetTab();
       await chrome.scripting.executeScript({ target: { tabId: live.id }, files: ["content_model_library_v145.js"] }).catch(() => {});
-      return chrome.tabs.sendMessage(live.id, { type: "chat2api.models.validate.v145" });
+      return chrome.tabs.sendMessage(live.id, message);
     }
   }
 
@@ -176,7 +177,7 @@
         );
         const observed = (Array.isArray(data.observed_models) ? data.observed_models : [])
           .filter(item => item && typeof item.id === "string")
-          .map(item => ({ id: item.id, label: String(item.label || item.id), source: "chatgpt-model-picker", validated: false, observed_at: item.observed_at || null }));
+          .map((item, index) => ({ id: item.id, label: String(item.label || item.id), source: "chatgpt-model-picker", validated: false, selectable: item.enabled === true, picker_order: index, observed_at: item.observed_at || null }));
         await chrome.storage.local.set({ modelObservedChoices: observed });
         if (!models.length) throw new Error(observed.length
           ? "ChatGPT picker choices observed, but no concrete model is selected and verified"
@@ -230,6 +231,98 @@
     return state.running;
   }
 
+  async function syncObservedChoices(trigger = "automatic-picker-sync") {
+    if (state.discoveryRunning) return state.discoveryRunning;
+    if (state.running) return { ok: false, deferred: true };
+    const before = await settingsSnapshot();
+    const observedBefore = Array.isArray(before.modelObservedChoices) ? before.modelObservedChoices : [];
+    const updatedAt = Date.parse(before.modelValidationUpdatedAt || "");
+    const sameConnection =
+      before.modelValidationRuntimeNonce === runtimeNonce &&
+      String(before.modelValidationClientId || "") === String(before.clientId || "") &&
+      String(before.modelValidationSocketUpdatedAt || "") === String(before.socketUpdatedAt || "");
+    if (
+      observedBefore.length &&
+      sameConnection &&
+      ["discovered", "validated"].includes(String(before.modelValidationState || "")) &&
+      Number.isFinite(updatedAt) &&
+      Date.now() - updatedAt < 4 * 60 * 1000
+    ) return { ok: true, skipped: true };
+    if (state.lastDiscoveryAt && Date.now() - state.lastDiscoveryAt < 60 * 1000) {
+      return { ok: true, skipped: true };
+    }
+    state.lastDiscoveryAt = Date.now();
+    state.discoveryRunning = (async () => {
+      try {
+        const tab = await targetTab();
+        const response = await ensureValidator(tab.id, { automatic: true });
+        if (!response?.ok) {
+          if (String(response?.code || "") === "model_validation_busy") {
+            state.lastDiscoveryAt = 0;
+            return { ok: false, deferred: true };
+          }
+          throw new Error(response?.error || "ChatGPT model picker inspection failed");
+        }
+        const data = response.data || {};
+        const observed = (Array.isArray(data.observed_models) ? data.observed_models : [])
+          .filter(item => item && typeof item.id === "string" && item.enabled === true)
+          .map((item, index) => ({
+            id: String(item.id).trim().slice(0, 128),
+            label: String(item.label || item.id).slice(0, 160),
+            source: "chatgpt-picker-observed",
+            validated: false,
+            selectable: true,
+            picker_order: index,
+            observed_at: data.validated_at || new Date().toISOString(),
+          }))
+          .filter(item => /^[a-z0-9._:-]{1,128}$/i.test(item.id));
+        if (!observed.length) {
+          state.lastDiscoveryAt = 0;
+          return { ok: false, empty: true };
+        }
+        const latest = await settingsSnapshot();
+        const observedIds = new Set(observed.map(item => item.id));
+        const stillValidated = (Array.isArray(latest.models) ? latest.models : [])
+          .filter(item => item && item.validated === true &&
+            Number(item.validation_revision || 0) >= REVISION && observedIds.has(String(item.id || "")));
+        const preserveValidated = validationFresh(latest) && stillValidated.length > 0;
+        await chrome.storage.local.set({
+          modelObservedChoices: observed,
+          models: preserveValidated ? stillValidated : [],
+          currentModel: preserveValidated && observedIds.has(String(latest.currentModel || ""))
+            ? latest.currentModel : null,
+          currentReasoning: preserveValidated ? latest.currentReasoning || null : null,
+          modelsUpdatedAt: preserveValidated ? Number(latest.modelsUpdatedAt || Date.now()) : 0,
+          modelValidationState: preserveValidated ? "validated" : "discovered",
+          modelValidationRevision: REVISION,
+          modelValidationTrigger: trigger,
+          modelValidationError: "",
+          modelValidationCandidateCount: observed.length,
+          modelValidationValidatedCount: preserveValidated ? stillValidated.length : 0,
+          modelValidationRuntimeNonce: runtimeNonce,
+          modelValidationBoundTabId: tab.id,
+          modelValidationSocketUpdatedAt: latest.socketUpdatedAt || "",
+          modelValidationClientId: latest.clientId || "",
+          modelValidationUpdatedAt: data.validated_at || new Date().toISOString(),
+        });
+        await publishStatus(false).catch(() => {});
+        return { ok: true, observed_models: observed };
+      } catch (error) {
+        const busy = String(error?.code || "") === "model_validation_busy";
+        if (busy) state.lastDiscoveryAt = 0;
+        return { ok: false, deferred: busy, error: String(error?.message || error) };
+      }
+    })().finally(() => { state.discoveryRunning = null; });
+    return state.discoveryRunning;
+  }
+
+  function scheduleObservedSync(trigger, delayMs = 1400) {
+    setTimeout(() => {
+      syncObservedChoices(trigger).catch(error =>
+        console.warn("chat2api automatic ChatGPT model catalog sync", error));
+    }, Math.max(0, delayMs));
+  }
+
   function schedule(trigger, delayMs = 700) {
     state.lastTrigger = trigger;
     clearTimeout(state.timer);
@@ -251,17 +344,45 @@
     };
   };
   sendExtensionStatus = async function sendValidatedExtensionStatusV145(forceModelDiscovery = false) {
-    return publishStatus(false);
+    const result = await publishStatus(false);
+    void syncObservedChoices(forceModelDiscovery ? "forced-worker-status" : "worker-status");
+    return result;
   };
 
   state.validateNow = validateNow;
   state.publishStatus = publishStatus;
+  state.syncObservedChoices = syncObservedChoices;
   state.validationFresh = validationFresh;
 
-  // v147: only administrators/popup can initiate discovery or verification.
-  // Bind/connect/startup only republishes existing evidence, no scheduled probes.
-  chrome.runtime.onStartup?.addListener?.(() => publishStatus(false).catch(() => {}));
-  chrome.runtime.onInstalled?.addListener?.(() => publishStatus(false).catch(() => {}));
+  // Read-only picker discovery keeps the visible Web Chat catalog aligned with
+  // the connected ChatGPT account. It never selects or switches a model.
+  const publishAndSync = trigger => {
+    publishStatus(false).catch(() => {});
+    scheduleObservedSync(trigger);
+  };
+
+  const MODEL_CATALOG_REFRESH_ALARM = "chat2api-model-catalog-refresh-v145";
+  try {
+    chrome.alarms?.create?.(MODEL_CATALOG_REFRESH_ALARM, { periodInMinutes: 5 });
+  } catch (_) {}
+  chrome.alarms?.onAlarm?.addListener?.(alarm => {
+    if (alarm?.name === MODEL_CATALOG_REFRESH_ALARM) {
+      scheduleObservedSync("periodic-chatgpt-picker-refresh", 0);
+    }
+  });
+  chrome.runtime.onStartup?.addListener?.(() => publishAndSync("worker-startup"));
+  chrome.runtime.onInstalled?.addListener?.(() => publishAndSync("worker-installed"));
+  chrome.tabs.onUpdated?.addListener?.((tabId, changeInfo, tab) => {
+    if (changeInfo?.status === "complete" && isChatGptUrl(tab?.url || tab?.pendingUrl || "")) {
+      scheduleObservedSync("chatgpt-tab-ready");
+    }
+  });
+  chrome.tabs.onActivated?.addListener?.(async ({ tabId }) => {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      if (isChatGptUrl(tab?.url || tab?.pendingUrl || "")) scheduleObservedSync("chatgpt-tab-activated");
+    } catch (_) {}
+  });
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type !== "chat2api.models.validate.background.v145") return false;
@@ -271,9 +392,8 @@
     return true;
   });
 
-  // Never auto-discover or auto-validate after an extension restart.
-  // Old proof is not fresh until explicitly revalidated; observed models
-  // remain available for manual testing, accurately labeled unverified.
+  // Server-authorized model.task.v147 remains the only path that can explicitly
+  // verify a requested model by selecting it. Automatic sync only reads the picker.
   const previousServerMessage = typeof handleServerMessage === "function" ? handleServerMessage : async () => {};
   let activeTask = null;
   handleServerMessage = async function modelTaskCommandV147(message) {
@@ -312,7 +432,7 @@
         if (!result?.ok) throw new Error(result?.error || "ChatGPT picker discovery failed");
         const observed = (Array.isArray(result.data?.observed_models) ? result.data.observed_models : [])
           .filter(row=>row && typeof row.id==="string")
-          .map(row=>({id:row.id,label:String(row.label||row.id).slice(0,130),source:"chatgpt-picker-manual-v148",validated:false,selectable:row.enabled!==false,observed_at:new Date().toISOString()}));
+          .map((row,index)=>({id:row.id,label:String(row.label||row.id).slice(0,130),source:"chatgpt-picker-manual-v148",validated:false,selectable:row.enabled===true,picker_order:index,observed_at:new Date().toISOString()}));
         log("Picker discovery completed: observed="+observed.length+"; selectable="+observed.filter(row=>row.selectable).length);
         for(const choice of observed)log("Picker choice id="+choice.id+" selectable="+choice.selectable+" label="+choice.label);
         await chrome.storage.local.set({

@@ -9,6 +9,11 @@
     models: [],
     conversations: [],
     activeConversationId: "",
+    sidebarPage: "",
+    pluginCatalog: [],
+    pluginCatalogLoaded: false,
+    pluginCatalogError: "",
+    modelCatalogLoadedAt: 0,
     selectedModel: "gpt-5.6-sol",
     storageKey: "",
     streaming: false,
@@ -69,10 +74,97 @@
   });
   const ALLOWED_DOCUMENT_MIME_TYPES = new Set(Object.values(DOCUMENT_MIME_BY_EXTENSION));
   const FILE_ID_PATTERN = /^file_[A-Za-z0-9]{8,64}$/;
+  let modelCatalogLoadPromise = null;
+  let clientDiagnosticFlushPromise = null;
+  let clientDiagnosticFlushTimer = null;
+  const clientDiagnosticQueue = [];
+  const clientDiagnosticSessionId = id();
 
   function id() {
     if (window.crypto && typeof window.crypto.randomUUID === "function") return window.crypto.randomUUID();
     return "c2a_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 12);
+  }
+
+
+
+  const CLIENT_DIAGNOSTIC_DETAIL_KEYS = new Set([
+    "phase", "feature", "code", "model_id", "request_id",
+    "model_count", "file_count", "image_count", "message_count",
+    "duration_ms", "http_status", "retryable", "connection_state",
+    "sync_revision", "client_version", "browser", "platform", "status",
+  ]);
+
+  function recordClientDiagnostic(event, details = {}, level = "info") {
+    if (!state.user?.user_id) return;
+    const safeDetails = {};
+    Object.entries(details || {}).slice(0, 24).forEach(([key, value]) => {
+      const name = String(key || "").toLowerCase();
+      if (!CLIENT_DIAGNOSTIC_DETAIL_KEYS.has(name)) return;
+      if (value === null || value === undefined) return;
+      if (typeof value === "boolean" || (typeof value === "number" && Number.isFinite(value))) {
+        safeDetails[name] = value;
+      } else if (typeof value === "string") {
+        safeDetails[name] = value.replace(/[\r\n\0]/g, " ").slice(0, 120);
+      }
+    });
+    const item = {
+      client_event_id: id(),
+      event: String(event || "client.event").replace(/[^A-Za-z0-9_.:-]/g, "_").slice(0, 80),
+      level: ["info", "warning", "error"].includes(level) ? level : "info",
+      occurred_at: new Date().toISOString(),
+      session_id: clientDiagnosticSessionId,
+      client_version: "web-chat-v1",
+      details: safeDetails,
+    };
+    if (typeof safeDetails.request_id === "string") item.request_id = safeDetails.request_id;
+    if (typeof safeDetails.model_id === "string") item.model_id = safeDetails.model_id;
+    if (Number.isInteger(safeDetails.duration_ms)) item.duration_ms = safeDetails.duration_ms;
+    if (Number.isInteger(safeDetails.http_status)) item.http_status = safeDetails.http_status;
+    if (typeof safeDetails.phase === "string") item.phase = safeDetails.phase;
+    if (typeof details.error_name === "string") item.error_name = details.error_name.slice(0, 100);
+    clientDiagnosticQueue.push(item);
+    while (clientDiagnosticQueue.length > 100) clientDiagnosticQueue.shift();
+    if (clientDiagnosticQueue.length >= 5 || level === "error") {
+      void flushClientDiagnostics();
+    } else if (clientDiagnosticFlushTimer === null) {
+      clientDiagnosticFlushTimer = window.setTimeout(() => {
+        clientDiagnosticFlushTimer = null;
+        void flushClientDiagnostics();
+      }, 1800);
+    }
+  }
+
+  async function flushClientDiagnostics(keepalive = false) {
+    if (!state.user?.user_id || !clientDiagnosticQueue.length) return;
+    if (clientDiagnosticFlushPromise) return clientDiagnosticFlushPromise;
+    if (clientDiagnosticFlushTimer !== null) {
+      window.clearTimeout(clientDiagnosticFlushTimer);
+      clientDiagnosticFlushTimer = null;
+    }
+    const batch = clientDiagnosticQueue.splice(0, 20);
+    clientDiagnosticFlushPromise = fetch("/api/user/chat/client-logs", {
+      method: "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+      keepalive: Boolean(keepalive),
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify({ events: batch }),
+    }).then(response => {
+      if (!response.ok && response.status >= 500 && !keepalive) {
+        clientDiagnosticQueue.unshift(...batch);
+      }
+    }).catch(() => {
+      if (!keepalive) clientDiagnosticQueue.unshift(...batch);
+    }).finally(() => {
+      clientDiagnosticFlushPromise = null;
+      if (clientDiagnosticQueue.length && state.user?.user_id && !keepalive) {
+        clientDiagnosticFlushTimer = window.setTimeout(() => {
+          clientDiagnosticFlushTimer = null;
+          void flushClientDiagnostics();
+        }, 5000);
+      }
+    });
+    return clientDiagnosticFlushPromise;
   }
 
   function toast(message) {
@@ -350,7 +442,9 @@
     state.voiceClient = client;
     setVoiceUi("requesting_microphone","正在请求麦克风权限…");
     try {
+      recordClientDiagnostic("voice.start_requested", {feature: "voice", phase: "connect"});
       await client.start();
+      recordClientDiagnostic("voice.started", {feature: "voice", phase: "connected"});
       state.voiceAuthTimer = window.setInterval(async () => {
         try {
           const current = await apiJson("/api/user/me");
@@ -365,6 +459,7 @@
         await stopVoiceCall();
       },60000);
     } catch (error) {
+      recordClientDiagnostic("voice.start_failed", {feature: "voice", phase: "connect", error_name: error?.name || "Error"}, "error");
       await client.stop();
       if (state.voiceClient === client) state.voiceClient = null;
       setVoiceUi("closed","实时语音启动失败：" + String(error?.message || error));
@@ -376,8 +471,9 @@
     const client = state.voiceClient;
     if (!client) { setVoiceUi("closed"); return; }
     setVoiceUi("stopping","正在结束实时语音…");
-    try { await client.stop(); }
-    catch (error) { toast("结束语音时发生错误：" + String(error?.message || error)); }
+    recordClientDiagnostic("voice.stop_requested", {feature: "voice", phase: "stop"});
+    try { await client.stop(); recordClientDiagnostic("voice.stopped", {feature: "voice", phase: "closed"}); }
+    catch (error) { recordClientDiagnostic("voice.stop_failed", {feature: "voice", phase: "stop", error_name: error?.name || "Error"}, "warning"); toast("结束语音时发生错误：" + String(error?.message || error)); }
     if (state.voiceClient === client) state.voiceClient = null;
     setVoiceUi("closed");
   }
@@ -406,10 +502,13 @@
   }
 
   function showOnly(view) {
-    ["welcomeScreen", "chatScreen", "authRequired", "serviceUnavailable"].forEach((name) => {
-      $(name).classList.toggle("hidden", name !== view);
+    ["welcomeScreen", "chatScreen", "pluginsScreen", "libraryScreen", "authRequired", "serviceUnavailable"].forEach((name) => {
+      const node = $(name);
+      if (node) node.classList.toggle("hidden", name !== view);
     });
-    $("composerArea").classList.toggle("hidden", view === "authRequired" || view === "serviceUnavailable");
+    $("composerArea").classList.toggle("hidden",
+      view === "authRequired" || view === "serviceUnavailable" ||
+      view === "pluginsScreen" || view === "libraryScreen");
   }
 
   async function apiJson(path, options = {}) {
@@ -879,6 +978,7 @@
       state.activeConversationId = state.conversations[0]?.id || "";
     }
     state.remoteSyncReady = true;
+    recordClientDiagnostic("webchat.conversations.synced", {message_count: state.conversations.length, phase: "conversation_sync"});
     persistHistorySnapshot();
     state.conversations.forEach((conversation) => scheduleConversationSync(conversation.id, 250));
   }
@@ -1061,6 +1161,7 @@
     };
     state.conversations.unshift(conversation);
     state.activeConversationId = conversation.id;
+    state.sidebarPage = "";
     void loadModels();
     state.forceScrollToBottom = true;
     saveHistory();
@@ -1085,6 +1186,7 @@
       return;
     }
     state.activeConversationId = conversationId;
+    state.sidebarPage = "";
     state.forceScrollToBottom = true;
     const conversation = currentConversation();
     if (conversation) state.selectedModel = conversation.model || state.selectedModel;
@@ -1486,13 +1588,14 @@
       const header = document.createElement("div");
       header.className = "message-header";
       const name = document.createElement("span");
-      name.textContent = message.role === "user" ? "你" : "Chat2API";
+      name.textContent = message.role === "user" ? "你" : "ChatGPT";
       const time = document.createElement("span");
       time.className = "message-time";
       time.textContent = message.createdAt ? new Date(message.createdAt).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}) : "";
       header.append(name, time);
       if (message.role === "assistant" && message.recoveryStatus &&
           (message.pending || message.recoveryStatus !== "completed")) {
+        article.classList.add("has-recovery-status");
         const status = document.createElement("span");
         status.className = "recovery-status";
         status.textContent = recoveryStatusLabel(message.recoveryStatus);
@@ -1625,8 +1728,139 @@
     else screen.scrollTop = previousScrollTop;
   }
 
+  function syncSidebarNav() {
+    $("pluginsButton")?.classList.toggle("active", state.sidebarPage === "plugins");
+    $("libraryButton")?.classList.toggle("active", state.sidebarPage === "library");
+  }
+
+  function openSidebarPage(page) {
+    if (!state.user || !["plugins", "library"].includes(page)) return;
+    state.sidebarPage = page;
+    document.body.classList.remove("sidebar-open");
+    renderAll();
+  }
+
+  function renderPluginCatalog() {
+    const root = $("pluginList");
+    if (!root) return;
+    root.replaceChildren();
+    if (state.pluginCatalogError) {
+      const empty = document.createElement("div");
+      empty.className = "utility-empty";
+      empty.textContent = "插件目录暂时不可用：" + state.pluginCatalogError;
+      root.appendChild(empty);
+      return;
+    }
+    if (!state.pluginCatalog.length) {
+      const empty = document.createElement("div");
+      empty.className = "utility-empty";
+      empty.textContent = "当前尚未开放用户插件授权和执行。服务端插件注册表目前只用于管理员登记 Manifest，待用户授权与安全沙箱接入后才会显示可用插件。";
+      root.appendChild(empty);
+      return;
+    }
+    state.pluginCatalog.forEach(plugin => {
+      const card = document.createElement("article");
+      card.className = "utility-card";
+      const title = document.createElement("h3");
+      title.textContent = plugin.name || plugin.id || "未命名插件";
+      const description = document.createElement("p");
+      description.textContent = plugin.description || "暂无说明";
+      const stateLabel = document.createElement("span");
+      stateLabel.className = "utility-status";
+      stateLabel.textContent = "目录可见 · 执行未开放";
+      card.append(title, description, stateLabel);
+      root.appendChild(card);
+    });
+  }
+
+  async function loadPluginCatalog(force = false) {
+    if (state.pluginCatalogLoaded && !force) {
+      renderPluginCatalog();
+      return;
+    }
+    try {
+      const payload = await apiJson("/api/client/plugins");
+      state.pluginCatalog = Array.isArray(payload.data) ? payload.data : [];
+      state.pluginCatalogError = "";
+      state.pluginCatalogLoaded = true;
+      recordClientDiagnostic("webchat.plugins.catalog_loaded", {model_count: state.pluginCatalog.length, phase: "plugin_catalog"});
+    } catch (error) {
+      state.pluginCatalogError = String(error?.name || "PluginCatalogError");
+      recordClientDiagnostic("webchat.plugins.catalog_failed", {phase: "plugin_catalog", error_name: state.pluginCatalogError}, "warning");
+    }
+    renderPluginCatalog();
+  }
+
+  function renderLibrary() {
+    const root = $("libraryList");
+    if (!root) return;
+    root.replaceChildren();
+    const seen = new Map();
+    state.conversations.forEach(conversation => {
+      (conversation.messages || []).forEach(message => {
+        messageFileAttachments(message).forEach(file => {
+          if (!seen.has(file.file_id)) seen.set(file.file_id, {
+            id: file.file_id, type: "file", name: file.filename, size: file.size,
+            mime: file.mime_type, conversation: conversation.title || "新对话",
+            createdAt: message.createdAt || conversation.updatedAt || "",
+          });
+        });
+        messageImageIds(message).forEach(fileId => {
+          if (!seen.has(fileId)) seen.set(fileId, {
+            id: fileId, type: "image", name: "图片附件", size: 0,
+            mime: "image/*", conversation: conversation.title || "新对话",
+            createdAt: message.createdAt || conversation.updatedAt || "",
+          });
+        });
+      });
+    });
+    const items = [...seen.values()].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+    if (!items.length) {
+      const empty = document.createElement("div");
+      empty.className = "utility-empty";
+      empty.textContent = "当前同步的对话中还没有图片或文档附件。上传到对话中的文件会自动出现在这里。";
+      root.appendChild(empty);
+      return;
+    }
+    items.forEach(item => {
+      const card = document.createElement("a");
+      card.className = "library-item";
+      card.href = "/api/user/chat/files/" + encodeURIComponent(item.id) + "/download";
+      card.target = "_blank";
+      card.rel = "noopener noreferrer";
+      const icon = document.createElement("span");
+      icon.className = "library-item-icon";
+      icon.textContent = item.type === "image" ? "▧" : "▤";
+      const meta = document.createElement("span");
+      meta.className = "library-item-meta";
+      const name = document.createElement("strong");
+      name.textContent = item.name;
+      const detail = document.createElement("small");
+      const size = item.size ? " · " + formatFileSize(item.size) : "";
+      const time = item.createdAt ? " · " + new Date(item.createdAt).toLocaleString() : "";
+      detail.textContent = item.conversation + " · " + item.mime + size + time;
+      meta.append(name, detail);
+      const open = document.createElement("span");
+      open.className = "library-item-open";
+      open.textContent = "下载 ↗";
+      card.append(icon, meta, open);
+      root.appendChild(card);
+    });
+  }
+
   function renderAll() {
     renderSidebar();
+    syncSidebarNav();
+    if (state.sidebarPage === "plugins") {
+      showOnly("pluginsScreen");
+      void loadPluginCatalog();
+      return;
+    }
+    if (state.sidebarPage === "library") {
+      showOnly("libraryScreen");
+      renderLibrary();
+      return;
+    }
     const conversation = currentConversation();
     if (conversation && conversation.messages.length) renderMessages();
     else showOnly("welcomeScreen");
@@ -1765,6 +1999,7 @@
   async function uploadPendingFiles() {
     for (const file of state.pendingFiles) {
       if (file.fileId) continue;
+      recordClientDiagnostic("attachment.file.upload_started", {phase: "file_upload", file_count: 1});
       const dataUrl = await readFileAsDataUrl(file.file);
       const comma = dataUrl.indexOf(",");
       if (comma < 0) throw new Error("文件编码失败");
@@ -1786,6 +2021,7 @@
       if (!FILE_ID_PATTERN.test(fileId)) throw new Error("服务器没有返回有效的文件 ID");
       file.fileId = fileId;
       file.file = null;
+      recordClientDiagnostic("attachment.file.upload_completed", {phase: "file_upload", file_count: 1});
     }
   }
 
@@ -1844,6 +2080,7 @@
   async function uploadPendingImages() {
     for (const image of state.pendingImages) {
       if (image.fileId) continue;
+      recordClientDiagnostic("attachment.image.upload_started", {phase: "image_upload", image_count: 1});
       const dataUrl = await readFileAsDataUrl(image.file);
       const comma = dataUrl.indexOf(",");
       if (comma < 0) throw new Error("图片编码失败");
@@ -1865,6 +2102,7 @@
       if (!FILE_ID_PATTERN.test(fileId)) throw new Error("服务器没有返回有效的图片文件 ID");
       image.fileId = fileId;
       image.file = null;
+      recordClientDiagnostic("attachment.image.upload_completed", {phase: "image_upload", image_count: 1});
     }
   }
 
@@ -2574,6 +2812,12 @@
     $("modelSelect").disabled = true;
     $("messageInput").disabled = true;
     setConnection((pending.length || pendingFiles.length) ? "正在上传附件…" : "正在连接…");
+    const diagnosticStartedAt = Date.now();
+    let diagnosticOutcome = "failed";
+    recordClientDiagnostic("chat.request.started", {
+      request_id: requestId, model_id: state.selectedModel, phase: "dispatch",
+      image_count: pending.length, file_count: pendingFiles.length,
+    });
 
     let userMessage = null;
     let assistant = null;
@@ -2655,6 +2899,9 @@
         requestSubmitted = false;
         let payload = {};
         try { payload = await response.json(); } catch {}
+        recordClientDiagnostic("chat.request.http_error", {
+          request_id: requestId, model_id: state.selectedModel, http_status: response.status, phase: "dispatch",
+        }, "warning");
         if (response.status === 401) {
           state.user = null;
           showOnly("authRequired");
@@ -2706,6 +2953,7 @@
         reader.releaseLock();
       }
       if (done) {
+        diagnosticOutcome = "completed";
         assistant.pending = false;
         assistant.recoveryStatus = "completed";
         if (!assistant.content.trim() && !assistant.toolEvents?.length) {
@@ -2713,6 +2961,7 @@
           toast("模型没有返回文本内容。");
         }
       } else {
+        diagnosticOutcome = "recovery_pending";
         assistant.pending = true;
         assistant.recoveryStatus = "recovery_pending";
         saveHistory();
@@ -2723,6 +2972,11 @@
         });
       }
     } catch (error) {
+      diagnosticOutcome = error?.name === "AbortError" ? "cancelled" : "failed";
+      recordClientDiagnostic("chat.request.failed", {
+        request_id: requestId, model_id: state.selectedModel, phase: "send",
+        error_name: error?.name || "Error",
+      }, diagnosticOutcome === "failed" ? "error" : "warning");
       if (error instanceof StreamResponseError) {
         assistant.pending = false;
         assistant.recoveryStatus = "error";
@@ -2751,6 +3005,11 @@
         toast("请求失败：" + error.message);
       }
     } finally {
+      recordClientDiagnostic("chat.request.finished", {
+        request_id: requestId, model_id: state.selectedModel, duration_ms: Date.now() - diagnosticStartedAt,
+        phase: diagnosticOutcome,
+      }, diagnosticOutcome === "failed" ? "error" : "info");
+      void flushClientDiagnostics();
       state.streaming = false;
       state.streamingMessageId = "";
       state.abortController = null;
@@ -2785,33 +3044,81 @@
     return true;
   }
 
-  async function loadModels() {
-    const select = $("modelSelect");
-    let rows = [];
-    try {
-      const payload = await apiJson("/api/user/chat/models", {
-        headers: {"X-Chat2API-User-Key-ID": selectedKeyId()},
+  async function loadModels(force = false) {
+    if (modelCatalogLoadPromise) return modelCatalogLoadPromise;
+    if (!force && state.modelCatalogLoadedAt && Date.now() - state.modelCatalogLoadedAt < 20_000) return;
+    modelCatalogLoadPromise = (async () => {
+      const select = $("modelSelect");
+      let rows = [];
+      try {
+        const payload = await apiJson("/api/user/chat/models", {
+          headers: {"X-Chat2API-User-Key-ID": selectedKeyId()},
+        });
+        rows = Array.isArray(payload.data) ? payload.data : [];
+      } catch (error) {
+        recordClientDiagnostic("webchat.models.load_failed", {
+          phase: "model_catalog", error_name: error?.name || "ModelCatalogError",
+        }, "warning");
+        // Never fall back to the generic user model catalog: this request
+        // carries the shared service-key entitlement context.
+        rows = [];
+      }
+      const specialIds = new Set(["gpt-image", "gpt-live", "gpt-live-mini"]);
+      const uniqueRows = [];
+      const seen = new Set();
+      rows.forEach(row => {
+        const modelId = String(row?.id || row?.model || "").trim();
+        if (!modelId || seen.has(modelId)) return;
+        if (row.selectable === false && row.validated !== true && !specialIds.has(modelId)) return;
+        seen.add(modelId);
+        uniqueRows.push({...row, id: modelId});
       });
-      rows = Array.isArray(payload.data) ? payload.data : [];
-    } catch {
-      // Never fall back to the generic user model catalog here: that request
-      // does not carry the shared service-key entitlement context.
-      rows = [];
-    }
-    const ids = [...new Set(rows.map((row) => String(row.id || row.model || "")).filter(Boolean))];
-    select.replaceChildren();
-    ids.forEach((modelId) => {
-      const option = document.createElement("option");
-      option.value = modelId;
-      option.textContent = modelId;
-      select.appendChild(option);
-    });
-    const conversation = currentConversation();
-    const preferred = conversation?.model || state.selectedModel;
-    state.selectedModel = ids.includes(preferred) ? preferred : (ids[0] || "");
-    select.value = state.selectedModel;
-    select.disabled = state.streaming || ids.length === 0;
-    if (!ids.length) setConnection("已连接 · 当前没有可用模型", "error");
+      const textRows = uniqueRows.filter(row => !specialIds.has(row.id) &&
+        (!Array.isArray(row.capabilities) || row.capabilities.includes("text")));
+      const specialRows = uniqueRows.filter(row => specialIds.has(row.id));
+      select.replaceChildren();
+      const appendGroup = (label, groupRows) => {
+        if (!groupRows.length) return;
+        const group = document.createElement("optgroup");
+        group.label = label;
+        groupRows.forEach(row => {
+          const option = document.createElement("option");
+          option.value = row.id;
+          option.textContent = String(row.label || row.id);
+          if (row.validated === false && row.source === "chatgpt-picker-observed") {
+            option.title = "来自当前 ChatGPT 模型菜单的实时选项；首次请求时会再次确认。";
+          }
+          group.appendChild(option);
+        });
+        select.appendChild(group);
+      };
+      appendGroup("ChatGPT 模型", textRows);
+      appendGroup("图像与语音", specialRows);
+      state.models = uniqueRows;
+      const ids = uniqueRows.map(row => row.id);
+      const conversation = currentConversation();
+      const preferred = conversation?.model || state.selectedModel;
+      state.selectedModel = ids.includes(preferred)
+        ? preferred
+        : (textRows[0]?.id || uniqueRows[0]?.id || "");
+      if (!ids.length) {
+        const option = document.createElement("option");
+        option.value = "";
+        option.textContent = "等待 Worker 同步 ChatGPT 模型…";
+        select.appendChild(option);
+      }
+      select.value = state.selectedModel;
+      select.disabled = state.streaming || ids.length === 0;
+      state.modelCatalogLoadedAt = Date.now();
+      recordClientDiagnostic("webchat.models.catalog_loaded", {
+        model_count: ids.length, phase: "model_catalog",
+      }, ids.length ? "info" : "warning");
+      if (!textRows.length) setConnection("已连接 · 当前没有可用的 ChatGPT 文本模型", "error");
+      else setConnection("已连接", "ready");
+      resizeComposer();
+    })();
+    try { return await modelCatalogLoadPromise; }
+    finally { modelCatalogLoadPromise = null; }
   }
 
   function exportConversation() {
@@ -2895,6 +3202,7 @@
     state.conversations = [imported, ...state.conversations.filter((row) => row.id !== imported.id)]
       .slice(0, MAX_CONVERSATIONS);
     state.activeConversationId = imported.id;
+    state.sidebarPage = "";
     state.forceScrollToBottom = true;
     state.searchResults = null;
     state.searchQuery = "";
@@ -2909,6 +3217,7 @@
     try {
       const payload = await apiJson("/api/user/me");
       state.user = payload.user;
+      recordClientDiagnostic("webchat.session.authenticated", {phase: "bootstrap"});
     } catch {
       showOnly("authRequired");
       setConnection("未登录", "error");
@@ -2939,6 +3248,7 @@
       if (!conversation.apiKeyId) conversation.apiKeyId = state.webChatKeyId;
     });
     state.forceScrollToBottom = true;
+    recordClientDiagnostic("webchat.session.ready", {phase: "bootstrap", model_count: state.models.length});
     renderAll();
     resumePendingMessages();
     void hydrateNativeSnapshots();
@@ -2967,6 +3277,9 @@
   });
 
   $("newChatButton").addEventListener("click", createConversation);
+  $("pluginsButton").addEventListener("click", () => openSidebarPage("plugins"));
+  $("libraryButton").addEventListener("click", () => openSidebarPage("library"));
+  $("sidebarCollapseButton").addEventListener("click", () => document.body.classList.toggle("sidebar-collapsed"));
   $("conversationSearch").addEventListener("input", onConversationSearchInput);
   $("exportJsonButton").addEventListener("click", exportConversationJson);
   $("importButton").addEventListener("click", () => $("conversationImportInput").click());
@@ -2982,6 +3295,8 @@
   });
   $("modelSelect").addEventListener("change", (event) => {
     state.selectedModel = event.target.value;
+    const selectedRow = state.models.find(row => row.id === state.selectedModel);
+    recordClientDiagnostic("webchat.model.selected", {model_id: state.selectedModel, phase: selectedRow?.source || "model_picker"});
     const conversation = currentConversation();
     if (conversation) {
       conversation.model = state.selectedModel;
@@ -3066,7 +3381,23 @@
     const theme = localStorage.getItem("chat2api.webchat.theme");
     if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
   } catch {}
+  window.addEventListener("error", (event) => {
+    recordClientDiagnostic("browser.error", {phase: "window", error_name: event.error?.name || "Error"}, "error");
+  });
+  window.addEventListener("unhandledrejection", (event) => {
+    recordClientDiagnostic("browser.unhandled_rejection", {phase: "promise", error_name: event.reason?.name || "UnhandledRejection"}, "error");
+  });
+  window.addEventListener("pagehide", () => { void flushClientDiagnostics(true); });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") void flushClientDiagnostics(true);
+    else if (state.user) void loadModels();
+  });
+  window.addEventListener("focus", () => { if (state.user) void loadModels(); });
+  window.setInterval(() => {
+    if (state.user && document.visibilityState === "visible" && !state.streaming && !state.voiceActive) void loadModels(true);
+  }, 60_000);
   window.addEventListener("beforeunload", () => {
+    void flushClientDiagnostics(true);
     if (state.voiceAuthTimer !== null) window.clearInterval(state.voiceAuthTimer);
     if (state.voiceClient) void state.voiceClient.stop();
     if (state.searchTimer) window.clearTimeout(state.searchTimer);
