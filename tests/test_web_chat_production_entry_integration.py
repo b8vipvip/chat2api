@@ -68,6 +68,7 @@ with TestClient(app) as client:
     assert_no_store(models)
     files = client.post(
         "/api/user/chat/files",
+        headers={"Origin": "http://testserver"},
         json={"filename":"proof.txt","mime_type":"text/plain","data_base64":"aGk=","purpose":"assistants"},
     )
     assert files.status_code == 401
