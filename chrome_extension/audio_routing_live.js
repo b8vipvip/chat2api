@@ -197,8 +197,14 @@
       } else if (type === "voice.live.cancel_response") {
         await chrome.tabs.sendMessage(tabId, { type: "chat2api.voice.live.cancel", requestId });
       } else if (type === "voice.live.stop") {
-        try { await chrome.tabs.sendMessage(tabId, { type: "chat2api.voice.live.stop", requestId }); }
-        finally { await releaseLiveSession(requestId, "voice-live-stop"); }
+        try {
+          const response = await chrome.tabs.sendMessage(tabId, { type: "chat2api.voice.live.stop", requestId });
+          if (!response?.ok) {
+            await reportError(requestId, new Error(response?.error || "GPT-Live stop transcript was not acknowledged by the page controller"));
+          }
+        } finally {
+          await releaseLiveSession(requestId, "voice-live-stop");
+        }
       }
     } catch (error) {
       if (type === "voice.live.stop") {
