@@ -31,6 +31,9 @@ for path in ("/v1/images/generations", "/v1/audio/speech", "/v1/audio/conversati
         and "POST" in (getattr(route, "methods", None) or set())
     ]) == 1
 expected = {
+    ("GET", "/api/user/chat/session"),
+    ("GET", "/api/user/chat/models"),
+    ("POST", "/api/user/chat/files"),
     ("GET", "/api/user/chat/requests/{request_id}/recovery"),
     ("POST", "/api/user/chat/completions"),
     ("GET", "/api/user/chat/requests/{request_id}/native-content"),
@@ -54,6 +57,18 @@ for method, path in expected:
     assert len(matches) == 1, (method, path, len(matches))
 
 with TestClient(app) as client:
+    session = client.get("/api/user/chat/session")
+    assert session.status_code == 401
+    assert session.headers["cache-control"] == "private, no-store"
+    models = client.get("/api/user/chat/models")
+    assert models.status_code == 401
+    assert models.headers["cache-control"] == "private, no-store"
+    files = client.post(
+        "/api/user/chat/files",
+        json={"filename":"proof.txt","mime_type":"text/plain","data_base64":"aGk=","purpose":"assistants"},
+    )
+    assert files.status_code == 401
+    assert files.headers["cache-control"] == "private, no-store"
     recovery = client.get("/api/user/chat/requests/req_12345678/recovery")
     assert recovery.status_code == 401
     mode1 = client.post("/api/user/chat/completions", json={"model":"gpt-5.6-sol","messages":[{"role":"user","content":"hello"}],"stream":True})
