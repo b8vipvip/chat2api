@@ -91,7 +91,7 @@ assert.ok(authority && typeof authority.syncObservedChoices === "function");
 const result = await authority.syncObservedChoices("test-browser-sync");
 assert.equal(result.ok, true);
 assert.equal(stored.modelValidationState, "discovered");
-assert.deepEqual(stored.modelObservedChoices.map(row => row.id), ["gpt-6", "gpt-6-reasoning"]);
+assert.deepEqual(Array.from(stored.modelObservedChoices, row => row.id), ["gpt-6", "gpt-6-reasoning"]);
 assert.ok(stored.modelObservedChoices.every(row => row.selectable === true && row.validated === false));
 assert.equal(stored.models.length, 0, "observations must not be promoted to verified models");
 assert.equal(selectMessages, 0, "automatic catalog sync must never select a model");
