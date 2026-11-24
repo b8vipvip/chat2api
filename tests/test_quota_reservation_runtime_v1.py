@@ -1101,3 +1101,118 @@ async def test_live_voice_zero_text_releases_admission_hold_without_fake_audio_c
     assert api_keys.keys["key-1"].tokens_used == 0
     assert api_keys.charged_requests == {}
     store.close()
+
+
+class FakeSharedWebChatApiKeys:
+    def __init__(self) -> None:
+        self.keys = {
+            "user-identity": SimpleNamespace(tokens_used=0, charged_requests={}),
+            "shared-key": SimpleNamespace(tokens_used=0, charged_requests={}),
+        }
+
+    async def account_completed_usage(self, record: dict) -> None:
+        request_id = str(record["request_id"])
+        if record.get("web_chat_mode") is True:
+            shared_key_id = str(record.get("shared_api_key_id") or "")
+            if not shared_key_id and str(record.get("auth_kind") or "") == "web_chat":
+                return
+            key_id = shared_key_id or str(record.get("api_key_id") or "")
+        else:
+            key_id = str(record.get("api_key_id") or "")
+        item = self.keys.get(key_id)
+        if item is None:
+            return
+        amount = max(0, int((record.get("usage") or {}).get("total_tokens") or 0))
+        previous = int(item.charged_requests.get(request_id, 0) or 0)
+        if amount > previous:
+            item.tokens_used += amount - previous
+            item.charged_requests[request_id] = amount
+
+
+@pytest.mark.asyncio
+async def test_web_chat_reservation_settles_against_shared_key_ledger(tmp_path: Path) -> None:
+    store = QuotaReservationStore(tmp_path)
+    api_keys = FakeSharedWebChatApiKeys()
+    request_id = "req_web_chat_shared_quota_0001"
+    await asyncio.to_thread(
+        store.reserve, request_id, "user-identity", 500,
+        quota_limit=None, completed_tokens=0,
+    )
+    record = {
+        "request_id": request_id,
+        "api_key_id": "user-identity",
+        "shared_api_key_id": "shared-key",
+        "web_chat_mode": True,
+        "auth_kind": "web_chat",
+        "status": "completed",
+        "usage": {"total_tokens": 73},
+    }
+
+    result = await store.commit_completed_usage(record, api_keys)
+
+    assert result == "settled"
+    reservation = store.get(request_id)
+    assert reservation["key_id"] == "user-identity"
+    assert reservation["state"] == "settled"
+    assert reservation["actual_tokens"] == 73
+    assert api_keys.keys["shared-key"].tokens_used == 73
+    assert request_id in api_keys.keys["shared-key"].charged_requests
+    assert api_keys.keys["user-identity"].tokens_used == 0
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_web_chat_startup_reconcile_uses_shared_key_ledger(tmp_path: Path) -> None:
+    store = QuotaReservationStore(tmp_path)
+    api_keys = FakeSharedWebChatApiKeys()
+    request_id = "req_web_chat_shared_reconcile_0001"
+    await asyncio.to_thread(
+        store.reserve, request_id, "user-identity", 500,
+        quota_limit=None, completed_tokens=0,
+    )
+    await asyncio.to_thread(store.begin_commit, request_id, "user-identity", 73)
+    record = {
+        "request_id": request_id,
+        "api_key_id": "user-identity",
+        "shared_api_key_id": "shared-key",
+        "web_chat_mode": True,
+        "auth_kind": "web_chat",
+        "status": "completed",
+        "usage": {"total_tokens": 73},
+    }
+    await api_keys.account_completed_usage(record)
+    telemetry = SimpleNamespace(get=lambda value: record if value == request_id else None)
+
+    reconciled = store.reconcile(api_keys, telemetry)
+
+    assert reconciled == 1
+    assert store.get(request_id)["state"] == "settled"
+    assert store.get(request_id)["actual_tokens"] == 73
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_new_web_chat_reservation_fails_closed_without_shared_key_id(tmp_path: Path) -> None:
+    store = QuotaReservationStore(tmp_path)
+    api_keys = FakeSharedWebChatApiKeys()
+    request_id = "req_web_chat_missing_shared_key_0001"
+    await asyncio.to_thread(
+        store.reserve, request_id, "user-identity", 500,
+        quota_limit=None, completed_tokens=0,
+    )
+    record = {
+        "request_id": request_id,
+        "api_key_id": "user-identity",
+        "web_chat_mode": True,
+        "auth_kind": "web_chat",
+        "status": "completed",
+        "usage": {"total_tokens": 73},
+    }
+
+    result = await store.commit_completed_usage(record, api_keys)
+
+    assert result == "charge_pending"
+    assert store.get(request_id)["state"] == "reserved"
+    assert api_keys.keys["user-identity"].tokens_used == 0
+    assert api_keys.keys["shared-key"].tokens_used == 0
+    store.close()
