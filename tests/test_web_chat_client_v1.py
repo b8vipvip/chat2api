@@ -36,8 +36,14 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         page = client.get("/chat")
         assert page.status_code == 200
         assert 'id="messageInput"' in page.text
-        assert "会话会同步保存在你的 Chat2API 账户中" in page.text
-        assert "当前浏览器仅缓存每条消息前 8,000 个字符" in page.text
+        assert "会话同步保存在当前账户" in page.text
+        assert "客户端诊断日志不会记录你的消息或模型回复内容" in page.text
+        assert "ChatGPT" in page.text
+        assert 'id="pluginsButton"' in page.text
+        assert 'id="libraryButton"' in page.text
+        sidebar_html = page.text.split('<aside class="sidebar"', 1)[1].split("</aside>", 1)[0]
+        assert 'id="newChatButton"' not in sidebar_html
+        assert 'id="pluginsButton"' in sidebar_html and 'id="libraryButton"' in sidebar_html
         assert "聊天记录保存在当前浏览器" not in page.text
         assert 'id="exportJsonButton"' in page.text
         assert 'id="importButton"' in page.text
@@ -81,6 +87,10 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         assert "/api/user/chat/requests/" in script.text
         assert "/api/user/chat/requests/" in script.text
         assert "localStorage" in script.text
+        assert "/api/user/chat/client-logs" in script.text
+        assert "chat.request.started" in script.text
+        assert "webchat.models.catalog_loaded" in script.text
+        assert "attachment.image.upload_completed" in script.text
         assert "/api/user/chat/conversations" in script.text
         assert "/api/user/chat/conversations/search" in script.text
         assert "/api/user/chat/conversations/import" in script.text
@@ -132,6 +142,9 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         assert stylesheet.status_code == 200
         assert ".sidebar" in stylesheet.text
         assert "@media(max-width:760px)" in stylesheet.text
+        assert ".message.assistant .message-body" in stylesheet.text
+        assert ".message.user .message-body" in stylesheet.text
+        assert ".history-label,.conversation-list{display:none!important}" in stylesheet.text
 
         # CI and production images vendor the exact pinned distribution. A plain
         # source checkout may omit generated assets and then keeps text fallback.

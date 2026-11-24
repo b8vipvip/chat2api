@@ -11,6 +11,7 @@ from app.worker_model_library_v145_patch import (
     _free_default_route,
     _validated_model_rows,
     _selectable_observed_model_ids,
+    _selectable_observed_model_rows,
 )
 
 
@@ -258,3 +259,33 @@ def test_picker_observations_are_candidates_not_served_model_proof():
     assert _validated_model_rows(registry, "ext_test") == []
     _mark_pending(registry, "ext_test", "reconnect")
     assert _selectable_observed_model_ids(registry, "ext_test") == set()
+
+
+def test_observed_chatgpt_picker_rows_are_fresh_selectable_and_not_validated():
+    registry = _registry({
+        "model_validation_state": "discovered",
+        "model_validation_revision": VALIDATION_REVISION,
+        "model_observed_choices": [
+            {"id": "gpt-6", "label": "GPT-6", "selectable": True},
+            {"id": "gpt-6-reasoning", "label": "GPT-6 Reasoning", "selectable": True},
+            {"id": "gpt-retired", "label": "Retired", "selectable": False},
+            {"id": "gpt-ignored", "label": "Ignored", "selectable": "true"},
+        ],
+    })
+    rows = _selectable_observed_model_rows(registry, "ext_test")
+    assert [row["id"] for row in rows] == ["gpt-6", "gpt-6-reasoning"]
+    assert all(row["selectable"] is True and row["validated"] is False for row in rows)
+    assert _selectable_observed_model_ids(registry, "ext_test") == {"gpt-6", "gpt-6-reasoning"}
+
+    pending = _registry({
+        "model_validation_state": "pending",
+        "model_validation_revision": VALIDATION_REVISION,
+        "model_observed_choices": [{"id": "gpt-6", "selectable": True}],
+    })
+    assert _selectable_observed_model_rows(pending, "ext_test") == []
+
+
+def test_free_default_compatibility_catalog_entry_is_not_selectable_in_the_chat_picker():
+    source = (Path(__file__).resolve().parents[1] / "app" / "worker_model_library_v145_patch.py").read_text(encoding="utf-8")
+    block = source.split('"source": "free-default-compatibility-unverified"', 1)[1].split("})", 1)[0]
+    assert '"selectable": False' in block
