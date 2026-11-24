@@ -177,22 +177,16 @@
     }
     return pending.catch(error => {
       if (isActiveSession(active)) {
-        if (liveEvent === "error") {
-          // The upstream bridge has already failed. If the server could not
-          // confirm the error event, still stop local capture/playback; the
-          // server will independently detect a dead Worker socket if needed.
-          void stopLive(active,false).catch(() => {});
-        } else {
-          active.deliveryError = String(error?.message || error).slice(0,300);
-          active.stopTerminalError = {
-            code:"VOICE_EVENT_DELIVERY_FAILED",
-            message:"A live Voice event was not accepted by the server Broker: " + active.deliveryError,
-          };
-          // A dropped audio/transcript/control event invalidates the live turn.
-          // Stop upstream and ask the server to terminate this call as an error;
-          // silent cleanup would leave the public Live WebSocket waiting forever.
-          void stopLive(active,true).catch(() => {});
-        }
+        active.deliveryError = String(error?.message || error).slice(0,300);
+        active.stopTerminalError = {
+          code:"VOICE_EVENT_DELIVERY_FAILED",
+          message:"A live Voice event was not accepted by the server Broker: " + active.deliveryError,
+        };
+        // A dropped audio/transcript/control event invalidates the live turn.
+        // If the original event was itself an error, this makes one final
+        // explicit error-terminal attempt instead of silently stopping locally.
+        // The server will also detect a dead Worker socket independently.
+        void stopLive(active,true).catch(() => {});
       }
       throw error;
     });
