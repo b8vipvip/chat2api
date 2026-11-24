@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark light">
-  <title>Chat2API · 聊天</title>
+  <title>ChatGPT</title>
   <link rel="stylesheet" href="/assets/chat2api-chat-client-v1.css">
   <link rel="stylesheet" href="/assets/katex/0.19.1/katex.min.css">
   <script defer src="/assets/katex/0.19.1/katex.min.js"></script>
@@ -21,21 +21,25 @@
       <div class="sidebar-top">
         <a class="brand" href="/chat" aria-label="Chat2API 首页">
           <span class="brand-mark">c</span>
-          <span>chat2api</span>
+          <span>ChatGPT</span>
         </a>
         <button class="icon-button mobile-close" id="closeSidebar" type="button" aria-label="关闭侧栏">×</button>
       </div>
       <button class="new-chat-button" id="newChatButton" type="button">
         <span class="plus">＋</span><span>新建对话</span>
       </button>
-      <label class="search-box">
+      <nav class="sidebar-tools" aria-label="工具">
+        <button class="sidebar-nav-button" id="pluginsButton" type="button"><span class="sidebar-nav-icon">▦</span><span>插件</span></button>
+        <button class="sidebar-nav-button" id="libraryButton" type="button"><span class="sidebar-nav-icon">▤</span><span>资料库</span></button>
+      </nav>
+      <label class="search-box" hidden aria-hidden="true">
         <span aria-hidden="true">⌕</span>
         <input id="conversationSearch" type="search" placeholder="搜索对话" autocomplete="off">
       </label>
       <div class="history-label">最近</div>
       <nav class="conversation-list" id="conversationList" aria-label="历史对话"></nav>
       <div class="sidebar-spacer"></div>
-      <div class="sidebar-account">
+      <div class="sidebar-account" hidden>
         <div class="account-row">
           <div class="avatar account-avatar" id="accountAvatar">U</div>
           <div class="account-meta">
@@ -53,12 +57,13 @@
     <main class="main-panel">
       <header class="topbar">
         <div class="topbar-left">
+          <button class="icon-button sidebar-collapse" id="sidebarCollapseButton" type="button" aria-label="折叠侧栏" title="折叠侧栏">☰</button>
           <button class="icon-button mobile-menu" id="openSidebar" type="button" aria-label="打开侧栏">☰</button>
-          <div class="mobile-brand">chat2api</div>
+          <div class="mobile-brand">ChatGPT</div>
           <label class="model-picker">
             <span class="sr-only">模型</span>
-            <select id="modelSelect" aria-label="选择模型">
-              <option value="gpt-5.6-sol">gpt-5.6-sol</option>
+            <select id="modelSelect" aria-label="选择 ChatGPT 模型">
+              <option value="">正在同步 ChatGPT 模型…</option>
             </select>
           </label>
           <span class="connection-state" id="connectionState">连接中</span>
@@ -68,19 +73,32 @@
           <button class="icon-button" id="exportJsonButton" type="button" title="导出完整会话 JSON（附件保留为文件引用）" aria-label="导出 JSON">{}</button>
           <button class="icon-button" id="importButton" type="button" title="导入 Chat2API 会话 JSON" aria-label="导入 JSON">⇧</button>
           <input id="conversationImportInput" class="sr-only" type="file" accept=".json,application/json">
-          <a class="topbar-link" href="/console">控制台</a>
         </div>
       </header>
 
       <section class="welcome-screen" id="welcomeScreen">
         <div class="welcome-mark">c</div>
         <h1>有什么可以帮忙的？</h1>
-        <p>由 Chat2API 提供服务。选择模型，开始一段新对话。</p>
+        <p>选择模型，开始一段新对话。</p>
         <div class="prompt-suggestions">
           <button type="button" data-prompt="解释一个复杂的技术概念，并给出实际示例。">解释一个技术概念</button>
           <button type="button" data-prompt="帮我分析这段代码的逻辑、潜在问题和改进方案。">分析代码</button>
           <button type="button" data-prompt="帮我制定一个清晰、可执行的项目计划。">制定项目计划</button>
           <button type="button" data-prompt="把下面的内容整理成结构清晰的表格和摘要。">整理信息</button>
+        </div>
+      </section>
+
+      <section class="utility-screen hidden" id="pluginsScreen" aria-label="插件">
+        <div class="utility-page">
+          <div class="utility-page-header"><h1>插件</h1><p>查看当前账户可用的插件目录。</p></div>
+          <div class="utility-list" id="pluginList"><div class="utility-empty">正在加载插件目录…</div></div>
+        </div>
+      </section>
+
+      <section class="utility-screen hidden" id="libraryScreen" aria-label="资料库">
+        <div class="utility-page">
+          <div class="utility-page-header"><h1>资料库</h1><p>汇总当前账户已同步会话中的图片和文档附件。</p></div>
+          <div class="utility-list" id="libraryList"><div class="utility-empty">正在整理资料…</div></div>
         </div>
       </section>
 
@@ -122,7 +140,7 @@
             </section>
             <input id="fileInput" class="sr-only" type="file" accept=".pdf,.txt,.md,.csv,.json,.rtf,.docx,.xlsx,.pptx" multiple>
             <input id="imageInput" class="sr-only" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple>
-            <textarea id="messageInput" rows="1" maxlength="8000" placeholder="向 Chat2API 发送消息" aria-label="输入消息"></textarea>
+            <textarea id="messageInput" rows="1" maxlength="8000" placeholder="向 ChatGPT 发送消息" aria-label="输入消息"></textarea>
             <div class="composer-bottom">
               <div class="composer-hint">Enter 发送 · Shift + Enter 换行</div>
               <div class="composer-controls">
@@ -138,7 +156,7 @@
               </div>
             </div>
           </div>
-          <div class="composer-disclaimer" id="composerDisclaimer">会话会同步保存在你的 Chat2API 账户中；当前浏览器仅缓存每条消息前 8,000 个字符，完整内容以服务端同步为准。图片和文档通过服务端统一 API Key 处理，并按当前登录账户隔离。</div>
+          <div class="composer-disclaimer" id="composerDisclaimer">ChatGPT 也可能会犯错。请核实重要信息。会话同步保存在当前账户；客户端诊断日志不会记录你的消息或模型回复内容。</div>
         </div>
       </footer>
     </main>
