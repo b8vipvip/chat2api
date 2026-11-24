@@ -193,7 +193,7 @@ for(const mode of ["reject","suspended"]) {
     webClient.slice(start,end)+"\nplayPcm",
     {
       audioContext:{state:"suspended"},
-      cleaned:false,
+      cleaned:false,stopping:false,ready:false,readyReject:null,readyResolve:null,
       event:payload=>events.push(payload),
       cleanup:async()=>{cleanupCalls+=1;},
       decodePcm16:()=>new Float32Array([0.1]),
