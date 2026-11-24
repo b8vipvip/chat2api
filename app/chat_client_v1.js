@@ -2632,7 +2632,6 @@
       const messages = conversation.messages
         .filter((message) => message.id !== assistant.id)
         .map((message) => ({role:message.role,content:message.content}));
-      requestSubmitted = true;
       const response = await fetch("/api/user/chat/completions", {
         method: "POST",
         credentials: "same-origin",
@@ -2650,6 +2649,7 @@
         signal: state.abortController.signal,
       });
       if (!response.ok) {
+        requestSubmitted = false;
         let payload = {};
         try { payload = await response.json(); } catch {}
         if (response.status === 401) {
@@ -2662,6 +2662,7 @@
         }
         throw new Error(payload?.error?.message || payload.detail || "请求失败，HTTP " + response.status);
       }
+      requestSubmitted = true;
       if (!response.body) throw new Error("当前浏览器不支持流式响应读取");
 
       // Observe native rich content for this same request ID; never dispatch twice.
@@ -2915,14 +2916,6 @@
     state.storageKey = historyKey(state.user.user_id);
     state.conversations = loadHistory();
     if (state.conversations.length) state.activeConversationId = state.conversations[0].id;
-    try {
-      await syncServerConversations();
-    } catch (error) {
-      state.remoteSyncReady = false;
-      toast("暂时无法同步服务端会话，当前先显示本地历史：" + error.message);
-    }
-    state.forceScrollToBottom = true;
-    renderAll();
     let ready = false;
     try {
       ready = await loadWebChatSession();
@@ -2932,6 +2925,14 @@
       toast("Web Chat 暂不可用：" + String(error?.message || error));
       return;
     }
+    try {
+      await syncServerConversations();
+    } catch (error) {
+      state.remoteSyncReady = false;
+      toast("暂时无法同步服务端会话，当前先显示本地历史：" + error.message);
+    }
+    state.forceScrollToBottom = true;
+    renderAll();
     resumePendingMessages();
     void hydrateNativeSnapshots();
     if (!ready) return;
