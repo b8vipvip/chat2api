@@ -295,7 +295,15 @@
       if (state.requestId && constraints?.audio) {
         state.micRequestsSeen += 1;
         post("voice.mic.requested", { mode: state.mode, mic_requests_seen: state.micRequestsSeen });
-        const synthetic = await ensureSyntheticMic();
+        let synthetic;
+        try {
+          synthetic = await ensureSyntheticMic();
+        } catch (error) {
+          if (state.mode === "live") {
+            post("voice.live.error", { error: String(error?.message || error) });
+          }
+          throw error;
+        }
         const tracks = [...synthetic.getAudioTracks()];
         post("voice.mic.synthetic", { track_count: tracks.length, mode: state.mode });
         if (!constraints?.video) return new MediaStream(tracks);
