@@ -6,7 +6,7 @@ import vm from "node:vm";
 const source = readFileSync("app/chat_client_v1.js", "utf8");
 const recoverySource = readFileSync("app/chat_stream_recovery_v1.js", "utf8");
 const start = source.indexOf("  function appendDelta(");
-const end = source.indexOf("  async function selectApiKey(", start);
+const end = source.indexOf("  async function loadModels(", start);
 assert.ok(start >= 0 && end > start);
 
 const delta = (text) => "data: " + JSON.stringify({choices: [{delta: {content: text}}]});
