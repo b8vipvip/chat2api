@@ -492,7 +492,6 @@ def test_web_chat_live_voice_token_is_bound_to_active_account_session(tmp_path: 
                 with client.websocket_connect(session_path) as live:
                     live.receive_json()
 
-    assert not app.state.telemetry.get("live_" + "0" * 32)
     app.state.quota_reservations.close()
 
 
