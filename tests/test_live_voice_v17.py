@@ -15,6 +15,7 @@ from app.live_voice_patch import (
 )
 from app.main import create_app
 from app.quota_reservation_runtime_v1 import install_quota_reservation_runtime_v1
+from app.quota_reservations import QuotaReservationStore
 from app.user_commerce import USER_SESSION_COOKIE
 from app.user_console_v104_patch import install_user_console_v104_patch
 from app.voice_patch import install_voice_patch
@@ -382,7 +383,11 @@ def test_browser_webapp_can_use_one_time_realtime_session_token(tmp_path: Path) 
 
 
 def test_web_chat_live_voice_uses_account_session_and_shared_server_key(tmp_path: Path) -> None:
-    app = create_app(settings(tmp_path))
+    config = settings(tmp_path)
+    app = create_app(config)
+    # C-06 is an optional runtime capability; provide its durable reservation
+    # store explicitly so this test exercises real Voice terminal accounting.
+    app.state.quota_reservations = QuotaReservationStore(config.data_dir)
     install_control_plane_v1(app)
     install_user_console_v104_patch(app)
     install_quota_reservation_runtime_v1(app)
@@ -443,6 +448,10 @@ def test_web_chat_live_voice_uses_account_session_and_shared_server_key(tmp_path
     assert row["shared_api_key_id"] == shared_key["key_id"]
     identity = app.state.api_keys.keys[row["api_key_id"]]
     assert identity.internal_owner_user_id == user["user_id"]
+    reservation = app.state.quota_reservations.get(request_id)
+    assert reservation is not None
+    assert reservation["state"] in {"released", "settled"}
+    app.state.quota_reservations.close()
     assert identity.tokens_used == 0
 
 
