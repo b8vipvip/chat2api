@@ -175,10 +175,14 @@
     function failIfAudioContextSuspended() {
       if (!audioContext || cleaned || stopping ||
           typeof audioContext.state !== "string" || audioContext.state === "running") return false;
-      event({
-        type:"client.error",
-        message:"浏览器音频输出上下文已暂停（" + audioContext.state + "），实时语音已停止，请重新连接",
-      });
+      const message = "浏览器音频输出上下文已暂停（" + audioContext.state + "），实时语音已停止，请重新连接";
+      event({type:"client.error",message});
+      if (!ready && readyReject) {
+        const reject = readyReject;
+        readyReject = null;
+        readyResolve = null;
+        reject(new Error(message));
+      }
       void cleanup();
       return true;
     }
