@@ -184,7 +184,7 @@ for(const mode of ["reject","suspended"]) {
 }
 
 {
-  const start=webClient.indexOf("    function playPcm(buffer) {");
+  const start=webClient.indexOf("    function failIfAudioContextSuspended()");
   const end=webClient.indexOf("\n    function startMicrophonePipeline()",start);
   assert.ok(start>=0 && end>start,"Web Chat Live PCM playback guard must remain extractable");
   const events=[];
@@ -211,4 +211,8 @@ assert.ok(voiceMain.includes('post("voice.live.error"'),
   "synthetic microphone resume failures must be surfaced immediately to the isolated Voice controller");
 assert.ok(liveMain.includes("remote audio AudioContext is not running"));
 assert.ok(webClient.includes("浏览器音频输出上下文未进入运行状态"));
+assert.ok(webClient.includes('audioContext.addEventListener?.("statechange",audioContextStateListener)'),
+  "a Live session must observe audio context suspension even when no output PCM is arriving");
+assert.ok(webClient.includes('audioContext.removeEventListener?.("statechange",audioContextStateListener)'),
+  "the state listener must be detached during cleanup");
 console.log("voice-audio-context-readiness-v1-passed");
