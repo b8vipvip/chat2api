@@ -1989,7 +1989,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "client_id": state.client_id,
                 "api_key_id": principal.key_id,
                 "shared_api_key_id": principal.auth_key_id or None,
-                "web_chat_mode": bool(state.mode1_web_chat),
+                "web_chat_mode": principal.kind == "web_chat",
                 "api_key_name": principal.name,
                 "auth_kind": principal.kind,
                 "requested_model": requested_model,
@@ -2119,21 +2119,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not request_id or not key_id or key_id == "master":
             return False
         api_key = getattr(api_keys, "keys", {}).get(key_id)
+        shared_key_id = str(record.get("shared_api_key_id") or "")
         accounting = getattr(telemetry, "usage_accounting", None)
         if api_key is None or not callable(accounting):
+            return False
+        if record.get("web_chat_mode") is True and not shared_key_id:
             return False
 
         # Telemetry is written before its accounting callback. If the callback
         # was interrupted, a duplicate Worker replay must retry that same
         # idempotent request_id charge rather than ACKing a merely completed row.
         await accounting(record)
-        ledger = getattr(api_key, "charged_requests", None)
-        if not isinstance(ledger, dict):
-            ledger = getattr(api_keys, "charged_requests", None)
-        charged = ledger.get(request_id, 0) if isinstance(ledger, dict) else 0
-        if type(charged) is not int or charged < counts["total_tokens"]:
-            return False
-        shared_key_id = str(record.get("shared_api_key_id") or "")
+        if record.get("web_chat_mode") is not True:
+            ledger = getattr(api_key, "charged_requests", None)
+            if not isinstance(ledger, dict):
+                ledger = getattr(api_keys, "charged_requests", None)
+            charged = ledger.get(request_id, 0) if isinstance(ledger, dict) else 0
+            if type(charged) is not int or charged < counts["total_tokens"]:
+                return False
         if shared_key_id:
             shared_key = getattr(api_keys, "keys", {}).get(shared_key_id)
             shared_ledger = getattr(shared_key, "charged_requests", None) if shared_key else None
@@ -2377,7 +2380,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "client_id": None,
             "api_key_id": principal.key_id,
             "shared_api_key_id": principal.auth_key_id or None,
-            "web_chat_mode": bool(web_chat_mode),
+            "web_chat_mode": bool(web_chat_mode or principal.kind == "web_chat"),
             "api_key_name": principal.name,
             "auth_kind": principal.kind,
             "requested_model": requested_model,
@@ -2432,7 +2435,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "prompt_chars": len(prompt),
                 "completion_chars": 0,
                 "status": "running",
-                "web_chat_mode": bool(state.mode1_web_chat),
+                "web_chat_mode": principal.kind == "web_chat",
                 "usage": {**usage, **token_meta},
                 "timings": state.timings(),
                 "diagnostics": dict(state.diagnostics),
