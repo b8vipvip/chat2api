@@ -365,7 +365,7 @@
       // before any network or permission prompt can consume transient activation.
       audioContext = new AudioContextImpl();
       audioContextStateListener = () => {
-        if (ready && !stopping && !cleaned) failIfAudioContextSuspended();
+        if ((ready || starting) && !stopping && !cleaned) failIfAudioContextSuspended();
       };
       audioContext.addEventListener?.("statechange",audioContextStateListener);
       if (typeof audioContext.resume === "function") await audioContext.resume();
