@@ -407,7 +407,7 @@ def install_web_chat_client_diagnostics_v1(app: FastAPI) -> FastAPI:
     @app.get("/api/admin/diagnostics/web-chat-client-logs")
     async def list_web_chat_client_logs(
         request: Request,
-        limit: int = Query(default=200, ge=1, le=2000),
+        limit: int = Query(default=200, ge=1, le=_MAX_ITEMS),
         since: str | None = None,
         until: str | None = None,
         user_id: str = "",
