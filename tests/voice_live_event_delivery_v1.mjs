@@ -125,7 +125,7 @@ async function runEmit(sendMessage) {
     let acknowledge;
     const mainStopAck=new Promise(resolve=>{acknowledge=resolve;});
     const active={requestId:"concurrent-stop",stopped:false};
-    const state={active,currentResponseId:"response-1",mainEvents:[]};
+    const state={active,currentResponseId:"response-1",mainEvents:[],stoppedSessions:new Map()};
     const calls={polling:0,wait:0,post:[],click:0,flush:0,events:[]};
     const stopLive=vm.runInNewContext(
       liveSource.slice(start,end) + "\nstopLive",
