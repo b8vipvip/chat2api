@@ -333,7 +333,7 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
     # Web Chat carries two independent identities: the per-user key ID for
     # account/tenant policies and the shared managed key ID for service-level
     # key policies. Both must allow a model.
-    registry.shared_api_key_context = contextvars.ContextVar(
+    registry.shared_api_key_context = ContextVar(
         "chat2api_shared_api_key_context", default=""
     )
 
