@@ -1093,6 +1093,10 @@
     if (conversation) state.selectedModel = conversation.model || state.selectedModel;
     $("modelSelect").value = state.selectedModel;
     renderAll();
+    // Native payloads stay server-authoritative rather than being copied into
+    // the revisioned text conversation. Rehydrate on selection, including when
+    // this conversation was not among the initial bounded preload candidates.
+    void hydrateNativeSnapshots(conversationId);
     document.body.classList.remove("sidebar-open");
   }
 
@@ -2501,14 +2505,18 @@
     }
   }
 
-  async function hydrateNativeSnapshots() {
+  async function hydrateNativeSnapshots(conversationId = state.activeConversationId) {
+    // Preloading the last 24 requests across *all* conversations favored the
+    // oldest conversation in a newest-first history list. Hydrate the selected
+    // conversation instead, and repeat on conversation switches so older
+    // cross-device history can recover its native media, math and citations.
+    const conversation = state.conversations.find(row => row.id === conversationId);
+    if (!conversation) return;
     const candidates = [], seen = new Set();
-    for (const conversation of state.conversations) {
-      for (const message of conversation.messages || []) {
-        if (message.role !== "assistant" || !message.requestId || seen.has(message.requestId)) continue;
-        seen.add(message.requestId);
-        candidates.push({requestId:message.requestId,pending:message.pending === true});
-      }
+    for (const message of conversation.messages || []) {
+      if (message.role !== "assistant" || !message.requestId || seen.has(message.requestId)) continue;
+      seen.add(message.requestId);
+      candidates.push({requestId:message.requestId,pending:message.pending === true});
     }
     await Promise.all(candidates.slice(-24).map(async item => {
       if (item.pending) void streamNativeContent(item.requestId);
