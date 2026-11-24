@@ -253,8 +253,8 @@
   }
 
   async function ensureSyntheticMic() {
-    if (state.micDestination && state.micContext?.state !== "closed") {
-      if (state.micContext) await resumeSyntheticMicContext(state.micContext);
+    if (state.micDestination && state.micContext && state.micContext.state !== "closed") {
+      await resumeSyntheticMicContext(state.micContext);
       return state.micDestination.stream;
     }
     // A closed AudioContext leaves an ended MediaStreamDestination behind.
