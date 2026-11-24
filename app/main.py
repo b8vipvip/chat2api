@@ -4136,6 +4136,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "chat.completed", "chat.error", "chat.cancelled",
                         "image.completed", "image.error", "image.cancelled",
                     }
+                    worker_event_ack_id = str(message.get("worker_event_ack_id") or "")
+                    voice_event_ack_id = (
+                        worker_event_ack_id
+                        if message.get("kind") == "voice-live"
+                        and message_type in {"image.started", "image.progress", "image.diagnostics"}
+                        and re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", worker_event_ack_id)
+                        else ""
+                    )
                     active_state = broker.requests.get(request_id)
                     recovered_row = telemetry.get(request_id) or {}
                     if active_state is None and is_replayed_mode1_terminal(
@@ -4356,6 +4364,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             "Rejected Worker event without original dispatch socket request=%s client=%s type=%s",
                             request_id, client_id, message_type,
                         )
+                        if voice_event_ack_id:
+                            await websocket.send_json({
+                                "type": "voice.event.ack",
+                                "event_id": voice_event_ack_id,
+                                "request_id": request_id,
+                                "accepted": False,
+                                "reason": "request-not-owned-or-active",
+                            })
                         continue
                     record_terminal_receipt = bool(
                         terminal_message
@@ -4375,6 +4391,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         websocket=websocket,
                         current_socket=registry.sockets.get(client_id),
                     )
+                    if voice_event_ack_id:
+                        await websocket.send_json({
+                            "type": "voice.event.ack",
+                            "event_id": voice_event_ack_id,
+                            "request_id": request_id,
+                            "accepted": bool(accepted),
+                            "reason": "" if accepted else "broker-rejected-event",
+                        })
                     replay_diagnostics = message.get("diagnostics")
                     replay_diagnostics = replay_diagnostics if isinstance(replay_diagnostics, dict) else {}
                     if (
