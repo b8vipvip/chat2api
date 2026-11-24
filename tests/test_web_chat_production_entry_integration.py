@@ -56,7 +56,7 @@ for method, path in expected:
     ]
     assert len(matches) == 1, (method, path, len(matches))
 
-def assert_private_no_store(response):
+def assert_no_store_and_vary(response):
     assert "no-store" in response.headers.get("cache-control", "").lower(), dict(response.headers)
     assert "cookie" in {value.strip().lower() for value in response.headers.get("vary", "").split(",")}
 
