@@ -11,7 +11,7 @@ ADMIN_HTML = r'''<!doctype html>
 @media(max-width:1250px){.labConfig{grid-template-columns:1fr 1fr}.labConfig>button{align-self:end}.testKeyBox{grid-template-columns:1fr}}
 @media(max-width:1050px){.shell{grid-template-columns:1fr}.side{border-right:0;border-bottom:1px solid var(--line)}.nav{display:flex;overflow:visible;flex-wrap:wrap}.nav button{width:auto;white-space:nowrap}.nav-group{position:relative;flex:0 0 auto}.nav-group>summary{white-space:nowrap}.nav-submenu{position:absolute;top:100%;left:0;min-width:210px;z-index:20;margin:4px 0 0;padding:8px;background:#0b1322;border:1px solid var(--line);border-radius:10px;box-shadow:0 16px 40px rgba(0,0,0,.4)}.top{position:static;flex-wrap:wrap}.grid{grid-template-columns:repeat(2,1fr)}.panels,.split{grid-template-columns:1fr}.wide{grid-column:auto}.labConfig{grid-template-columns:1fr}.timelineRow{grid-template-columns:1fr 1fr}.auth{min-width:0;margin-left:auto}.sessionAuth{width:100%;justify-content:flex-end}.testKeyBox{grid-template-columns:1fr}}
 </style></head><body><div class="shell">
-<aside class="side"><div class="brand">chat2api<small>Server Console · v0.5</small></div><div class="nav"><button data-view="overview">概览</button><button data-view="keys">API Key</button><button data-view="requests">请求记录</button><button data-view="media-storage">转存管理</button><button data-view="docs">开发文档</button><button data-view="playground">测试场</button><button data-view="control-admins" data-cview>管理员 RBAC</button><button data-view="client-policy" data-cview>客户端配置</button><button data-view="registration-invitations" data-cview>邀请注册</button><button data-view="tenants" data-cview>租户管理</button><button data-view="user-roles" data-cview>用户角色</button><button data-view="subscriptions" data-cview>订阅套餐</button><button data-view="model-entitlements" data-cview>模型权限</button><button data-view="plugins" data-cview>插件目录</button><button data-view="quota-ledger" data-cview>额度预留</button></div></aside>
+<aside class="side"><div class="brand">chat2api<small>Server Console · v0.5</small></div><div class="nav"><button data-view="overview">概览</button><button data-view="keys">API Key</button><button data-view="requests">请求记录</button><button data-view="media-storage">转存管理</button><button data-view="docs">开发文档</button><button data-view="playground">测试场</button><button data-view="control-admins" data-cview>管理员 RBAC</button><button data-view="client-policy" data-cview>客户端配置</button><button data-view="client-logs" data-cview>客户端日志</button><button data-view="registration-invitations" data-cview>邀请注册</button><button data-view="tenants" data-cview>租户管理</button><button data-view="user-roles" data-cview>用户角色</button><button data-view="subscriptions" data-cview>订阅套餐</button><button data-view="model-entitlements" data-cview>模型权限</button><button data-view="plugins" data-cview>插件目录</button><button data-view="quota-ledger" data-cview>额度预留</button></div></aside>
 <main class="main"><header class="top"><div><b id="pageTitle">概览</b><div id="status" class="muted">请登录管理员账号</div></div><div class="sessionAuth" id="sessionAuthControls"><span id="adminSessionState" class="sessionIdentity muted" aria-live="polite">正在检查登录状态</span><button class="action good" id="adminSessionOpenLogin" type="button">登录</button><button class="action danger" id="adminSessionLogout" type="button" hidden>退出登录</button><button class="action" id="adminSessionRotatePassword" type="button" hidden>修改密码</button></div></header><div class="content">
 <section class="view" id="view-overview"><div class="grid"><div class="card"><div class="muted">在线扩展</div><div class="n" id="sExt">-</div></div><div class="card"><div class="muted">请求记录</div><div class="n" id="sReq">-</div></div><div class="card"><div class="muted">成功率</div><div class="n" id="sSuccess">-</div></div><div class="card"><div class="muted">平均首 Token</div><div class="n" id="sFirst">-</div></div><div class="card"><div class="muted">估算 Token</div><div class="n" id="sToken">-</div></div></div><div class="panels"><div class="panel"><h3>Chrome 扩展</h3><table><thead><tr><th>ID</th><th>名称</th><th>状态</th><th>版本</th><th>能力</th></tr></thead><tbody id="extBody"></tbody></table></div><div class="panel"><h3>模型目录</h3><table><thead><tr><th>ID</th><th>能力</th></tr></thead><tbody id="modelBody"></tbody></table></div><div class="panel wide"><h3>最近请求</h3><div class="scroll"><table><thead><tr><th>时间</th><th>类型</th><th>状态</th><th>Key</th><th>模型</th><th>首包</th><th>总耗时</th><th>Token</th></tr></thead><tbody id="recentBody"></tbody></table></div></div></div></section>
 <section class="view" id="view-keys"><div class="panel"><h3>创建业务 API Key</h3><div class="toolbar"><input id="keyName" placeholder="名称"><input id="keyDays" type="number" min="1" max="3650" placeholder="有效天数"><input id="keyQuota" type="number" min="0" placeholder="Token 额度（留空不限）"><button class="action good" id="createKey">创建</button></div><div class="secret hidden" id="newSecret"><span id="newToken"></span> <button class="action" id="copyNew">复制</button></div></div><div class="panel" style="margin-top:14px"><h3>令牌列表</h3><div class="scroll"><table><thead><tr><th>名称</th><th>前缀</th><th>状态</th><th>权限</th><th>最后使用</th><th>请求/Token</th><th>Token 额度</th><th>操作</th></tr></thead><tbody id="keysBody"></tbody></table></div></div><div class="footer">新版本业务 Key 的可复制副本使用管理员主密钥派生密钥加密保存；鉴权仍只比较哈希。旧版 0.4 Key 没有密文副本，因此无法恢复。</div></section>
@@ -72,6 +72,32 @@ ADMIN_HTML = r'''<!doctype html>
     <label class="c-note"><input id="cClientClearApiKey" type="checkbox"> 清除当前统一 API Key（清除后 Web Chat 暂停请求，直到重新配置）</label>
     <label>公告（最多 500 字）<textarea id="cAnnouncement" maxlength="500" style="width:100%;min-height:110px"></textarea></label>
     <div class="c-form"><button class="action good" id="cClientSave">保存配置</button><button class="action" id="cClientReload">重新读取</button><span id="cClientStatus" class="muted"></span></div>
+  </div>
+</section>
+<section class="view" id="view-client-logs">
+  <div class="panel">
+    <h2>Web Chat 客户端日志</h2>
+    <p class="c-note">记录浏览器端会话初始化、模型目录同步、请求生命周期、附件上传、Voice 和异常事件。日志不采集用户提示词、模型回复、Cookie、Authorization、API Key 或文件内容。</p>
+    <div class="c-form">
+      <label>用户 ID（可选）<input id="webChatClientLogUser" type="text" maxlength="100" placeholder="筛选某个用户"></label>
+      <label>按条数查询 / 导出<select id="webChatClientLogLimit"><option value="100">最近 100 条</option><option value="200" selected>最近 200 条</option><option value="500">最近 500 条</option><option value="1000">最近 1,000 条</option><option value="5000">最近 5,000 条</option><option value="20000">最近 20,000 条</option></select></label>
+    </div>
+    <div class="c-form">
+      <label>开始时间<input id="webChatClientLogSince" type="datetime-local"></label>
+      <label>结束时间<input id="webChatClientLogUntil" type="datetime-local"></label>
+    </div>
+    <div class="c-form">
+      <button class="action good" id="webChatClientLogLoad" type="button">查询日志</button>
+      <button class="action" id="webChatClientLogExportCount" type="button">按条数导出诊断包</button>
+      <button class="action" id="webChatClientLogExportRange" type="button">按时间范围导出诊断包</button>
+    </div>
+    <div id="webChatClientLogStatus" class="muted" aria-live="polite">选择条数或时间范围后查询。</div>
+    <div class="scroll" style="margin-top:12px">
+      <table class="c-table">
+        <thead><tr><th>记录时间</th><th>用户 ID</th><th>事件</th><th>级别</th><th>模型</th><th>阶段</th><th>HTTP</th><th>耗时</th><th>错误 / 详情</th></tr></thead>
+        <tbody id="webChatClientLogRows"><tr><td colspan="9">尚未查询</td></tr></tbody>
+      </table>
+    </div>
   </div>
 </section>
 <section class="view" id="view-registration-invitations">
@@ -148,6 +174,7 @@ ADMIN_HTML = r'''<!doctype html>
 </dialog>
 
 <script src="/assets/chat2api-control-plane-admin-v1.js" defer></script>
+<script src="/assets/chat2api-admin-web-chat-client-logs-v1.js" defer></script>
 <script>
 const INITIAL_VIEW='__INITIAL_VIEW__';
 const $=id=>document.getElementById(id);
@@ -162,8 +189,8 @@ function headers(k=key()){return{Authorization:'Bearer '+k}}
 async function api(path,opt={}){const h={...headers(opt.key||key()),...(opt.headers||{})};if(opt.body!==undefined)h['Content-Type']='application/json';const r=await fetch(path,{method:opt.method||'GET',headers:h,body:opt.body===undefined?undefined:JSON.stringify(opt.body),cache:'no-store',keepalive:opt.keepalive===true,signal:opt.signal});const t=await r.text();let d={};try{d=t?JSON.parse(t):{}}catch(_){d={detail:t}}if(!r.ok)throw new Error(d.detail||`${r.status} ${t}`);return d}
 function pill(v){const c=v==='completed'||v==='passed'||v==='online'?'ok':v==='warning'||v==='skipped'||v==='busy'?'warn':'bad';return`<span class="pill ${c}">${esc(v)}</span>`}
 function status(t,c='muted'){$('status').className=c;$('status').textContent=t}
-const titles={overview:'概览',keys:'API Key',requests:'请求记录','media-storage':'转存管理',docs:'开发文档',playground:'测试场','control-admins':'管理员 RBAC','client-policy':'客户端配置','registration-invitations':'邀请注册',tenants:'租户管理','user-roles':'用户角色',subscriptions:'订阅套餐','model-entitlements':'模型权限',plugins:'插件目录','quota-ledger':'额度预留','api-keys':'API Key 管理'};
-function show(v){document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.nav button').forEach(x=>x.classList.toggle('active',x.dataset.view===v));$('view-'+v)?.classList.add('active');$('pageTitle').textContent=titles[v]||v;location.hash=v;if(v==='overview')loadOverview();if(v==='keys')loadKeys();if(v==='requests')loadRequests();if(v==='media-storage')loadMediaStorage();if(v==='control-admins')loadWebChatRetention();if(v==='docs')renderDocs();if(v==='playground'){loadOverview().then(loadTests)}}
+const titles={overview:'概览',keys:'API Key',requests:'请求记录','media-storage':'转存管理',docs:'开发文档',playground:'测试场','control-admins':'管理员 RBAC','client-policy':'客户端配置','client-logs':'客户端日志','registration-invitations':'邀请注册',tenants:'租户管理','user-roles':'用户角色',subscriptions:'订阅套餐','model-entitlements':'模型权限',plugins:'插件目录','quota-ledger':'额度预留','api-keys':'API Key 管理'};
+function show(v){document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.nav button').forEach(x=>x.classList.toggle('active',x.dataset.view===v));$('view-'+v)?.classList.add('active');$('pageTitle').textContent=titles[v]||v;location.hash=v;if(v==='overview')loadOverview();if(v==='keys')loadKeys();if(v==='requests')loadRequests();if(v==='media-storage')loadMediaStorage();if(v==='control-admins')loadWebChatRetention();if(v==='client-logs')window.Chat2APIWebChatClientLogsV1?.load();if(v==='docs')renderDocs();if(v==='playground'){loadOverview().then(loadTests)}}
 document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>show(b.dataset.view));
 async function loadOverview(){if(!key()){status('请输入管理员主密钥');return}try{overview=await api('/api/admin/overview');status(`已连接 · v${overview.version}`,'ok');const s=overview.telemetry||{};$('sExt').textContent=overview.health?.online_extensions??0;$('sReq').textContent=s.retained_requests??0;$('sSuccess').textContent=(s.success_rate??100)+'%';$('sFirst').textContent=fmtMs(s.avg_first_token_ms);$('sToken').textContent=s.estimated_total_tokens??0;$('extBody').innerHTML=(overview.clients||[]).map(c=>`<tr><td><code>${esc(c.client_id)}</code></td><td>${esc(c.name)}</td><td>${pill(c.online?(c.busy?'busy':'online'):'offline')}</td><td>${esc(c.version)}</td><td>${esc((c.metadata?.capabilities||[]).join(', '))}</td></tr>`).join('')||'<tr><td colspan="5">暂无扩展</td></tr>';$('modelBody').innerHTML=(overview.models||[]).map(m=>`<tr><td><code>${esc(m.id)}</code></td><td>${esc((m.capabilities||[]).join(', '))}</td></tr>`).join('');$('recentBody').innerHTML=(overview.recent_requests||[]).map(r=>`<tr><td>${fmtTime(r.recorded_at)}</td><td>${esc(r.request_type||'text')}</td><td>${pill(r.status)}</td><td>${esc(r.api_key_name||'-')}</td><td><code>${esc(r.requested_model||'-')}</code></td><td>${fmtMs(r.timings?.first_token_ms)}</td><td>${fmtMs(r.timings?.total_ms)}</td><td>${esc(r.usage?.total_tokens??0)}</td></tr>`).join('');fillModels();return overview}catch(e){status('连接失败：'+e.message,'bad')}}
 // Test only concrete models discovered AND validated on an online Worker.
@@ -383,5 +410,5 @@ document.querySelectorAll('.nav button').forEach(button=>button.disabled=true);
 
 
 def admin_response(initial_view: str = "overview") -> HTMLResponse:
-    view = initial_view if initial_view in {"overview", "keys", "requests", "media-storage", "docs", "playground", "control-admins", "client-policy", "registration-invitations", "tenants", "user-roles", "subscriptions", "model-entitlements", "plugins", "quota-ledger", "api-keys"} else "overview"
+    view = initial_view if initial_view in {"overview", "keys", "requests", "media-storage", "docs", "playground", "control-admins", "client-policy", "client-logs", "registration-invitations", "tenants", "user-roles", "subscriptions", "model-entitlements", "plugins", "quota-ledger", "api-keys"} else "overview"
     return HTMLResponse(ADMIN_HTML.replace("__INITIAL_VIEW__", view), headers={"Cache-Control": "no-store"})

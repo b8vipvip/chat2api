@@ -139,6 +139,8 @@ def permission_for_admin_route(path: str, method: str) -> str | None:
         return "models:" + suffix
     # Raw request detail and media can contain user content or credentials.
     # Do not grant delegated support access until a redacted projection exists.
+    if path in {"/api/admin/diagnostics/web-chat-client-logs", "/api/admin/diagnostics/web-chat-client-logs/export"}:
+        return "diagnostics:read"
     if path == "/api/admin/worker-tools/catalog":
         return "diagnostics:read"
     if path == "/api/admin/worker-tools/policies":
