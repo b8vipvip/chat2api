@@ -470,6 +470,8 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 # test then waited 55s and telemetry recorded error=null.
                 if event.get("type") in {"image.error", "chat.error"}:
                     worker_disconnect = event.get("type") == "chat.error"
+                    if state.completed_mono is None:
+                        state.completed_mono = time.perf_counter()
                     error_message = str(
                         event.get("error") or (
                             "The assigned ChatGPT Worker disconnected during the Live session"
@@ -713,11 +715,18 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                             "text": partial_text,
                         })
                 elif event_type == "session.closed":
-                    # The Worker has drained its final transcript/interruption
-                    # events. The request coroutine owns the single terminal
-                    # session.closed message after usage/status reconciliation.
+                    # Close Broker publication immediately when the Worker
+                    # confirms its drain. Waiting until telemetry settlement
+                    # finishes leaves a window where stale progress can still
+                    # enter a relay that has already returned.
+                    if state.completed_mono is None:
+                        state.completed_mono = time.perf_counter()
+                    # The request coroutine owns the single public session.closed
+                    # message after usage/status reconciliation.
                     return
                 elif event_type == "error":
+                    if state.completed_mono is None:
+                        state.completed_mono = time.perf_counter()
                     error_message = str(event.get("message") or "GPT-Live bridge error")
                     await send_json({
                         "type": "error",
