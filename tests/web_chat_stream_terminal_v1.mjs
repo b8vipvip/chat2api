@@ -30,7 +30,8 @@ async function send(chunks, close = true, onCancel = () => {}) {
     limitAssistantText:value=>String(value || "").slice(0,32000),
     appendAssistantText:(assistant,value)=>{assistant.content=String(assistant.content || "")+String(value || "");},
     state: {
-      apiToken: "test-token", user: {user_id: "user-a"},
+      webChatKeyId: "test-key", webChatScopes: ["chat", "models", "files", "audio"],
+      user: {user_id: "user-a"},
       selectedModel: "test-model", streaming: false,
       recoveryInFlight: new Set(),
       pendingImages: [],
