@@ -3,6 +3,7 @@ import base64
 import subprocess
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
@@ -453,6 +454,46 @@ def test_web_chat_live_voice_uses_account_session_and_shared_server_key(tmp_path
     assert reservation["state"] in {"released", "settled"}
     app.state.quota_reservations.close()
     assert identity.tokens_used == 0
+
+
+def test_web_chat_live_voice_token_is_bound_to_active_account_session(tmp_path: Path) -> None:
+    config = settings(tmp_path)
+    app = create_app(config)
+    app.state.quota_reservations = QuotaReservationStore(config.data_dir)
+    install_control_plane_v1(app)
+    install_user_console_v104_patch(app)
+    install_quota_reservation_runtime_v1(app)
+    install_voice_patch(app)
+    install_live_voice_patch(app)
+    install_web_chat_features_v1(app)
+
+    user = app.state.user_accounts.register(
+        "web-chat-voice-session@example.org", "secure-password-123", "Voice Session"
+    )
+    user_session = app.state.user_accounts.create_session(user["user_id"])
+    shared_key, _shared_token = asyncio.run(app.state.api_keys.create("web-chat-voice-session-shared"))
+    app.state.control_plane.update_client({"api_key_id": shared_key["key_id"]})
+
+    with TestClient(app) as client:
+        client.cookies.set(USER_SESSION_COOKIE, user_session)
+        client_id, extension_token = pair_extension(client)
+        with client.websocket_connect(f"/ws/extensions/{client_id}?token={extension_token}") as extension:
+            assert extension.receive_json()["type"] == "server.hello"
+            token_response = client.post(
+                "/api/user/chat/voice-session",
+                headers={"Origin": "http://testserver"},
+            )
+            assert token_response.status_code == 200, token_response.text
+            session_path = token_response.json()["websocket_path"] + f"&client_id={client_id}"
+
+            logged_out = client.post("/api/user/logout", headers={"Origin": "http://testserver"})
+            assert logged_out.status_code == 200, logged_out.text
+            with pytest.raises(WebSocketDisconnect):
+                with client.websocket_connect(session_path) as live:
+                    live.receive_json()
+
+    assert not app.state.telemetry.get("live_" + "0" * 32)
+    app.state.quota_reservations.close()
 
 
 def test_live_voice_rejects_legacy_master_key_and_wrong_key(tmp_path: Path) -> None:
