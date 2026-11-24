@@ -648,9 +648,10 @@ def test_client_policy_accepts_shared_api_key_without_persisting_or_exposing_sec
     key_public, key_token = asyncio.run(app.state.api_keys.create("shared-web-chat"))
     limited_public, limited_token = asyncio.run(app.state.api_keys.create("quota-limited-web-chat"))
     missing_scope_public, missing_scope_token = asyncio.run(
-        app.state.api_keys.create("missing-models-scope", scopes=["chat"])
+        app.state.api_keys.create("missing-models-scope")
     )
     app.state.api_keys.keys[limited_public["key_id"]].token_quota = 100
+    app.state.api_keys.keys[missing_scope_public["key_id"]].scopes = ["chat"]
     asyncio.run(app.state.api_keys.save())
     with TestClient(app) as client:
         assert login(client, "owner", "strong-root-password").status_code == 200
