@@ -297,17 +297,25 @@ async def reserve_request_quota(
         item = getattr(api_keys, "keys", {}).get(key_id)
         if item is None:
             raise QuotaReservationError("Unknown API key")
-        public = item.public() if callable(getattr(item, "public", None)) else {}
-        completed_tokens = max(0, int(getattr(item, "tokens_used", 0) or 0))
-        quota_limit = getattr(item, "token_quota", None)
-        if quota_limit is not None and completed_tokens >= int(quota_limit):
-            raise QuotaExceeded("API key token quota is exhausted")
-        if (
-            not bool(getattr(item, "enabled", False))
-            or bool(getattr(item, "revoked_at", None))
-            or bool(public.get("expired", False))
-        ):
-            raise QuotaReservationError("API key is disabled, expired or revoked")
+        if str(getattr(principal, "kind", "")) == "web_chat":
+            # The shared service key is validated separately at session ingress.
+            # This per-user key ID is only an ownership/accounting namespace;
+            # do not make existing Web Chat sessions depend on a user's old
+            # API-key quota, expiry or revocation state.
+            completed_tokens = 0
+            quota_limit = None
+        else:
+            public = item.public() if callable(getattr(item, "public", None)) else {}
+            completed_tokens = max(0, int(getattr(item, "tokens_used", 0) or 0))
+            quota_limit = getattr(item, "token_quota", None)
+            if quota_limit is not None and completed_tokens >= int(quota_limit):
+                raise QuotaExceeded("API key token quota is exhausted")
+            if (
+                not bool(getattr(item, "enabled", False))
+                or bool(getattr(item, "revoked_at", None))
+                or bool(public.get("expired", False))
+            ):
+                raise QuotaReservationError("API key is disabled, expired or revoked")
         # Keep ApiKeyStore's async lock while the SQLite transaction reserves
         # against the same completed-usage snapshot. Otherwise a concurrent
         # terminal charge can update tokens_used between the snapshot and the
