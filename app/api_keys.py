@@ -342,7 +342,7 @@ class ApiKeyStore:
             return item.public()
 
     async def account_completed_usage(self, record: dict[str, Any]) -> None:
-        """Count a completed request once for both its user and shared service key."""
+        """Count API-key usage once; Web Chat usage belongs to its shared service key."""
         if record.get("status") != "completed":
             return
         request_id = str(record.get("request_id") or "")
@@ -353,9 +353,10 @@ class ApiKeyStore:
             return
         if not request_id or not amount:
             return
+        primary_key_id = "" if record.get("web_chat_mode") is True else record.get("api_key_id")
         key_ids = list(dict.fromkeys(
             str(value or "") for value in (
-                record.get("api_key_id"), record.get("shared_api_key_id")
+                primary_key_id, record.get("shared_api_key_id")
             ) if value
         ))
         if not key_ids:
