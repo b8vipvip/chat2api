@@ -74,6 +74,37 @@ for(const mode of ["reject","suspended"]) {
 }
 
 {
+  const helperStart=voiceMain.indexOf("  async function resumeSyntheticMicContext(");
+  const helperEnd=voiceMain.indexOf("\n  const mediaDevices",helperStart);
+  const playStart=voiceMain.indexOf("  async function playPreparedInput()",helperEnd);
+  const playEnd=voiceMain.indexOf("\n  window.addEventListener",playStart);
+  assert.ok(helperStart>=0 && helperEnd>helperStart && playStart>helperEnd && playEnd>playStart);
+  const events=[];
+  const state={
+    preparedInput:{base64:"AAAA",mime_type:"audio/wav"},
+    micContext:{state:"suspended",async resume(){throw new Error("playback resume denied");}},
+    micDestination:{},
+  };
+  const playPreparedInput=vm.runInNewContext(
+    voiceMain.slice(helperStart,helperEnd)+
+      "\n"+voiceMain.slice(playStart,playEnd)+
+      "\nplayPreparedInput",
+    {
+      state,
+      waitForRemoteTrackBeforeInput:async()=>1,
+      ensureSyntheticMic:async()=>({}),
+      decodeBase64:()=>new Uint8Array([0,0]),
+      post:(type)=>events.push(type),
+      performance:{now:()=>1},
+      Promise,String,Error,Number,Math,
+    },
+  );
+  await assert.rejects(playPreparedInput(),/playback resume denied/);
+  assert.equal(events.includes("voice.input.started"),false,
+    "prepared audio must not announce playback when its AudioContext is suspended");
+}
+
+{
   const state={micContext:{
     state:"suspended",
     async resume(){throw new Error("resume denied");},
