@@ -1662,7 +1662,7 @@
     const keyMatchesConversation = !conversation?.apiKeyId || conversation.apiKeyId === selectedKeyId();
     const unresolvedRequest = Boolean(conversation?.messages?.some((message) => message.role === "assistant" && message.pending === true));
     $("sendButton").disabled = state.streaming || state.voiceActive || unresolvedRequest || (!input.value.trim() && !pendingForConversation) ||
-      !state.webChatKeyId || !selectedKeyHasScope("chat") || !keyMatchesConversation;
+      !state.webChatKeyId || !state.selectedModel || !selectedKeyHasScope("chat") || !keyMatchesConversation;
     $("attachButton").disabled = state.streaming || state.voiceActive || !state.webChatKeyId || !selectedKeyHasScope("files");
     $("fileButton").disabled = state.streaming || state.voiceActive || !state.webChatKeyId || !selectedKeyHasScope("files");
     updateVoiceControls();
@@ -2530,6 +2530,7 @@
   }
   async function sendMessage(text) {
     if (state.voiceActive) { toast("请先结束实时语音，再发送普通聊天消息。"); return; }
+    if (!state.selectedModel) { toast("当前账户或服务端统一 API Key 没有可用模型。"); return; }
     if (!selectedKeyHasScope("chat")) { toast("服务端统一 API Key 缺少 chat 权限。"); return; }
     const clean = String(text || "").trim();
     if (state.streaming) return;
@@ -2793,13 +2794,11 @@
       });
       rows = Array.isArray(payload.data) ? payload.data : [];
     } catch {
-      try {
-        const payload = await apiJson("/api/user/models");
-        rows = Array.isArray(payload.data) ? payload.data.map((row) => ({id:row.model_id || row.id})) : [];
-      } catch {}
+      // Never fall back to the generic user model catalog here: that request
+      // does not carry the shared service-key entitlement context.
+      rows = [];
     }
     const ids = [...new Set(rows.map((row) => String(row.id || row.model || "")).filter(Boolean))];
-    if (!ids.includes("gpt-5.6-sol") && !ids.length) ids.push("gpt-5.6-sol");
     select.replaceChildren();
     ids.forEach((modelId) => {
       const option = document.createElement("option");
@@ -2809,9 +2808,10 @@
     });
     const conversation = currentConversation();
     const preferred = conversation?.model || state.selectedModel;
-    state.selectedModel = ids.includes(preferred) ? preferred : (ids[0] || "gpt-5.6-sol");
+    state.selectedModel = ids.includes(preferred) ? preferred : (ids[0] || "");
     select.value = state.selectedModel;
-    if (!rows.length) setConnection("已连接 · 模型列表不可用", "ready");
+    select.disabled = state.streaming || ids.length === 0;
+    if (!ids.length) setConnection("已连接 · 当前没有可用模型", "error");
   }
 
   function exportConversation() {
