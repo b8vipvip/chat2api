@@ -646,6 +646,12 @@ def test_control_plane_rejects_invalid_client_domains_without_mutating_policy(tm
 def test_client_policy_accepts_shared_api_key_without_persisting_or_exposing_secret(tmp_path: Path):
     app = make_app(tmp_path)
     key_public, key_token = asyncio.run(app.state.api_keys.create("shared-web-chat"))
+    limited_public, limited_token = asyncio.run(app.state.api_keys.create("quota-limited-web-chat"))
+    missing_scope_public, missing_scope_token = asyncio.run(
+        app.state.api_keys.create("missing-models-scope", scopes=["chat"])
+    )
+    app.state.api_keys.keys[limited_public["key_id"]].token_quota = 100
+    asyncio.run(app.state.api_keys.save())
     with TestClient(app) as client:
         assert login(client, "owner", "strong-root-password").status_code == 200
         configured = client.put(
@@ -678,6 +684,18 @@ def test_client_policy_accepts_shared_api_key_without_persisting_or_exposing_sec
             json={"api_key": "sk-chat2api-invalid-token"},
         )
         assert invalid.status_code == 400
+        limited = client.put(
+            "/api/admin/control/client",
+            headers=ORIGIN,
+            json={"api_key": limited_token},
+        )
+        assert limited.status_code == 400
+        missing_scope = client.put(
+            "/api/admin/control/client",
+            headers=ORIGIN,
+            json={"api_key": missing_scope_token},
+        )
+        assert missing_scope.status_code == 400
         assert app.state.control_plane.client_api_key_id() == key_public["key_id"]
 
         cleared = client.put(
