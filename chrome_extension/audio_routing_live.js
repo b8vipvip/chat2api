@@ -40,13 +40,46 @@
         world: "MAIN",
         injectImmediately: true,
       });
-    } catch (_) {}
+    } catch (error) {
+      throw new Error("GPT-Live MAIN-world bridge injection failed: " + String(error?.message || error));
+    }
     try {
       await chrome.scripting.executeScript({
         target: { tabId },
         files: ["content_voice_ui_gate_v185.js", "content_voice_live.js", "content_voice_live_text_v24.js"],
       });
-    } catch (_) {}
+    } catch (error) {
+      throw new Error("GPT-Live isolated-world controller injection failed: " + String(error?.message || error));
+    }
+
+    // executeScript resolving is not proof that every required file registered
+    // its bridge: a stale one-shot global can short-circuit initialization.
+    // Probe both worlds before dispatching voice.live.start so an incomplete
+    // injection fails here with an actionable error instead of timing out later.
+    const mainProbe = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: "MAIN",
+      func: () => ({
+        voiceMain: Boolean(globalThis.__CHAT2API_VOICE_MAIN_V1__),
+        liveMain: Boolean(globalThis.__CHAT2API_VOICE_LIVE_MAIN_V2__),
+      }),
+    });
+    const mainReady = mainProbe?.[0]?.result;
+    if (mainReady?.voiceMain !== true || mainReady?.liveMain !== true) {
+      throw new Error("GPT-Live MAIN-world audio/WebRTC bridge did not become ready after injection");
+    }
+
+    const isolatedProbe = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => ({
+        liveContent: Boolean(globalThis.__CHAT2API_VOICE_LIVE_CONTENT_V2__),
+        textContext: typeof globalThis.__CHAT2API_VOICE_LIVE_TEXT_V24__?.prepareContext === "function",
+      }),
+    });
+    const isolatedReady = isolatedProbe?.[0]?.result;
+    if (isolatedReady?.liveContent !== true || isolatedReady?.textContext !== true) {
+      throw new Error("GPT-Live isolated controller/context bridge did not become ready after injection");
+    }
     await sleep(120);
   }
 
