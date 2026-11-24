@@ -94,20 +94,30 @@ def test_worker_scripts_have_no_static_normal_model_catalog_fallback():
     assert "sendValidatedExtensionStatusV145" in background
 
 
-def test_worker_model_discovery_requires_explicit_administrator_task():
+def test_worker_model_catalog_auto_sync_is_read_only_and_admin_verification_remains_explicit():
     root = Path(__file__).resolve().parents[1] / "chrome_extension"
     background = (root / "background_model_library_v145.js").read_text(encoding="utf-8")
-    for automatic_trigger in (
-        'schedule("worker-restart"',
-        'schedule("worker-connect"',
-        'schedule("worker-bind"',
-        'schedule("worker-enable"',
-        'schedule("model-validation-retry"',
-    ):
-        assert automatic_trigger not in background
+    content = (root / "content_model_library_v145.js").read_text(encoding="utf-8")
+    assert "syncObservedChoices" in background
+    assert "chatgpt-tab-ready" in background
+    assert "chatgpt-tab-activated" in background
+    assert "automatic: options.automatic === true" in background
+    assert "automaticInspectionSafe" in content
+    sync_body = background.split("async function syncObservedChoices", 1)[1].split("function scheduleObservedSync", 1)[0]
+    assert "chat2api.model.select.v145" not in sync_body
     assert 'message?.type !== "model.task.v147"' in background
     assert "chat2api.models.validate.v145" in background
-    assert "chat2api.model.select.v145" in (root / "content_model_library_v145.js").read_text(encoding="utf-8")
+    assert "chat2api.model.select.v145" in content
+
+
+def test_worker_model_auto_catalog_sync_browser_integration():
+    import shutil
+    import subprocess
+    if shutil.which("node") is None:
+        return
+    path = Path(__file__).resolve().parents[1] / "tests" / "worker_model_auto_catalog_sync_v1.mjs"
+    run = subprocess.run([shutil.which("node"), str(path)], capture_output=True, text=True, check=False, timeout=30)
+    assert run.returncode == 0, run.stdout + run.stderr
 
 
 def test_free_default_mini_route_requires_ready_composer_and_reliable_plan() -> None:

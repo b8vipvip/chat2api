@@ -414,10 +414,20 @@
     );
   }
 
-  async function validateModels() {
+  function automaticInspectionSafe() {
+    if (requestActive()) return false;
+    const active = document.activeElement;
+    if (!active || active === document.body || active === document.documentElement) return true;
+    const tag = String(active.tagName || "").toUpperCase();
+    return !["INPUT", "TEXTAREA", "BUTTON", "SELECT"].includes(tag) &&
+      active.isContentEditable !== true &&
+      !active.closest?.("[contenteditable='true']");
+  }
+
+  async function validateModels({ automatic = false } = {}) {
     if (state.running) return state.running;
-    if (requestActive()) {
-      const error = new Error("Worker model validation deferred while a ChatGPT request is active");
+    if (requestActive() || (automatic && !automaticInspectionSafe())) {
+      const error = new Error(automatic ? "Automatic model catalog inspection deferred while ChatGPT is in use" : "Worker model validation deferred while a ChatGPT request is active");
       error.code = "model_validation_busy";
       throw error;
     }
@@ -614,7 +624,7 @@
       return true;
     }
     if (message?.type === "chat2api.models.validate.v145") {
-      validateModels()
+      validateModels({ automatic: Boolean(message.automatic) })
         .then(data => sendResponse({ ok: true, data }))
         .catch(error => sendResponse({ ok: false, code: String(error?.code || ""), stage: String(error?.stage || ""), evidence: error?.evidence || [], after: error?.after || [], error: String(error?.message || error) }));
       return true;
