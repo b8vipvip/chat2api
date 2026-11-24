@@ -7,13 +7,17 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from app.config import Settings
+from app.control_plane_v1_patch import install_control_plane_v1
 from app.live_voice_patch import (
     _build_live_session_setup_prompt,
     _send_live_audio_frame,
     install_live_voice_patch,
 )
 from app.main import create_app
+from app.user_commerce import USER_SESSION_COOKIE
+from app.user_console_v104_patch import install_user_console_v104_patch
 from app.voice_patch import install_voice_patch
+from app.web_chat_integration_v1 import install_web_chat_features_v1
 from app.token_usage import usage_for
 
 
@@ -374,6 +378,70 @@ def test_browser_webapp_can_use_one_time_realtime_session_token(tmp_path: Path) 
             assert error.code == 4401
         else:
             raise AssertionError("one-time realtime token unexpectedly reused")
+
+
+def test_web_chat_live_voice_uses_account_session_and_shared_server_key(tmp_path: Path) -> None:
+    app = create_app(settings(tmp_path))
+    install_control_plane_v1(app)
+    install_user_console_v104_patch(app)
+    install_voice_patch(app)
+    install_live_voice_patch(app)
+    install_web_chat_features_v1(app)
+
+    user = app.state.user_accounts.register(
+        "web-chat-voice@example.org", "secure-password-123", "Web Chat Voice"
+    )
+    user_session = app.state.user_accounts.create_session(user["user_id"])
+    shared_key, _shared_token = asyncio.run(app.state.api_keys.create("web-chat-voice-shared"))
+    app.state.control_plane.update_client({"api_key_id": shared_key["key_id"]})
+
+    with TestClient(app) as client:
+        client.cookies.set(USER_SESSION_COOKIE, user_session)
+        # The account has no user-managed API keys; the internal identity is
+        # created server-side when the Web Chat session is resolved.
+        keys = client.get("/api/user/keys")
+        assert keys.status_code == 200, keys.text
+        assert keys.json()["data"] == []
+
+        client_id, extension_token = pair_extension(client)
+        with client.websocket_connect(f"/ws/extensions/{client_id}?token={extension_token}") as extension:
+            assert extension.receive_json()["type"] == "server.hello"
+            token_response = client.post(
+                "/api/user/chat/voice-session",
+                headers={"Origin": "http://testserver"},
+            )
+            assert token_response.status_code == 200, token_response.text
+            token_payload = token_response.json()
+            assert token_payload["object"] == "realtime.session_token"
+            assert token_payload["expires_in"] == 60
+
+            with client.websocket_connect(
+                token_payload["websocket_path"] + f"&client_id={client_id}",
+            ) as live:
+                live.send_json({"type": "session.start", "model": "gpt-live"})
+                started = extension.receive_json()
+                assert started["type"] == "voice.live.start"
+                request_id = started["request_id"]
+                extension.send_json({
+                    "type": "image.progress",
+                    "kind": "voice-live",
+                    "request_id": request_id,
+                    "live_event": "session.ready",
+                    "instructions_applied": True,
+                    "context_injected": False,
+                })
+                assert live.receive_json()["type"] == "session.ready"
+                live.send_json({"type": "session.finish"})
+                events = acknowledge_live_stop(live, extension, request_id)
+                assert events[-1]["status"] == "cancelled"
+
+    row = app.state.telemetry.get(request_id)
+    assert row["status"] == "cancelled"
+    assert row["web_chat_mode"] is True
+    assert row["shared_api_key_id"] == shared_key["key_id"]
+    identity = app.state.api_keys.keys[row["api_key_id"]]
+    assert identity.internal_owner_user_id == user["user_id"]
+    assert identity.tokens_used == 0
 
 
 def test_live_voice_rejects_legacy_master_key_and_wrong_key(tmp_path: Path) -> None:
