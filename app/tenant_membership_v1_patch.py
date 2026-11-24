@@ -298,8 +298,9 @@ def install_tenant_memberships(app: FastAPI) -> FastAPI:
         except TenantMembershipError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         if is_internal_web_chat_key:
-            key_record.tenant_binding_initialized = True
-            await api_keys.save()
+            async with api_keys.lock:
+                key_record.tenant_binding_initialized = True
+                await api_keys.save()
         audit_ok = audit_write(request, actor, "tenant.api_key_bind_completed", "tenant_api_key", tenant_id, {
             "user_id": body.user_id, "key_id": key_id,
         }, required=False)
@@ -320,8 +321,9 @@ def install_tenant_memberships(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=404, detail="Unknown tenant API key binding") from exc
         key_record = getattr(api_keys, "keys", {}).get(key_id)
         if key_record is not None and key_record.internal_owner_user_id:
-            key_record.tenant_binding_initialized = True
-            await api_keys.save()
+            async with api_keys.lock:
+                key_record.tenant_binding_initialized = True
+                await api_keys.save()
         audit_ok = audit_write(request, actor, "tenant.api_key_unbind_completed", "tenant_api_key", tenant_id, {
             "key_id": key_id,
         }, required=False)
