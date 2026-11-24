@@ -97,6 +97,10 @@
     const deadline = Date.now() + timeout;
     while (Date.now() < deadline) {
       if (active && !isActiveSession(active)) return null;
+      if (active) {
+        const failure = state.mainEvents.find(item => item.type === "voice.live.error");
+        if (failure) throw new Error(String(failure.error || "Live media bridge failed"));
+      }
       try {
         const value = fn();
         if (value) return value;
