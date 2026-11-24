@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 from pathlib import Path
 import json
@@ -10,11 +11,20 @@ import subprocess
 from fastapi.testclient import TestClient
 
 from app.config import Settings
+from app.control_plane_v1_patch import install_control_plane_v1
 from app.main import create_app
 from app.user_commerce import USER_SESSION_COOKIE
 from app.user_console_v104_patch import install_user_console_v104_patch
 from app.web_chat_conversations_v1 import WebChatConversationStoreV1
 from app.web_chat_integration_v1 import install_web_chat_features_v1
+
+
+def _install_web_chat_test_features(app) -> None:
+    install_control_plane_v1(app)
+    shared_key, _shared_token = asyncio.run(app.state.api_keys.create("Web Chat conversation test shared"))
+    app.state.control_plane.update_client({"api_key_id": shared_key["key_id"]})
+    install_user_console_v104_patch(app)
+    install_web_chat_features_v1(app)
 
 
 def _conversation(conversation_id: str, *, title: str = "跨设备会话") -> dict:
@@ -86,8 +96,7 @@ def test_web_chat_conversation_api_auth_ownership_sync_and_conflicts(tmp_path: P
         CHAT2API_DATA_DIR=str(tmp_path),
     )
     app = create_app(settings)
-    install_user_console_v104_patch(app)
-    install_web_chat_features_v1(app)
+    _install_web_chat_test_features(app)
 
     with TestClient(app) as client:
         client.headers.update({"Origin": "http://testserver"})
@@ -310,8 +319,7 @@ def test_conversation_api_rejects_foreign_api_key_and_invalid_pending_message(tm
         CHAT2API_DATA_DIR=str(tmp_path),
     )
     app = create_app(settings)
-    install_user_console_v104_patch(app)
-    install_web_chat_features_v1(app)
+    _install_web_chat_test_features(app)
 
     with TestClient(app) as client:
         client.headers.update({"Origin": "http://testserver"})
@@ -380,8 +388,7 @@ def test_conversation_attachment_references_protect_files_until_last_cross_devic
         CHAT2API_API_KEY="web-chat-conversation-files-master-key",
         CHAT2API_DATA_DIR=str(tmp_path),
     ))
-    install_user_console_v104_patch(app)
-    install_web_chat_features_v1(app)
+    _install_web_chat_test_features(app)
 
     with TestClient(app) as client:
         client.headers.update({"Origin": "http://testserver"})
