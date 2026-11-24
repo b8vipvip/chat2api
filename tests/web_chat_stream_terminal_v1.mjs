@@ -117,6 +117,34 @@ test("reports truncation even without content or with an unframed DONE marker", 
 });
 
 
+test("does not advance the durable SSE cursor on malformed or empty unknown frames", () => {
+  const start = source.indexOf("  function consumeSseFrame(");
+  const end = source.indexOf("  function recoveryStatusLabel(",start);
+  assert.ok(start >= 0 && end > start);
+  const parser = vm.runInNewContext(
+    source.slice(start,end) + "\nconsumeSseFrame",
+    {
+      appendDelta:(assistant,value)=>{assistant.content += String(value || "");},
+      Number,JSON,Array,String,Object,
+    },
+  );
+  const assistant = {content:"",lastEventId:7};
+  assert.equal(parser("id: 999\nevent: delivery.delta\ndata: {not-json\n\n",assistant),false);
+  assert.equal(assistant.lastEventId,7,
+    "a malformed JSON frame must not poison the persisted replay cursor");
+  assert.equal(parser("id: 888\nevent: unknown.heartbeat\n\n",assistant),false);
+  assert.equal(assistant.lastEventId,7,
+    "unknown empty frames must not silently skip valid events");
+  assert.equal(parser("id: 8\nevent: delivery.delta\ndata: {\"delta\":\"hello\"}\n\n",assistant),false);
+  assert.equal(assistant.lastEventId,8);
+  assert.equal(assistant.content,"hello");
+  assert.equal(parser("id: 9\nevent: cursor\n\n",assistant),false);
+  assert.equal(assistant.lastEventId,9,
+    "explicit cursor-only heartbeats can safely advance after validation");
+  assert.equal(parser("id: 10\ndata: [DONE]\n\n",assistant),true);
+  assert.equal(assistant.lastEventId,10);
+});
+
 test("preserves request-scoped tool calls and results as safe presentation state", () => {
   const start = source.indexOf("  function appendDelta(");
   const end = source.indexOf("  function recoveryStatusLabel(", start);
