@@ -195,7 +195,11 @@ def install_control_plane_v1(app: FastAPI) -> FastAPI:
             **result,
             "api_key_name": str((key or {}).get("name") or ""),
             "api_key_prefix": str((key or {}).get("prefix") or ""),
-            "api_key_enabled": bool((key or {}).get("enabled")) and not bool((key or {}).get("expired")),
+            "api_key_enabled": (
+                bool((key or {}).get("enabled"))
+                and not bool((key or {}).get("expired"))
+                and (key or {}).get("token_quota") is None
+            ),
         }
 
     @app.put("/api/admin/control/client")
