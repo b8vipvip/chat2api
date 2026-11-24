@@ -99,6 +99,9 @@
 
   function create(options = {}) {
     const token = String(options.apiToken || "");
+    const sessionEndpoint = String(options.sessionEndpoint || "/v1/audio/realtime/sessions");
+    const fileUploadEndpoint = String(options.fileUploadEndpoint || "/v1/files");
+    const userKeyId = String(options.userKeyId || "");
     const instructions = sliceCodePoints(String(options.instructions || DEFAULT_SESSION_INSTRUCTIONS).trim(),0,MAX_SESSION_INSTRUCTIONS_CHARS);
     const context = sliceCodePoints(String(options.context || "").trim(),0,MAX_SESSION_CONTEXT_CHARS);
     const beforeConnect = typeof options.beforeConnect === "function" ? options.beforeConnect : null;
@@ -384,10 +387,13 @@
         throw new Error("GPT-Live startup was cancelled");
       }
       microphoneStream = requestedMicrophoneStream;
-      const response = await fetcher("/v1/audio/realtime/sessions", {
+      const sessionHeaders = {Accept:"application/json"};
+      if (token) sessionHeaders.Authorization = "Bearer " + token;
+      if (userKeyId) sessionHeaders["X-Chat2API-User-Key-ID"] = userKeyId;
+      const response = await fetcher(sessionEndpoint, {
         method:"POST",
         credentials:"same-origin",
-        headers:{Authorization:"Bearer " + token,Accept:"application/json"},
+        headers:sessionHeaders,
       });
       assertNotCancelled();
       let session = {};
@@ -516,14 +522,16 @@
           releaseUnsentVideoFrame(itemId);
           return;
         }
-        const upload = await fetcher("/v1/files", {
+        const uploadHeaders = {
+          "Content-Type":"application/json",
+          "X-Chat2API-Source":"web-chat",
+        };
+        if (token) uploadHeaders.Authorization = "Bearer " + token;
+        if (userKeyId) uploadHeaders["X-Chat2API-User-Key-ID"] = userKeyId;
+        const upload = await fetcher(fileUploadEndpoint, {
           method:"POST",
           credentials:"same-origin",
-          headers:{
-            Authorization:"Bearer " + token,
-            "Content-Type":"application/json",
-            "X-Chat2API-Source":"web-chat",
-          },
+          headers:uploadHeaders,
           body:JSON.stringify({
             filename:"webchat-camera-" + sequence + ".jpg",
             mime_type:"image/jpeg",
