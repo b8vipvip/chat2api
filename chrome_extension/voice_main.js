@@ -323,6 +323,11 @@
           throw error;
         }
         const tracks = [...synthetic.getAudioTracks()];
+        if (!tracks.length || tracks.some(track => track.readyState === "ended")) {
+          const error = new Error("ChatGPT Voice synthetic microphone returned no live audio track");
+          if (state.mode === "live") post("voice.live.error", { error: error.message });
+          throw error;
+        }
         post("voice.mic.synthetic", { track_count: tracks.length, mode: state.mode });
         if (!constraints?.video) return new MediaStream(tracks);
         const native = await nativeGetUserMedia({ ...constraints, audio: false });
