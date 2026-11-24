@@ -205,9 +205,13 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
             expired = [key for key, (deadline, _) in realtime_sessions.items() if deadline <= now]
             for key in expired:
                 realtime_sessions.pop(key, None)
+            # Web Chat users share one service credential. Enforce the
+            # per-key session cap against that shared credential rather than
+            # each account's hidden ownership identity.
+            capacity_key_id = str(principal.auth_key_id or principal.key_id)
             per_key = sum(
                 1 for _, (_, existing) in realtime_sessions.items()
-                if existing.key_id == principal.key_id
+                if str(existing.auth_key_id or existing.key_id) == capacity_key_id
             )
             if per_key >= MAX_REALTIME_SESSION_TOKENS_PER_KEY:
                 raise HTTPException(
