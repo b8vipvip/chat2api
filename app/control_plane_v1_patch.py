@@ -199,6 +199,7 @@ def install_control_plane_v1(app: FastAPI) -> FastAPI:
                 bool((key or {}).get("enabled"))
                 and not bool((key or {}).get("expired"))
                 and (key or {}).get("token_quota") is None
+                and {"chat", "models"}.issubset(set((key or {}).get("scopes") or []))
             ),
         }
 
