@@ -251,15 +251,26 @@ def test_web_chat_usage_is_counted_for_user_and_shared_key_once(tmp_path: Path) 
             "request_id": "req_web_chat_shared_usage_0001",
             "api_key_id": user_identity.key_id,
             "shared_api_key_id": shared_public["key_id"],
+            "web_chat_mode": True,
             "status": "completed",
             "usage": {"total_tokens": 73},
         }
         await api_keys.account_completed_usage(record)
         await api_keys.account_completed_usage(record)
+        regular_record = {
+            "request_id": "req_regular_api_usage_0002",
+            "api_key_id": user_identity.key_id,
+            "web_chat_mode": False,
+            "status": "completed",
+            "usage": {"total_tokens": 19},
+        }
+        await api_keys.account_completed_usage(regular_record)
         return shared_public["key_id"], user_identity.key_id
 
     shared_key_id, user_key_id = asyncio.run(exercise())
     assert api_keys.keys[shared_key_id].tokens_used == 73
-    assert api_keys.keys[user_key_id].tokens_used == 73
+    # Web Chat must not consume a user's legacy API-key quota; normal API calls
+    # still account against their caller key.
+    assert api_keys.keys[user_key_id].tokens_used == 19
     assert api_keys.get_public(user_key_id) is None
     assert all(row["key_id"] != user_key_id for row in api_keys.list_public())
