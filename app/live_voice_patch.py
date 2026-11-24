@@ -468,16 +468,21 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 # kind="voice-live". Previously that event fell through the
                 # voice-live branch (empty live_event) and was swallowed. The
                 # test then waited 55s and telemetry recorded error=null.
-                if event.get("type") in {"image.error", "chat.error"}:
-                    worker_disconnect = event.get("type") == "chat.error"
+                worker_disconnect = None
+                if event.get("type") == "image.error":
+                    worker_disconnect = False
+                elif event.get("type") == "chat.error":
+                    worker_disconnect = True
+                if worker_disconnect is not None:
                     if state.completed_mono is None:
                         state.completed_mono = time.perf_counter()
-                    error_message = str(
-                        event.get("error") or (
-                            "The assigned ChatGPT Worker disconnected during the Live session"
-                            if worker_disconnect else "ChatGPT Voice bridge failed"
-                        )
-                    )[:500]
+                    if worker_disconnect:
+                        error_message = str(
+                            event.get("error")
+                            or "The assigned ChatGPT Worker disconnected during the Live session"
+                        )[:500]
+                    else:
+                        error_message = str(event.get("error") or "ChatGPT Voice bridge failed")[:500]
                     await send_json({
                         "type": "error",
                         "code": "GPT_LIVE_WORKER_DISCONNECTED" if worker_disconnect else "GPT_LIVE_BROWSER_ERROR",
