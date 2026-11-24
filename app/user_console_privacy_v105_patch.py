@@ -45,7 +45,11 @@ def install_user_console_privacy_v105_patch(app: FastAPI) -> FastAPI:
         if response.status_code >= 500:
             headers = {
                 key: value for key, value in response.headers.items()
-                if key.lower() not in {"content-length", "content-type"}
+                if key.lower() not in {
+                    "content-length", "content-type", "content-encoding",
+                    "transfer-encoding", "connection", "keep-alive",
+                    "upgrade", "trailer", "set-cookie",
+                }
             }
             headers["Cache-Control"] = "no-store"
             vary_name = next((name for name in headers if name.lower() == "vary"), None)
@@ -66,7 +70,14 @@ def install_user_console_privacy_v105_patch(app: FastAPI) -> FastAPI:
             payload: Any = json.loads(raw.decode("utf-8"))
         except Exception:
             payload = {"detail": "请求未完成"}
-        headers = {key: value for key, value in response.headers.items() if key.lower() not in {"content-length", "content-type"}}
+        headers = {
+            key: value for key, value in response.headers.items()
+            if key.lower() not in {
+                "content-length", "content-type", "content-encoding",
+                "transfer-encoding", "connection", "keep-alive",
+                "upgrade", "trailer", "set-cookie",
+            }
+        }
         # User API error responses must never be cached, regardless of the
         # route's original cache policy.
         headers["Cache-Control"] = "no-store"
