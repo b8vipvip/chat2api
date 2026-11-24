@@ -4,8 +4,10 @@ import vm from "node:vm";
 
 const voiceMain=readFileSync("chrome_extension/voice_main.js","utf8");
 const liveMain=readFileSync("chrome_extension/voice_live_main.js","utf8");
+const webClient=readFileSync("app/chat_voice_client_v1.js","utf8");
 new vm.Script(voiceMain);
 new vm.Script(liveMain);
+new vm.Script(webClient);
 
 function micHarness({resume="running",existing=false}={}) {
   const state={micContext:null,micDestination:null,micOscillator:null};
@@ -148,6 +150,30 @@ for(const mode of ["reject","suspended"]) {
     "a suspended remote output context must never satisfy Live audio readiness");
 }
 
+{
+  const start=webClient.indexOf("    function playPcm(buffer) {");
+  const end=webClient.indexOf("\n    function startMicrophonePipeline()",start);
+  assert.ok(start>=0 && end>start,"Web Chat Live PCM playback guard must remain extractable");
+  const events=[];
+  let cleanupCalls=0;
+  const playPcm=vm.runInNewContext(
+    webClient.slice(start,end)+"\nplayPcm",
+    {
+      audioContext:{state:"suspended"},
+      cleaned:false,
+      event:payload=>events.push(payload),
+      cleanup:async()=>{cleanupCalls+=1;},
+      decodePcm16:()=>new Float32Array([0.1]),
+      String,Error,Promise,Math,Number,ArrayBuffer,
+    },
+  );
+  playPcm(new ArrayBuffer(2));
+  assert.equal(events[0]?.type,"client.error");
+  assert.match(events[0]?.message,/已暂停/);
+  assert.equal(cleanupCalls,1,
+    "a suspended Web Chat output context must not silently discard all future PCM playback");
+}
 assert.ok(voiceMain.includes("synthetic microphone AudioContext is not running"));
 assert.ok(liveMain.includes("remote audio AudioContext is not running"));
+assert.ok(webClient.includes("浏览器音频输出上下文未进入运行状态"));
 console.log("voice-audio-context-readiness-v1-passed");
