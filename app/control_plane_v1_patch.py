@@ -208,6 +208,13 @@ def install_control_plane_v1(app: FastAPI) -> FastAPI:
         supplied = body.model_dump(exclude_none=True, exclude_unset=True)
         token = supplied.pop("api_key", None)
         clear_api_key = bool(supplied.pop("clear_api_key", False))
+        # The shared service credential controls every Web Chat user's
+        # upstream access and billing. Client-policy delegates may edit public
+        # flags, but only the root super administrator may set or clear it.
+        if token is not None or clear_api_key:
+            actor = str(getattr(request.state, "admin_username", "") or "")
+            if store.role_for(actor) != "super_admin":
+                raise HTTPException(status_code=403, detail="仅超级管理员可以配置 Web Chat 统一 API Key")
         if token is not None and clear_api_key:
             raise HTTPException(status_code=400, detail="Cannot set and clear the shared API Key in one update")
         if token is not None:
