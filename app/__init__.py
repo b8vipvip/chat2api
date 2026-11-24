@@ -1,6 +1,6 @@
 """chat2api server package."""
 
-__version__ = "0.7.2"
+__version__ = "0.7.3"
 
 # Evict the exact stale websocket when an extension transport dies abnormally
 # (for example RFC 6455 close code 1006) so reconnect/pairing does not keep
