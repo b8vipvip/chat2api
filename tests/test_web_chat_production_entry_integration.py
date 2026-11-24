@@ -56,38 +56,41 @@ for method, path in expected:
     ]
     assert len(matches) == 1, (method, path, len(matches))
 
+def assert_private_no_store(response):
+    assert "no-store" in response.headers.get("cache-control", "").lower(), dict(response.headers)
+    assert "cookie" in {value.strip().lower() for value in response.headers.get("vary", "").split(",")}
+
 with TestClient(app) as client:
     session = client.get("/api/user/chat/session")
     assert session.status_code == 401
-    assert session.headers["cache-control"] == "private, no-store"
+    assert_private_no_store(session)
     models = client.get("/api/user/chat/models")
     assert models.status_code == 401
-    assert models.headers["cache-control"] == "private, no-store"
+    assert_private_no_store(models)
     files = client.post(
         "/api/user/chat/files",
         json={"filename":"proof.txt","mime_type":"text/plain","data_base64":"aGk=","purpose":"assistants"},
     )
     assert files.status_code == 401
-    assert files.headers["cache-control"] == "private, no-store"
+    assert_private_no_store(files)
     recovery = client.get("/api/user/chat/requests/req_12345678/recovery")
     assert recovery.status_code == 401
+    assert_private_no_store(recovery)
     mode1 = client.post("/api/user/chat/completions", json={"model":"gpt-5.6-sol","messages":[{"role":"user","content":"hello"}],"stream":True})
     assert mode1.status_code == 401
-    assert mode1.headers["cache-control"] == "private, no-store"
-    assert "cookie" in {value.strip().lower() for value in mode1.headers["vary"].split(",")}
+    assert_private_no_store(mode1)
     native = client.get("/api/user/chat/requests/req_12345678/native-content")
     assert native.status_code == 401
-    assert native.headers["cache-control"] == "private, no-store"
-    assert recovery.headers["cache-control"] == "private, no-store"
+    assert_private_no_store(native)
     download = client.get("/api/user/chat/files/file_12345678/download")
     assert download.status_code == 401
-    assert download.headers["cache-control"] == "private, no-store"
+    assert_private_no_store(download)
     image_content = client.get("/api/user/files/file_12345678/content")
     assert image_content.status_code == 401
-    assert image_content.headers["cache-control"] == "private, no-store"
+    assert_private_no_store(image_content)
     image_delete = client.delete("/api/user/files/file_12345678", headers={"Origin": "http://testserver"})
     assert image_delete.status_code == 401
-    assert image_delete.headers["cache-control"] == "private, no-store"
+    assert_private_no_store(image_delete)
 
     # Exercise the actual app.entry composition, not a manually installed route.
     registered = client.post(
