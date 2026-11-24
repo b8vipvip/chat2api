@@ -1061,6 +1061,7 @@
     };
     state.conversations.unshift(conversation);
     state.activeConversationId = conversation.id;
+    void loadModels();
     state.forceScrollToBottom = true;
     saveHistory();
     renderAll();
