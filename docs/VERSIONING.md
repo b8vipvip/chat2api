@@ -4,10 +4,10 @@ chat2api 同时包含服务端 Python 包、分层运行时/控制台、Chrome B
 
 ## 当前版本面
 
-- Python package：`0.7.2`
-- Server runtime / console：`0.22.299`
-- Chrome Bridge：`0.22.299`
-- Chrome Bundle / manifest：`0.22.299`
+- Python package：`0.7.3`
+- Server runtime / console：`0.22.300`
+- Chrome Bridge：`0.22.300`
+- Chrome Bundle / manifest：`0.22.300`
 - Realtime Voice protocol：`chat2api-live-v1`
 - 生产入口：`app.entry:app`
 
@@ -38,15 +38,15 @@ GET /version
   "object": "chat2api.version",
   "contract_version": 1,
   "server": {
-    "package_version": "0.7.2",
-    "runtime_version": "0.22.299",
-    "expected_runtime_version": "0.22.299",
+    "package_version": "0.7.3",
+    "runtime_version": "0.22.300",
+    "expected_runtime_version": "0.22.300",
     "entrypoint": "app.entry:app",
     "runtime_aligned": true
   },
   "chrome_bridge": {
-    "version": "0.22.299",
-    "bundle_version": "0.22.299",
+    "version": "0.22.300",
+    "bundle_version": "0.22.300",
     "multimodal_revision": 85
   },
   "protocols": {
@@ -70,6 +70,15 @@ GET /version
 7. `tests/test_runtime_contract.py` 必须保持通过，用来阻止 package、manifest、protocol 和文档再次漂移。
 8. Worker 内容运行时升级时，bundle marker、content runtime contract、programmatic bootstrap 和 background runtime preflight 必须在同一次发布中对齐；如果采用兼容热修复并保持 manifest 版本不变，服务端 Worker 自动同步必须依据 `chrome_extension/` 路径变化强制刷新 Worker payload。涉及页面 MAIN-world 能力时还必须把 MAIN-world marker 纳入 runtime contract。
 9. 自动处理 ChatGPT 页面弹窗只能执行无副作用的关闭/跳过动作；涉及授权、连接健康数据、付款、登录、验证、删除账号等动作必须保持人工确认，且 runtime preflight 必须把当前 UI hygiene revision 纳入完整性检查。
+
+## v0.22.300
+
+- Web Chat 改为 HttpOnly 账户会话认证，用户登录后即可使用，不再要求在浏览器端创建、选择或保存 API Key。
+- 管理后台“客户端配置”新增统一 Web Chat API Key 设置；密钥仅引用服务端托管 Key ID，不回显明文，并限制为超级管理员配置。
+- 每个账户使用隐藏的内部身份 ID 隔离会话、附件、请求历史、租户和钱包归属；所有 Web Chat 请求统一使用服务端配置的共享 Key。
+- 共享 Key 用量结算、配额预留、终态重放和重启恢复统一检查共享 Key 账本，同时保留旧版用户 Key 请求的历史结算兼容。
+- Live Voice 使用账户会话与共享 Key，并在 WebSocket 握手及会话期间重新验证账户会话、共享 Key 和权限。
+- Server runtime、Chrome Bridge、Worker Bundle / manifest 同步升级至 `0.22.300`；Python package 升级至 `0.7.3`。
 
 ## v0.22.299
 
