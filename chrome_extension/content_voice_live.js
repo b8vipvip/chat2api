@@ -511,9 +511,11 @@
           state.stoppedSessions.delete(state.stoppedSessions.keys().next().value);
         }
       }
-      if (state.active === active) state.active = null;
-      state.currentResponseId = null;
-      state.mainEvents = [];
+      if (state.active === active) {
+        state.active = null;
+        state.currentResponseId = null;
+        state.mainEvents = [];
+      }
     })();
     active.stopPromise = stopPromise;
     return stopPromise;
