@@ -484,6 +484,7 @@ async function connectSocket() {
   const settings = await config();
   if (!settings.clientId || !settings.clientToken) { await updateState("unpaired"); return; }
   if (socket && [WebSocket.OPEN, WebSocket.CONNECTING].includes(socket.readyState)) return;
+  if (socket) rejectPendingVoiceEventAcks("socket-replaced-before-broker-ack",socket);
   await updateState("connecting");
   let connection;
   try {
