@@ -692,6 +692,7 @@ def test_client_policy_accepts_shared_api_key_without_persisting_or_exposing_sec
 
 def test_control_plane_migrates_legacy_client_policy_without_api_key_id(tmp_path: Path):
     store = ControlPlaneStore(tmp_path, "owner")
+    store.update_client({"announcement": "legacy"})
     payload = json.loads(store.path.read_text(encoding="utf-8"))
     payload["client"].pop("api_key_id", None)
     store.path.write_text(json.dumps(payload), encoding="utf-8")
