@@ -71,21 +71,27 @@ async function runEmit(sendMessage) {
   const start=liveSource.indexOf("  function emitLive(");
   const end=liveSource.indexOf("  function postMain(",start);
   assert.ok(start>=0 && end>start,"production emitLive failure policy must remain extractable");
-  let stopCalls=0;
+  let stopCalls=0,stopNotify=null;
   const active={requestId:"voice-event-failure",sessionId:"session-1"};
   const emitLive=vm.runInNewContext(
     liveSource.slice(start,end) + "\nemitLive",
     {
       emit:async()=>{throw new Error("server-websocket-disconnected");},
       isActiveSession:()=>true,
-      stopLive:async()=>{stopCalls+=1;},
+      stopLive:async(_active,notify)=>{stopCalls+=1;stopNotify=notify;},
       String,Promise,Error,
     },
   );
   await assert.rejects(emitLive(active,"response.audio.delta",{pcm_base64:"AAAA"}),/server-websocket-disconnected/);
   assert.equal(stopCalls,1,
     "a dropped intermediate audio/transcript event must stop upstream Voice rather than silently continue");
+  assert.equal(stopNotify,true,
+    "a failed event must notify the server instead of performing a silent cleanup");
   assert.equal(active.deliveryError,"server-websocket-disconnected");
+  assert.deepEqual(active.stopTerminalError,{
+    code:"VOICE_EVENT_DELIVERY_FAILED",
+    message:"A live Voice event was not accepted by the server Broker: server-websocket-disconnected",
+  });
 
   stopCalls=0;
   await assert.rejects(emitLive(active,"session.ready"),/server-websocket-disconnected/);
@@ -94,6 +100,30 @@ async function runEmit(sendMessage) {
   await assert.rejects(emitLive(active,"session.closed"),/server-websocket-disconnected/);
   assert.equal(stopCalls,0,
     "a failed terminal send must propagate to the stop owner without recursive teardown");
+}
+
+{
+  const start=liveSource.indexOf("  function sendStopTerminal(");
+  const end=liveSource.indexOf("\n  async function stopLive(",start);
+  assert.ok(start>=0 && end>start,"production Voice terminal selection must remain extractable");
+  const events=[];
+  const sendStopTerminal=vm.runInNewContext(
+    liveSource.slice(start,end) + "\nsendStopTerminal",
+    {
+      emitLive:async(_active,event,data)=>{events.push({event,data});},
+      Promise,String,Error,
+    },
+  );
+  const active={
+    stopTerminalError:{code:"VOICE_EVENT_DELIVERY_FAILED",message:"Broker rejected an audio frame"},
+    stopMainAcknowledged:true,
+  };
+  await sendStopTerminal(active);
+  assert.deepEqual(events,[{
+    event:"error",
+    data:{code:"VOICE_EVENT_DELIVERY_FAILED",message:"Broker rejected an audio frame"},
+  }],"event loss must produce an error terminal, not a false successful session.closed");
+  assert.equal(active.stopTerminalSent,true);
 }
 
 {
