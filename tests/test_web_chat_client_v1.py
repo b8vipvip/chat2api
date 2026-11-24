@@ -108,6 +108,8 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         assert "Authorization" not in script.text
         assert "/api/user/chat/session" in script.text
         assert "/api/user/chat/models" in script.text
+        assert 'apiJson("/api/user/models")' not in script.text
+        assert "当前账户或服务端统一 API Key 没有可用模型" in script.text
         assert "/api/user/chat/files" in script.text
         assert "/api/user/chat/voice-session" in script.text
         assert "X-Chat2API-User-Key-ID" in script.text
