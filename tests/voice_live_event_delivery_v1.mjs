@@ -184,6 +184,22 @@ async function runEmit(sendMessage) {
     assert.equal(h.calls.wait,1);
     assert.equal(h.calls.click,1);
   }
+
+  {
+    const h=await makeStopHarness();
+    const silentCleanup=h.stopLive(h.active,false);
+    h.acknowledge(true);
+    await silentCleanup;
+    const newer={requestId:"newer-session"};
+    h.state.active=newer;
+    h.state.currentResponseId="newer-response";
+    h.state.mainEvents=["newer-event"];
+    await h.stopLive(h.active,true);
+    assert.equal(h.state.active,newer,
+      "a late stop for an old session must not clear the new active Voice owner");
+    assert.equal(h.state.currentResponseId,"newer-response");
+    assert.deepEqual(h.state.mainEvents,["newer-event"]);
+  }
 }
 
 assert.ok(backgroundSource.includes('error: sent ? "" : "server-websocket-disconnected-or-send-failed"'),
