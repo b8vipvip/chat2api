@@ -356,9 +356,16 @@ class ApiKeyStore:
         shared_key_id = str(record.get("shared_api_key_id") or "")
         if record.get("web_chat_mode") is True:
             # New Web Chat requests charge only the configured shared key.
-            # Rows created before this migration have no shared key ID and
-            # must retain their historical account-owned key settlement.
-            key_ids = [shared_key_id or str(record.get("api_key_id") or "")]
+            # Rows created before this migration used a normal managed user key
+            # (auth_kind=managed) and must retain their historical settlement.
+            # A new Web Chat row missing its shared-key identity is incomplete;
+            # never silently charge the hidden ownership identity instead.
+            if shared_key_id:
+                key_ids = [shared_key_id]
+            elif str(record.get("auth_kind") or "") == "web_chat":
+                return
+            else:
+                key_ids = [str(record.get("api_key_id") or "")]
         else:
             key_ids = [str(record.get("api_key_id") or "")]
         if not key_ids:
