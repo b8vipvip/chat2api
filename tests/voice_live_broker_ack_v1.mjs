@@ -56,7 +56,9 @@ function harness() {
     type:"voice.event.ack",event_id:sent.worker_event_ack_id,
     request_id:event.request_id,accepted:true,
   },h.socket),true);
-  assert.deepEqual(await pending,{ok:true,error:""});
+  const accepted=await pending;
+  assert.equal(accepted.ok,true);
+  assert.equal(accepted.error,"");
   assert.equal(h.api.pendingVoiceEventAcks.size,0);
   assert.equal(h.timers.size,0);
 }
@@ -70,7 +72,9 @@ function harness() {
     type:"voice.event.ack",event_id:sent.worker_event_ack_id,
     request_id:event.request_id,accepted:false,reason:"request-not-owned-or-active",
   },h.socket),true);
-  assert.deepEqual(await pending,{ok:false,error:"request-not-owned-or-active"});
+  const rejected=await pending;
+  assert.equal(rejected.ok,false);
+  assert.equal(rejected.error,"request-not-owned-or-active");
   assert.equal(h.api.pendingVoiceEventAcks.size,0);
 }
 
@@ -82,7 +86,9 @@ function harness() {
   const [timerId,timer]=[...h.timers.entries()][0];
   assert.equal(timer.ms,8000);
   timer.fn();
-  assert.deepEqual(await pending,{ok:false,error:"voice-event-broker-ack-timeout"});
+  const timedOut=await pending;
+  assert.equal(timedOut.ok,false);
+  assert.equal(timedOut.error,"voice-event-broker-ack-timeout");
   assert.equal(h.api.pendingVoiceEventAcks.size,0);
   h.api.rejectPendingVoiceEventAcks("test cleanup");
 }
@@ -93,7 +99,9 @@ function harness() {
     type:"image.progress",kind:"voice-live",request_id:"voicereq_disconnect",live_event:"session.closed",
   });
   h.api.rejectPendingVoiceEventAcks("socket-closed-before-broker-ack",h.socket);
-  assert.deepEqual(await pending,{ok:false,error:"socket-closed-before-broker-ack"});
+  const disconnected=await pending;
+  assert.equal(disconnected.ok,false);
+  assert.equal(disconnected.error,"socket-closed-before-broker-ack");
   assert.equal(h.api.pendingVoiceEventAcks.size,0);
 }
 
@@ -102,7 +110,8 @@ function harness() {
   const result=await h.api.awaitVoiceEventAck({
     type:"image.progress",kind:"chat",request_id:"voicereq_invalid",live_event:"session.ready",
   });
-  assert.deepEqual(result,{ok:false,error:"invalid-voice-event-envelope"});
+  assert.equal(result.ok,false);
+  assert.equal(result.error,"invalid-voice-event-envelope");
   assert.equal(h.socket.sent.length,0);
 }
 
