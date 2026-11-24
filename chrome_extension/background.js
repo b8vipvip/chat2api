@@ -553,7 +553,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       .catch(error=>sendResponse({ok:false,error:String(error?.message || error)}));
     return true;
   }
-  if (message.type === "chat2api.event") { trySendSocket(message.event).then(sent => sendResponse({ ok: sent })); return true; }
+  if (message.type === "chat2api.event") {
+    trySendSocket(message.event).then(sent => sendResponse({
+      ok: sent,
+      error: sent ? "" : "server-websocket-disconnected-or-send-failed",
+    }));
+    return true;
+  }
   if (message.type === "chat2api.attachment.fetch") {
     fetchAttachment(message.fileId, message.requestId).then(data => sendResponse({ ok: true, data })).catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));
     return true;
