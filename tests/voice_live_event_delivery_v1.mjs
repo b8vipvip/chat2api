@@ -97,7 +97,7 @@ async function runEmit(sendMessage) {
 }
 
 {
-  const start=liveSource.indexOf("  async function stopLive(");
+  const start=liveSource.indexOf("  function sendStopTerminal(");
   const end=liveSource.indexOf("\n  window.addEventListener(\"message\"",start);
   assert.ok(start>=0 && end>start,"production stopLive drain must remain extractable");
 
@@ -148,6 +148,19 @@ async function runEmit(sendMessage) {
     await Promise.all([silentCleanup,brokerStop]);
     assert.deepEqual(h.calls.events,["session.closed"],
       "a later broker stop must upgrade an in-flight silent cleanup to a server-notified terminal");
+    assert.equal(h.calls.wait,1);
+    assert.equal(h.calls.click,1);
+  }
+
+  {
+    const h=await makeStopHarness();
+    const silentCleanup=h.stopLive(h.active,false);
+    h.acknowledge(true);
+    await silentCleanup;
+    assert.deepEqual(h.calls.events,[]);
+    await h.stopLive(h.active,true);
+    assert.deepEqual(h.calls.events,["session.closed"],
+      "a broker stop arriving just after silent cleanup must still deliver one terminal event");
     assert.equal(h.calls.wait,1);
     assert.equal(h.calls.click,1);
   }
