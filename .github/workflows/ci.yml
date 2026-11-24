@@ -331,6 +331,8 @@ jobs:
         run: node tests/voice_live_media_bridge_v194.mjs
       - name: Live Voice native camera track passthrough
         run: node tests/voice_camera_track_passthrough_v1.mjs
+      - name: Live Voice bridge injection and readiness contract
+        run: node tests/voice_live_bridge_injection_v1.mjs
 
       - name: R06 map full-suite collection around prior timeout positions
         run: |
