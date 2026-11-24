@@ -94,6 +94,8 @@ class ManagedApiKey:
     charged_requests: dict[str, int] | None = None
     # Internal account-scoped identity; never exposed as a user-manageable API key.
     internal_owner_user_id: str | None = None
+    # Prevent automatic workspace rebinding after an administrator explicitly unbinds it.
+    tenant_binding_initialized: bool = False
 
     def public(self) -> dict[str, Any]:
         scopes = self.scopes or ["chat", "models", "files", "images", "audio"]
