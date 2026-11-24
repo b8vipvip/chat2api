@@ -172,20 +172,27 @@
     // For any intermediate transcript/audio/control event, a negative server
     // ACK invalidates the live turn: stop upstream Voice rather than silently
     // continue after dropping a PCM chunk or transcript boundary.
-    if (liveEvent === "session.ready" || liveEvent === "session.closed" || liveEvent === "error") {
+    if (liveEvent === "session.ready" || liveEvent === "session.closed") {
       return pending;
     }
     return pending.catch(error => {
       if (isActiveSession(active)) {
-        active.deliveryError = String(error?.message || error).slice(0,300);
-        active.stopTerminalError = {
-          code:"VOICE_EVENT_DELIVERY_FAILED",
-          message:"A live Voice event was not accepted by the server Broker: " + active.deliveryError,
-        };
-        // A dropped audio/transcript/control event invalidates the live turn.
-        // Stop upstream and ask the server to terminate this call as an error;
-        // silent cleanup would leave the public Live WebSocket waiting forever.
-        void stopLive(active,true).catch(() => {});
+        if (liveEvent === "error") {
+          // The upstream bridge has already failed. If the server could not
+          // confirm the error event, still stop local capture/playback; the
+          // server will independently detect a dead Worker socket if needed.
+          void stopLive(active,false).catch(() => {});
+        } else {
+          active.deliveryError = String(error?.message || error).slice(0,300);
+          active.stopTerminalError = {
+            code:"VOICE_EVENT_DELIVERY_FAILED",
+            message:"A live Voice event was not accepted by the server Broker: " + active.deliveryError,
+          };
+          // A dropped audio/transcript/control event invalidates the live turn.
+          // Stop upstream and ask the server to terminate this call as an error;
+          // silent cleanup would leave the public Live WebSocket waiting forever.
+          void stopLive(active,true).catch(() => {});
+        }
       }
       throw error;
     });
