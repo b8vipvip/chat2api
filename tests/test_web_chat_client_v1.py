@@ -193,6 +193,14 @@ def test_web_chat_uses_shared_server_key_but_keeps_user_identity_isolated(tmp_pa
         assert session_a.status_code == 200, session_a.text
         key_a = session_a.json()["key_id"]
         assert key_a and key_a != shared_public["key_id"]
+        # The internal ownership identity is never exposed as a user API key
+        # and cannot be revealed, quota-edited or revoked through legacy routes.
+        assert client.get("/api/user/keys").json()["data"] == []
+        assert client.get(f"/api/user/keys/{key_a}/secret").status_code == 409
+        assert client.patch(
+            f"/api/user/keys/{key_a}/quota", json={"token_quota": 100},
+        ).status_code == 409
+        assert client.delete(f"/api/user/keys/{key_a}").status_code == 409
         assert shared_token not in session_a.text
         assert shared_public["key_id"] not in session_a.text
         assert client.get("/api/client/config").json()["api_key_configured"] is True
