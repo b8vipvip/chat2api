@@ -736,6 +736,14 @@ def test_web_chat_usage_charges_shared_key_and_keeps_legacy_key_fallback(tmp_pat
             "status": "completed",
             "usage": {"total_tokens": 9},
         })
+        await app.state.api_keys.account_completed_usage({
+            "request_id": "req_new_usage_missing_shared_key_0001",
+            "api_key_id": identity.key_id,
+            "web_chat_mode": True,
+            "auth_kind": "web_chat",
+            "status": "completed",
+            "usage": {"total_tokens": 11},
+        })
 
     asyncio.run(settle())
 
