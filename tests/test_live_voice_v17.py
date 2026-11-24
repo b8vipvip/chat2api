@@ -710,11 +710,15 @@ def test_live_voice_malformed_control_frames_do_not_terminate_session(tmp_path: 
                 assert live.receive_json() == {"type": "pong", "timestamp": 123}
 
                 live.send_json({"type": "session.finish"})
-                acknowledge_live_stop(live, extension, request_id)
+                events = acknowledge_live_stop(live, extension, request_id)
+                assert events[-1]["status"] == "cancelled"
+                assert events[-1]["error"] is None
 
         row = app.state.telemetry.get(request_id)
-        assert row["status"] == "error"
-        assert "without a completed response" in row["error"]
+        # Recoverable invalid control frames did not end the session or
+        # demonstrate a user turn; a later idle finish is still a cancellation.
+        assert row["status"] == "cancelled"
+        assert row["error"] is None
 
 
 def test_live_voice_requires_session_start_json_object(tmp_path: Path) -> None:
