@@ -14,6 +14,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 
+from .admin_auth import same_origin_admin_request
 from .api_keys import ApiPrincipal
 from . import model_capability_routing_patch as model_routing
 from .responses_multimodal_input_v183 import attachment_specs, validate_image_file
@@ -241,32 +242,37 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
         if deadline <= now:
             return None
 
-        # A one-time token must not outlive the API key that minted it.
-        # Re-read the authoritative key record at consumption so revocation,
-        # expiry, scope removal, or quota exhaustion takes effect immediately.
-        key = getattr(api_keys, "keys", {}).get(issued_principal.key_id)
-        if key is None:
+        # A Web Chat one-time token is bound to both the per-user ownership
+        # namespace and the currently configured shared service key. User key
+        # revocation/expiry does not revoke the account session; shared-key
+        # revocation, expiry or scope removal takes effect immediately.
+        identity = getattr(api_keys, "keys", {}).get(issued_principal.key_id)
+        auth_key_id = issued_principal.auth_key_id if issued_principal.kind == "web_chat" else issued_principal.key_id
+        auth_key = getattr(api_keys, "keys", {}).get(auth_key_id)
+        if identity is None or auth_key is None:
             return None
-        public = key.public() if callable(getattr(key, "public", None)) else {}
-        if not isinstance(public, dict) or not public.get("enabled"):
+        public = auth_key.public() if callable(getattr(auth_key, "public", None)) else {}
+        if not isinstance(public, dict) or not public.get("enabled") or auth_key.internal_owner_user_id:
             return None
-        scopes = tuple(key.scopes or ["chat", "models", "files", "images", "audio"])
+        scopes = tuple(auth_key.scopes or ["chat", "models", "files", "images", "audio"])
         if "audio" not in scopes and "chat" not in scopes:
             return None
         return ApiPrincipal(
-            key_id=key.key_id,
-            name=key.name,
-            kind="managed",
-            scopes=scopes,
+            key_id=issued_principal.key_id,
+            name=issued_principal.name,
+            kind=issued_principal.kind,
+            scopes=tuple(issued_principal.scopes),
+            auth_key_id=auth_key_id if issued_principal.kind == "web_chat" else "",
         )
 
     def principal_is_active(principal: ApiPrincipal) -> bool:
-        # A successful WebSocket handshake must not turn a managed API key
-        # into a permanent lease. Re-read the authoritative key record so
-        # disable, revocation, expiry, quota exhaustion and scope removal
-        # terminate an already-open Live session as well.
-        key = getattr(api_keys, "keys", {}).get(principal.key_id)
-        if key is None:
+        # A successful WebSocket handshake must not turn a credential into a
+        # permanent lease. For Web Chat, the shared service key is authoritative;
+        # the per-user key ID is only the account ownership namespace.
+        identity = getattr(api_keys, "keys", {}).get(principal.key_id)
+        auth_key_id = principal.auth_key_id if principal.kind == "web_chat" else principal.key_id
+        key = getattr(api_keys, "keys", {}).get(auth_key_id)
+        if identity is None or key is None or key.internal_owner_user_id:
             return False
         public = key.public() if callable(getattr(key, "public", None)) else {}
         if not isinstance(public, dict) or not public.get("enabled"):
@@ -326,6 +332,33 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
         principal = await authenticate_managed_token(_bearer(request.headers))
         if principal is None:
             raise HTTPException(status_code=401, detail="Invalid or unauthorized managed API key")
+        token = await issue_realtime_session(principal)
+        return {
+            "object": "realtime.session_token",
+            "protocol": LIVE_PROTOCOL_VERSION,
+            "expires_in": REALTIME_SESSION_TTL_SECONDS,
+            "session_token": token,
+            "websocket_path": f"/v1/audio/realtime?session_token={token}",
+            "input_audio_format": "pcm16le-16000-mono",
+            "output_audio_format": "pcm16le-24000-mono",
+            "supports": ["binary_pcm_input", "binary_pcm_output", "input_text", "conversation.item.create", "input_media", "barge_in"],
+        }
+
+    @app.post("/api/user/chat/voice-session")
+    async def create_web_chat_live_voice_session(request: Request) -> dict[str, object]:
+        if not same_origin_admin_request(request):
+            raise HTTPException(
+                status_code=403, detail="Same-origin request required",
+                headers={"Cache-Control": "private, no-store", "Vary": "Cookie"},
+            )
+        from .web_chat_identity_v1 import resolve_web_chat_principal
+
+        principal = (await resolve_web_chat_principal(
+            request, request.headers.get("x-chat2api-user-key-id")
+        ))[1]
+        if "audio" not in principal.scopes and "chat" not in principal.scopes:
+            raise HTTPException(status_code=403, detail="Web Chat shared API Key lacks audio permission",
+                                headers={"Cache-Control": "private, no-store", "Vary": "Cookie"})
         token = await issue_realtime_session(principal)
         return {
             "object": "realtime.session_token",
