@@ -98,9 +98,18 @@ def install_web_chat_features_v1(app: Any) -> Any:
         if registry is None:
             raise HTTPException(status_code=503, detail="model catalog unavailable",
                                 headers=_PRIVATE_HEADERS)
+        # Reuse the same user/tenant model-entitlement filter as normal API
+        # routing. The registry's context is a ContextVar; restore the caller's
+        # value after building this account's catalog.
+        previous_routing_key = registry.routing_key_context.get()
+        registry.set_routing_key(principal.key_id)
+        try:
+            models = registry.model_catalog(online_only=True)
+        finally:
+            registry.set_routing_key(previous_routing_key)
         return JSONResponse({
             "object": "list",
-            "data": registry.model_catalog(online_only=True),
+            "data": models,
         }, headers=_PRIVATE_HEADERS)
 
     @app.post("/api/user/chat/files")
