@@ -54,7 +54,7 @@ def install_web_chat_features_v1(app: Any) -> Any:
     from .web_chat_recovery_api import install_web_chat_recovery_api
     from .web_chat_file_download_api import install_web_chat_file_download_api
     from .web_chat_conversations_v1 import install_web_chat_conversations_v1
-from .web_chat_client_diagnostics_v1 import install_web_chat_client_diagnostics_v1
+    from .web_chat_client_diagnostics_v1 import install_web_chat_client_diagnostics_v1
     install_web_chat_recovery_api(app)
     install_web_chat_file_download_api(app)
     install_web_chat_conversations_v1(app)
