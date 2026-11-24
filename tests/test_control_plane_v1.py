@@ -713,6 +713,43 @@ def test_client_policy_accepts_shared_api_key_without_persisting_or_exposing_sec
         assert app.state.control_plane.client_api_key_id() == ""
 
 
+def test_web_chat_usage_charges_shared_key_and_keeps_legacy_key_fallback(tmp_path: Path):
+    app = make_app(tmp_path)
+
+    async def settle():
+        shared, _shared_token = await app.state.api_keys.create("shared-web-chat-usage")
+        legacy, _legacy_token = await app.state.api_keys.create("legacy-web-chat-usage")
+        identity = await app.state.api_keys.ensure_web_chat_user_key("user-usage-a")
+
+        await app.state.api_keys.account_completed_usage({
+            "request_id": "req_shared_usage_0001",
+            "api_key_id": identity.key_id,
+            "shared_api_key_id": shared["key_id"],
+            "web_chat_mode": True,
+            "status": "completed",
+            "usage": {"total_tokens": 17},
+        })
+        await app.state.api_keys.account_completed_usage({
+            "request_id": "req_legacy_usage_0001",
+            "api_key_id": legacy["key_id"],
+            "web_chat_mode": True,
+            "status": "completed",
+            "usage": {"total_tokens": 9},
+        })
+
+    asyncio.run(settle())
+
+    keys = app.state.api_keys.keys
+    shared_key = next(item for item in keys.values() if item.name == "shared-web-chat-usage")
+    legacy_key = next(item for item in keys.values() if item.name == "legacy-web-chat-usage")
+    identity_key = next(item for item in keys.values() if item.internal_owner_user_id == "user-usage-a")
+    assert shared_key.tokens_used == 17
+    assert legacy_key.tokens_used == 9
+    assert identity_key.tokens_used == 0
+    assert "req_shared_usage_0001" in (shared_key.charged_requests or {})
+    assert "req_shared_usage_0001" not in (identity_key.charged_requests or {})
+
+
 def test_control_plane_migrates_legacy_client_policy_without_api_key_id(tmp_path: Path):
     store = ControlPlaneStore(tmp_path, "owner")
     store.update_client({"announcement": "legacy"})
