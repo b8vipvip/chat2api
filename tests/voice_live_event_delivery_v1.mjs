@@ -100,6 +100,14 @@ async function runEmit(sendMessage) {
   await assert.rejects(emitLive(active,"session.closed"),/server-websocket-disconnected/);
   assert.equal(stopCalls,0,
     "a failed terminal send must propagate to the stop owner without recursive teardown");
+
+  stopCalls=0;
+  stopNotify=null;
+  await assert.rejects(emitLive(active,"error"),/server-websocket-disconnected/);
+  assert.equal(stopCalls,1,
+    "if the fatal error event itself cannot be delivered, local Voice media must still stop");
+  assert.equal(stopNotify,false,
+    "a failed error notification must not recursively try to send another terminal");
 }
 
 {
