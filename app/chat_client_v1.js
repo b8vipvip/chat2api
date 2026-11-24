@@ -2174,19 +2174,18 @@
     }
     const data = dataLines.join("\n");
     // Only a validated frame may advance the durable replay cursor. A
-    // malformed JSON frame or an unknown empty event must not skip future
+    // malformed JSON frame or unknown empty event must not skip future
     // events after reconnect. A cursor-only heartbeat is explicitly valid.
     if (!data && eventName !== "cursor") return false;
+    let event = null;
     if (data && data.trim() !== "[DONE]") {
-      try { JSON.parse(data); } catch { return false; }
+      try { event = JSON.parse(data); } catch { return false; }
     }
     if (eventId && eventId > Number(assistant.lastEventId || 0)) {
       assistant.lastEventId = eventId;
     }
     if (!data) return false;
     if (data.trim() === "[DONE]") return true;
-    let event;
-    try { event = JSON.parse(data); } catch { return false; }
 
     if (eventName === "delivery.delta") {
       appendDelta(assistant, event.delta);
