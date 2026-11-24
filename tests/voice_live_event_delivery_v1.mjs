@@ -96,6 +96,63 @@ async function runEmit(sendMessage) {
     "a failed terminal send must propagate to the stop owner without recursive teardown");
 }
 
+{
+  const start=liveSource.indexOf("  async function stopLive(");
+  const end=liveSource.indexOf("\n  window.addEventListener(\"message\"",start);
+  assert.ok(start>=0 && end>start,"production stopLive drain must remain extractable");
+
+  async function makeStopHarness() {
+    let acknowledge;
+    const mainStopAck=new Promise(resolve=>{acknowledge=resolve;});
+    const active={requestId:"concurrent-stop",stopped:false};
+    const state={active,currentResponseId:"response-1",mainEvents:[]};
+    const calls={polling:0,wait:0,post:[],click:0,flush:0,events:[]};
+    const stopLive=vm.runInNewContext(
+      liveSource.slice(start,end) + "\nstopLive",
+      {
+        state,
+        stopTranscriptPolling(){calls.polling+=1;},
+        waitForMainStop(){calls.wait+=1;return mainStopAck;},
+        postMain(type){calls.post.push(type);},
+        endVoiceButton(){return {click(){calls.click+=1;}};},
+        flushPendingEmits:async()=>{calls.flush+=1;},
+        emitLive:async(_active,event)=>{calls.events.push(event);},
+        Promise,String,Error,
+      },
+    );
+    return {active,state,calls,stopLive,acknowledge};
+  }
+
+  {
+    const h=await makeStopHarness();
+    const first=h.stopLive(h.active,true);
+    const second=h.stopLive(h.active,true);
+    assert.equal(h.calls.polling,1);
+    assert.equal(h.calls.wait,1);
+    assert.deepEqual(h.calls.post,["voice.live.stop"]);
+    h.acknowledge(true);
+    await Promise.all([first,second]);
+    assert.deepEqual(h.calls.events,["session.closed"],
+      "concurrent stop requests must emit one terminal only after the shared transcript drain");
+    assert.deepEqual(h.calls.post,["voice.live.stop","voice.reset"]);
+    assert.equal(h.calls.click,1);
+    assert.equal(h.calls.flush,1);
+    assert.equal(h.state.active,null);
+  }
+
+  {
+    const h=await makeStopHarness();
+    const silentCleanup=h.stopLive(h.active,false);
+    const brokerStop=h.stopLive(h.active,true);
+    h.acknowledge(true);
+    await Promise.all([silentCleanup,brokerStop]);
+    assert.deepEqual(h.calls.events,["session.closed"],
+      "a later broker stop must upgrade an in-flight silent cleanup to a server-notified terminal");
+    assert.equal(h.calls.wait,1);
+    assert.equal(h.calls.click,1);
+  }
+}
+
 assert.ok(backgroundSource.includes('error: sent ? "" : "server-websocket-disconnected-or-send-failed"'),
   "background transport must return a diagnosable negative acknowledgement");
 assert.ok(liveSource.includes(".catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));"),
