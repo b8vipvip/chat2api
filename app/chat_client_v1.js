@@ -302,7 +302,7 @@
     }
     if (!state.webChatKeyId) { toast("Web Chat 服务尚未就绪，请稍后重试。"); return; }
     if (!selectedKeyHasScope("audio") && !selectedKeyHasScope("chat")) {
-      toast("当前 API Key 没有 audio 或 chat 权限。");
+      toast("服务端统一 API Key 缺少 audio 或 chat 权限。");
       return;
     }
     const voiceApi = window.Chat2APIVoiceClientV1;
@@ -392,7 +392,7 @@
       return;
     }
     if (!selectedKeyHasScope("files")) {
-      toast("摄像头画面上传需要当前 API Key 具有 files 权限。");
+      toast("摄像头画面上传需要服务端统一 API Key 具有 files 权限。");
       return;
     }
     try {
@@ -1790,7 +1790,7 @@
   async function handleDocumentFiles(fileList) {
     if (state.streaming) return;
     if (!state.webChatKeyId) { toast("Web Chat 服务尚未就绪，请稍后重试。"); return; }
-    if (!selectedKeyHasScope("files")) { toast("当前 API Key 没有 files 权限。"); return; }
+    if (!selectedKeyHasScope("files")) { toast("服务端统一 API Key 缺少 files 权限。"); return; }
     const files = Array.from(fileList || []);
     if (!files.length) return;
     const conversation = currentConversation() || createConversation();
@@ -1873,7 +1873,7 @@
       return;
     }
     if (!selectedKeyHasScope("files")) {
-      toast("当前 API Key 没有 files 权限，请更换 Key 或在控制台调整权限。");
+      toast("服务端统一 API Key 缺少 files 权限，请联系管理员调整配置。");
       return;
     }
     const files = Array.from(fileList || []);
@@ -2528,7 +2528,7 @@
   }
   async function sendMessage(text) {
     if (state.voiceActive) { toast("请先结束实时语音，再发送普通聊天消息。"); return; }
-    if (!selectedKeyHasScope("chat")) { toast("当前 API Key 没有 chat 权限。"); return; }
+    if (!selectedKeyHasScope("chat")) { toast("服务端统一 API Key 缺少 chat 权限。"); return; }
     const clean = String(text || "").trim();
     if (state.streaming) return;
     const conversation = currentConversation() || createConversation();
@@ -2558,7 +2558,7 @@
     }
     conversation.apiKeyId = keyId;
     if ((pending.length || pendingFiles.length) && !selectedKeyHasScope("files")) {
-      toast("当前 API Key 没有 files 权限，无法发送附件。");
+      toast("服务端统一 API Key 缺少 files 权限，无法发送附件。");
       return;
     }
     conversation.model = state.selectedModel;
