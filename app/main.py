@@ -1989,7 +1989,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "client_id": state.client_id,
                 "api_key_id": principal.key_id,
                 "shared_api_key_id": principal.auth_key_id or None,
-                "web_chat_mode": principal.kind == "web_chat",
+                "web_chat_mode": bool(state.mode1_web_chat or principal.kind == "web_chat"),
                 "api_key_name": principal.name,
                 "auth_kind": principal.kind,
                 "requested_model": requested_model,
@@ -2123,14 +2123,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         accounting = getattr(telemetry, "usage_accounting", None)
         if api_key is None or not callable(accounting):
             return False
-        if record.get("web_chat_mode") is True and not shared_key_id:
-            return False
-
         # Telemetry is written before its accounting callback. If the callback
         # was interrupted, a duplicate Worker replay must retry that same
         # idempotent request_id charge rather than ACKing a merely completed row.
         await accounting(record)
-        if record.get("web_chat_mode") is not True:
+        # Legacy Web Chat requests used the account-owned API key directly.
+        # New Web Chat requests carry shared_api_key_id and charge only that
+        # server-managed key. Keep the old path recoverable after an upgrade.
+        if not shared_key_id:
             ledger = getattr(api_key, "charged_requests", None)
             if not isinstance(ledger, dict):
                 ledger = getattr(api_keys, "charged_requests", None)
@@ -2332,6 +2332,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             name=str(recovered_row.get("api_key_name") or "Web Chat"),
             kind=str(recovered_row.get("auth_kind") or "managed"),
             scopes=scopes,
+            auth_key_id=str(recovered_row.get("shared_api_key_id") or ""),
         )
         await record_request(
             state,
@@ -2435,7 +2436,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "prompt_chars": len(prompt),
                 "completion_chars": 0,
                 "status": "running",
-                "web_chat_mode": principal.kind == "web_chat",
+                "web_chat_mode": bool(state.mode1_web_chat or principal.kind == "web_chat"),
                 "usage": {**usage, **token_meta},
                 "timings": state.timings(),
                 "diagnostics": dict(state.diagnostics),
