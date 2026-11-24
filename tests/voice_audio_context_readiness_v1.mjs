@@ -140,6 +140,21 @@ for(const mode of ["reject","suspended"]) {
 }
 
 {
+  const state={
+    micContext:{state:"running",async resume(){}},
+    micDestination:{stream:{getAudioTracks:()=>[{readyState:"ended"}]}},
+  };
+  const start=liveMain.indexOf("  async function waitForSyntheticMic(");
+  const end=liveMain.indexOf("\n  async function pushInput(",start);
+  const waitForSyntheticMic=vm.runInNewContext(
+    liveMain.slice(start,end)+"\nwaitForSyntheticMic",
+    {base:()=>state,delay:async()=>{},Date,String,Error,Promise},
+  );
+  await assert.rejects(waitForSyntheticMic(),/track is no longer live/,
+    "an ended microphone track must fail the next input frame instead of silently dropping it");
+}
+
+{
   const events=[];
   const remoteTrack={kind:"audio",readyState:"live",addEventListener(){}};
   const live={prepared:true,requestId:"voice-remote-context",remoteProcessor:null,remoteTrack:null};
