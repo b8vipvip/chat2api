@@ -449,35 +449,49 @@
   }
 
   async function stopLive(active = state.active, notify = true) {
-    if (!active || active.stopped) return;
-    active.stopped = true;
-    stopTranscriptPolling();
-    const mainStopAck = waitForMainStop(active);
-    postMain("voice.live.stop", active);
-    // Do not click ChatGPT's End Voice button until the MAIN-world bridge has
-    // synchronously captured and posted its final assistant DOM snapshot. The
-    // button can tear down/rewrite the DOM before the queued postMessage event
-    // is handled, which would otherwise erase the last partial text.
-    const mainStopAcknowledged = await mainStopAck;
-    postMain("voice.reset", active);
-    try { endVoiceButton()?.click(); } catch (_) {}
-    await flushPendingEmits();
-    if (notify) {
-      if (mainStopAcknowledged) {
-        await emitLive(active, "session.closed");
-      } else {
-        // Fail closed: do not tell the Broker that the Worker drained its
-        // final DOM snapshot when the MAIN-world stop acknowledgement was
-        // never received. The server will terminate this session as an error.
-        await emitLive(active, "error", {
-          code:"VOICE_STOP_ACK_TIMEOUT",
-          message:"ChatGPT Voice did not acknowledge shutdown; final partial text may be incomplete",
-        });
-      }
+    if (!active) return;
+    if (active.stopPromise) {
+      // Concurrent stop sources (user, Worker shutdown, startup cancellation)
+      // must await the same drain. A later caller may upgrade a silent cleanup
+      // to a server-notified terminal, but must never return before the first
+      // caller has persisted the final transcript and released the Voice UI.
+      if (notify) active.stopNotify = true;
+      return active.stopPromise;
     }
-    if (state.active === active) state.active = null;
-    state.currentResponseId = null;
-    state.mainEvents = [];
+    if (active.stopped) return;
+    active.stopped = true;
+    active.stopNotify = notify === true;
+    const stopPromise = (async () => {
+      stopTranscriptPolling();
+      const mainStopAck = waitForMainStop(active);
+      postMain("voice.live.stop", active);
+      // Do not click ChatGPT's End Voice button until the MAIN-world bridge has
+      // synchronously captured and posted its final assistant DOM snapshot. The
+      // button can tear down/rewrite the DOM before the queued postMessage event
+      // is handled, which would otherwise erase the last partial text.
+      const mainStopAcknowledged = await mainStopAck;
+      postMain("voice.reset", active);
+      try { endVoiceButton()?.click(); } catch (_) {}
+      await flushPendingEmits();
+      if (active.stopNotify) {
+        if (mainStopAcknowledged) {
+          await emitLive(active, "session.closed");
+        } else {
+          // Fail closed: do not tell the Broker that the Worker drained its
+          // final DOM snapshot when the MAIN-world stop acknowledgement was
+          // never received. The server will terminate this session as an error.
+          await emitLive(active, "error", {
+            code:"VOICE_STOP_ACK_TIMEOUT",
+            message:"ChatGPT Voice did not acknowledge shutdown; final partial text may be incomplete",
+          });
+        }
+      }
+      if (state.active === active) state.active = null;
+      state.currentResponseId = null;
+      state.mainEvents = [];
+    })();
+    active.stopPromise = stopPromise;
+    return stopPromise;
   }
 
   window.addEventListener("message", event => {
