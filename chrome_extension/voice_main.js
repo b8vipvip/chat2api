@@ -241,8 +241,41 @@
     }
   }
 
+  async function resumeSyntheticMicContext(context) {
+    try {
+      await context.resume();
+    } catch (error) {
+      throw new Error("ChatGPT Voice synthetic microphone AudioContext could not resume: " + String(error?.message || error));
+    }
+    if (typeof context.state === "string" && context.state !== "running") {
+      throw new Error("ChatGPT Voice synthetic microphone AudioContext is not running (" + context.state + ")");
+    }
+  }
+
   async function ensureSyntheticMic() {
-    if (state.micDestination) return state.micDestination.stream;
+    if (state.micDestination && state.micContext && state.micContext.state !== "closed") {
+      const existingContext = state.micContext;
+      await resumeSyntheticMicContext(existingContext);
+      const existingTracks = state.micDestination.stream?.getAudioTracks?.() || [];
+      if (existingTracks.length && existingTracks.every(track => track.readyState !== "ended")) {
+        return state.micDestination.stream;
+      }
+      // ChatGPT may stop the MediaStreamTrack it received when its Voice UI
+      // closes. The AudioContext can remain running while its destination track
+      // is ended; rebuild it instead of returning a non-functional stream.
+      try { state.micOscillator?.stop(); } catch (_) {}
+      try { await existingContext.close(); } catch (_) {}
+      if (state.micContext === existingContext) {
+        state.micContext = null;
+        state.micDestination = null;
+        state.micOscillator = null;
+      }
+    }
+    // A closed AudioContext or an ended destination track must never be
+    // returned to ChatGPT as a ready microphone on the next Voice session.
+    state.micContext = null;
+    state.micDestination = null;
+    state.micOscillator = null;
     const context = new AudioContext();
     const destination = context.createMediaStreamDestination();
     const gain = context.createGain();
@@ -254,7 +287,22 @@
     state.micContext = context;
     state.micDestination = destination;
     state.micOscillator = oscillator;
-    try { await context.resume(); } catch (_) {}
+    try {
+      await resumeSyntheticMicContext(context);
+      const tracks = destination.stream?.getAudioTracks?.() || [];
+      if (!tracks.length || tracks.some(track => track.readyState === "ended")) {
+        throw new Error("ChatGPT Voice synthetic microphone returned no live audio track");
+      }
+    } catch (error) {
+      try { oscillator.stop(); } catch (_) {}
+      try { await context.close(); } catch (_) {}
+      if (state.micContext === context) {
+        state.micContext = null;
+        state.micDestination = null;
+        state.micOscillator = null;
+      }
+      throw error;
+    }
     return destination.stream;
   }
 
@@ -265,8 +313,21 @@
       if (state.requestId && constraints?.audio) {
         state.micRequestsSeen += 1;
         post("voice.mic.requested", { mode: state.mode, mic_requests_seen: state.micRequestsSeen });
-        const synthetic = await ensureSyntheticMic();
+        let synthetic;
+        try {
+          synthetic = await ensureSyntheticMic();
+        } catch (error) {
+          if (state.mode === "live") {
+            post("voice.live.error", { error: String(error?.message || error) });
+          }
+          throw error;
+        }
         const tracks = [...synthetic.getAudioTracks()];
+        if (!tracks.length || tracks.some(track => track.readyState === "ended")) {
+          const error = new Error("ChatGPT Voice synthetic microphone returned no live audio track");
+          if (state.mode === "live") post("voice.live.error", { error: error.message });
+          throw error;
+        }
         post("voice.mic.synthetic", { track_count: tracks.length, mode: state.mode });
         if (!constraints?.video) return new MediaStream(tracks);
         const native = await nativeGetUserMedia({ ...constraints, audio: false });
@@ -310,7 +371,7 @@
     const transportWaitMs = await waitForRemoteTrackBeforeInput(8000);
     const stream = await ensureSyntheticMic();
     const context = state.micContext;
-    try { await context.resume(); } catch (_) {}
+    await resumeSyntheticMicContext(context);
     const buffer = await context.decodeAudioData(decodeBase64(state.preparedInput.base64).slice(0));
     const source = context.createBufferSource();
     source.buffer = buffer;

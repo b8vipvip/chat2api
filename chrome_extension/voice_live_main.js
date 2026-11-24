@@ -145,7 +145,19 @@
     while (Date.now() < deadline) {
       const state = base();
       if (state?.micContext && state?.micDestination) {
-        try { await state.micContext.resume(); } catch (_) {}
+        try {
+          await state.micContext.resume();
+        } catch (error) {
+          throw new Error("ChatGPT Voice synthetic microphone AudioContext could not resume: " + String(error?.message || error));
+        }
+        if (typeof state.micContext.state === "string" && state.micContext.state !== "running") {
+          throw new Error("ChatGPT Voice synthetic microphone AudioContext is not running (" + state.micContext.state + ")");
+        }
+        const micTracks = state.micDestination.stream?.getAudioTracks?.();
+        if (Array.isArray(micTracks) &&
+            (!micTracks.length || micTracks.some(track => track.readyState === "ended"))) {
+          throw new Error("ChatGPT Voice synthetic microphone track is no longer live");
+        }
         return state;
       }
       await delay(40);
@@ -229,7 +241,14 @@
         cleanupRemote("track_ended", false);
       }
     }, {once:true});
-    try { await context.resume(); } catch (_) {}
+    try {
+      await context.resume();
+    } catch (error) {
+      throw new Error("GPT-Live remote audio AudioContext could not resume: " + String(error?.message || error));
+    }
+    if (typeof context.state === "string" && context.state !== "running") {
+      throw new Error("GPT-Live remote audio AudioContext is not running (" + context.state + ")");
+    }
     if (!live.prepared || live.requestId !== ownerRequestId ||
         live.remoteProcessor !== processor || live.remoteTrack !== remoteTrack) return;
 

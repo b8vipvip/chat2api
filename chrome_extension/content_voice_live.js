@@ -97,6 +97,10 @@
     const deadline = Date.now() + timeout;
     while (Date.now() < deadline) {
       if (active && !isActiveSession(active)) return null;
+      if (active) {
+        const failure = state.mainEvents.find(item => item.type === "voice.live.error");
+        if (failure) throw new Error(String(failure.error || "Live media bridge failed"));
+      }
       try {
         const value = fn();
         if (value) return value;
@@ -113,11 +117,12 @@
         chrome.runtime.sendMessage({ type: "chat2api.event", event }),
       ).then(response => {
         // sendMessage resolving only proves that the background listener ran.
-        // Its {ok:false} means the server WebSocket did not accept this event;
-        // treating that as success can falsely announce session.ready or drain
-        // a terminal transcript that never reached the server.
+        // The response is positive only after the authenticated server Broker
+        // accepted this exact request event; a local socket.send is not enough.
+        // Treating a missing/negative ACK as success could falsely announce
+        // session.ready or drain a terminal transcript that never reached the Broker.
         if (response?.ok !== true) {
-          throw new Error(String(response?.error || "Voice event was not accepted by the Worker transport"));
+          throw new Error(String(response?.error || "Voice event was not accepted by the server Broker"));
         }
         return response;
       });
@@ -167,13 +172,21 @@
     // For any intermediate transcript/audio/control event, a negative server
     // ACK invalidates the live turn: stop upstream Voice rather than silently
     // continue after dropping a PCM chunk or transcript boundary.
-    if (liveEvent === "session.ready" || liveEvent === "session.closed" || liveEvent === "error") {
+    if (liveEvent === "session.ready" || liveEvent === "session.closed") {
       return pending;
     }
     return pending.catch(error => {
       if (isActiveSession(active)) {
         active.deliveryError = String(error?.message || error).slice(0,300);
-        void stopLive(active,false).catch(() => {});
+        active.stopTerminalError = {
+          code:"VOICE_EVENT_DELIVERY_FAILED",
+          message:"A live Voice event was not accepted by the server Broker: " + active.deliveryError,
+        };
+        // A dropped audio/transcript/control event invalidates the live turn.
+        // If the original event was itself an error, this makes one final
+        // explicit error-terminal attempt instead of silently stopping locally.
+        // The server will also detect a dead Worker socket independently.
+        void stopLive(active,true).catch(() => {});
       }
       throw error;
     });
@@ -460,7 +473,9 @@
     if (active.stopTerminalSent) return Promise.resolve();
     if (active.stopTerminalPromise) return active.stopTerminalPromise;
     active.stopTerminalPromise = (async () => {
-      if (active.stopMainAcknowledged) {
+      if (active.stopTerminalError) {
+        await emitLive(active, "error", active.stopTerminalError);
+      } else if (active.stopMainAcknowledged) {
         await emitLive(active, "session.closed");
       } else {
         // Fail closed: do not tell the Broker that the Worker drained its

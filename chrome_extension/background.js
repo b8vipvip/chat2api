@@ -196,6 +196,65 @@ function awaitNativeAck(event) {
     }
   });
 }
+// Voice event delivery is complete only after the authenticated Worker socket
+// receives the server's broker-publication ACK. WebSocket.send() succeeding is
+// merely a local enqueue and is not evidence that the Broker accepted the event.
+const pendingVoiceEventAcks = new Map();
+function rejectPendingVoiceEventAcks(reason, targetSocket = null) {
+  for (const [eventId, row] of pendingVoiceEventAcks) {
+    if (targetSocket && row.socket !== targetSocket) continue;
+    clearTimeout(row.timer);
+    pendingVoiceEventAcks.delete(eventId);
+    row.resolve({ok:false,error:String(reason || "voice-event-ack-unavailable")});
+  }
+}
+function handleVoiceEventAck(message, sourceSocket) {
+  const eventId = String(message?.event_id || "");
+  const pending = pendingVoiceEventAcks.get(eventId);
+  if (!pending || pending.socket !== sourceSocket ||
+      pending.requestId !== String(message?.request_id || "")) return false;
+  clearTimeout(pending.timer);
+  pendingVoiceEventAcks.delete(eventId);
+  pending.resolve({
+    ok:message.accepted === true,
+    error:message.accepted === true ? "" : String(message.reason || "voice-event-rejected").slice(0,120),
+  });
+  return true;
+}
+function awaitVoiceEventAck(event) {
+  if (!socketReady()) return Promise.resolve({ok:false,error:"socket-disconnected"});
+  if (!event || !["image.started","image.progress","image.diagnostics"].includes(event.type) ||
+      event.kind !== "voice-live" || !String(event.request_id || "")) {
+    return Promise.resolve({ok:false,error:"invalid-voice-event-envelope"});
+  }
+  if (pendingVoiceEventAcks.size >= 128) {
+    return Promise.resolve({ok:false,error:"voice-event-ack-backpressure"});
+  }
+  const eventId = crypto.randomUUID();
+  const sentOn = socket;
+  return new Promise(resolve => {
+    const timer = setTimeout(() => {
+      pendingVoiceEventAcks.delete(eventId);
+      resolve({ok:false,error:"voice-event-broker-ack-timeout"});
+    }, 8000);
+    pendingVoiceEventAcks.set(eventId,{
+      resolve,timer,socket:sentOn,requestId:String(event.request_id),
+    });
+    if (sentOn !== socket || !socketReady()) {
+      clearTimeout(timer);
+      pendingVoiceEventAcks.delete(eventId);
+      resolve({ok:false,error:"socket-replaced-before-voice-event-send"});
+      return;
+    }
+    try {
+      sentOn.send(JSON.stringify({...event,worker_event_ack_id:eventId}));
+    } catch (_) {
+      clearTimeout(timer);
+      pendingVoiceEventAcks.delete(eventId);
+      resolve({ok:false,error:"voice-event-send-failed"});
+    }
+  });
+}
 function socketReady() { return Boolean(socket && socket.readyState === WebSocket.OPEN); }
 async function sendSocket(payload) {
   if (!socketReady()) throw new Error("Server WebSocket is not connected");
@@ -425,6 +484,7 @@ async function connectSocket() {
   const settings = await config();
   if (!settings.clientId || !settings.clientToken) { await updateState("unpaired"); return; }
   if (socket && [WebSocket.OPEN, WebSocket.CONNECTING].includes(socket.readyState)) return;
+  if (socket) rejectPendingVoiceEventAcks("socket-replaced-before-broker-ack",socket);
   await updateState("connecting");
   let connection;
   try {
@@ -467,6 +527,10 @@ async function connectSocket() {
     if (socket !== connection) return;
     try {
       const message = JSON.parse(event.data);
+      if (message?.type === "voice.event.ack") {
+        handleVoiceEventAck(message,event.target);
+        return;
+      }
       if (message?.type === "chat.native.ack") {
         const key = nativeAckKey(message);
         const pending = pendingNativeAcks.get(key);
@@ -494,6 +558,7 @@ async function connectSocket() {
     updateState("error", `WebSocket connection error · server=${serverHost(settings.serverUrl)}`);
   };
   connection.onclose = event => {
+    rejectPendingVoiceEventAcks("socket-closed-before-broker-ack",connection);
     if (socket !== connection) return;
     socket = null;
     rejectPendingFileChunks("socket-closed-before-server-ack");
@@ -554,7 +619,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
   if (message.type === "chat2api.event") {
-    trySendSocket(message.event).then(sent => sendResponse({
+    const event = message.event;
+    if (event?.kind === "voice-live" &&
+        ["image.started","image.progress","image.diagnostics"].includes(event.type)) {
+      awaitVoiceEventAck(event).then(sendResponse)
+        .catch(error=>sendResponse({ok:false,error:String(error?.message || error)}));
+      return true;
+    }
+    trySendSocket(event).then(sent => sendResponse({
       ok: sent,
       error: sent ? "" : "server-websocket-disconnected-or-send-failed",
     }));
