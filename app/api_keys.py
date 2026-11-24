@@ -262,7 +262,9 @@ class ApiKeyStore:
                         scopes=tuple(item.scopes or ["chat", "models", "files", "images", "audio"]),
                     )
             raw = "internal-web-chat-" + secrets.token_urlsafe(32)
-            key_id = "key_" + secrets.token_urlsafe(9).replace("-", "").replace("_", "")
+            key_id = ""
+            while not key_id or key_id in self.keys:
+                key_id = "key_" + secrets.token_urlsafe(9).replace("-", "").replace("_", "")
             item = ManagedApiKey(
                 key_id=key_id,
                 name="Web Chat",
