@@ -206,6 +206,30 @@ for(const mode of ["reject","suspended"]) {
   assert.equal(cleanupCalls,1,
     "a suspended Web Chat output context must not silently discard all future PCM playback");
 }
+{
+  const start=webClient.indexOf("    function failIfAudioContextSuspended()");
+  const end=webClient.indexOf("\n    function startMicrophonePipeline()",start);
+  const events=[];
+  let readyError=null,cleanupCalls=0;
+  const failIfAudioContextSuspended=vm.runInNewContext(
+    webClient.slice(start,end)+"\nfailIfAudioContextSuspended",
+    {
+      audioContext:{state:"suspended"},
+      cleaned:false,stopping:false,ready:false,
+      readyReject:error=>{readyError=String(error?.message || error);},
+      readyResolve:()=>{},
+      event:payload=>events.push(payload),
+      cleanup:async()=>{cleanupCalls+=1;},
+      Promise,String,Error,
+    },
+  );
+  assert.equal(failIfAudioContextSuspended(),true);
+  assert.match(readyError,/已暂停/,
+    "a suspended context at session.ready must reject the pending start promise immediately");
+  assert.equal(events[0]?.type,"client.error");
+  assert.equal(cleanupCalls,1);
+}
+
 assert.ok(voiceMain.includes("synthetic microphone AudioContext is not running"));
 assert.ok(voiceMain.includes('post("voice.live.error"'),
   "synthetic microphone resume failures must be surfaced immediately to the isolated Voice controller");
