@@ -19,15 +19,12 @@
   <div class="app-shell" id="appShell">
     <aside class="sidebar" id="sidebar" aria-label="会话侧栏">
       <div class="sidebar-top">
-        <a class="brand" href="/chat" aria-label="Chat2API 首页">
+        <a class="brand" href="/chat" aria-label="ChatGPT 首页">
           <span class="brand-mark">c</span>
           <span>ChatGPT</span>
         </a>
         <button class="icon-button mobile-close" id="closeSidebar" type="button" aria-label="关闭侧栏">×</button>
       </div>
-      <button class="new-chat-button" id="newChatButton" type="button">
-        <span class="plus">＋</span><span>新建对话</span>
-      </button>
       <nav class="sidebar-tools" aria-label="工具">
         <button class="sidebar-nav-button" id="pluginsButton" type="button"><span class="sidebar-nav-icon">▦</span><span>插件</span></button>
         <button class="sidebar-nav-button" id="libraryButton" type="button"><span class="sidebar-nav-icon">▤</span><span>资料库</span></button>
@@ -60,6 +57,7 @@
           <button class="icon-button sidebar-collapse" id="sidebarCollapseButton" type="button" aria-label="折叠侧栏" title="折叠侧栏">☰</button>
           <button class="icon-button mobile-menu" id="openSidebar" type="button" aria-label="打开侧栏">☰</button>
           <div class="mobile-brand">ChatGPT</div>
+          <button class="topbar-new-chat" id="newChatButton" type="button" aria-label="新建对话" title="新建对话"><span aria-hidden="true">＋</span><span>新对话</span></button>
           <label class="model-picker">
             <span class="sr-only">模型</span>
             <select id="modelSelect" aria-label="选择 ChatGPT 模型">

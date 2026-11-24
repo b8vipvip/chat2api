@@ -88,13 +88,13 @@
 
 
   const CLIENT_DIAGNOSTIC_DETAIL_KEYS = new Set([
-    "phase", "feature", "code", "reason", "model_id", "request_id",
+    "phase", "feature", "code", "model_id", "request_id",
     "model_count", "file_count", "image_count", "message_count",
     "duration_ms", "http_status", "retryable", "connection_state",
     "sync_revision", "client_version", "browser", "platform", "status",
   ]);
 
-  function recordClientDiagnostic(event, details = {}, level = "info", errorMessage = "") {
+  function recordClientDiagnostic(event, details = {}, level = "info") {
     if (!state.user?.user_id) return;
     const safeDetails = {};
     Object.entries(details || {}).slice(0, 24).forEach(([key, value]) => {
@@ -122,7 +122,6 @@
     if (Number.isInteger(safeDetails.http_status)) item.http_status = safeDetails.http_status;
     if (typeof safeDetails.phase === "string") item.phase = safeDetails.phase;
     if (typeof details.error_name === "string") item.error_name = details.error_name.slice(0, 100);
-    if (errorMessage) item.error_message = String(errorMessage).replace(/[\r\n\0]/g, " ").slice(0, 400);
     clientDiagnosticQueue.push(item);
     while (clientDiagnosticQueue.length > 100) clientDiagnosticQueue.shift();
     if (clientDiagnosticQueue.length >= 5 || level === "error") {
@@ -1755,7 +1754,7 @@
     if (!state.pluginCatalog.length) {
       const empty = document.createElement("div");
       empty.className = "utility-empty";
-      empty.textContent = "当前没有已发布且对用户开放的插件。管理员发布插件并完成授权、沙箱配置后，会显示在这里。";
+      empty.textContent = "当前尚未开放用户插件授权和执行。服务端插件注册表目前只用于管理员登记 Manifest，待用户授权与安全沙箱接入后才会显示可用插件。";
       root.appendChild(empty);
       return;
     }
@@ -1826,9 +1825,7 @@
     items.forEach(item => {
       const card = document.createElement("a");
       card.className = "library-item";
-      card.href = item.type === "image"
-        ? "/api/user/files/" + encodeURIComponent(item.id) + "/content"
-        : "/api/user/chat/files/" + encodeURIComponent(item.id) + "/download";
+      card.href = "/api/user/chat/files/" + encodeURIComponent(item.id) + "/download";
       card.target = "_blank";
       card.rel = "noopener noreferrer";
       const icon = document.createElement("span");
@@ -1845,7 +1842,7 @@
       meta.append(name, detail);
       const open = document.createElement("span");
       open.className = "library-item-open";
-      open.textContent = "打开 ↗";
+      open.textContent = "下载 ↗";
       card.append(icon, meta, open);
       root.appendChild(card);
     });
@@ -2002,6 +1999,7 @@
   async function uploadPendingFiles() {
     for (const file of state.pendingFiles) {
       if (file.fileId) continue;
+      recordClientDiagnostic("attachment.file.upload_started", {phase: "file_upload", file_count: 1});
       const dataUrl = await readFileAsDataUrl(file.file);
       const comma = dataUrl.indexOf(",");
       if (comma < 0) throw new Error("文件编码失败");
@@ -2023,6 +2021,7 @@
       if (!FILE_ID_PATTERN.test(fileId)) throw new Error("服务器没有返回有效的文件 ID");
       file.fileId = fileId;
       file.file = null;
+      recordClientDiagnostic("attachment.file.upload_completed", {phase: "file_upload", file_count: 1});
     }
   }
 
@@ -2081,6 +2080,7 @@
   async function uploadPendingImages() {
     for (const image of state.pendingImages) {
       if (image.fileId) continue;
+      recordClientDiagnostic("attachment.image.upload_started", {phase: "image_upload", image_count: 1});
       const dataUrl = await readFileAsDataUrl(image.file);
       const comma = dataUrl.indexOf(",");
       if (comma < 0) throw new Error("图片编码失败");
@@ -2102,6 +2102,7 @@
       if (!FILE_ID_PATTERN.test(fileId)) throw new Error("服务器没有返回有效的图片文件 ID");
       image.fileId = fileId;
       image.file = null;
+      recordClientDiagnostic("attachment.image.upload_completed", {phase: "image_upload", image_count: 1});
     }
   }
 
@@ -3381,10 +3382,10 @@
     if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
   } catch {}
   window.addEventListener("error", (event) => {
-    recordClientDiagnostic("browser.error", {phase: "window", error_name: event.error?.name || "Error"}, "error", event.message || "Browser error");
+    recordClientDiagnostic("browser.error", {phase: "window", error_name: event.error?.name || "Error"}, "error");
   });
   window.addEventListener("unhandledrejection", (event) => {
-    recordClientDiagnostic("browser.unhandled_rejection", {phase: "promise", error_name: event.reason?.name || "UnhandledRejection"}, "error", event.reason?.message || "Unhandled promise rejection");
+    recordClientDiagnostic("browser.unhandled_rejection", {phase: "promise", error_name: event.reason?.name || "UnhandledRejection"}, "error");
   });
   window.addEventListener("pagehide", () => { void flushClientDiagnostics(true); });
   document.addEventListener("visibilitychange", () => {

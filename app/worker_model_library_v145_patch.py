@@ -384,6 +384,7 @@ def install_worker_model_library_v145_patch(app: FastAPI) -> FastAPI:
                     "compatibility_clients": [],
                     "source": "free-default-compatibility-unverified",
                     "validated": False,
+                    "selectable": False,
                 })
                 if client_id not in entry["clients"]:
                     entry["clients"].append(client_id)
