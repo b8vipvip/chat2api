@@ -662,11 +662,15 @@ def test_client_policy_accepts_shared_api_key_without_persisting_or_exposing_sec
         assert configured.status_code == 200, configured.text
         result = configured.json()
         assert result["api_key_configured"] is True
-        assert result["api_key_enabled"] is True
-        assert result["api_key_name"] == "shared-web-chat"
-        assert result["api_key_prefix"] == key_public["prefix"]
         assert "api_key_id" not in result
         assert "api_key" not in result
+        policy = client.get("/api/admin/control/client").json()
+        assert policy["api_key_configured"] is True
+        assert policy["api_key_enabled"] is True
+        assert policy["api_key_name"] == "shared-web-chat"
+        assert policy["api_key_prefix"] == key_public["prefix"]
+        assert "api_key_id" not in policy
+        assert "api_key" not in policy
         public = client.get("/api/client/config").json()
         assert public["api_key_configured"] is True
         assert "api_key_id" not in public
