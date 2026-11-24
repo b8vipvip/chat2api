@@ -246,7 +246,7 @@
       sameConnection &&
       ["discovered", "validated"].includes(String(before.modelValidationState || "")) &&
       Number.isFinite(updatedAt) &&
-      Date.now() - updatedAt < 5 * 60 * 1000
+      Date.now() - updatedAt < 4 * 60 * 1000
     ) return { ok: true, skipped: true };
     if (state.lastDiscoveryAt && Date.now() - state.lastDiscoveryAt < 60 * 1000) {
       return { ok: true, skipped: true };
@@ -360,6 +360,16 @@
     publishStatus(false).catch(() => {});
     scheduleObservedSync(trigger);
   };
+
+  const MODEL_CATALOG_REFRESH_ALARM = "chat2api-model-catalog-refresh-v145";
+  try {
+    chrome.alarms?.create?.(MODEL_CATALOG_REFRESH_ALARM, { periodInMinutes: 5 });
+  } catch (_) {}
+  chrome.alarms?.onAlarm?.addListener?.(alarm => {
+    if (alarm?.name === MODEL_CATALOG_REFRESH_ALARM) {
+      scheduleObservedSync("periodic-chatgpt-picker-refresh", 0);
+    }
+  });
   chrome.runtime.onStartup?.addListener?.(() => publishAndSync("worker-startup"));
   chrome.runtime.onInstalled?.addListener?.(() => publishAndSync("worker-installed"));
   chrome.tabs.onUpdated?.addListener?.((tabId, changeInfo, tab) => {

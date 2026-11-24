@@ -102,6 +102,8 @@ def test_worker_model_catalog_auto_sync_is_read_only_and_admin_verification_rema
     assert "syncObservedChoices" in background
     assert "chatgpt-tab-ready" in background
     assert "chatgpt-tab-activated" in background
+    assert "periodic-chatgpt-picker-refresh" in background
+    assert "periodInMinutes: 5" in background
     assert "automatic: options.automatic === true" in background
     assert "automaticInspectionSafe" in content
     sync_body = background.split("async function syncObservedChoices", 1)[1].split("function scheduleObservedSync", 1)[0]
