@@ -340,7 +340,7 @@
     const transportWaitMs = await waitForRemoteTrackBeforeInput(8000);
     const stream = await ensureSyntheticMic();
     const context = state.micContext;
-    try { await context.resume(); } catch (_) {}
+    await resumeSyntheticMicContext(context);
     const buffer = await context.decodeAudioData(decodeBase64(state.preparedInput.base64).slice(0));
     const source = context.createBufferSource();
     source.buffer = buffer;
