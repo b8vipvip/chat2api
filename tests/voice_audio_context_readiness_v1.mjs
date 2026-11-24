@@ -104,7 +104,7 @@ for(const mode of ["reject","suspended"]) {
         throw new Error("playback resume denied");
       },
     },
-    micDestination:{stream:{}},
+    micDestination:{stream:{getAudioTracks:()=>[{readyState:"live"}]}},
   };
   const playPreparedInput=vm.runInNewContext(
     voiceMain.slice(helperStart,helperEnd)+
