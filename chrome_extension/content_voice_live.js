@@ -22,6 +22,7 @@
     assistantBaselineText: "",
     currentResponseId: null,
     stopWaiters: new Map(),
+    stoppedSessions: new Map(),
   };
   globalThis[KEY] = state;
 
@@ -83,6 +84,13 @@
 
   function assertActiveSession(active) {
     if (!isActiveSession(active)) throw new Error("Live Voice startup was cancelled");
+  }
+
+  function activeForStopRequest(requestId) {
+    const id = String(requestId || "").trim();
+    if (!id) return state.active;
+    if (state.active?.requestId === id) return state.active;
+    return state.stoppedSessions.get(id) || null;
   }
 
   async function waitFor(fn, timeout = 20000, interval = 100, active = null) {
@@ -497,6 +505,12 @@
       // arrives on either side of this point, sendStopTerminal deduplicates it.
       active.stopCompleted = true;
       if (active.stopNotify) await sendStopTerminal(active);
+      if (active.requestId) {
+        state.stoppedSessions.set(active.requestId, active);
+        while (state.stoppedSessions.size > 64) {
+          state.stoppedSessions.delete(state.stoppedSessions.keys().next().value);
+        }
+      }
       if (state.active === active) state.active = null;
       state.currentResponseId = null;
       state.mainEvents = [];
@@ -622,7 +636,13 @@
       return false;
     }
     if (message.type === "chat2api.voice.live.stop") {
-      const active = state.active;
+      const active = activeForStopRequest(message.requestId);
+      if (!active) {
+        // A delayed stop for an already-evicted request must never terminate
+        // the currently active call on this tab.
+        sendResponse({ ok: true, ignored: true });
+        return false;
+      }
       // This is a Broker-requested graceful shutdown. Drain the final
       // response.interrupted snapshot and acknowledge session.closed so the
       // Broker can close the public WebSocket only after the transcript lands.
