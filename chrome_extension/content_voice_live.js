@@ -117,11 +117,12 @@
         chrome.runtime.sendMessage({ type: "chat2api.event", event }),
       ).then(response => {
         // sendMessage resolving only proves that the background listener ran.
-        // Its {ok:false} means the server WebSocket did not accept this event;
-        // treating that as success can falsely announce session.ready or drain
-        // a terminal transcript that never reached the server.
+        // The response is positive only after the authenticated server Broker
+        // accepted this exact request event; a local socket.send is not enough.
+        // Treating a missing/negative ACK as success could falsely announce
+        // session.ready or drain a terminal transcript that never reached the Broker.
         if (response?.ok !== true) {
-          throw new Error(String(response?.error || "Voice event was not accepted by the Worker transport"));
+          throw new Error(String(response?.error || "Voice event was not accepted by the server Broker"));
         }
         return response;
       });
