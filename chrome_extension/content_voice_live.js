@@ -103,9 +103,18 @@
     try {
       pending = Promise.resolve(
         chrome.runtime.sendMessage({ type: "chat2api.event", event }),
-      ).catch(() => {});
-    } catch (_) {
-      return Promise.resolve();
+      ).then(response => {
+        // sendMessage resolving only proves that the background listener ran.
+        // Its {ok:false} means the server WebSocket did not accept this event;
+        // treating that as success can falsely announce session.ready or drain
+        // a terminal transcript that never reached the server.
+        if (response?.ok !== true) {
+          throw new Error(String(response?.error || "Voice event was not accepted by the Worker transport"));
+        }
+        return response;
+      });
+    } catch (error) {
+      pending = Promise.reject(error);
     }
     pendingEmits.add(pending);
     pending.then(() => pendingEmits.delete(pending), () => pendingEmits.delete(pending));
@@ -138,13 +147,27 @@
   }
 
   function emitLive(active, liveEvent, data = {}) {
-    return emit({
+    const pending = emit({
       type: "image.progress",
       kind: "voice-live",
       request_id: active.requestId,
       live_event: liveEvent,
       session_id: active.sessionId,
       ...data,
+    });
+    // Startup and terminal events are awaited by their owning lifecycle path.
+    // For any intermediate transcript/audio/control event, a negative server
+    // ACK invalidates the live turn: stop upstream Voice rather than silently
+    // continue after dropping a PCM chunk or transcript boundary.
+    if (liveEvent === "session.ready" || liveEvent === "session.closed" || liveEvent === "error") {
+      return pending;
+    }
+    return pending.catch(error => {
+      if (isActiveSession(active)) {
+        active.deliveryError = String(error?.message || error).slice(0,300);
+        void stopLive(active,false).catch(() => {});
+      }
+      throw error;
     });
   }
 
@@ -425,22 +448,11 @@
     }
   }
 
-  async function stopLive(active = state.active, notify = true) {
-    if (!active || active.stopped) return;
-    active.stopped = true;
-    stopTranscriptPolling();
-    const mainStopAck = waitForMainStop(active);
-    postMain("voice.live.stop", active);
-    // Do not click ChatGPT's End Voice button until the MAIN-world bridge has
-    // synchronously captured and posted its final assistant DOM snapshot. The
-    // button can tear down/rewrite the DOM before the queued postMessage event
-    // is handled, which would otherwise erase the last partial text.
-    const mainStopAcknowledged = await mainStopAck;
-    postMain("voice.reset", active);
-    try { endVoiceButton()?.click(); } catch (_) {}
-    await flushPendingEmits();
-    if (notify) {
-      if (mainStopAcknowledged) {
+  function sendStopTerminal(active) {
+    if (active.stopTerminalSent) return Promise.resolve();
+    if (active.stopTerminalPromise) return active.stopTerminalPromise;
+    active.stopTerminalPromise = (async () => {
+      if (active.stopMainAcknowledged) {
         await emitLive(active, "session.closed");
       } else {
         // Fail closed: do not tell the Broker that the Worker drained its
@@ -451,10 +463,46 @@
           message:"ChatGPT Voice did not acknowledge shutdown; final partial text may be incomplete",
         });
       }
+      active.stopTerminalSent = true;
+    })();
+    return active.stopTerminalPromise;
+  }
+
+  async function stopLive(active = state.active, notify = true) {
+    if (!active) return;
+    if (active.stopPromise) {
+      // Concurrent stop sources (user, Worker shutdown, startup cancellation)
+      // must await the same drain. A later caller may upgrade a silent cleanup
+      // to a server-notified terminal, including just after cleanup completed.
+      if (notify) active.stopNotify = true;
+      if (active.stopCompleted && active.stopNotify) return sendStopTerminal(active);
+      return active.stopPromise;
     }
-    if (state.active === active) state.active = null;
-    state.currentResponseId = null;
-    state.mainEvents = [];
+    if (active.stopped) return;
+    active.stopped = true;
+    active.stopNotify = notify === true;
+    const stopPromise = (async () => {
+      stopTranscriptPolling();
+      const mainStopAck = waitForMainStop(active);
+      postMain("voice.live.stop", active);
+      // Do not click ChatGPT's End Voice button until the MAIN-world bridge has
+      // synchronously captured and posted its final assistant DOM snapshot. The
+      // button can tear down/rewrite the DOM before the queued postMessage event
+      // is handled, which would otherwise erase the last partial text.
+      active.stopMainAcknowledged = await mainStopAck;
+      postMain("voice.reset", active);
+      try { endVoiceButton()?.click(); } catch (_) {}
+      await flushPendingEmits();
+      // Mark the drain complete before checking stopNotify. If a second stop
+      // arrives on either side of this point, sendStopTerminal deduplicates it.
+      active.stopCompleted = true;
+      if (active.stopNotify) await sendStopTerminal(active);
+      if (state.active === active) state.active = null;
+      state.currentResponseId = null;
+      state.mainEvents = [];
+    })();
+    active.stopPromise = stopPromise;
+    return stopPromise;
   }
 
   window.addEventListener("message", event => {
@@ -578,7 +626,9 @@
       // This is a Broker-requested graceful shutdown. Drain the final
       // response.interrupted snapshot and acknowledge session.closed so the
       // Broker can close the public WebSocket only after the transcript lands.
-      stopLive(active, true).then(() => sendResponse({ ok: true })).catch(() => sendResponse({ ok: true }));
+      stopLive(active, true)
+        .then(() => sendResponse({ ok: true }))
+        .catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));
       return true;
     }
     return false;
