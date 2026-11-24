@@ -255,9 +255,6 @@ class ApiKeyStore:
         async with self.lock:
             for item in self.keys.values():
                 if item.internal_owner_user_id == owner and not item.revoked_at:
-                    if not item.enabled:
-                        item.enabled = True
-                        await self.save()
                     return ApiPrincipal(
                         key_id=item.key_id,
                         name="Web Chat",
