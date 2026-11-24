@@ -248,6 +248,10 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
         # revocation, expiry or scope removal takes effect immediately.
         identity = getattr(api_keys, "keys", {}).get(issued_principal.key_id)
         auth_key_id = issued_principal.auth_key_id if issued_principal.kind == "web_chat" else issued_principal.key_id
+        if issued_principal.kind == "web_chat":
+            control_plane = getattr(app.state, "control_plane", None)
+            if control_plane is None or control_plane.client_api_key_id() != auth_key_id:
+                return None
         auth_key = getattr(api_keys, "keys", {}).get(auth_key_id)
         if identity is None or auth_key is None:
             return None
@@ -261,7 +265,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
             key_id=issued_principal.key_id,
             name=issued_principal.name,
             kind=issued_principal.kind,
-            scopes=tuple(issued_principal.scopes),
+            scopes=scopes,
             auth_key_id=auth_key_id if issued_principal.kind == "web_chat" else "",
         )
 
@@ -271,6 +275,10 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
         # the per-user key ID is only the account ownership namespace.
         identity = getattr(api_keys, "keys", {}).get(principal.key_id)
         auth_key_id = principal.auth_key_id if principal.kind == "web_chat" else principal.key_id
+        if principal.kind == "web_chat":
+            control_plane = getattr(app.state, "control_plane", None)
+            if control_plane is None or control_plane.client_api_key_id() != auth_key_id:
+                return False
         key = getattr(api_keys, "keys", {}).get(auth_key_id)
         if identity is None or key is None or key.internal_owner_user_id:
             return False
@@ -278,6 +286,8 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
         if not isinstance(public, dict) or not public.get("enabled"):
             return False
         scopes = tuple(key.scopes or ["chat", "models", "files", "images", "audio"])
+        if principal.kind == "web_chat" and not set(principal.scopes).issubset(set(scopes)):
+            return False
         return "audio" in scopes or "chat" in scopes
 
     async def authenticate_websocket(websocket: WebSocket, session_token: str | None) -> ApiPrincipal | None:
