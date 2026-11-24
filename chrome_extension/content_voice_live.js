@@ -103,9 +103,18 @@
     try {
       pending = Promise.resolve(
         chrome.runtime.sendMessage({ type: "chat2api.event", event }),
-      ).catch(() => {});
-    } catch (_) {
-      return Promise.resolve();
+      ).then(response => {
+        // sendMessage resolving only proves that the background listener ran.
+        // Its {ok:false} means the server WebSocket did not accept this event;
+        // treating that as success can falsely announce session.ready or drain
+        // a terminal transcript that never reached the server.
+        if (response?.ok !== true) {
+          throw new Error(String(response?.error || "Voice event was not accepted by the Worker transport"));
+        }
+        return response;
+      });
+    } catch (error) {
+      pending = Promise.reject(error);
     }
     pendingEmits.add(pending);
     pending.then(() => pendingEmits.delete(pending), () => pendingEmits.delete(pending));
@@ -578,7 +587,9 @@
       // This is a Broker-requested graceful shutdown. Drain the final
       // response.interrupted snapshot and acknowledge session.closed so the
       // Broker can close the public WebSocket only after the transcript lands.
-      stopLive(active, true).then(() => sendResponse({ ok: true })).catch(() => sendResponse({ ok: true }));
+      stopLive(active, true)
+        .then(() => sendResponse({ ok: true }))
+        .catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));
       return true;
     }
     return false;
