@@ -235,7 +235,7 @@ class ApiKeyStore:
             if (
                 item is None or item.internal_owner_user_id or not item.enabled
                 or item.revoked_at or _expired(item.expires_at)
-                or (item.token_quota is not None and item.tokens_used >= item.token_quota)
+                or item.token_quota is not None
             ):
                 return None
             item.last_used_at = utc_now()
