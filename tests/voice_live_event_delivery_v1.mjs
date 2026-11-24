@@ -105,8 +105,8 @@ async function runEmit(sendMessage) {
   await assert.rejects(emitLive(active,"error"),/server-websocket-disconnected/);
   assert.equal(stopCalls,1,
     "if the fatal error event itself cannot be delivered, local Voice media must still stop");
-  assert.equal(stopNotify,false,
-    "a failed error notification must not recursively try to send another terminal");
+  assert.equal(stopNotify,true,
+    "a failed fatal notification must trigger one explicit error-terminal retry");
 }
 
 {
