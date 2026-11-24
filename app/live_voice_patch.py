@@ -261,6 +261,14 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
         scopes = tuple(auth_key.scopes or ["chat", "models", "files", "images", "audio"])
         if "audio" not in scopes and "chat" not in scopes:
             return None
+        registry = getattr(app.state, "registry", None)
+        if registry is not None:
+            registry.set_routing_key(issued_principal.key_id)
+            shared_key_context = getattr(registry, "shared_api_key_context", None)
+            if shared_key_context is not None:
+                shared_key_context.set(
+                    auth_key_id if issued_principal.kind == "web_chat" else ""
+                )
         return ApiPrincipal(
             key_id=issued_principal.key_id,
             name=issued_principal.name,
