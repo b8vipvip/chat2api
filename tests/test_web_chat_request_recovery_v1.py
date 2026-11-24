@@ -60,6 +60,8 @@ const context = {
   renderPendingImages() {},
   renderPendingFiles() {},
   setConnection() {},
+  recordClientDiagnostic() {},
+  flushClientDiagnostics: async () => {},
   recoverPendingMessage: async () => { polls++; return {status: 'completed'}; },
   id: () => String(conversation.messages.length),
   toast: (message) => notices.push(message),

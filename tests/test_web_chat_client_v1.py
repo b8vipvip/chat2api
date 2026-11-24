@@ -144,7 +144,7 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         assert "@media(max-width:760px)" in stylesheet.text
         assert ".message.assistant .message-body" in stylesheet.text
         assert ".message.user .message-body" in stylesheet.text
-        assert ".history-label,.conversation-list{display:none!important}" in stylesheet.text
+        assert ".conversation-list{gap:2px;padding:0 2px}" in stylesheet.text
         assert ".topbar-actions,.connection-state{display:none!important}" in stylesheet.text
 
         # CI and production images vendor the exact pinned distribution. A plain

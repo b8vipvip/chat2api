@@ -318,7 +318,6 @@ body.sidebar-collapsed .sidebar{display:none}
 }
 
 /* The left rail exposes only Plugins and Library; new chat lives in the top bar. */
-.history-label,.conversation-list{display:none!important}
 .sidebar .new-chat-button{display:none!important}
 .topbar-new-chat{display:inline-flex;align-items:center;gap:7px;min-height:34px;padding:6px 11px;border:1px solid #414141;border-radius:9px;background:transparent;color:#dedede;font-size:12px;cursor:pointer;white-space:nowrap}
 .topbar-new-chat:hover{background:#303030;border-color:#5b5b5b}
