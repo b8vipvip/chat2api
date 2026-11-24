@@ -312,7 +312,10 @@ def test_web_chat_image_picker_and_client_javascript_are_wired(tmp_path: Path) -
 
         script = client.get("/assets/chat2api-chat-client-v1.js")
         assert script.status_code == 200
-        assert "/v1/files" in script.text
+        assert "/api/user/chat/files" in script.text
+        assert "/v1/files" not in script.text
+        assert "apiToken" not in script.text
+        assert "selectApiKey" not in script.text
         assert 'purpose: "vision"' in script.text
         assert 'purpose: "assistants"' in script.text
         assert 'type: "file"' in script.text
