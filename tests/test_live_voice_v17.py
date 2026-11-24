@@ -14,6 +14,7 @@ from app.live_voice_patch import (
     install_live_voice_patch,
 )
 from app.main import create_app
+from app.quota_reservation_runtime_v1 import install_quota_reservation_runtime_v1
 from app.user_commerce import USER_SESSION_COOKIE
 from app.user_console_v104_patch import install_user_console_v104_patch
 from app.voice_patch import install_voice_patch
@@ -384,6 +385,7 @@ def test_web_chat_live_voice_uses_account_session_and_shared_server_key(tmp_path
     app = create_app(settings(tmp_path))
     install_control_plane_v1(app)
     install_user_console_v104_patch(app)
+    install_quota_reservation_runtime_v1(app)
     install_voice_patch(app)
     install_live_voice_patch(app)
     install_web_chat_features_v1(app)
