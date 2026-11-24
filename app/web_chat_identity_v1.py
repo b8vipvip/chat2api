@@ -108,4 +108,13 @@ async def resolve_web_chat_principal(
         scopes=tuple(shared.scopes),
         auth_key_id=shared.key_id,
     )
+    registry = getattr(app.state, "registry", None)
+    if registry is not None:
+        # Match the normal managed-key authentication path: routing and
+        # account/tenant entitlements follow the user identity, while
+        # service-key-specific model restrictions are evaluated separately.
+        registry.set_routing_key(identity_key_id)
+        shared_key_context = getattr(registry, "shared_api_key_context", None)
+        if shared_key_context is not None:
+            shared_key_context.set(shared.key_id)
     return user, principal
