@@ -42,6 +42,8 @@ async def resolve_web_chat_principal(
     user = accounts.authenticate(request.cookies.get(USER_SESSION_COOKIE))
     if not user:
         raise _private_error(401, "请先登录 Chat2API 账户")
+    if control_plane.public_client().get("web_chat_enabled") is not True:
+        raise _private_error(403, "Web Chat 当前已由管理员停用")
 
     configured_key_id = control_plane.client_api_key_id()
     if not configured_key_id:
