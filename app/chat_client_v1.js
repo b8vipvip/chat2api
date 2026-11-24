@@ -1088,6 +1088,7 @@
     const conversation = currentConversation();
     if (conversation) state.selectedModel = conversation.model || state.selectedModel;
     $("modelSelect").value = state.selectedModel;
+    void loadModels();
     renderAll();
     // Native payloads stay server-authoritative rather than being copied into
     // the revisioned text conversation. Rehydrate on selection, including when
@@ -2786,7 +2787,9 @@
     const select = $("modelSelect");
     let rows = [];
     try {
-      const payload = await apiJson("/api/user/chat/models");
+      const payload = await apiJson("/api/user/chat/models", {
+        headers: {"X-Chat2API-User-Key-ID": selectedKeyId()},
+      });
       rows = Array.isArray(payload.data) ? payload.data : [];
     } catch {
       try {
