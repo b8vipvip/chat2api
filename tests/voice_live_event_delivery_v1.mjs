@@ -103,6 +103,28 @@ async function runEmit(sendMessage) {
 }
 
 {
+  const start=liveSource.indexOf("  async function waitFor(");
+  const end=liveSource.indexOf("\n  function emit(",start);
+  assert.ok(start>=0 && end>start,"production Voice readiness wait must remain extractable");
+  const active={requestId:"voice-wait-failure"};
+  const state={mainEvents:[{type:"voice.live.error",error:"synthetic microphone AudioContext could not resume"}]};
+  const waitFor=vm.runInNewContext(
+    liveSource.slice(start,end)+"\nwaitFor",
+    {
+      state,
+      isActiveSession:()=>true,
+      delay:async()=>{},
+      Date,String,Error,Promise,
+    },
+  );
+  await assert.rejects(
+    waitFor(()=>null,15000,100,active),
+    /synthetic microphone AudioContext could not resume/,
+    "an explicit MAIN-world media failure must interrupt startup instead of waiting for the readiness timeout",
+  );
+}
+
+{
   const start=liveSource.indexOf("  function sendStopTerminal(");
   const end=liveSource.indexOf("\n  async function stopLive(",start);
   assert.ok(start>=0 && end>start,"production Voice terminal selection must remain extractable");
