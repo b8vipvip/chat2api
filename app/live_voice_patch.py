@@ -259,6 +259,13 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
         if not isinstance(public, dict) or not public.get("enabled") or auth_key.internal_owner_user_id:
             return None
         scopes = tuple(auth_key.scopes or ["chat", "models", "files", "images", "audio"])
+        if issued_principal.kind == "web_chat":
+            # The one-time token may not gain scopes added after issuance, and
+            # a Web Chat key that no longer meets the unlimited-key contract
+            # must not keep minting live sessions.
+            if auth_key.token_quota is not None or not set(issued_principal.scopes).issubset(set(scopes)):
+                return None
+            scopes = tuple(issued_principal.scopes)
         if "audio" not in scopes and "chat" not in scopes:
             return None
         registry = getattr(app.state, "registry", None)
@@ -294,7 +301,10 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
         if not isinstance(public, dict) or not public.get("enabled"):
             return False
         scopes = tuple(key.scopes or ["chat", "models", "files", "images", "audio"])
-        if principal.kind == "web_chat" and not set(principal.scopes).issubset(set(scopes)):
+        if principal.kind == "web_chat" and (
+            key.token_quota is not None
+            or not set(principal.scopes).issubset(set(scopes))
+        ):
             return False
         return "audio" in scopes or "chat" in scopes
 
