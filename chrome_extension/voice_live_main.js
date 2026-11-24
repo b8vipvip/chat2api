@@ -153,6 +153,11 @@
         if (typeof state.micContext.state === "string" && state.micContext.state !== "running") {
           throw new Error("ChatGPT Voice synthetic microphone AudioContext is not running (" + state.micContext.state + ")");
         }
+        const micTracks = state.micDestination.stream?.getAudioTracks?.();
+        if (Array.isArray(micTracks) &&
+            (!micTracks.length || micTracks.some(track => track.readyState === "ended"))) {
+          throw new Error("ChatGPT Voice synthetic microphone track is no longer live");
+        }
         return state;
       }
       await delay(40);
