@@ -148,10 +148,11 @@ async function runEmit(sendMessage) {
     stopMainAcknowledged:true,
   };
   await sendStopTerminal(active);
-  assert.deepEqual(events,[{
-    event:"error",
-    data:{code:"VOICE_EVENT_DELIVERY_FAILED",message:"Broker rejected an audio frame"},
-  }],"event loss must produce an error terminal, not a false successful session.closed");
+  assert.equal(events.length,1,"event loss must produce exactly one terminal");
+  assert.equal(events[0].event,"error",
+    "event loss must produce an error terminal, not a false successful session.closed");
+  assert.equal(events[0].data.code,"VOICE_EVENT_DELIVERY_FAILED");
+  assert.equal(events[0].data.message,"Broker rejected an audio frame");
   assert.equal(active.stopTerminalSent,true);
 }
 
