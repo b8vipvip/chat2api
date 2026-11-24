@@ -47,8 +47,7 @@ def install_user_console_privacy_v105_patch(app: FastAPI) -> FastAPI:
                 key: value for key, value in response.headers.items()
                 if key.lower() not in {"content-length", "content-type"}
             }
-            if not any(name.lower() == "cache-control" for name in headers):
-                headers["Cache-Control"] = "no-store"
+            headers["Cache-Control"] = "no-store"
             vary_name = next((name for name in headers if name.lower() == "vary"), None)
             if vary_name is None:
                 headers["Vary"] = "Cookie"
@@ -68,10 +67,9 @@ def install_user_console_privacy_v105_patch(app: FastAPI) -> FastAPI:
         except Exception:
             payload = {"detail": "请求未完成"}
         headers = {key: value for key, value in response.headers.items() if key.lower() not in {"content-length", "content-type"}}
-        # Preserve stricter endpoint policies such as private, no-store; only
-        # supply a default when the route did not choose its own cache policy.
-        if not any(name.lower() == "cache-control" for name in headers):
-            headers["Cache-Control"] = "no-store"
+        # User API error responses must never be cached, regardless of the
+        # route's original cache policy.
+        headers["Cache-Control"] = "no-store"
         vary_name = next((name for name in headers if name.lower() == "vary"), None)
         if vary_name is None:
             headers["Vary"] = "Cookie"
