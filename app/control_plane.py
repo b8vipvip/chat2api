@@ -34,7 +34,15 @@ ROLES: dict[str, frozenset[str]] = {
 }
 ADMIN_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{2,63}$")
 ITERATIONS = 310_000
-DEFAULT_CLIENT = {"registration_mode": "open", "web_chat_enabled": True, "announcement": "", "client_domain": ""}
+DEFAULT_CLIENT = {
+    "registration_mode": "open",
+    "web_chat_enabled": True,
+    "announcement": "",
+    "client_domain": "",
+    # Only the managed-key ID is persisted here. The secret remains in the
+    # encrypted API-key store and is never part of public client configuration.
+    "api_key_id": "",
+}
 
 
 class ControlPlaneError(ValueError):
@@ -189,13 +197,15 @@ class ControlPlaneStore:
             admins = payload["admins"]
             if not isinstance(client, dict) or not isinstance(admins, list):
                 raise ValueError("invalid control-plane structure")
-            legacy_client_keys = set(DEFAULT_CLIENT) - {"client_domain"}
-            if set(client) == legacy_client_keys:
-                # Older installations predate the public client-domain setting.
-                # Supply its empty default rather than refusing service startup.
-                client = {**DEFAULT_CLIENT, **client}
-            elif set(client) != set(DEFAULT_CLIENT):
+            required_client_keys = {"registration_mode", "web_chat_enabled", "announcement"}
+            if (
+                not required_client_keys.issubset(client)
+                or not set(client).issubset(set(DEFAULT_CLIENT))
+            ):
                 raise ValueError("unexpected client policy keys")
+            # Additive migrations: older installations may predate either the
+            # public client-domain field or the private shared API-key reference.
+            client = {**DEFAULT_CLIENT, **client}
             self._validate_client(client)
             client["client_domain"] = self._normalize_client_domain(client["client_domain"])
             loaded = {}
@@ -309,10 +319,19 @@ class ControlPlaneStore:
         if not isinstance(announcement, str) or len(announcement) > 500:
             raise ControlPlaneError("announcement must be a string up to 500 characters")
         ControlPlaneStore._normalize_client_domain(payload.get("client_domain"))
+        api_key_id = payload.get("api_key_id", "")
+        if not isinstance(api_key_id, str) or len(api_key_id) > 128:
+            raise ControlPlaneError("api_key_id must be a string up to 128 characters")
+
+    def client_api_key_id(self) -> str:
+        with self.lock:
+            return str(self.client.get("api_key_id") or "")
 
     def public_client(self) -> dict[str, Any]:
         with self.lock:
-            return {"policy_version": POLICY_VERSION, **self.client}
+            public = {key: value for key, value in self.client.items() if key != "api_key_id"}
+            public["api_key_configured"] = bool(self.client.get("api_key_id"))
+            return {"policy_version": POLICY_VERSION, **public}
 
     def update_client(self, changes: dict[str, Any]) -> dict[str, Any]:
         if not changes or set(changes) - set(DEFAULT_CLIENT):
