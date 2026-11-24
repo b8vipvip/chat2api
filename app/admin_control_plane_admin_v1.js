@@ -496,7 +496,6 @@
     } catch (error) { setStatus("cClientStatus", error.message, true); }
   });
   $("cClientReload")?.addEventListener("click", loadClientPolicy);
-  $("cClientReload")?.addEventListener("click", loadClientPolicy);
 
   async function loadInvitations() {
     try {
