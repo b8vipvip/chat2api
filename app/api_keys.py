@@ -66,6 +66,9 @@ class ApiPrincipal:
     name: str
     kind: str
     scopes: tuple[str, ...]
+    # The credential that authenticated a Web Chat session. The visible
+    # per-user key_id remains the ownership/accounting namespace.
+    auth_key_id: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {"key_id": self.key_id, "name": self.name, "kind": self.kind, "scopes": list(self.scopes)}
@@ -89,6 +92,8 @@ class ManagedApiKey:
     quota_exhausted: bool = False
     # Durable per-request ledger prevents a telemetry replay from double charging.
     charged_requests: dict[str, int] | None = None
+    # Internal account-scoped identity; never exposed as a user-manageable API key.
+    internal_owner_user_id: str | None = None
 
     def public(self) -> dict[str, Any]:
         scopes = self.scopes or ["chat", "models", "files", "images", "audio"]
@@ -204,6 +209,8 @@ class ApiKeyStore:
         digest = token_hash(token)
         matched: ManagedApiKey | None = None
         for item in self.keys.values():
+            if item.internal_owner_user_id:
+                continue
             if secrets.compare_digest(item.token_hash, digest):
                 matched = item
                 break
@@ -219,17 +226,79 @@ class ApiKeyStore:
             scopes=tuple(matched.scopes or ["chat", "models", "files", "images", "audio"]),
         )
 
+    async def authenticate_key_id(self, key_id: str) -> ApiPrincipal | None:
+        """Resolve an administrator-configured managed key without revealing its token."""
+        async with self.lock:
+            item = self.keys.get(str(key_id or ""))
+            if (
+                item is None or item.internal_owner_user_id or not item.enabled
+                or item.revoked_at or _expired(item.expires_at)
+                or (item.token_quota is not None and item.tokens_used >= item.token_quota)
+            ):
+                return None
+            item.last_used_at = utc_now()
+            await self.save()
+            return ApiPrincipal(
+                key_id=item.key_id,
+                name=item.name,
+                kind="managed",
+                scopes=tuple(item.scopes or ["chat", "models", "files", "images", "audio"]),
+            )
+
+    async def ensure_web_chat_user_key(self, user_id: str) -> ApiPrincipal:
+        """Create/reuse a non-secret per-user identity for Web Chat ownership."""
+        owner = str(user_id or "").strip()
+        if not owner or len(owner) > 128:
+            raise ValueError("Invalid Web Chat user identity")
+        async with self.lock:
+            for item in self.keys.values():
+                if item.internal_owner_user_id == owner and not item.revoked_at:
+                    if not item.enabled:
+                        item.enabled = True
+                        await self.save()
+                    return ApiPrincipal(
+                        key_id=item.key_id,
+                        name="Web Chat",
+                        kind="web_chat",
+                        scopes=tuple(item.scopes or ["chat", "models", "files", "images", "audio"]),
+                    )
+            raw = "internal-web-chat-" + secrets.token_urlsafe(32)
+            key_id = "key_" + secrets.token_urlsafe(9).replace("-", "").replace("_", "")
+            item = ManagedApiKey(
+                key_id=key_id,
+                name="Web Chat",
+                token_hash=token_hash(raw),
+                prefix="internal",
+                created_at=utc_now(),
+                scopes=["chat", "models", "files", "images", "audio"],
+                token_ciphertext=None,
+                internal_owner_user_id=owner,
+            )
+            self.keys[key_id] = item
+            await self.save()
+            return ApiPrincipal(
+                key_id=key_id,
+                name="Web Chat",
+                kind="web_chat",
+                scopes=tuple(item.scopes or ["chat", "models", "files", "images", "audio"]),
+            )
+
     def list_public(self) -> list[dict[str, Any]]:
-        return sorted((item.public() for item in self.keys.values()), key=lambda row: row["created_at"], reverse=True)
+        return sorted(
+            (item.public() for item in self.keys.values() if not item.internal_owner_user_id),
+            key=lambda row: row["created_at"], reverse=True,
+        )
 
     def get_public(self, key_id: str) -> dict[str, Any] | None:
         item = self.keys.get(key_id)
-        return item.public() if item else None
+        return item.public() if item and not item.internal_owner_user_id else None
 
     def reveal(self, key_id: str) -> str:
         item = self.keys.get(key_id)
         if not item:
             raise KeyError("Unknown API key")
+        if item.internal_owner_user_id:
+            raise ValueError("Internal Web Chat identities cannot be revealed")
         if not item.token_ciphertext:
             raise ValueError("This key predates encrypted secret storage and cannot be revealed")
         if not self.cipher:
@@ -245,6 +314,8 @@ class ApiKeyStore:
             item = self.keys.get(key_id)
             if not item:
                 raise KeyError("Unknown API key")
+            if item.internal_owner_user_id:
+                raise ValueError("Internal Web Chat identities cannot be modified")
             if item.revoked_at:
                 raise ValueError("Revoked API keys cannot be modified")
             if name is not None:
@@ -270,48 +341,52 @@ class ApiKeyStore:
             return item.public()
 
     async def account_completed_usage(self, record: dict[str, Any]) -> None:
-        """Single accounting authority: count each completed request at most once.
-
-        Rewritten terminal telemetry records may increase an estimate but cannot
-        count the same request twice. Failed/unsubmitted requests are not charged.
-        """
+        """Count a completed request once for both its user and shared service key."""
         if record.get("status") != "completed":
             return
-        key_id = str(record.get("api_key_id") or "")
         request_id = str(record.get("request_id") or "")
         usage = record.get("usage") or {}
         try:
             amount = max(0, int(usage.get("total_tokens") or 0))
         except (TypeError, ValueError, AttributeError):
             return
-        if not key_id or not request_id or not amount:
+        if not request_id or not amount:
+            return
+        key_ids = list(dict.fromkeys(
+            str(value or "") for value in (
+                record.get("api_key_id"), record.get("shared_api_key_id")
+            ) if value
+        ))
+        if not key_ids:
             return
         async with self.lock:
-            item = self.keys.get(key_id)
-            if not item:
-                return
-            ledger = item.charged_requests if isinstance(item.charged_requests, dict) else {}
-            prior = max(0, int(ledger.get(request_id, 0) or 0))
-            if amount <= prior:
-                # The previous attempt may have updated the in-memory ledger
-                # and then failed while persisting it. Re-saving the existing
-                # idempotency entry makes a retry repair that interrupted write
-                # without incrementing tokens_used a second time.
+            touched = False
+            for key_id in key_ids:
+                item = self.keys.get(key_id)
+                if not item:
+                    continue
+                ledger = item.charged_requests if isinstance(item.charged_requests, dict) else {}
+                prior = max(0, int(ledger.get(request_id, 0) or 0))
+                if amount > prior:
+                    ledger[request_id] = amount
+                    item.charged_requests = ledger
+                    item.tokens_used += amount - prior
+                    if item.token_quota is not None and item.tokens_used >= item.token_quota:
+                        item.enabled = False
+                        item.quota_exhausted = True
+                # Re-save even when the ledger already contains this request:
+                # a previous interrupted write may have changed memory only.
+                touched = True
+            if touched:
                 await self.save()
-                return
-            ledger[request_id] = amount
-            item.charged_requests = ledger
-            item.tokens_used += amount - prior
-            if item.token_quota is not None and item.tokens_used >= item.token_quota:
-                item.enabled = False
-                item.quota_exhausted = True
-            await self.save()
 
     async def revoke(self, key_id: str) -> dict[str, Any]:
         async with self.lock:
             item = self.keys.get(key_id)
             if not item:
                 raise KeyError("Unknown API key")
+            if item.internal_owner_user_id:
+                raise ValueError("Internal Web Chat identities cannot be revoked")
             if not item.revoked_at:
                 item.revoked_at = utc_now()
             item.enabled = False
