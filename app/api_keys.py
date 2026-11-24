@@ -353,12 +353,14 @@ class ApiKeyStore:
             return
         if not request_id or not amount:
             return
-        primary_key_id = "" if record.get("web_chat_mode") is True else record.get("api_key_id")
-        key_ids = list(dict.fromkeys(
-            str(value or "") for value in (
-                primary_key_id, record.get("shared_api_key_id")
-            ) if value
-        ))
+        shared_key_id = str(record.get("shared_api_key_id") or "")
+        if record.get("web_chat_mode") is True:
+            # New Web Chat requests charge only the configured shared key.
+            # Rows created before this migration have no shared key ID and
+            # must retain their historical account-owned key settlement.
+            key_ids = [shared_key_id or str(record.get("api_key_id") or "")]
+        else:
+            key_ids = [str(record.get("api_key_id") or "")]
         if not key_ids:
             return
         async with self.lock:
