@@ -67,6 +67,35 @@ async function runEmit(sendMessage) {
   assert.equal(h.pendingEmits.size,0);
 }
 
+{
+  const start=liveSource.indexOf("  function emitLive(");
+  const end=liveSource.indexOf("  function postMain(",start);
+  assert.ok(start>=0 && end>start,"production emitLive failure policy must remain extractable");
+  let stopCalls=0;
+  const active={requestId:"voice-event-failure",sessionId:"session-1"};
+  const emitLive=vm.runInNewContext(
+    liveSource.slice(start,end) + "\nemitLive",
+    {
+      emit:async()=>{throw new Error("server-websocket-disconnected");},
+      isActiveSession:()=>true,
+      stopLive:async()=>{stopCalls+=1;},
+      String,Promise,Error,
+    },
+  );
+  await assert.rejects(emitLive(active,"response.audio.delta",{pcm_base64:"AAAA"}),/server-websocket-disconnected/);
+  assert.equal(stopCalls,1,
+    "a dropped intermediate audio/transcript event must stop upstream Voice rather than silently continue");
+  assert.equal(active.deliveryError,"server-websocket-disconnected");
+
+  stopCalls=0;
+  await assert.rejects(emitLive(active,"session.ready"),/server-websocket-disconnected/);
+  assert.equal(stopCalls,0,
+    "session.ready startup cleanup is owned by startLive and must not race a second stop");
+  await assert.rejects(emitLive(active,"session.closed"),/server-websocket-disconnected/);
+  assert.equal(stopCalls,0,
+    "a failed terminal send must propagate to the stop owner without recursive teardown");
+}
+
 assert.ok(backgroundSource.includes('error: sent ? "" : "server-websocket-disconnected-or-send-failed"'),
   "background transport must return a diagnosable negative acknowledgement");
 assert.ok(liveSource.includes(".catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));"),
