@@ -228,7 +228,9 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
             realtime_sessions[digest] = (now + REALTIME_SESSION_TTL_SECONDS, principal)
         return value
 
-    async def consume_realtime_session(token: str) -> ApiPrincipal | None:
+    async def consume_realtime_session(
+        token: str, session_cookie: str | None = None,
+    ) -> ApiPrincipal | None:
         digest = _token_hash(token)
         now = time.monotonic()
         async with realtime_sessions_lock:
@@ -250,7 +252,22 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
         auth_key_id = issued_principal.auth_key_id if issued_principal.kind == "web_chat" else issued_principal.key_id
         if issued_principal.kind == "web_chat":
             control_plane = getattr(app.state, "control_plane", None)
+            accounts = getattr(app.state, "user_accounts", None)
             if control_plane is None or control_plane.client_api_key_id() != auth_key_id:
+                return None
+            if accounts is None or not session_cookie:
+                return None
+            try:
+                session_user = accounts.authenticate(session_cookie)
+                owner_id = accounts.owner_for_key(issued_principal.key_id)
+                if (
+                    not session_user
+                    or not owner_id
+                    or str(session_user.get("user_id") or "") != str(owner_id)
+                    or not accounts.is_enabled(str(owner_id))
+                ):
+                    return None
+            except Exception:
                 return None
         auth_key = getattr(api_keys, "keys", {}).get(auth_key_id)
         if identity is None or auth_key is None:
@@ -284,7 +301,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
             auth_key_id=auth_key_id if issued_principal.kind == "web_chat" else "",
         )
 
-    def principal_is_active(principal: ApiPrincipal) -> bool:
+    def principal_is_active(principal: ApiPrincipal, websocket: WebSocket | None = None) -> bool:
         # A successful WebSocket handshake must not turn a credential into a
         # permanent lease. For Web Chat, the shared service key is authoritative;
         # the per-user key ID is only the account ownership namespace.
@@ -292,7 +309,25 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
         auth_key_id = principal.auth_key_id if principal.kind == "web_chat" else principal.key_id
         if principal.kind == "web_chat":
             control_plane = getattr(app.state, "control_plane", None)
+            accounts = getattr(app.state, "user_accounts", None)
             if control_plane is None or control_plane.client_api_key_id() != auth_key_id:
+                return False
+            if accounts is None or websocket is None:
+                return False
+            try:
+                from .user_commerce import USER_SESSION_COOKIE
+                session_user = accounts.authenticate(
+                    websocket.cookies.get(USER_SESSION_COOKIE)
+                )
+                owner_id = accounts.owner_for_key(principal.key_id)
+                if (
+                    not session_user
+                    or not owner_id
+                    or str(session_user.get("user_id") or "") != str(owner_id)
+                    or not accounts.is_enabled(str(owner_id))
+                ):
+                    return False
+            except Exception:
                 return False
         key = getattr(api_keys, "keys", {}).get(auth_key_id)
         if identity is None or key is None or key.internal_owner_user_id:
@@ -313,7 +348,10 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
         if supplied:
             return await authenticate_managed_token(supplied)
         if session_token:
-            return await consume_realtime_session(session_token)
+            from .user_commerce import USER_SESSION_COOKIE
+            return await consume_realtime_session(
+                session_token, websocket.cookies.get(USER_SESSION_COOKIE),
+            )
         return None
 
     def can_accept(client_id: str, weight: int = LIVE_CAPACITY_WEIGHT) -> bool:
@@ -835,7 +873,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
             if start.get("type") != "session.start":
                 await send_json({"type": "error", "code": "SESSION_START_REQUIRED", "message": "First frame must be session.start"})
                 return
-            if not principal_is_active(principal):
+            if not principal_is_active(principal, websocket):
                 await send_json({
                     "type": "error", "code": "API_KEY_REVOKED",
                     "message": "The API key is disabled, expired, exhausted or no longer has Live permission",
@@ -938,7 +976,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         return_when=asyncio.FIRST_COMPLETED,
                     )
                     if not completed:
-                        if not principal_is_active(principal):
+                        if not principal_is_active(principal, websocket):
                             error_message = "Live API key is no longer active"
                             await send_json({
                                 "type": "error", "code": "API_KEY_REVOKED",
@@ -956,7 +994,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         client_receive.cancel()
                         with suppress(asyncio.CancelledError):
                             await client_receive
-                if not principal_is_active(principal):
+                if not principal_is_active(principal, websocket):
                     error_message = "Live API key is no longer active"
                     await send_json({
                         "type": "error", "code": "API_KEY_REVOKED",
