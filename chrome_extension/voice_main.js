@@ -254,11 +254,25 @@
 
   async function ensureSyntheticMic() {
     if (state.micDestination && state.micContext && state.micContext.state !== "closed") {
-      await resumeSyntheticMicContext(state.micContext);
-      return state.micDestination.stream;
+      const existingContext = state.micContext;
+      await resumeSyntheticMicContext(existingContext);
+      const existingTracks = state.micDestination.stream?.getAudioTracks?.() || [];
+      if (existingTracks.length && existingTracks.every(track => track.readyState !== "ended")) {
+        return state.micDestination.stream;
+      }
+      // ChatGPT may stop the MediaStreamTrack it received when its Voice UI
+      // closes. The AudioContext can remain running while its destination track
+      // is ended; rebuild it instead of returning a non-functional stream.
+      try { state.micOscillator?.stop(); } catch (_) {}
+      try { await existingContext.close(); } catch (_) {}
+      if (state.micContext === existingContext) {
+        state.micContext = null;
+        state.micDestination = null;
+        state.micOscillator = null;
+      }
     }
-    // A closed AudioContext leaves an ended MediaStreamDestination behind.
-    // Do not hand that stale track back to ChatGPT on the next Voice session.
+    // A closed AudioContext or an ended destination track must never be
+    // returned to ChatGPT as a ready microphone on the next Voice session.
     state.micContext = null;
     state.micDestination = null;
     state.micOscillator = null;
@@ -275,6 +289,10 @@
     state.micOscillator = oscillator;
     try {
       await resumeSyntheticMicContext(context);
+      const tracks = destination.stream?.getAudioTracks?.() || [];
+      if (!tracks.length || tracks.some(track => track.readyState === "ended")) {
+        throw new Error("ChatGPT Voice synthetic microphone returned no live audio track");
+      }
     } catch (error) {
       try { oscillator.stop(); } catch (_) {}
       try { await context.close(); } catch (_) {}
