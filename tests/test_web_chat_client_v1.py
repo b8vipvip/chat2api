@@ -238,3 +238,28 @@ def test_web_chat_uses_shared_server_key_but_keeps_user_identity_isolated(tmp_pa
         assert upload_b.status_code == 200, upload_b.text
         assert app.state.file_store.get(file_a).owner_key_id == key_a
         assert app.state.file_store.get(upload_b.json()["id"]).owner_key_id == key_b
+
+
+def test_web_chat_usage_is_counted_for_user_and_shared_key_once(tmp_path: Path) -> None:
+    app = create_app(Settings(CHAT2API_DATA_DIR=str(tmp_path)))
+    api_keys = app.state.api_keys
+
+    async def exercise():
+        shared_public, _shared_token = await api_keys.create("shared-web-chat")
+        user_identity = await api_keys.ensure_web_chat_user_key("user_web_chat_usage")
+        record = {
+            "request_id": "req_web_chat_shared_usage_0001",
+            "api_key_id": user_identity.key_id,
+            "shared_api_key_id": shared_public["key_id"],
+            "status": "completed",
+            "usage": {"total_tokens": 73},
+        }
+        await api_keys.account_completed_usage(record)
+        await api_keys.account_completed_usage(record)
+        return shared_public["key_id"], user_identity.key_id
+
+    shared_key_id, user_key_id = asyncio.run(exercise())
+    assert api_keys.keys[shared_key_id].tokens_used == 73
+    assert api_keys.keys[user_key_id].tokens_used == 73
+    assert api_keys.get_public(user_key_id) is None
+    assert all(row["key_id"] != user_key_id for row in api_keys.list_public())
