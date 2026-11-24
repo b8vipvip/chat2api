@@ -363,6 +363,9 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
         observed_audio_bytes = 0
         observed_input_audio_bytes = 0
         observed_response_count = 0
+        observed_speech_activity = False
+        observed_user_transcript = False
+        requested_graceful_finish = False
         observed_media_count = 0
         observed_media_ids: list[str] = []
         input_confirmed = 0
@@ -402,7 +405,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 await websocket.send_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
 
         async def relay_extension_events() -> None:
-            nonlocal finished, observed_audio_bytes, observed_response_count, observed_media_count, input_confirmed, session_ready, setup_prompt_accounted, error_message, observed_media_ids
+            nonlocal finished, observed_audio_bytes, observed_response_count, observed_media_count, input_confirmed, session_ready, setup_prompt_accounted, error_message, observed_media_ids, observed_speech_activity, observed_user_transcript
             assert state is not None
             text_by_response: dict[str, str] = {}
 
@@ -512,6 +515,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         payload["model_alias_of"] = effective_model
                     await send_json(payload)
                 elif event_type == "input.speech_started":
+                    observed_speech_activity = True
                     await send_json({"type": "input_audio_buffer.speech_started"})
                 elif event_type == "input.speech_stopped":
                     await send_json({"type": "input_audio_buffer.speech_stopped"})
@@ -592,6 +596,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 elif event_type == "transcript.final":
                     text = str(event.get("text") or "").strip()
                     if text:
+                        observed_user_transcript = True
                         observed_prompt_parts.append(text)
                         await send_json({"type": "transcript.final", "text": text})
                 elif event_type == "response.created":
@@ -1130,6 +1135,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                             "message": error_message, "retryable": True,
                         })
                         break
+                    requested_graceful_finish = True
                     # Ask the extension to stop first, then keep the relay alive
                     # until it has flushed response.interrupted/partial DOM text
                     # and acknowledged session.closed. Closing immediately here
@@ -1182,10 +1188,23 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
             with suppress(Exception):
                 await send_json({"type": "error", "code": "GPT_LIVE_BRIDGE_ERROR", "message": str(error), "retryable": True})
         finally:
-            if session_ready and not error_message and not observed_response_count:
-                # Audio bytes prove transport, not a completed assistant turn.
-                # Require the browser's response.done signal before marking
-                # the live session successful, even if partial PCM was heard.
+            # Closing a ready call before speaking or sending any text/media
+            # is an intentional idle cancellation, not a failed generation.
+            # Silence PCM packets from the microphone are transport activity,
+            # not evidence of an attempted user turn.
+            idle_graceful_finish = (
+                requested_graceful_finish
+                and session_ready
+                and not error_message
+                and not observed_response_count
+                and not observed_speech_activity
+                and not observed_user_transcript
+                and input_confirmed == 0
+                and observed_audio_bytes == 0
+            )
+            if session_ready and not error_message and not observed_response_count and not idle_graceful_finish:
+                # If speech or another input was observed but the Worker never
+                # completed a response, preserve the missing-response error.
                 error_message = "GPT-Live session ended without a completed response"
                 with suppress(Exception):
                     await send_json({
@@ -1196,7 +1215,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     })
             terminal_status = (
                 "completed" if session_ready and observed_response_count else
-                "cancelled" if error_message == "client-disconnected" else "error"
+                "cancelled" if error_message == "client-disconnected" or idle_graceful_finish else "error"
             )
             if error_message != "client-disconnected":
                 with suppress(Exception):
@@ -1227,7 +1246,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 # with no completed response release their admission hold.
                 terminal_status = (
                     "completed" if session_ready and observed_response_count else
-                    "cancelled" if error_message == "client-disconnected" else "error"
+                    "cancelled" if error_message == "client-disconnected" or idle_graceful_finish else "error"
                 )
                 prompt_text = "\n".join(part for part in observed_prompt_parts if part).strip()
                 completion_text = "\n".join(part for part in observed_completion_parts if part).strip()

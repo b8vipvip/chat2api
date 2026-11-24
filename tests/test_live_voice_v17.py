@@ -147,8 +147,57 @@ def test_live_voice_ready_distinguishes_instructions_from_empty_context(tmp_path
                 assert ready["context_injected"] is False
                 assert ready["instructions_applied"] is True
                 assert ready["context_mode"] == "instructions_only_setup_turn"
+                # PCM16 silence is sent continuously by the microphone graph.
+                # It is not evidence that the user actually spoke.
+                silent_pcm = b"\x00\x00" * 320
+                live.send_bytes(silent_pcm)
+                microphone = extension.receive_json()
+                assert microphone["type"] == "voice.live.audio"
+                assert base64.b64decode(microphone["pcm_base64"]) == silent_pcm
                 live.send_json({"type":"session.finish"})
-                acknowledge_live_stop(live,extension,request_id)
+                events = acknowledge_live_stop(live,extension,request_id)
+                assert events[-1]["status"] == "cancelled"
+                assert events[-1]["error"] is None
+                assert not any(item["type"] == "error" for item in events)
+        row = client.app.state.telemetry.get(request_id)
+        assert row["status"] == "cancelled"
+        assert row["diagnostics"]["input_audio_bytes"] == len(silent_pcm)
+        assert row["diagnostics"]["completed_responses"] == 0
+
+
+def test_live_voice_speech_without_completed_response_remains_error(tmp_path: Path) -> None:
+    with TestClient(app_live(tmp_path)) as client:
+        managed_key = create_managed_key(client)
+        client_id, extension_token = pair_extension(client)
+        with client.websocket_connect(f"/ws/extensions/{client_id}?token={extension_token}") as extension:
+            assert extension.receive_json()["type"] == "server.hello"
+            with client.websocket_connect(
+                f"/v1/audio/realtime?client_id={client_id}",
+                headers={"Authorization": f"Bearer {managed_key}"},
+            ) as live:
+                live.send_json({"type":"session.start","model":"gpt-live"})
+                started = extension.receive_json()
+                assert started["type"] == "voice.live.start"
+                request_id = started["request_id"]
+                extension.send_json({
+                    "type":"image.progress","kind":"voice-live",
+                    "request_id":request_id,"live_event":"session.ready",
+                    "instructions_applied":True,
+                })
+                assert live.receive_json()["type"] == "session.ready"
+                extension.send_json({
+                    "type":"image.progress","kind":"voice-live",
+                    "request_id":request_id,"live_event":"input.speech_started",
+                })
+                assert live.receive_json()["type"] == "input_audio_buffer.speech_started"
+                live.send_json({"type":"session.finish"})
+                events = acknowledge_live_stop(live,extension,request_id)
+                assert any(
+                    event.get("code") == "GPT_LIVE_NO_COMPLETED_RESPONSE" for event in events
+                ), "an actual spoken turn without response.done must remain a failure"
+                assert events[-1]["status"] == "error"
+        row = client.app.state.telemetry.get(request_id)
+        assert row["status"] == "error"
 
 
 def test_live_voice_stream_relays_pcm_both_directions(tmp_path: Path) -> None:
@@ -661,11 +710,15 @@ def test_live_voice_malformed_control_frames_do_not_terminate_session(tmp_path: 
                 assert live.receive_json() == {"type": "pong", "timestamp": 123}
 
                 live.send_json({"type": "session.finish"})
-                acknowledge_live_stop(live, extension, request_id)
+                events = acknowledge_live_stop(live, extension, request_id)
+                assert events[-1]["status"] == "cancelled"
+                assert events[-1]["error"] is None
 
         row = app.state.telemetry.get(request_id)
-        assert row["status"] == "error"
-        assert "without a completed response" in row["error"]
+        # Recoverable invalid control frames did not end the session or
+        # demonstrate a user turn; a later idle finish is still a cancellation.
+        assert row["status"] == "cancelled"
+        assert row["error"] is None
 
 
 def test_live_voice_requires_session_start_json_object(tmp_path: Path) -> None:
