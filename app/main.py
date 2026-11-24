@@ -2120,6 +2120,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return False
         api_key = getattr(api_keys, "keys", {}).get(key_id)
         shared_key_id = str(record.get("shared_api_key_id") or "")
+        # New session-backed Web Chat requests must retain the shared service
+        # key identity all the way through terminal replay. Only pre-migration
+        # Web Chat rows (auth_kind=managed) may use the legacy owner-key ledger.
+        if str(record.get("auth_kind") or "") == "web_chat" and not shared_key_id:
+            return False
         accounting = getattr(telemetry, "usage_accounting", None)
         if api_key is None or not callable(accounting):
             return False
