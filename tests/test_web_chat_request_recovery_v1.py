@@ -45,7 +45,7 @@ const body = new ReadableStream({
   },
 });
 const context = {
-  state: {apiToken: 'token', user: {user_id: 'user-a'}, selectedModel: 'model', pendingImages: [], pendingImagesConversationId: '', pendingFiles: [], pendingFilesConversationId: ''},
+  state: {webChatKeyId: 'key-a', webChatScopes: ['chat', 'models'], user: {user_id: 'user-a'}, selectedModel: 'model', pendingImages: [], pendingImagesConversationId: '', pendingFiles: [], pendingFilesConversationId: ''},
   currentConversation: () => conversation,
   window: {Chat2APIStreamRecoveryV1: {createRequestId: () => 'req_webchat_error'}},
   apiJson: async () => ({user: {user_id: 'user-a'}}),
@@ -68,7 +68,7 @@ const context = {
   AbortController, TextDecoder,
 };
 const readFrame = source.slice(source.indexOf('  class StreamResponseError'), source.indexOf('  function recoveryStatusLabel'));
-const send = source.slice(source.indexOf('  async function sendMessage'), source.indexOf('  async function selectApiKey'));
+const send = source.slice(source.indexOf('  async function sendMessage'), source.indexOf('  async function loadWebChatSession'));
 const sendMessage = vm.runInNewContext(readFrame + send + '\nsendMessage', context);
 (async () => {
   await sendMessage('question');
