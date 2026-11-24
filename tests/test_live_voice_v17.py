@@ -847,3 +847,58 @@ def test_live_voice_drops_pcm_frame_queued_before_terminal_close():
         assert websocket.sent == [b"current-pcm"]
 
     asyncio.run(scenario())
+
+
+def test_voice_worker_event_ack_is_a_server_broker_ack_not_local_socket_send(tmp_path: Path) -> None:
+    """Voice ACK is emitted only after the authenticated Broker accepts the event."""
+    with TestClient(app_live(tmp_path)) as client:
+        managed_key = create_managed_key(client)
+        client_id, extension_token = pair_extension(client)
+        with client.websocket_connect(f"/ws/extensions/{client_id}?token={extension_token}") as extension:
+            assert extension.receive_json()["type"] == "server.hello"
+            with client.websocket_connect(
+                f"/v1/audio/realtime?client_id={client_id}",
+                headers={"Authorization": f"Bearer {managed_key}"},
+            ) as live:
+                live.send_json({"type": "session.start", "model": "gpt-live"})
+                started = extension.receive_json()
+                request_id = started["request_id"]
+                event_id = "8a4d5e3f-2c1b-4a6d-9e8f-0123456789ab"
+                extension.send_json({
+                    "type": "image.progress",
+                    "kind": "voice-live",
+                    "request_id": request_id,
+                    "live_event": "session.ready",
+                    "worker_event_ack_id": event_id,
+                })
+                ack = extension.receive_json()
+                assert ack == {
+                    "type": "voice.event.ack",
+                    "event_id": event_id,
+                    "request_id": request_id,
+                    "accepted": True,
+                    "reason": "",
+                }
+                assert live.receive_json()["type"] == "session.ready"
+
+                live.send_json({"type": "session.finish"})
+                acknowledge_live_stop(live, extension, request_id)
+
+                # The same authenticated Worker socket can receive a negative
+                # ACK for a delayed event after its Broker lease is gone.
+                stale_id = "7b3c4d2e-1f0a-4b5c-8d9e-0123456789ab"
+                extension.send_json({
+                    "type": "image.progress",
+                    "kind": "voice-live",
+                    "request_id": request_id,
+                    "live_event": "response.done",
+                    "worker_event_ack_id": stale_id,
+                })
+                rejected = extension.receive_json()
+                assert rejected == {
+                    "type": "voice.event.ack",
+                    "event_id": stale_id,
+                    "request_id": request_id,
+                    "accepted": False,
+                    "reason": "request-not-owned-or-active",
+                }
