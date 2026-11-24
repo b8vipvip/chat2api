@@ -147,13 +147,27 @@
   }
 
   function emitLive(active, liveEvent, data = {}) {
-    return emit({
+    const pending = emit({
       type: "image.progress",
       kind: "voice-live",
       request_id: active.requestId,
       live_event: liveEvent,
       session_id: active.sessionId,
       ...data,
+    });
+    // Startup and terminal events are awaited by their owning lifecycle path.
+    // For any intermediate transcript/audio/control event, a negative server
+    // ACK invalidates the live turn: stop upstream Voice rather than silently
+    // continue after dropping a PCM chunk or transcript boundary.
+    if (liveEvent === "session.ready" || liveEvent === "session.closed" || liveEvent === "error") {
+      return pending;
+    }
+    return pending.catch(error => {
+      if (isActiveSession(active)) {
+        active.deliveryError = String(error?.message || error).slice(0,300);
+        void stopLive(active,false).catch(() => {});
+      }
+      throw error;
     });
   }
 
