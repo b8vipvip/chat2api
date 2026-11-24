@@ -237,6 +237,8 @@ assert.ok(liveMain.includes("remote audio AudioContext is not running"));
 assert.ok(webClient.includes("浏览器音频输出上下文未进入运行状态"));
 assert.ok(webClient.includes('audioContext.addEventListener?.("statechange",audioContextStateListener)'),
   "a Live session must observe audio context suspension even when no output PCM is arriving");
+assert.ok(webClient.includes("if ((ready || starting) && !stopping && !cleaned)"),
+  "audio context suspension during startup must also reject readiness immediately");
 assert.ok(webClient.includes('audioContext.removeEventListener?.("statechange",audioContextStateListener)'),
   "the state listener must be detached during cleanup");
 console.log("voice-audio-context-readiness-v1-passed");
