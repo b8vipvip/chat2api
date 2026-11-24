@@ -237,5 +237,6 @@ def test_web_chat_client_diagnostics_admin_asset_uses_safe_dom_and_range_exports
     assert "webChatClientLogExportCount" in source
     assert "webChatClientLogExportRange" in source
     assert "since" in source and "until" in source
+    assert 'DOMContentLoaded' in source
     c_track = (root / "app" / "admin_control_plane_admin_v1.js").read_text(encoding="utf-8")
     assert '"client-logs": ["super_admin", "system_admin", "support"]' in c_track

@@ -143,6 +143,9 @@
   $("webChatClientLogExportCount")?.addEventListener("click", () => { void exportBundle("count"); });
   $("webChatClientLogExportRange")?.addEventListener("click", () => { void exportBundle("range"); });
   window.Chat2APIWebChatClientLogsV1 = { load };
+  window.addEventListener("DOMContentLoaded", () => {
+    if (location.hash === "#client-logs" || $("view-client-logs")?.classList.contains("active")) void load();
+  });
   window.addEventListener("hashchange", () => {
     if (location.hash === "#client-logs") void load();
   });
