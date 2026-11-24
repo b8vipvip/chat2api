@@ -82,10 +82,18 @@ for(const mode of ["reject","suspended"]) {
   const playEnd=voiceMain.indexOf("\n  window.addEventListener",playStart);
   assert.ok(helperStart>=0 && helperEnd>helperStart && playStart>helperEnd && playEnd>playStart);
   const events=[];
+  let resumeCount=0;
   const state={
     preparedInput:{base64:"AAAA",mime_type:"audio/wav"},
-    micContext:{state:"suspended",async resume(){throw new Error("playback resume denied");}},
-    micDestination:{},
+    micContext:{
+      state:"suspended",
+      async resume(){
+        resumeCount+=1;
+        if(resumeCount===1){this.state="running";return;}
+        throw new Error("playback resume denied");
+      },
+    },
+    micDestination:{stream:{}},
   };
   const playPreparedInput=vm.runInNewContext(
     voiceMain.slice(helperStart,helperEnd)+
@@ -94,7 +102,6 @@ for(const mode of ["reject","suspended"]) {
     {
       state,
       waitForRemoteTrackBeforeInput:async()=>1,
-      ensureSyntheticMic:async()=>({}),
       decodeBase64:()=>new Uint8Array([0,0]),
       post:(type)=>events.push(type),
       performance:{now:()=>1},
