@@ -329,3 +329,6 @@ body.sidebar-collapsed .sidebar{display:none}
   .topbar-new-chat span:last-child{display:none}
   .topbar-left{gap:6px}
 }
+
+/* Hide Chat2API-only developer actions from the ChatGPT-style user surface. */
+.topbar-actions,.connection-state{display:none!important}
