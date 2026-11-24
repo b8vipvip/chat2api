@@ -2931,6 +2931,9 @@
       state.remoteSyncReady = false;
       toast("暂时无法同步服务端会话，当前先显示本地历史：" + error.message);
     }
+    state.conversations.forEach((conversation) => {
+      if (!conversation.apiKeyId) conversation.apiKeyId = state.webChatKeyId;
+    });
     state.forceScrollToBottom = true;
     renderAll();
     resumePendingMessages();
