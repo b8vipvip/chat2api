@@ -1054,3 +1054,50 @@ def test_live_voice_idle_public_socket_terminates_when_worker_disconnects(tmp_pa
         row = app.state.telemetry.get(request_id)
         assert row["status"] == "error"
         assert "disconnected" in row["error"].lower()
+
+
+def test_web_chat_realtime_session_limit_is_shared_across_accounts(tmp_path: Path) -> None:
+    config = settings(tmp_path)
+    app = create_app(config)
+    install_control_plane_v1(app)
+    install_user_console_v104_patch(app)
+    install_voice_patch(app)
+    install_live_voice_patch(app)
+    install_web_chat_features_v1(app)
+
+    users = [
+        app.state.user_accounts.register(
+            "voice-cap-a@example.org", "secure-password-123", "Voice Capacity A"
+        ),
+        app.state.user_accounts.register(
+            "voice-cap-b@example.org", "secure-password-123", "Voice Capacity B"
+        ),
+    ]
+    sessions = [
+        app.state.user_accounts.create_session(user["user_id"])
+        for user in users
+    ]
+    shared_key, _shared_token = asyncio.run(
+        app.state.api_keys.create("shared-web-chat-voice-capacity")
+    )
+    app.state.control_plane.update_client({"api_key_id": shared_key["key_id"]})
+
+    with TestClient(app) as client:
+        for session in sessions:
+            client.cookies.set(USER_SESSION_COOKIE, session)
+            for _ in range(4):
+                response = client.post(
+                    "/api/user/chat/voice-session",
+                    headers={"Origin": "http://testserver"},
+                )
+                assert response.status_code == 200, response.text
+
+        # Each account has only four pending tokens, but the shared service
+        # key already has eight. The ninth token must be rejected globally.
+        client.cookies.set(USER_SESSION_COOKIE, sessions[0])
+        overflow = client.post(
+            "/api/user/chat/voice-session",
+            headers={"Origin": "http://testserver"},
+        )
+        assert overflow.status_code == 429, overflow.text
+        assert overflow.json()["detail"]["code"] == "realtime_session_limit"

@@ -2,9 +2,9 @@
 
 ## 当前版本与运行契约
 
-- Python package：`0.7.2`
-- Server runtime / console：`0.22.299`
-- Chrome Bridge：`0.22.299`
+- Python package：`0.7.3`
+- Server runtime / console：`0.22.300`
+- Chrome Bridge：`0.22.300`
 - 用户控制台：`/console`
 - 运行中的服务端可通过 `GET /version` 查询服务器运行时、Chrome Bridge 与功能契约版本。
 - 完整版本规则见 `docs/VERSIONING.md`。
