@@ -71,6 +71,29 @@ async def resolve_web_chat_principal(
             raise _private_error(503, "无法初始化 Web Chat 账户身份") from error
         identity_key_id = internal.key_id
 
+    # A hidden Web Chat identity must inherit the account's workspace binding;
+    # otherwise model-entitlement evaluation would see it as an unbound key and
+    # could omit tenant-specific restrictions. If the user belongs to multiple
+    # workspaces, use the first stable (slug-sorted) membership as the default
+    # Web Chat workspace. Existing conversations keep their own bound key IDs.
+    identity_record = getattr(api_keys, "keys", {}).get(identity_key_id)
+    if identity_record is not None and identity_record.internal_owner_user_id == user_id:
+        tenant_memberships = getattr(app.state, "tenant_memberships", None)
+        if tenant_memberships is not None:
+            try:
+                bound_tenant = tenant_memberships.tenant_for_key(identity_key_id)
+                if bound_tenant:
+                    if tenant_memberships.user_for_key(identity_key_id) != user_id:
+                        raise ValueError("Web Chat identity tenant owner mismatch")
+                else:
+                    memberships = tenant_memberships.list_for_user(user_id)
+                    if memberships:
+                        tenant_memberships.bind_key(
+                            str(memberships[0]["tenant_id"]), user_id, identity_key_id
+                        )
+            except Exception as error:
+                raise _private_error(503, "无法初始化 Web Chat 工作区身份") from error
+
     principal = ApiPrincipal(
         key_id=identity_key_id,
         name="Web Chat",
