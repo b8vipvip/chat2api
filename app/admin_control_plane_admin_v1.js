@@ -191,6 +191,13 @@
     ["cKeyName", "cKeyExpiry", "cKeyQuota", "cKeyCreate"].forEach((id) => {
       if ($(id)) $(id).disabled = !canWriteKeys;
     });
+    const canManageSharedWebChatKey = adminSession && adminSession.role === "super_admin";
+    ["cClientApiKey", "cClientClearApiKey"].forEach((id) => {
+      if ($(id)) {
+        $(id).disabled = !canManageSharedWebChatKey;
+        $(id).title = canManageSharedWebChatKey ? "" : "仅超级管理员可以配置 Web Chat 统一 API Key";
+      }
+    });
     ["cEntSubjectType", "cEntSubjectId", "cEntEffect", "cEntModels"].forEach((id) => {
       if ($(id)) $(id).disabled = !canWriteModels;
     });
