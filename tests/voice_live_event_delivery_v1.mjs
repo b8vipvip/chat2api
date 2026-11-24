@@ -88,10 +88,9 @@ async function runEmit(sendMessage) {
   assert.equal(stopNotify,true,
     "a failed event must notify the server instead of performing a silent cleanup");
   assert.equal(active.deliveryError,"server-websocket-disconnected");
-  assert.deepEqual(active.stopTerminalError,{
-    code:"VOICE_EVENT_DELIVERY_FAILED",
-    message:"A live Voice event was not accepted by the server Broker: server-websocket-disconnected",
-  });
+  assert.equal(active.stopTerminalError.code,"VOICE_EVENT_DELIVERY_FAILED");
+  assert.equal(active.stopTerminalError.message,
+    "A live Voice event was not accepted by the server Broker: server-websocket-disconnected");
 
   stopCalls=0;
   await assert.rejects(emitLive(active,"session.ready"),/server-websocket-disconnected/);
