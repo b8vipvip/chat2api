@@ -97,6 +97,26 @@ async function runEmit(sendMessage) {
 }
 
 {
+  const start=liveSource.indexOf("  function activeForStopRequest(");
+  const end=liveSource.indexOf("  async function waitFor(",start);
+  assert.ok(start>=0 && end>start,"request-scoped stop lookup must remain extractable");
+  const current={requestId:"current-session"};
+  const stopped={requestId:"previous-session",stopped:true};
+  const state={active:current,stoppedSessions:new Map([[stopped.requestId,stopped]])};
+  const activeForStopRequest=vm.runInNewContext(
+    liveSource.slice(start,end) + "\nactiveForStopRequest",
+    {state,String},
+  );
+  assert.equal(activeForStopRequest("current-session"),current);
+  assert.equal(activeForStopRequest("previous-session"),stopped,
+    "a delayed stop must resolve only to its original stopped session");
+  assert.equal(activeForStopRequest("unknown-request"),null,
+    "an unknown stale stop must not fall back to the currently active call");
+  assert.equal(activeForStopRequest(""),current,
+    "legacy stop messages without a request ID retain current-session behavior");
+}
+
+{
   const start=liveSource.indexOf("  function sendStopTerminal(");
   const end=liveSource.indexOf("\n  window.addEventListener(\"message\"",start);
   assert.ok(start>=0 && end>start,"production stopLive drain must remain extractable");
