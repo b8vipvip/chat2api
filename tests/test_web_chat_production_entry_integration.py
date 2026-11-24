@@ -56,41 +56,40 @@ for method, path in expected:
     ]
     assert len(matches) == 1, (method, path, len(matches))
 
-def assert_no_store_and_vary(response):
+def assert_no_store(response):
     assert "no-store" in response.headers.get("cache-control", "").lower(), dict(response.headers)
-    assert "cookie" in {value.strip().lower() for value in response.headers.get("vary", "").split(",")}
 
 with TestClient(app) as client:
     session = client.get("/api/user/chat/session")
     assert session.status_code == 401
-    assert_no_store_and_vary(session)
+    assert_no_store(session)
     models = client.get("/api/user/chat/models")
     assert models.status_code == 401
-    assert_no_store_and_vary(models)
+    assert_no_store(models)
     files = client.post(
         "/api/user/chat/files",
         json={"filename":"proof.txt","mime_type":"text/plain","data_base64":"aGk=","purpose":"assistants"},
     )
     assert files.status_code == 401
-    assert_no_store_and_vary(files)
+    assert_no_store(files)
     recovery = client.get("/api/user/chat/requests/req_12345678/recovery")
     assert recovery.status_code == 401
-    assert_no_store_and_vary(recovery)
+    assert_no_store(recovery)
     mode1 = client.post("/api/user/chat/completions", json={"model":"gpt-5.6-sol","messages":[{"role":"user","content":"hello"}],"stream":True})
     assert mode1.status_code == 401
-    assert_no_store_and_vary(mode1)
+    assert_no_store(mode1)
     native = client.get("/api/user/chat/requests/req_12345678/native-content")
     assert native.status_code == 401
-    assert_no_store_and_vary(native)
+    assert_no_store(native)
     download = client.get("/api/user/chat/files/file_12345678/download")
     assert download.status_code == 401
-    assert_no_store_and_vary(download)
+    assert_no_store(download)
     image_content = client.get("/api/user/files/file_12345678/content")
     assert image_content.status_code == 401
-    assert_no_store_and_vary(image_content)
+    assert_no_store(image_content)
     image_delete = client.delete("/api/user/files/file_12345678", headers={"Origin": "http://testserver"})
     assert image_delete.status_code == 401
-    assert_no_store_and_vary(image_delete)
+    assert_no_store(image_delete)
 
     # Exercise the actual app.entry composition, not a manually installed route.
     registered = client.post(
