@@ -181,6 +181,8 @@ for(const mode of ["reject","suspended"]) {
     "a suspended Web Chat output context must not silently discard all future PCM playback");
 }
 assert.ok(voiceMain.includes("synthetic microphone AudioContext is not running"));
+assert.ok(voiceMain.includes('post("voice.live.error"'),
+  "synthetic microphone resume failures must be surfaced immediately to the isolated Voice controller");
 assert.ok(liveMain.includes("remote audio AudioContext is not running"));
 assert.ok(webClient.includes("浏览器音频输出上下文未进入运行状态"));
 console.log("voice-audio-context-readiness-v1-passed");
