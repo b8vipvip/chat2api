@@ -76,7 +76,11 @@ with TestClient(app) as client:
     recovery = client.get("/api/user/chat/requests/req_12345678/recovery")
     assert recovery.status_code == 401
     assert_no_store(recovery)
-    mode1 = client.post("/api/user/chat/completions", json={"model":"gpt-5.6-sol","messages":[{"role":"user","content":"hello"}],"stream":True})
+    mode1 = client.post(
+        "/api/user/chat/completions",
+        headers={"Origin": "http://testserver"},
+        json={"model":"gpt-5.6-sol","messages":[{"role":"user","content":"hello"}],"stream":True},
+    )
     assert mode1.status_code == 401
     assert_no_store(mode1)
     native = client.get("/api/user/chat/requests/req_12345678/native-content")
