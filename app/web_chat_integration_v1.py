@@ -129,6 +129,9 @@ def install_web_chat_features_v1(app: Any) -> Any:
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error),
                                 headers=_PRIVATE_HEADERS) from error
+        except (OSError, RuntimeError) as error:
+            raise HTTPException(status_code=503, detail="Web Chat file storage is unavailable",
+                                headers=_PRIVATE_HEADERS) from error
         return JSONResponse({
             "id": item.file_id,
             "object": "file",
