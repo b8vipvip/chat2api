@@ -765,3 +765,47 @@ def test_control_plane_migrates_legacy_client_policy_without_api_key_id(tmp_path
     persisted = json.loads(store.path.read_text(encoding="utf-8"))
     assert persisted["client"]["api_key_id"] == ""
     assert persisted["client"]["announcement"] == "migrated"
+
+
+def test_shared_web_chat_api_key_requires_root_super_admin(tmp_path: Path):
+    app = make_app(tmp_path)
+    shared, token = asyncio.run(app.state.api_keys.create("root-only-web-chat"))
+    app.state.control_plane.create_admin(
+        "system_operator", "strong-system-password", "system_admin",
+    )
+
+    with TestClient(app) as client:
+        assert login(client, "system_operator", "strong-system-password").status_code == 200
+        # A delegated system administrator retains ordinary client-policy access.
+        public_change = client.put(
+            "/api/admin/control/client",
+            headers=ORIGIN,
+            json={"announcement": "maintenance"},
+        )
+        assert public_change.status_code == 200, public_change.text
+
+        denied_set = client.put(
+            "/api/admin/control/client",
+            headers=ORIGIN,
+            json={"api_key": token},
+        )
+        assert denied_set.status_code == 403
+        assert app.state.control_plane.client_api_key_id() == ""
+
+        assert login(client, "owner", "strong-root-password").status_code == 200
+        configured = client.put(
+            "/api/admin/control/client",
+            headers=ORIGIN,
+            json={"api_key": token},
+        )
+        assert configured.status_code == 200, configured.text
+        assert app.state.control_plane.client_api_key_id() == shared["key_id"]
+
+        assert login(client, "system_operator", "strong-system-password").status_code == 200
+        denied_clear = client.put(
+            "/api/admin/control/client",
+            headers=ORIGIN,
+            json={"clear_api_key": True},
+        )
+        assert denied_clear.status_code == 403
+        assert app.state.control_plane.client_api_key_id() == shared["key_id"]
