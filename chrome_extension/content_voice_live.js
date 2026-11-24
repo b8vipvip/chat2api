@@ -173,7 +173,14 @@
     return pending.catch(error => {
       if (isActiveSession(active)) {
         active.deliveryError = String(error?.message || error).slice(0,300);
-        void stopLive(active,false).catch(() => {});
+        active.stopTerminalError = {
+          code:"VOICE_EVENT_DELIVERY_FAILED",
+          message:"A live Voice event was not accepted by the server Broker: " + active.deliveryError,
+        };
+        // A dropped audio/transcript/control event invalidates the live turn.
+        // Stop upstream and ask the server to terminate this call as an error;
+        // silent cleanup would leave the public Live WebSocket waiting forever.
+        void stopLive(active,true).catch(() => {});
       }
       throw error;
     });
@@ -460,7 +467,9 @@
     if (active.stopTerminalSent) return Promise.resolve();
     if (active.stopTerminalPromise) return active.stopTerminalPromise;
     active.stopTerminalPromise = (async () => {
-      if (active.stopMainAcknowledged) {
+      if (active.stopTerminalError) {
+        await emitLive(active, "error", active.stopTerminalError);
+      } else if (active.stopMainAcknowledged) {
         await emitLive(active, "session.closed");
       } else {
         // Fail closed: do not tell the Broker that the Worker drained its
