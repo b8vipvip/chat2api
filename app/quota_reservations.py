@@ -62,6 +62,20 @@ class QuotaReservationStore:
             raise
 
     @staticmethod
+    def _usage_accounting_key_id(record: dict[str, Any] | None, owner_key_id: str) -> str:
+        """Resolve the key whose durable usage ledger owns this request."""
+        if isinstance(record, dict) and record.get("web_chat_mode") is True:
+            shared_key_id = str(record.get("shared_api_key_id") or "").strip()
+            if shared_key_id:
+                return shared_key_id
+            # Pre-migration Web Chat rows used the user's managed key directly.
+            # New session-backed rows must never fall back to their hidden
+            # ownership identity when the shared key reference is missing.
+            if str(record.get("auth_kind") or "") == "web_chat":
+                return ""
+        return str(owner_key_id or "")
+
+    @staticmethod
     def _validate(request_id: str, key_id: str, amount: int) -> None:
         if not isinstance(request_id, str) or not request_id or len(request_id) > 128:
             raise QuotaReservationError("Invalid request_id")
@@ -277,7 +291,7 @@ class QuotaReservationStore:
                 )
                 return int(cursor.rowcount)
 
-    def reconcile(self, api_keys: Any) -> int:
+    def reconcile(self, api_keys: Any, telemetry: Any = None) -> int:
         """Settle interrupted commits only when ApiKeyStore proves the request charge."""
         with self.lock:
             rows = self.db.execute(
@@ -286,7 +300,19 @@ class QuotaReservationStore:
             ).fetchall()
         reconciled = 0
         for request_id, key_id, actual_tokens in rows:
-            item = getattr(api_keys, "keys", {}).get(str(key_id))
+            record = None
+            getter = getattr(telemetry, "get", None)
+            if callable(getter):
+                try:
+                    record = getter(str(request_id))
+                except Exception:
+                    record = None
+            charge_key_id = self._usage_accounting_key_id(
+                record if isinstance(record, dict) else None, str(key_id),
+            )
+            if not charge_key_id:
+                continue
+            item = getattr(api_keys, "keys", {}).get(charge_key_id)
             ledger = getattr(item, "charged_requests", None) if item else None
             if not isinstance(ledger, dict):
                 # Production ApiKeyStore keeps the ledger on ManagedApiKey;
@@ -298,7 +324,7 @@ class QuotaReservationStore:
             # request consumed zero tokens. Keep its reservation active until
             # the existing ApiKeyStore ledger proves a positive charge.
             if charged > 0 and charged >= expected:
-                self.mark_settled(request_id, key_id, max(expected, charged))
+                self.mark_settled(request_id, str(key_id), max(expected, charged))
                 reconciled += 1
         return reconciled
 
@@ -385,6 +411,12 @@ class QuotaReservationStore:
             return "released_zero_text_estimate"
         if reservation and reservation["key_id"] != key_id:
             raise QuotaReservationError("Completion API key does not match the request reservation")
+        charge_key_id = self._usage_accounting_key_id(record, key_id)
+        if not charge_key_id:
+            # New Web Chat telemetry must carry the configured shared key ID;
+            # keep the reservation recoverable rather than charging the owner
+            # namespace or acknowledging an unproven completion.
+            return "charge_pending"
         if reservation and reservation["state"] == "released":
             # A terminal failure/cancellation or pre-dispatch rollback already
             # released this request. A late/conflicting completed projection
@@ -404,7 +436,7 @@ class QuotaReservationStore:
             # returns no status, so prove the durable request ledger was
             # updated before dropping the in-flight reservation. A missing
             # key or interrupted/no-op charge must remain recoverable.
-            item = getattr(api_keys, "keys", {}).get(key_id)
+            item = getattr(api_keys, "keys", {}).get(charge_key_id)
             ledger = getattr(item, "charged_requests", None) if item else None
             if not isinstance(ledger, dict):
                 # Production ApiKeyStore persists the ledger on ManagedApiKey;
