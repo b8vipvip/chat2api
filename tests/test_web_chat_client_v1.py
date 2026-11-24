@@ -1,3 +1,5 @@
+import asyncio
+import base64
 from pathlib import Path
 import shutil
 import subprocess
@@ -7,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import create_app
+from app.control_plane_v1_patch import install_control_plane_v1
 from app.user_console_v104_patch import install_user_console_v104_patch
 from app.web_chat_integration_v1 import install_web_chat_features_v1
 
@@ -25,6 +28,7 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         CHAT2API_DATA_DIR=str(tmp_path),
     )
     app = create_app(settings)
+    install_control_plane_v1(app)
     install_user_console_v104_patch(app)
     install_web_chat_features_v1(app)
 
@@ -98,7 +102,15 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         assert "expected_revision" in script.text
         assert "orphanedFileIds" not in script.text
         assert "remainingFileIds" not in script.text
-        assert "state.apiToken" in script.text
+        assert "state.apiToken" not in script.text
+        assert "apiKeySelect" not in script.text
+        assert "/api/user/keys" not in script.text
+        assert "Authorization" not in script.text
+        assert "/api/user/chat/session" in script.text
+        assert "/api/user/chat/models" in script.text
+        assert "/api/user/chat/files" in script.text
+        assert "/api/user/chat/voice-session" in script.text
+        assert "X-Chat2API-User-Key-ID" in script.text
         assert "prompt_mode" not in script.text
         assert 'await apiJson("/api/user/me")' in script.text
         voice_content = (Path(__file__).resolve().parents[1] / "chrome_extension" / "content_voice_live.js").read_text(encoding="utf-8")
@@ -148,3 +160,81 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         # remain behind the existing user-session boundary.
         assert client.get("/api/user/me").status_code == 401
         assert client.get("/api/user/keys").status_code == 401
+
+
+def test_web_chat_uses_shared_server_key_but_keeps_user_identity_isolated(tmp_path: Path) -> None:
+    settings = Settings(CHAT2API_DATA_DIR=str(tmp_path))
+    app = create_app(settings)
+    install_control_plane_v1(app)
+    install_user_console_v104_patch(app)
+    install_web_chat_features_v1(app)
+    shared_public, shared_token = asyncio.run(app.state.api_keys.create("web-chat-shared"))
+
+    origin = {"Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"}
+
+    with TestClient(app) as client:
+        for email in ("webchat-a@example.com", "webchat-b@example.com"):
+            registered = client.post("/api/user/register", json={
+                "email": email, "password": "web-chat-password-123",
+            })
+            assert registered.status_code == 200, registered.text
+        login_a = client.post("/api/user/login", json={
+            "email": "webchat-a@example.com", "password": "web-chat-password-123",
+        })
+        assert login_a.status_code == 200, login_a.text
+        # A valid account session is not enough until the administrator configures
+        # the shared service key.
+        assert client.get("/api/user/chat/session").status_code == 503
+
+        app.state.control_plane.update_client({"api_key_id": shared_public["key_id"]})
+        session_a = client.get("/api/user/chat/session")
+        assert session_a.status_code == 200, session_a.text
+        key_a = session_a.json()["key_id"]
+        assert key_a and key_a != shared_public["key_id"]
+        assert shared_token not in session_a.text
+        assert shared_public["key_id"] not in session_a.text
+        assert client.get("/api/client/config").json()["api_key_configured"] is True
+        assert "api_key_id" not in client.get("/api/client/config").json()
+        assert client.get("/api/user/keys").json()["data"] == []
+
+        upload_a = client.post("/api/user/chat/files", headers={
+            **origin, "X-Chat2API-User-Key-ID": key_a,
+        }, json={
+            "filename": "note.txt",
+            "mime_type": "text/plain",
+            "data_base64": base64.b64encode(b"private A").decode("ascii"),
+            "purpose": "assistants",
+        })
+        assert upload_a.status_code == 200, upload_a.text
+        file_a = upload_a.json()["id"]
+
+        login_b = client.post("/api/user/login", json={
+            "email": "webchat-b@example.com", "password": "web-chat-password-123",
+        })
+        assert login_b.status_code == 200, login_b.text
+        session_b = client.get("/api/user/chat/session")
+        assert session_b.status_code == 200, session_b.text
+        key_b = session_b.json()["key_id"]
+        assert key_b and key_b != key_a
+
+        cross_user_upload = client.post("/api/user/chat/files", headers={
+            **origin, "X-Chat2API-User-Key-ID": key_a,
+        }, json={
+            "filename": "note.txt",
+            "mime_type": "text/plain",
+            "data_base64": base64.b64encode(b"private B").decode("ascii"),
+            "purpose": "assistants",
+        })
+        assert cross_user_upload.status_code == 404
+
+        upload_b = client.post("/api/user/chat/files", headers={
+            **origin, "X-Chat2API-User-Key-ID": key_b,
+        }, json={
+            "filename": "note.txt",
+            "mime_type": "text/plain",
+            "data_base64": base64.b64encode(b"private B").decode("ascii"),
+            "purpose": "assistants",
+        })
+        assert upload_b.status_code == 200, upload_b.text
+        assert app.state.file_store.get(file_a).owner_key_id == key_a
+        assert app.state.file_store.get(upload_b.json()["id"]).owner_key_id == key_b
