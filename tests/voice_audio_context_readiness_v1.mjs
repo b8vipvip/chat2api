@@ -76,6 +76,17 @@ for(const mode of ["reject","suspended"]) {
 }
 
 {
+  const h=micHarness({resume:"running",existing:true});
+  h.contexts[0].destination.stream.getAudioTracks=()=>[{readyState:"ended"}];
+  const stream=await h.ensureSyntheticMic();
+  assert.equal(h.contexts.length,2,
+    "a new Voice session must recreate a destination whose previous track ChatGPT stopped");
+  assert.equal(h.contexts[0].closed,true);
+  assert.equal(h.contexts[1].state,"running");
+  assert.equal(stream.getAudioTracks()[0].id,"synthetic-mic-track");
+}
+
+{
   const helperStart=voiceMain.indexOf("  async function resumeSyntheticMicContext(");
   const helperEnd=voiceMain.indexOf("\n  const mediaDevices",helperStart);
   const playStart=voiceMain.indexOf("  async function playPreparedInput()",helperEnd);
