@@ -75,10 +75,6 @@ def test_web_chat_document_attachment_upload_send_and_download_in_chromium(tmp_p
                 assert registered.status == 200, registered.text()
                 # Web Chat now authenticates from the account session and the
                 # server-side shared key; users do not create or select API keys.
-                user_keys = context.request.get(base_url + "/api/user/keys")
-                assert user_keys.status == 200, user_keys.text()
-                assert user_keys.json()["data"] == []
-
                 page = context.new_page()
                 page.goto(base_url + "/chat", wait_until="domcontentloaded")
                 page.wait_for_function(
@@ -86,6 +82,9 @@ def test_web_chat_document_attachment_upload_send_and_download_in_chromium(tmp_p
                     "return button && !button.disabled; }",
                     timeout=15000,
                 )
+                user_keys = context.request.get(base_url + "/api/user/keys")
+                assert user_keys.status == 200, user_keys.text()
+                assert user_keys.json()["data"] == []
                 assert page.locator("#fileInput").get_attribute("accept") == (
                     ".pdf,.txt,.md,.csv,.json,.rtf,.docx,.xlsx,.pptx"
                 )
