@@ -478,7 +478,7 @@ def install_quota_reservation_runtime_v1(app: Any) -> Any:
         # new requests, then reconcile the idempotent API-key ledger.
         try:
             replayed = await store.recover_committing(telemetry, api_keys)
-            reconciled = store.reconcile(api_keys)
+            reconciled = store.reconcile(api_keys, telemetry)
             expired = store.expire_reservations()
         except Exception as error:
             app.state.quota_reservation_recovery_status = "failed"
