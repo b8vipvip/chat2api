@@ -47,7 +47,8 @@ def install_user_console_privacy_v105_patch(app: FastAPI) -> FastAPI:
                 key: value for key, value in response.headers.items()
                 if key.lower() not in {"content-length", "content-type"}
             }
-            headers.setdefault("Cache-Control", "no-store")
+            if not any(name.lower() == "cache-control" for name in headers):
+                headers["Cache-Control"] = "no-store"
             return JSONResponse(
                 {"detail": "请求暂时无法完成，请稍后重试"},
                 status_code=response.status_code,
@@ -64,7 +65,8 @@ def install_user_console_privacy_v105_patch(app: FastAPI) -> FastAPI:
         headers = {key: value for key, value in response.headers.items() if key.lower() not in {"content-length", "content-type"}}
         # Preserve stricter endpoint policies such as private, no-store; only
         # supply a default when the route did not choose its own cache policy.
-        headers.setdefault("Cache-Control", "no-store")
+        if not any(name.lower() == "cache-control" for name in headers):
+            headers["Cache-Control"] = "no-store"
         return JSONResponse(payload, status_code=response.status_code, headers=headers)
 
     return app
