@@ -191,6 +191,13 @@
     ["cKeyName", "cKeyExpiry", "cKeyQuota", "cKeyCreate"].forEach((id) => {
       if ($(id)) $(id).disabled = !canWriteKeys;
     });
+    const canManageSharedWebChatKey = adminSession && adminSession.role === "super_admin";
+    ["cClientApiKey", "cClientClearApiKey"].forEach((id) => {
+      if ($(id)) {
+        $(id).disabled = !canManageSharedWebChatKey;
+        $(id).title = canManageSharedWebChatKey ? "" : "仅超级管理员可以配置 Web Chat 统一 API Key";
+      }
+    });
     ["cEntSubjectType", "cEntSubjectId", "cEntEffect", "cEntModels"].forEach((id) => {
       if ($(id)) $(id).disabled = !canWriteModels;
     });
@@ -466,20 +473,32 @@
       $("cRegistrationMode").value = data.registration_mode;
       $("cWebChatEnabled").value = String(data.web_chat_enabled);
       $("cAnnouncement").value = data.announcement || "";
+      $("cClientApiKey").value = "";
+      $("cClientClearApiKey").checked = false;
+      const apiKeyStatus = !data.api_key_configured
+        ? "未配置；Web Chat 用户暂时无法发起请求"
+        : (data.api_key_enabled
+          ? "已配置：" + (data.api_key_name || "API Key") + " · " + (data.api_key_prefix || "已隐藏")
+          : "已配置但当前不可用；请重新配置或启用该 Key");
+      setStatus("cClientApiKeyStatus", apiKeyStatus, Boolean(data.api_key_configured && !data.api_key_enabled));
       setStatus("cClientStatus", "配置已读取 · policy v" + data.policy_version);
     } catch (error) { setStatus("cClientStatus", error.message, true); }
   }
   $("cClientSave")?.addEventListener("click", async () => {
     try {
-      await sessionApi("/api/admin/control/client", {
-        method: "PUT",
-        body: {
-          client_domain: $("cClientDomain").value.trim(),
-          registration_mode: $("cRegistrationMode").value,
-          web_chat_enabled: $("cWebChatEnabled").value === "true",
-          announcement: $("cAnnouncement").value
-        }
-      });
+      const body = {
+        client_domain: $("cClientDomain").value.trim(),
+        registration_mode: $("cRegistrationMode").value,
+        web_chat_enabled: $("cWebChatEnabled").value === "true",
+        announcement: $("cAnnouncement").value
+      };
+      const apiKey = $("cClientApiKey").value.trim();
+      if (apiKey) body.api_key = apiKey;
+      if ($("cClientClearApiKey").checked) body.clear_api_key = true;
+      await sessionApi("/api/admin/control/client", {method: "PUT", body});
+      $("cClientApiKey").value = "";
+      $("cClientClearApiKey").checked = false;
+      await loadClientPolicy();
       setStatus("cClientStatus", "保存成功；服务端策略已更新");
     } catch (error) { setStatus("cClientStatus", error.message, true); }
   });

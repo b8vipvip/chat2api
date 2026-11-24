@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import socket
 import threading
 import time
@@ -12,6 +13,7 @@ from playwright.sync_api import sync_playwright
 
 from app.config import Settings
 from app.main import create_app
+from app.control_plane_v1_patch import install_control_plane_v1
 from app.user_console_v104_patch import install_user_console_v104_patch
 from app.web_chat_integration_v1 import install_web_chat_features_v1
 
@@ -33,6 +35,9 @@ def test_web_chat_document_attachment_upload_send_and_download_in_chromium(tmp_p
         CHAT2API_PAIRING_CODE="web-chat-browser-e2e-pairing-code",
         CHAT2API_PUBLIC_URL=base_url,
     ))
+    install_control_plane_v1(app)
+    shared_key, _shared_token = asyncio.run(app.state.api_keys.create("Web Chat browser E2E shared"))
+    app.state.control_plane.update_client({"api_key_id": shared_key["key_id"]})
     install_user_console_v104_patch(app)
     install_web_chat_features_v1(app)
 
@@ -68,13 +73,8 @@ def test_web_chat_document_attachment_upload_send_and_download_in_chromium(tmp_p
                     },
                 )
                 assert registered.status == 200, registered.text()
-                created = context.request.post(
-                    base_url + "/api/user/keys",
-                    headers={"Origin": base_url},
-                    data={"name": "Browser E2E document key"},
-                )
-                assert created.status == 200, created.text()
-
+                # Web Chat now authenticates from the account session and the
+                # server-side shared key; users do not create or select API keys.
                 page = context.new_page()
                 page.goto(base_url + "/chat", wait_until="domcontentloaded")
                 page.wait_for_function(
@@ -82,6 +82,9 @@ def test_web_chat_document_attachment_upload_send_and_download_in_chromium(tmp_p
                     "return button && !button.disabled; }",
                     timeout=15000,
                 )
+                user_keys = context.request.get(base_url + "/api/user/keys")
+                assert user_keys.status == 200, user_keys.text()
+                assert user_keys.json()["data"] == []
                 assert page.locator("#fileInput").get_attribute("accept") == (
                     ".pdf,.txt,.md,.csv,.json,.rtf,.docx,.xlsx,.pptx"
                 )

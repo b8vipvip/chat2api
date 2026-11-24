@@ -273,7 +273,14 @@ def install_tenant_memberships(app: FastAPI) -> FastAPI:
         # existing tenant membership. No caller-supplied tenant header is used.
         if accounts.admin_get(body.user_id) is None or not accounts.owns_key(body.user_id, key_id):
             raise HTTPException(status_code=404, detail="User-owned API key not found")
-        public_key = api_keys.get_public(key_id)
+        key_record = getattr(api_keys, "keys", {}).get(key_id)
+        is_internal_web_chat_key = bool(
+            key_record and key_record.internal_owner_user_id == body.user_id
+        )
+        public_key = (
+            {"enabled": bool(key_record.enabled), "revoked_at": key_record.revoked_at}
+            if is_internal_web_chat_key else api_keys.get_public(key_id)
+        )
         if public_key is None:
             raise HTTPException(status_code=404, detail="API key not found")
         if not public_key.get("enabled") or public_key.get("revoked_at"):
@@ -290,6 +297,10 @@ def install_tenant_memberships(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=409, detail="User must be a member of the tenant before binding a key") from exc
         except TenantMembershipError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if is_internal_web_chat_key:
+            async with api_keys.lock:
+                key_record.tenant_binding_initialized = True
+                await api_keys.save()
         audit_ok = audit_write(request, actor, "tenant.api_key_bind_completed", "tenant_api_key", tenant_id, {
             "user_id": body.user_id, "key_id": key_id,
         }, required=False)
@@ -308,6 +319,11 @@ def install_tenant_memberships(app: FastAPI) -> FastAPI:
             store.unbind_key(tenant_id, key_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Unknown tenant API key binding") from exc
+        key_record = getattr(api_keys, "keys", {}).get(key_id)
+        if key_record is not None and key_record.internal_owner_user_id:
+            async with api_keys.lock:
+                key_record.tenant_binding_initialized = True
+                await api_keys.save()
         audit_ok = audit_write(request, actor, "tenant.api_key_unbind_completed", "tenant_api_key", tenant_id, {
             "key_id": key_id,
         }, required=False)

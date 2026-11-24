@@ -686,6 +686,8 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
             item = await api_keys.revoke(key_id)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="API Key 不存在") from error
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail="Web Chat 内部账户身份不能撤销") from error
         return {"key": public_key(item)}
 
     @app.get("/api/user/requests")

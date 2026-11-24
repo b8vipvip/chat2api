@@ -9,7 +9,10 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import ValidationError
 
+from .admin_auth import same_origin_admin_request
+from .models import FileUploadRequest
 from .native_content_v1 import native_delivery_fingerprint
 from .user_commerce import USER_SESSION_COOKIE
 
@@ -68,6 +71,82 @@ def install_web_chat_features_v1(app: Any) -> Any:
             raise HTTPException(status_code=401, detail="user login required",
                                 headers=_PRIVATE_HEADERS)
         return accounts, user
+
+    async def resolve_chat_identity(request: Request, *, require_same_origin: bool = False):
+        if require_same_origin and not same_origin_admin_request(request):
+            raise HTTPException(status_code=403, detail="Same-origin request required",
+                                headers=_PRIVATE_HEADERS)
+        from .web_chat_identity_v1 import resolve_web_chat_principal
+        requested_key_id = request.headers.get("x-chat2api-user-key-id")
+        return await resolve_web_chat_principal(request, requested_key_id)
+
+    @app.get("/api/user/chat/session")
+    async def user_chat_session(request: Request) -> Response:
+        user, principal = await resolve_chat_identity(request)
+        return JSONResponse({
+            "key_id": principal.key_id,
+            "scopes": list(principal.scopes),
+        }, headers=_PRIVATE_HEADERS)
+
+    @app.get("/api/user/chat/models")
+    async def user_chat_models(request: Request) -> Response:
+        _, principal = await resolve_chat_identity(request)
+        if "models" not in principal.scopes:
+            raise HTTPException(status_code=403, detail="Web Chat shared API Key lacks models permission",
+                                headers=_PRIVATE_HEADERS)
+        registry = getattr(request.app.state, "registry", None)
+        if registry is None:
+            raise HTTPException(status_code=503, detail="model catalog unavailable",
+                                headers=_PRIVATE_HEADERS)
+        # resolve_chat_identity binds the per-user routing identity and
+        # shared service-key entitlement context for this request.
+        models = registry.model_catalog(online_only=True)
+        return JSONResponse({
+            "object": "list",
+            "data": models,
+        }, headers=_PRIVATE_HEADERS)
+
+    @app.post("/api/user/chat/files")
+    async def user_chat_upload_file(request: Request) -> Response:
+        _, principal = await resolve_chat_identity(request, require_same_origin=True)
+        if "files" not in principal.scopes:
+            raise HTTPException(status_code=403, detail="Web Chat shared API Key lacks files permission",
+                                headers=_PRIVATE_HEADERS)
+        try:
+            body = FileUploadRequest.model_validate(await request.json())
+        except (ValueError, TypeError, ValidationError) as error:
+            raise HTTPException(status_code=422, detail="Invalid Web Chat file upload request",
+                                headers=_PRIVATE_HEADERS) from error
+        if body.purpose not in {"assistants", "vision"}:
+            raise HTTPException(status_code=400, detail="Unsupported Web Chat file purpose",
+                                headers=_PRIVATE_HEADERS)
+        try:
+            item = await request.app.state.file_store.create(
+                filename=body.filename,
+                data_base64=body.data_base64,
+                mime_type=body.mime_type,
+                owner_key_id=principal.key_id,
+                purpose=body.purpose,
+                source="web_chat",
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error),
+                                headers=_PRIVATE_HEADERS) from error
+        except (OSError, RuntimeError) as error:
+            raise HTTPException(status_code=503, detail="Web Chat file storage is unavailable",
+                                headers=_PRIVATE_HEADERS) from error
+        return JSONResponse({
+            "id": item.file_id,
+            "object": "file",
+            "bytes": int(item.size),
+            "filename": item.filename,
+            "purpose": item.purpose,
+            "status": "processed",
+            "mime_type": item.mime_type,
+        }, headers={
+            **_PRIVATE_HEADERS,
+            "X-Content-Type-Options": "nosniff",
+        })
 
     def owned_request(request_id: str, request: Request):
         if not _REQUEST_ID_RE.fullmatch(request_id):

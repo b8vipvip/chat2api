@@ -14,6 +14,10 @@ def test_admin_console_exposes_c_views_and_one_control_plane_asset():
     assert 'id="view-registration-invitations"' in html
     assert 'id="cClientDomain"' in html
     assert 'placeholder="https://chat.example.com"' in html
+    assert 'id="cClientApiKey"' in html
+    assert 'id="cClientClearApiKey"' in html
+    assert "Web Chat 统一 API Key" in html
+    assert "客户端配置仅保存密钥 ID 引用" in html
     assert 'value="invite_only"' in html
     assert 'data-view="tenants"' in html
     assert 'data-view="user-roles"' in html
@@ -73,6 +77,10 @@ def test_control_plane_ui_asset_is_served_with_safe_cache_and_content_headers():
         assert "loadInvitations" in response.text
         assert 'data.client_domain' in response.text
         assert 'client_domain: $("cClientDomain").value.trim()' in response.text
+        assert 'data.api_key_configured' in response.text
+        assert 'body.api_key = apiKey' in response.text
+        assert 'body.clear_api_key = true' in response.text
+        assert 'cClientApiKeyStatus' in response.text
         assert "/api/admin/control/invitations" in response.text
         assert '"user-roles": ["super_admin", "user_admin"]' in response.text
         assert '"subscriptions": ["super_admin", "billing_admin"]' in response.text

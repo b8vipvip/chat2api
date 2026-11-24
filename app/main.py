@@ -1988,7 +1988,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "response_id": response_id,
                 "client_id": state.client_id,
                 "api_key_id": principal.key_id,
-                "web_chat_mode": bool(state.mode1_web_chat),
+                "shared_api_key_id": principal.auth_key_id or None,
+                "web_chat_mode": bool(state.mode1_web_chat or principal.kind == "web_chat"),
                 "api_key_name": principal.name,
                 "auth_kind": principal.kind,
                 "requested_model": requested_model,
@@ -2118,20 +2119,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not request_id or not key_id or key_id == "master":
             return False
         api_key = getattr(api_keys, "keys", {}).get(key_id)
+        shared_key_id = str(record.get("shared_api_key_id") or "")
+        # New session-backed Web Chat requests must retain the shared service
+        # key identity all the way through terminal replay. Only pre-migration
+        # Web Chat rows (auth_kind=managed) may use the legacy owner-key ledger.
+        if str(record.get("auth_kind") or "") == "web_chat" and not shared_key_id:
+            return False
         accounting = getattr(telemetry, "usage_accounting", None)
         if api_key is None or not callable(accounting):
             return False
-
         # Telemetry is written before its accounting callback. If the callback
         # was interrupted, a duplicate Worker replay must retry that same
         # idempotent request_id charge rather than ACKing a merely completed row.
         await accounting(record)
-        ledger = getattr(api_key, "charged_requests", None)
-        if not isinstance(ledger, dict):
-            ledger = getattr(api_keys, "charged_requests", None)
-        charged = ledger.get(request_id, 0) if isinstance(ledger, dict) else 0
-        if type(charged) is not int or charged < counts["total_tokens"]:
-            return False
+        # Legacy Web Chat requests used the account-owned API key directly.
+        # New Web Chat requests carry shared_api_key_id and charge only that
+        # server-managed key. Keep the old path recoverable after an upgrade.
+        if not shared_key_id:
+            ledger = getattr(api_key, "charged_requests", None)
+            if not isinstance(ledger, dict):
+                ledger = getattr(api_keys, "charged_requests", None)
+            charged = ledger.get(request_id, 0) if isinstance(ledger, dict) else 0
+            if type(charged) is not int or charged < counts["total_tokens"]:
+                return False
+        if shared_key_id:
+            shared_key = getattr(api_keys, "keys", {}).get(shared_key_id)
+            shared_ledger = getattr(shared_key, "charged_requests", None) if shared_key else None
+            if not isinstance(shared_ledger, dict):
+                return False
+            shared_charged = shared_ledger.get(request_id, 0)
+            if type(shared_charged) is not int or shared_charged < counts["total_tokens"]:
+                return False
 
         if getattr(app.state, "quota_reservation_runtime_enabled", False):
             quota_store = getattr(app.state, "quota_reservations", None)
@@ -2319,6 +2337,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             name=str(recovered_row.get("api_key_name") or "Web Chat"),
             kind=str(recovered_row.get("auth_kind") or "managed"),
             scopes=scopes,
+            auth_key_id=str(recovered_row.get("shared_api_key_id") or ""),
         )
         await record_request(
             state,
@@ -2366,7 +2385,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "response_id": response_id,
             "client_id": None,
             "api_key_id": principal.key_id,
-            "web_chat_mode": bool(web_chat_mode),
+            "shared_api_key_id": principal.auth_key_id or None,
+            "web_chat_mode": bool(web_chat_mode or principal.kind == "web_chat"),
             "api_key_name": principal.name,
             "auth_kind": principal.kind,
             "requested_model": requested_model,
@@ -2409,6 +2429,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "response_id": response_id,
                 "client_id": state.client_id,
                 "api_key_id": principal.key_id,
+                "shared_api_key_id": principal.auth_key_id or None,
                 "api_key_name": principal.name,
                 "auth_kind": principal.kind,
                 "requested_model": requested_model,
@@ -2420,7 +2441,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "prompt_chars": len(prompt),
                 "completion_chars": 0,
                 "status": "running",
-                "web_chat_mode": bool(state.mode1_web_chat),
+                "web_chat_mode": bool(state.mode1_web_chat or principal.kind == "web_chat"),
                 "usage": {**usage, **token_meta},
                 "timings": state.timings(),
                 "diagnostics": dict(state.diagnostics),
@@ -2477,6 +2498,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "response_id": response_id,
                 "client_id": existing.get("client_id"),
                 "api_key_id": principal.key_id,
+                "shared_api_key_id": principal.auth_key_id or None,
                 "api_key_name": principal.name,
                 "auth_kind": principal.kind,
                 "requested_model": requested_model,
@@ -3484,51 +3506,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # handler above, but does not expose or call the OpenAI-compatible /v1 route.
     app.state.chat_completions_adapter = chat_completions
 
-    async def require_mode1_api_key(
-        authorization: str | None = Header(default=None),
-        x_api_key: str | None = Header(default=None),
-    ) -> ApiPrincipal:
-        try:
-            return await require_api_key(authorization, x_api_key)
-        except HTTPException as error:
-            headers = {
-                **(error.headers or {}),
-                "Cache-Control": "private, no-store",
-                "Vary": "Cookie",
-            }
-            raise HTTPException(
-                status_code=error.status_code, detail=error.detail, headers=headers,
-            ) from error
-
+    # Web Chat uses the HttpOnly account session and a server-managed shared
+    # API Key. The per-user key ID header is an ownership namespace only; it is
+    # validated against the logged-in account and is never an auth credential.
     @app.post("/api/user/chat/completions")
     async def mode1_user_chat_completions(
         body: ChatCompletionRequest,
         request: Request,
         x_chat2api_request_id: str | None = Header(default=None),
-        principal: ApiPrincipal = Depends(require_mode1_api_key),
+        x_chat2api_user_key_id: str | None = Header(default=None, alias="X-Chat2API-User-Key-ID"),
     ) -> Response:
-        from .user_commerce import USER_SESSION_COOKIE
-
-        private_headers = {"Cache-Control": "private, no-store", "Vary": "Cookie"}
-        accounts = getattr(request.app.state, "user_accounts", None)
-        if accounts is None:
-            raise HTTPException(status_code=503, detail="User account service unavailable",
-                                headers=private_headers)
-        user = accounts.authenticate(request.cookies.get(USER_SESSION_COOKIE))
-        if not user:
-            raise HTTPException(status_code=401, detail="User login required",
-                                headers=private_headers)
         if not same_origin_admin_request(request):
-            raise HTTPException(status_code=403, detail="Same-origin request required",
-                                headers=private_headers)
-        # Mode 1 never accepts the administrator master key or a Key owned by
-        # another account. The selected Chat2API Key remains the request owner.
-        key_id = str(getattr(principal, "key_id", "") or "")
-        if (getattr(principal, "kind", "") == "master" or not key_id
-                or not accounts.owns_key(str(user["user_id"]), key_id)):
-            raise HTTPException(status_code=404, detail="API key not found",
-                                headers=private_headers)
+            raise HTTPException(
+                status_code=403, detail="Same-origin request required",
+                headers={"Cache-Control": "private, no-store", "Vary": "Cookie"},
+            )
+        from .web_chat_identity_v1 import resolve_web_chat_principal
+
+        user, principal = await resolve_web_chat_principal(request, x_chat2api_user_key_id)
         request.scope["chat2api_mode1_web_chat"] = True
+        request.scope["chat2api_web_chat_user_id"] = str(user["user_id"])
         adapter = request.app.state.chat_completions_adapter
         response = await adapter(body, request, None, x_chat2api_request_id, principal)
         if isinstance(response, Response):

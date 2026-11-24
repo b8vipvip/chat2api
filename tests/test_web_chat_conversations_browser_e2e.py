@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import socket
 import threading
 import time
@@ -12,6 +13,7 @@ from playwright.sync_api import sync_playwright
 
 from app.config import Settings
 from app.main import create_app
+from app.control_plane_v1_patch import install_control_plane_v1
 from app.user_console_v104_patch import install_user_console_v104_patch
 from app.web_chat_integration_v1 import install_web_chat_features_v1
 
@@ -33,6 +35,9 @@ def test_web_chat_conversations_sync_between_two_browser_profiles(tmp_path: Path
         CHAT2API_PAIRING_CODE="conversation-browser-e2e-pairing-code",
         CHAT2API_PUBLIC_URL=base_url,
     ))
+    install_control_plane_v1(app)
+    shared_key, _shared_token = asyncio.run(app.state.api_keys.create("Web Chat conversation E2E shared"))
+    app.state.control_plane.update_client({"api_key_id": shared_key["key_id"]})
     install_user_console_v104_patch(app)
     install_web_chat_features_v1(app)
 
@@ -68,13 +73,8 @@ def test_web_chat_conversations_sync_between_two_browser_profiles(tmp_path: Path
                     data={"email": email, "password": password},
                 )
                 assert registered.status == 200, registered.text()
-                created_key = device_a.request.post(
-                    base_url + "/api/user/keys",
-                    headers={"Origin": base_url},
-                    data={"name": "Cross-device Web Chat key"},
-                )
-                assert created_key.status == 200, created_key.text()
-
+                # No per-user API Key is created; both devices use the account
+                # session and the server-configured shared Web Chat key.
                 logged_in = device_b.request.post(
                     base_url + "/api/user/login",
                     headers={"Origin": base_url},
@@ -90,6 +90,8 @@ def test_web_chat_conversations_sync_between_two_browser_profiles(tmp_path: Path
                     page.locator("#conversationList .muted-empty").wait_for(
                         state="visible", timeout=15000,
                     )
+                assert device_a.request.get(base_url + "/api/user/keys").json()["data"] == []
+                assert device_b.request.get(base_url + "/api/user/keys").json()["data"] == []
 
                 conversation_id = "conv_browser_sync_001"
                 created_at = "2026-11-20T00:00:00Z"

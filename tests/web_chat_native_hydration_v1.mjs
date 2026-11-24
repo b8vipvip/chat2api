@@ -64,6 +64,7 @@ const switchConversation = vm.runInNewContext(
     toast(){throw Error("switch should be allowed");},
     currentConversation:()=>state.conversations.find(c=>c.id === state.activeConversationId),
     $:()=>({value:""}),
+    loadModels(){},
     renderAll(){rendered+=1;},
     hydrateNativeSnapshots:async conversationId=>{
       lastRequestedConversation=conversationId;

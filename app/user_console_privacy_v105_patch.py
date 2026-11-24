@@ -43,7 +43,25 @@ def install_user_console_privacy_v105_patch(app: FastAPI) -> FastAPI:
             return JSONResponse({"detail": detail}, status_code=response.status_code, headers={"Cache-Control": "no-store"})
 
         if response.status_code >= 500:
-            return JSONResponse({"detail": "请求暂时无法完成，请稍后重试"}, status_code=response.status_code, headers={"Cache-Control": "no-store"})
+            headers = {
+                key: value for key, value in response.headers.items()
+                if key.lower() not in {
+                    "content-length", "content-type", "content-encoding",
+                    "transfer-encoding", "connection", "keep-alive",
+                    "upgrade", "trailer", "set-cookie",
+                }
+            }
+            headers["Cache-Control"] = "no-store"
+            vary_name = next((name for name in headers if name.lower() == "vary"), None)
+            if vary_name is None:
+                headers["Vary"] = "Cookie"
+            elif "cookie" not in {part.strip().lower() for part in headers[vary_name].split(",")}:
+                headers[vary_name] = headers[vary_name] + ", Cookie"
+            return JSONResponse(
+                {"detail": "请求暂时无法完成，请稍后重试"},
+                status_code=response.status_code,
+                headers=headers,
+            )
 
         # Preserve explicitly designed 4xx account validation messages. Rebuild
         # the response after consuming it so upstream middleware stays correct.
@@ -52,8 +70,22 @@ def install_user_console_privacy_v105_patch(app: FastAPI) -> FastAPI:
             payload: Any = json.loads(raw.decode("utf-8"))
         except Exception:
             payload = {"detail": "请求未完成"}
-        headers = {key: value for key, value in response.headers.items() if key.lower() not in {"content-length", "content-type"}}
+        headers = {
+            key: value for key, value in response.headers.items()
+            if key.lower() not in {
+                "content-length", "content-type", "content-encoding",
+                "transfer-encoding", "connection", "keep-alive",
+                "upgrade", "trailer", "set-cookie",
+            }
+        }
+        # User API error responses must never be cached, regardless of the
+        # route's original cache policy.
         headers["Cache-Control"] = "no-store"
+        vary_name = next((name for name in headers if name.lower() == "vary"), None)
+        if vary_name is None:
+            headers["Vary"] = "Cookie"
+        elif "cookie" not in {part.strip().lower() for part in headers[vary_name].split(",")}:
+            headers[vary_name] = headers[vary_name] + ", Cookie"
         return JSONResponse(payload, status_code=response.status_code, headers=headers)
 
     return app

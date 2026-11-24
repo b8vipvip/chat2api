@@ -8,10 +8,20 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.config import Settings
+from app.control_plane_v1_patch import install_control_plane_v1
 from app.main import create_app
 from app.user_commerce import USER_SESSION_COOKIE
 from app.user_console_v104_patch import install_user_console_v104_patch
 from app.web_chat_integration_v1 import install_web_chat_features_v1
+
+
+def _install_shared_web_chat(app):
+    install_control_plane_v1(app)
+    shared_key, _shared_token = asyncio.run(app.state.api_keys.create("Web Chat native delivery test shared"))
+    app.state.control_plane.update_client({"api_key_id": shared_key["key_id"]})
+    install_user_console_v104_patch(app)
+    install_web_chat_features_v1(app)
+    return shared_key
 
 
 def test_native_renderer_rejects_active_nodes_and_untrusted_urls() -> None:
@@ -55,8 +65,7 @@ def test_user_native_content_adapter_enforces_key_owner_and_preserves_validated_
         return result
 
     app.state.native_response_snapshot = snapshot_loader
-    install_user_console_v104_patch(app)
-    install_web_chat_features_v1(app)
+    shared_key = _install_shared_web_chat(app)
 
     with TestClient(app) as client:
         first = client.post(
@@ -66,13 +75,9 @@ def test_user_native_content_adapter_enforces_key_owner_and_preserves_validated_
         )
         assert first.status_code == 200, first.text
         owner_cookie = client.cookies.get(USER_SESSION_COOKIE)
-        owner_key = client.post(
-            "/api/user/keys",
-            headers={"Origin": "http://testserver"},
-            json={"name": "native owner key"},
-        )
-        assert owner_key.status_code == 200, owner_key.text
-        owner_key_id = owner_key.json()["key"]["key_id"]
+        owner_session = client.get("/api/user/chat/session")
+        assert owner_session.status_code == 200, owner_session.text
+        owner_key_id = owner_session.json()["key_id"]
 
         client.cookies.clear()
         second = client.post(
@@ -86,6 +91,8 @@ def test_user_native_content_adapter_enforces_key_owner_and_preserves_validated_
         asyncio.run(app.state.telemetry.upsert({
             "request_id": "req_nativeproof1234",
             "api_key_id": owner_key_id,
+            "shared_api_key_id": shared_key["key_id"],
+            "web_chat_mode": True,
             "status": "completed",
             "response_media": [],
             "response_generated_files": [],
@@ -120,19 +127,21 @@ def test_user_native_content_adapter_enforces_key_owner_and_preserves_validated_
         assert "cookie" in {value.strip().lower() for value in events.headers["vary"].split(",")}
 
 
-def test_mode1_chat_ingress_requires_session_and_selected_key_ownership(tmp_path: Path) -> None:
+def test_mode1_chat_ingress_uses_session_and_server_shared_key(tmp_path: Path) -> None:
     settings = Settings(
         CHAT2API_API_KEY="mode1-web-adapter-master-key",
         CHAT2API_DATA_DIR=str(tmp_path),
     )
     app = create_app(settings)
-    install_user_console_v104_patch(app)
+    shared_key = _install_shared_web_chat(app)
     calls = []
 
     async def shared_adapter(body, request, x_chat2api_client, request_id, principal):
         calls.append({
             "request_id": request_id,
             "api_key_id": principal.key_id,
+            "auth_key_id": principal.auth_key_id,
+            "principal_kind": principal.kind,
             "mode1": request.scope.get("chat2api_mode1_web_chat") is True,
             "model": body.model,
         })
@@ -149,45 +158,35 @@ def test_mode1_chat_ingress_requires_session_and_selected_key_ownership(tmp_path
         )
         assert registered.status_code == 200, registered.text
         owner_cookie = client.cookies.get(USER_SESSION_COOKIE)
-        key = client.post(
-            "/api/user/keys",
-            headers={"Origin": "http://testserver"},
-            json={"name": "mode1 selected key"},
-        )
-        assert key.status_code == 200, key.text
-        token = key.json()["token"]
-        key_id = key.json()["key"]["key_id"]
+        owner_session = client.get("/api/user/chat/session")
+        assert owner_session.status_code == 200, owner_session.text
+        identity_key_id = owner_session.json()["key_id"]
 
         client.cookies.clear()
         missing_session = client.post(
             "/api/user/chat/completions",
-            headers={"Authorization": "Bearer " + token, "X-Chat2API-Request-ID": "req_mode1test0001"},
+            headers={"Origin": "http://testserver", "Authorization": "Bearer ignored-without-session", "X-Chat2API-Request-ID": "req_mode1test0001"},
             json={"model": "gpt-5.6-sol", "messages": [{"role": "user", "content": "hello"}], "stream": True},
         )
         assert missing_session.status_code == 401
 
         client.cookies.set(USER_SESSION_COOKIE, owner_cookie)
-        master_key = client.post(
-            "/api/user/chat/completions",
-            headers={"Authorization": "Bearer mode1-web-adapter-master-key", "X-Chat2API-Request-ID": "req_mode1test0002"},
-            json={"model": "gpt-5.6-sol", "messages": [{"role": "user", "content": "hello"}], "stream": True},
-        )
-        assert master_key.status_code == 404
-
         response = client.post(
             "/api/user/chat/completions",
-            headers={"Authorization": "Bearer " + token, "X-Chat2API-Request-ID": "req_mode1test0003"},
+            headers={"Origin": "http://testserver", "X-Chat2API-Request-ID": "req_mode1test0003"},
             json={"model": "gpt-5.6-sol", "messages": [{"role": "user", "content": "hello"}], "stream": True},
         )
         assert response.status_code == 200, response.text
         assert response.json() == {
-            "mode": "mode1", "request_id": "req_mode1test0003", "api_key_id": key_id,
+            "mode": "mode1", "request_id": "req_mode1test0003", "api_key_id": identity_key_id,
         }
         assert response.headers["cache-control"] == "private, no-store"
         assert "cookie" in {value.strip().lower() for value in response.headers["vary"].split(",")}
         assert calls == [{
             "request_id": "req_mode1test0003",
-            "api_key_id": key_id,
+            "api_key_id": identity_key_id,
+            "auth_key_id": shared_key["key_id"],
+            "principal_kind": "web_chat",
             "mode1": True,
             "model": "gpt-5.6-sol",
         }]

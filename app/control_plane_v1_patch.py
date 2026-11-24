@@ -42,6 +42,10 @@ class ClientPolicyUpdate(BaseModel):
     registration_mode: str | None = None
     web_chat_enabled: bool | None = None
     announcement: str | None = Field(default=None, max_length=500)
+    # The plaintext token is accepted only for this request, validated against
+    # ApiKeyStore, and reduced to a private key_id before persistence.
+    api_key: str | None = Field(default=None, max_length=512)
+    clear_api_key: bool | None = None
 
 
 def install_control_plane_v1(app: FastAPI) -> FastAPI:
@@ -184,19 +188,69 @@ def install_control_plane_v1(app: FastAPI) -> FastAPI:
 
     @app.get("/api/admin/control/client")
     async def get_client_policy() -> dict:
-        return store.public_client()
+        result = store.public_client()
+        key_id = store.client_api_key_id()
+        key = app.state.api_keys.get_public(key_id) if key_id else None
+        return {
+            **result,
+            "api_key_name": str((key or {}).get("name") or ""),
+            "api_key_prefix": str((key or {}).get("prefix") or ""),
+            "api_key_enabled": (
+                bool((key or {}).get("enabled"))
+                and not bool((key or {}).get("expired"))
+                and (key or {}).get("token_quota") is None
+                and {"chat", "models"}.issubset(set((key or {}).get("scopes") or []))
+            ),
+        }
 
     @app.put("/api/admin/control/client")
     async def update_client_policy(body: ClientPolicyUpdate, request: Request, response: Response) -> dict:
-        changes = body.model_dump(exclude_none=True)
-        if not changes:
+        supplied = body.model_dump(exclude_none=True, exclude_unset=True)
+        token = supplied.pop("api_key", None)
+        clear_api_key = bool(supplied.pop("clear_api_key", False))
+        # The shared service credential controls every Web Chat user's
+        # upstream access and billing. Client-policy delegates may edit public
+        # flags, but only the root super administrator may set or clear it.
+        if token is not None or clear_api_key:
+            actor = str(getattr(request.state, "admin_username", "") or "")
+            if store.role_for(actor) != "super_admin":
+                raise HTTPException(status_code=403, detail="仅超级管理员可以配置 Web Chat 统一 API Key")
+        if token is not None and clear_api_key:
+            raise HTTPException(status_code=400, detail="Cannot set and clear the shared API Key in one update")
+        if token is not None:
+            normalized_token = str(token).strip()
+            if normalized_token:
+                api_keys = getattr(app.state, "api_keys", None)
+                principal = await api_keys.authenticate(normalized_token) if api_keys is not None else None
+                if principal is None or principal.kind != "managed":
+                    raise HTTPException(status_code=400, detail="API Key 无效、已停用或已过期")
+                key_record = getattr(api_keys, "keys", {}).get(principal.key_id)
+                if key_record is None or key_record.internal_owner_user_id:
+                    raise HTTPException(status_code=400, detail="只能配置服务端已创建的托管 API Key")
+                if "chat" not in principal.scopes or "models" not in principal.scopes:
+                    raise HTTPException(status_code=400, detail="统一 API Key 必须具有 chat 和 models 权限")
+                if key_record.token_quota is not None:
+                    raise HTTPException(status_code=400, detail="统一 API Key 必须设置为不限 Token 额度")
+                supplied["api_key_id"] = principal.key_id
+        if clear_api_key:
+            supplied["api_key_id"] = ""
+        if not supplied:
             raise HTTPException(status_code=400, detail="Empty client policy update")
-        audit_event(request, "client.policy_requested", "client", "default", changes)
+
+        # Never write the supplied secret or a bearer token into the audit log.
+        audit_changes = {key: value for key, value in supplied.items() if key != "api_key_id"}
+        if token is not None:
+            audit_changes["api_key_configured"] = bool(str(token).strip())
+        if clear_api_key:
+            audit_changes["api_key_cleared"] = True
+        audit_event(request, "client.policy_requested", "client", "default", audit_changes)
         try:
-            result = store.update_client(changes)
+            result = store.update_client(supplied)
         except ControlPlaneError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        audit_ok = audit_event(request, "client.policy_completed", "client", "default", changes, required=False)
+        audit_ok = audit_event(
+            request, "client.policy_completed", "client", "default", audit_changes, required=False
+        )
         response.headers["X-Admin-Audit-Status"] = "complete" if audit_ok else "completion-pending"
         return result
 

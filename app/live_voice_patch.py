@@ -14,6 +14,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 
+from .admin_auth import same_origin_admin_request
 from .api_keys import ApiPrincipal
 from . import model_capability_routing_patch as model_routing
 from .responses_multimodal_input_v183 import attachment_specs, validate_image_file
@@ -227,7 +228,9 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
             realtime_sessions[digest] = (now + REALTIME_SESSION_TTL_SECONDS, principal)
         return value
 
-    async def consume_realtime_session(token: str) -> ApiPrincipal | None:
+    async def consume_realtime_session(
+        token: str, session_cookie: str | None = None,
+    ) -> ApiPrincipal | None:
         digest = _token_hash(token)
         now = time.monotonic()
         async with realtime_sessions_lock:
@@ -241,37 +244,103 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
         if deadline <= now:
             return None
 
-        # A one-time token must not outlive the API key that minted it.
-        # Re-read the authoritative key record at consumption so revocation,
-        # expiry, scope removal, or quota exhaustion takes effect immediately.
-        key = getattr(api_keys, "keys", {}).get(issued_principal.key_id)
-        if key is None:
+        # A Web Chat one-time token is bound to both the per-user ownership
+        # namespace and the currently configured shared service key. User key
+        # revocation/expiry does not revoke the account session; shared-key
+        # revocation, expiry or scope removal takes effect immediately.
+        identity = getattr(api_keys, "keys", {}).get(issued_principal.key_id)
+        auth_key_id = issued_principal.auth_key_id if issued_principal.kind == "web_chat" else issued_principal.key_id
+        if issued_principal.kind == "web_chat":
+            control_plane = getattr(app.state, "control_plane", None)
+            accounts = getattr(app.state, "user_accounts", None)
+            if control_plane is None or control_plane.client_api_key_id() != auth_key_id:
+                return None
+            if accounts is None or not session_cookie:
+                return None
+            try:
+                session_user = accounts.authenticate(session_cookie)
+                owner_id = accounts.owner_for_key(issued_principal.key_id)
+                if (
+                    not session_user
+                    or not owner_id
+                    or str(session_user.get("user_id") or "") != str(owner_id)
+                    or not accounts.is_enabled(str(owner_id))
+                ):
+                    return None
+            except Exception:
+                return None
+        auth_key = getattr(api_keys, "keys", {}).get(auth_key_id)
+        if identity is None or auth_key is None:
             return None
-        public = key.public() if callable(getattr(key, "public", None)) else {}
-        if not isinstance(public, dict) or not public.get("enabled"):
+        public = auth_key.public() if callable(getattr(auth_key, "public", None)) else {}
+        if not isinstance(public, dict) or not public.get("enabled") or auth_key.internal_owner_user_id:
             return None
-        scopes = tuple(key.scopes or ["chat", "models", "files", "images", "audio"])
+        scopes = tuple(auth_key.scopes or ["chat", "models", "files", "images", "audio"])
+        if issued_principal.kind == "web_chat":
+            # The one-time token may not gain scopes added after issuance, and
+            # a Web Chat key that no longer meets the unlimited-key contract
+            # must not keep minting live sessions.
+            if auth_key.token_quota is not None or not set(issued_principal.scopes).issubset(set(scopes)):
+                return None
+            scopes = tuple(issued_principal.scopes)
         if "audio" not in scopes and "chat" not in scopes:
             return None
+        registry = getattr(app.state, "registry", None)
+        if registry is not None:
+            registry.set_routing_key(issued_principal.key_id)
+            shared_key_context = getattr(registry, "shared_api_key_context", None)
+            if shared_key_context is not None:
+                shared_key_context.set(
+                    auth_key_id if issued_principal.kind == "web_chat" else ""
+                )
         return ApiPrincipal(
-            key_id=key.key_id,
-            name=key.name,
-            kind="managed",
+            key_id=issued_principal.key_id,
+            name=issued_principal.name,
+            kind=issued_principal.kind,
             scopes=scopes,
+            auth_key_id=auth_key_id if issued_principal.kind == "web_chat" else "",
         )
 
-    def principal_is_active(principal: ApiPrincipal) -> bool:
-        # A successful WebSocket handshake must not turn a managed API key
-        # into a permanent lease. Re-read the authoritative key record so
-        # disable, revocation, expiry, quota exhaustion and scope removal
-        # terminate an already-open Live session as well.
-        key = getattr(api_keys, "keys", {}).get(principal.key_id)
-        if key is None:
+    def principal_is_active(principal: ApiPrincipal, websocket: WebSocket | None = None) -> bool:
+        # A successful WebSocket handshake must not turn a credential into a
+        # permanent lease. For Web Chat, the shared service key is authoritative;
+        # the per-user key ID is only the account ownership namespace.
+        identity = getattr(api_keys, "keys", {}).get(principal.key_id)
+        auth_key_id = principal.auth_key_id if principal.kind == "web_chat" else principal.key_id
+        if principal.kind == "web_chat":
+            control_plane = getattr(app.state, "control_plane", None)
+            accounts = getattr(app.state, "user_accounts", None)
+            if control_plane is None or control_plane.client_api_key_id() != auth_key_id:
+                return False
+            if accounts is None or websocket is None:
+                return False
+            try:
+                from .user_commerce import USER_SESSION_COOKIE
+                session_user = accounts.authenticate(
+                    websocket.cookies.get(USER_SESSION_COOKIE)
+                )
+                owner_id = accounts.owner_for_key(principal.key_id)
+                if (
+                    not session_user
+                    or not owner_id
+                    or str(session_user.get("user_id") or "") != str(owner_id)
+                    or not accounts.is_enabled(str(owner_id))
+                ):
+                    return False
+            except Exception:
+                return False
+        key = getattr(api_keys, "keys", {}).get(auth_key_id)
+        if identity is None or key is None or key.internal_owner_user_id:
             return False
         public = key.public() if callable(getattr(key, "public", None)) else {}
         if not isinstance(public, dict) or not public.get("enabled"):
             return False
         scopes = tuple(key.scopes or ["chat", "models", "files", "images", "audio"])
+        if principal.kind == "web_chat" and (
+            key.token_quota is not None
+            or not set(principal.scopes).issubset(set(scopes))
+        ):
+            return False
         return "audio" in scopes or "chat" in scopes
 
     async def authenticate_websocket(websocket: WebSocket, session_token: str | None) -> ApiPrincipal | None:
@@ -279,7 +348,10 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
         if supplied:
             return await authenticate_managed_token(supplied)
         if session_token:
-            return await consume_realtime_session(session_token)
+            from .user_commerce import USER_SESSION_COOKIE
+            return await consume_realtime_session(
+                session_token, websocket.cookies.get(USER_SESSION_COOKIE),
+            )
         return None
 
     def can_accept(client_id: str, weight: int = LIVE_CAPACITY_WEIGHT) -> bool:
@@ -326,6 +398,33 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
         principal = await authenticate_managed_token(_bearer(request.headers))
         if principal is None:
             raise HTTPException(status_code=401, detail="Invalid or unauthorized managed API key")
+        token = await issue_realtime_session(principal)
+        return {
+            "object": "realtime.session_token",
+            "protocol": LIVE_PROTOCOL_VERSION,
+            "expires_in": REALTIME_SESSION_TTL_SECONDS,
+            "session_token": token,
+            "websocket_path": f"/v1/audio/realtime?session_token={token}",
+            "input_audio_format": "pcm16le-16000-mono",
+            "output_audio_format": "pcm16le-24000-mono",
+            "supports": ["binary_pcm_input", "binary_pcm_output", "input_text", "conversation.item.create", "input_media", "barge_in"],
+        }
+
+    @app.post("/api/user/chat/voice-session")
+    async def create_web_chat_live_voice_session(request: Request) -> dict[str, object]:
+        if not same_origin_admin_request(request):
+            raise HTTPException(
+                status_code=403, detail="Same-origin request required",
+                headers={"Cache-Control": "private, no-store", "Vary": "Cookie"},
+            )
+        from .web_chat_identity_v1 import resolve_web_chat_principal
+
+        principal = (await resolve_web_chat_principal(
+            request, request.headers.get("x-chat2api-user-key-id")
+        ))[1]
+        if "audio" not in principal.scopes and "chat" not in principal.scopes:
+            raise HTTPException(status_code=403, detail="Web Chat shared API Key lacks audio permission",
+                                headers={"Cache-Control": "private, no-store", "Vary": "Cookie"})
         token = await issue_realtime_session(principal)
         return {
             "object": "realtime.session_token",
@@ -774,7 +873,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
             if start.get("type") != "session.start":
                 await send_json({"type": "error", "code": "SESSION_START_REQUIRED", "message": "First frame must be session.start"})
                 return
-            if not principal_is_active(principal):
+            if not principal_is_active(principal, websocket):
                 await send_json({
                     "type": "error", "code": "API_KEY_REVOKED",
                     "message": "The API key is disabled, expired, exhausted or no longer has Live permission",
@@ -825,6 +924,8 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 "response_id": session_id,
                 "client_id": selected_client,
                 "api_key_id": principal.key_id,
+                "shared_api_key_id": principal.auth_key_id or None,
+                "web_chat_mode": principal.kind == "web_chat",
                 "api_key_name": principal.name,
                 "auth_kind": principal.kind,
                 "requested_model": effective_model,
@@ -875,7 +976,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         return_when=asyncio.FIRST_COMPLETED,
                     )
                     if not completed:
-                        if not principal_is_active(principal):
+                        if not principal_is_active(principal, websocket):
                             error_message = "Live API key is no longer active"
                             await send_json({
                                 "type": "error", "code": "API_KEY_REVOKED",
@@ -893,7 +994,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         client_receive.cancel()
                         with suppress(asyncio.CancelledError):
                             await client_receive
-                if not principal_is_active(principal):
+                if not principal_is_active(principal, websocket):
                     error_message = "Live API key is no longer active"
                     await send_json({
                         "type": "error", "code": "API_KEY_REVOKED",
@@ -1293,6 +1394,8 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     "response_id": session_id,
                     "client_id": selected_client,
                     "api_key_id": principal.key_id,
+                    "shared_api_key_id": principal.auth_key_id or None,
+                    "web_chat_mode": principal.kind == "web_chat",
                     "api_key_name": principal.name,
                     "auth_kind": principal.kind,
                     "requested_model": effective_model,

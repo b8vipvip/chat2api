@@ -330,6 +330,41 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
             subscription_plan=subscription_plan,
         )
 
+    # Web Chat carries two independent identities: the per-user key ID for
+    # account/tenant policies and the shared managed key ID for service-level
+    # key policies. Both must allow a model.
+    registry.shared_api_key_context = contextvars.ContextVar(
+        "chat2api_shared_api_key_context", default=""
+    )
+
+    def _decision_with_shared_key(key_id: str | None, model_id: str | None) -> dict[str, Any]:
+        user_decision = _decision(key_id, model_id)
+        shared_key_id = str(registry.shared_api_key_context.get() or "").strip()
+        if not shared_key_id or shared_key_id == key_id or shared_key_id == "master":
+            return user_decision
+        shared_decision = store.evaluate(
+            str(model_id or ""),
+            key_id=shared_key_id,
+            user_id=None,
+            tenant_id=None,
+            tenant_role=None,
+            user_role=None,
+            subscription_plan=None,
+        )
+        user_allowed = user_decision.get("allowed") is True
+        shared_allowed = shared_decision.get("allowed") is True
+        return {
+            "allowed": user_allowed and shared_allowed,
+            "reason": (
+                user_decision.get("reason") if not user_allowed
+                else shared_decision.get("reason") if not shared_allowed
+                else user_decision.get("reason")
+            ),
+            "model": user_decision.get("model") or shared_decision.get("model") or model_id,
+            "matched_rules": list(user_decision.get("matched_rules") or [])
+                + list(shared_decision.get("matched_rules") or []),
+        }
+
     base_catalog = registry.model_catalog
 
     def model_catalog_with_entitlements(online_only: bool = True) -> list[dict[str, Any]]:
@@ -339,7 +374,7 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
             return rows
         return [
             row for row in rows
-            if _decision(str(key_id), str(row.get("id") or "")).get("allowed") is True
+            if _decision_with_shared_key(str(key_id), str(row.get("id") or "")).get("allowed") is True
         ]
 
     registry.model_catalog = model_catalog_with_entitlements
@@ -351,7 +386,7 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
         if key_id and key_id != "master":
             target = model_routing._MODEL_CONTEXT.get() or v13_patch._target_context.get() or {}
             model_id = str(target.get("model") or "")
-            decision = _decision(str(key_id), model_id)
+            decision = _decision_with_shared_key(str(key_id), model_id)
             if not decision.get("allowed"):
                 raise HTTPException(
                     status_code=403,
