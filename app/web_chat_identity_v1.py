@@ -60,7 +60,10 @@ async def resolve_web_chat_principal(
     if requested:
         if not accounts.owns_key(user_id, requested):
             raise _private_error(404, "Web Chat 账户身份不存在")
-        if requested not in getattr(api_keys, "keys", {}):
+        requested_record = getattr(api_keys, "keys", {}).get(requested)
+        if requested_record is None:
+            raise _private_error(404, "Web Chat 账户身份不存在")
+        if requested_record.internal_owner_user_id and requested_record.internal_owner_user_id != user_id:
             raise _private_error(404, "Web Chat 账户身份不存在")
         identity_key_id = requested
     else:
