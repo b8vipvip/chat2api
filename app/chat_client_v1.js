@@ -4,8 +4,8 @@
   const $ = (id) => document.getElementById(id);
   const state = {
     user: null,
-    apiToken: "",
-    keys: [],
+    webChatKeyId: "",
+    webChatScopes: [],
     models: [],
     conversations: [],
     activeConversationId: "",
@@ -94,19 +94,18 @@
     const stop = $("voiceStopButton");
     const camera = $("voiceCameraButton");
     if (!start || !stop || !camera) return;
-    start.disabled = state.streaming || state.voiceActive || !state.apiToken;
+    start.disabled = state.streaming || state.voiceActive || !state.webChatKeyId || (!selectedKeyHasScope("audio") && !selectedKeyHasScope("chat"));
     start.classList.toggle("hidden", state.voiceActive);
     stop.classList.toggle("hidden", !state.voiceActive);
     stop.disabled = !state.voiceActive || state.voiceStarting;
     camera.classList.toggle("hidden", !state.voiceActive || state.voiceStarting);
     camera.disabled = !state.voiceActive || state.voiceStarting || !selectedKeyHasScope("files");
-    if (!selectedKeyHasScope("files")) camera.title = "当前 API Key 缺少 files 权限";
+    if (!selectedKeyHasScope("files")) camera.title = "服务端统一 API Key 缺少 files 权限";
     else camera.title = "在同一 Voice 会话中发送摄像头快照";
-    $("apiKeySelect").disabled = state.streaming || state.voiceActive;
     $("modelSelect").disabled = state.streaming || state.voiceActive;
     $("newChatButton").disabled = state.streaming || state.voiceActive;
-    $("attachButton").disabled = state.streaming || state.voiceActive || !state.apiToken || !selectedKeyHasScope("files");
-    $("fileButton").disabled = state.streaming || state.voiceActive || !state.apiToken || !selectedKeyHasScope("files");
+    $("attachButton").disabled = state.streaming || state.voiceActive || !state.webChatKeyId || !selectedKeyHasScope("files");
+    $("fileButton").disabled = state.streaming || state.voiceActive || !state.webChatKeyId || !selectedKeyHasScope("files");
   }
 
   function setVoiceUi(status, detail = "") {
@@ -301,7 +300,7 @@
       toast("当前对话还有未完成的回复或恢复任务，请先处理后再开始语音。");
       return;
     }
-    if (!state.apiToken) { toast("请先选择一个可用的 API Key。"); return; }
+    if (!state.webChatKeyId) { toast("Web Chat 服务尚未就绪，请稍后重试。"); return; }
     if (!selectedKeyHasScope("audio") && !selectedKeyHasScope("chat")) {
       toast("当前 API Key 没有 audio 或 chat 权限。");
       return;
@@ -317,10 +316,7 @@
       toast("无法为语音会话创建聊天记录。");
       return;
     }
-    if (voiceConversation.apiKeyId && voiceConversation.apiKeyId !== selectedKeyId()) {
-      toast("当前对话绑定了另一个 API Key，请切换到该 Key 后再开始语音。");
-      return;
-    }
+    voiceConversation.apiKeyId = voiceConversation.apiKeyId || state.webChatKeyId;
     state.voiceConversationId = voiceConversation.id;
     state.voiceAssistantLine = null;
     state.voiceAssistantPersisted = false;
@@ -329,7 +325,9 @@
     $("voiceTranscript").replaceChildren();
     state.voiceAssistantLine = null;
     const client = voiceApi.create({
-      apiToken:state.apiToken,
+      sessionEndpoint:"/api/user/chat/voice-session",
+      fileUploadEndpoint:"/api/user/chat/files",
+      userKeyId:voiceConversation.apiKeyId,
       instructions:DEFAULT_VOICE_INSTRUCTIONS,
       context:buildVoiceContext(voiceConversation),
       beforeConnect:async () => {
@@ -337,7 +335,6 @@
           const session = await apiJson("/api/user/me");
           if (String(session.user?.user_id || "") === String(state.user?.user_id || "")) return;
         } catch {}
-        state.apiToken = "";
         state.user = null;
         state.voicePanelVisible = false;
         $("voiceTranscript").replaceChildren();
@@ -359,7 +356,6 @@
           const current = await apiJson("/api/user/me");
           if (String(current.user?.user_id || "") === String(state.user?.user_id || "")) return;
         } catch {}
-        state.apiToken = "";
         state.user = null;
         showOnly("authRequired");
         $("composerArea").classList.add("hidden");
@@ -410,10 +406,10 @@
   }
 
   function showOnly(view) {
-    ["welcomeScreen", "chatScreen", "authRequired", "keyRequired"].forEach((name) => {
+    ["welcomeScreen", "chatScreen", "authRequired", "serviceUnavailable"].forEach((name) => {
       $(name).classList.toggle("hidden", name !== view);
     });
-    $("composerArea").classList.toggle("hidden", view === "authRequired" || view === "keyRequired");
+    $("composerArea").classList.toggle("hidden", view === "authRequired" || view === "serviceUnavailable");
   }
 
   async function apiJson(path, options = {}) {
@@ -1058,7 +1054,7 @@
       id: id(),
       title: "新对话",
       model: state.selectedModel,
-      apiKeyId: "",
+      apiKeyId: state.webChatKeyId,
       createdAt: now,
       updatedAt: now,
       messages: [],
@@ -1643,12 +1639,15 @@
   }
 
   function selectedKeyId() {
-    return String($("apiKeySelect")?.value || "");
+    const conversation = currentConversation();
+    if (conversation && !conversation.apiKeyId && state.webChatKeyId) {
+      conversation.apiKeyId = state.webChatKeyId;
+    }
+    return String(conversation?.apiKeyId || state.webChatKeyId || "");
   }
 
   function selectedKeyHasScope(scope) {
-    const key = state.keys.find((row) => row.key_id === selectedKeyId());
-    return Boolean(key && (!Array.isArray(key.scopes) || key.scopes.includes(scope)));
+    return state.webChatScopes.includes(scope);
   }
 
   function resizeComposer() {
@@ -1661,9 +1660,9 @@
     const keyMatchesConversation = !conversation?.apiKeyId || conversation.apiKeyId === selectedKeyId();
     const unresolvedRequest = Boolean(conversation?.messages?.some((message) => message.role === "assistant" && message.pending === true));
     $("sendButton").disabled = state.streaming || state.voiceActive || unresolvedRequest || (!input.value.trim() && !pendingForConversation) ||
-      !state.apiToken || !selectedKeyHasScope("chat") || !keyMatchesConversation;
-    $("attachButton").disabled = state.streaming || state.voiceActive || !state.apiToken || !selectedKeyHasScope("files");
-    $("fileButton").disabled = state.streaming || state.voiceActive || !state.apiToken || !selectedKeyHasScope("files");
+      !state.webChatKeyId || !selectedKeyHasScope("chat") || !keyMatchesConversation;
+    $("attachButton").disabled = state.streaming || state.voiceActive || !state.webChatKeyId || !selectedKeyHasScope("files");
+    $("fileButton").disabled = state.streaming || state.voiceActive || !state.webChatKeyId || !selectedKeyHasScope("files");
     updateVoiceControls();
   }
 
@@ -1767,12 +1766,12 @@
       const dataUrl = await readFileAsDataUrl(file.file);
       const comma = dataUrl.indexOf(",");
       if (comma < 0) throw new Error("文件编码失败");
-      const payload = await apiJson("/v1/files", {
+      const payload = await apiJson("/api/user/chat/files", {
         method: "POST",
         headers: {
-          "Authorization": "Bearer " + state.apiToken,
           "Content-Type": "application/json",
           "X-Chat2API-Source": "web-chat",
+          "X-Chat2API-User-Key-ID": selectedKeyId(),
         },
         body: JSON.stringify({
           filename: file.filename,
@@ -1790,16 +1789,12 @@
 
   async function handleDocumentFiles(fileList) {
     if (state.streaming) return;
-    if (!state.apiToken) { toast("请先登录并选择 API Key。"); return; }
+    if (!state.webChatKeyId) { toast("Web Chat 服务尚未就绪，请稍后重试。"); return; }
     if (!selectedKeyHasScope("files")) { toast("当前 API Key 没有 files 权限。"); return; }
     const files = Array.from(fileList || []);
     if (!files.length) return;
     const conversation = currentConversation() || createConversation();
     if (!conversation) return;
-    if (conversation.apiKeyId && conversation.apiKeyId !== selectedKeyId()) {
-      toast("该对话已有附件，请切换回上传附件时使用的 API Key。");
-      return;
-    }
     if ((state.pendingImages.length && state.pendingImagesConversationId !== conversation.id) ||
         (state.pendingFiles.length && state.pendingFilesConversationId !== conversation.id)) {
       toast("请先发送或移除其他对话的待发送附件。");
@@ -1850,12 +1845,12 @@
       const dataUrl = await readFileAsDataUrl(image.file);
       const comma = dataUrl.indexOf(",");
       if (comma < 0) throw new Error("图片编码失败");
-      const payload = await apiJson("/v1/files", {
+      const payload = await apiJson("/api/user/chat/files", {
         method: "POST",
         headers: {
-          "Authorization": "Bearer " + state.apiToken,
           "Content-Type": "application/json",
           "X-Chat2API-Source": "web-chat",
+          "X-Chat2API-User-Key-ID": selectedKeyId(),
         },
         body: JSON.stringify({
           filename: image.filename,
@@ -1873,8 +1868,8 @@
 
   async function handleImageFiles(fileList) {
     if (state.streaming) return;
-    if (!state.apiToken) {
-      toast("请先登录并选择 API Key。");
+    if (!state.webChatKeyId) {
+      toast("Web Chat 服务尚未就绪，请稍后重试。");
       return;
     }
     if (!selectedKeyHasScope("files")) {
@@ -1885,10 +1880,6 @@
     if (!files.length) return;
     const conversation = currentConversation() || createConversation();
     if (!conversation) return;
-    if (conversation.apiKeyId && conversation.apiKeyId !== selectedKeyId()) {
-      toast("该对话已有图片附件，请切换回上传图片时使用的 API Key。");
-      return;
-    }
     if (state.pendingFiles.length && state.pendingFilesConversationId !== conversation.id) {
       toast("请先发送或移除其他对话的待发送附件。");
       return;
@@ -2555,17 +2546,17 @@
     const pendingFiles = state.pendingFilesConversationId === conversation?.id ? state.pendingFiles : [];
     if (!clean && pendingFiles.length) { toast("添加文档时请同时输入要处理的问题或指令。"); return; }
     if (!clean && !pending.length && !pendingFiles.length) return;
-    if (!state.apiToken) {
-      toast("请先选择一个可用的 API Key。");
-      showOnly("keyRequired");
+    if (!state.webChatKeyId) {
+      showOnly("serviceUnavailable");
+      toast("Web Chat 服务尚未配置完成，请联系管理员。");
       return;
     }
     const keyId = selectedKeyId();
-    if (conversation.apiKeyId && conversation.apiKeyId !== keyId) {
-      toast("该对话包含由其他 API Key 上传的附件，请切换回原 API Key。");
-      resizeComposer();
+    if (!keyId) {
+      showOnly("serviceUnavailable");
       return;
     }
+    conversation.apiKeyId = keyId;
     if ((pending.length || pendingFiles.length) && !selectedKeyHasScope("files")) {
       toast("当前 API Key 没有 files 权限，无法发送附件。");
       return;
@@ -2577,7 +2568,6 @@
     $("attachButton").disabled = true;
     $("fileButton").disabled = true;
     $("newChatButton").disabled = true;
-    $("apiKeySelect").disabled = true;
     $("modelSelect").disabled = true;
     $("messageInput").disabled = true;
     setConnection((pending.length || pendingFiles.length) ? "正在上传附件…" : "正在连接…");
@@ -2592,7 +2582,6 @@
           throw new Error("当前登录账户已变化");
         }
       } catch {
-        state.apiToken = "";
         state.user = null;
         showOnly("authRequired");
         setConnection("登录已失效", "error");
@@ -2648,10 +2637,10 @@
         method: "POST",
         credentials: "same-origin",
         headers: {
-          "Authorization": "Bearer " + state.apiToken,
           "Content-Type": "application/json",
           "Accept": "text/event-stream",
           "X-Chat2API-Request-ID": requestId,
+          "X-Chat2API-User-Key-ID": keyId,
         },
         body: JSON.stringify({
           model: state.selectedModel,
@@ -2663,10 +2652,13 @@
       if (!response.ok) {
         let payload = {};
         try { payload = await response.json(); } catch {}
-        if (response.status === 401 || response.status === 403) {
-          state.apiToken = "";
-          showOnly("keyRequired");
-          setConnection("API Key 已失效或权限不足", "error");
+        if (response.status === 401) {
+          state.user = null;
+          showOnly("authRequired");
+          setConnection("登录已失效", "error");
+        } else if (response.status === 403 || response.status === 503) {
+          showOnly("serviceUnavailable");
+          setConnection("服务端统一 API Key 不可用", "error");
         }
         throw new Error(payload?.error?.message || payload.detail || "请求失败，HTTP " + response.status);
       }
@@ -2762,11 +2754,10 @@
       state.activeRequestRecord = null;
       conversation.updatedAt = new Date().toISOString();
       saveHistory();
-      if (state.apiToken) renderAll();
-      else showOnly(state.user ? "keyRequired" : "authRequired");
+      if (state.webChatKeyId) renderAll();
+      else showOnly(state.user ? "serviceUnavailable" : "authRequired");
       $("stopButton").classList.add("hidden");
       $("newChatButton").disabled = false;
-      $("apiKeySelect").disabled = false;
       $("modelSelect").disabled = false;
       $("messageInput").disabled = false;
       renderPendingImages();
@@ -2776,77 +2767,25 @@
     }
   }
 
-  async function selectApiKey(keyId) {
-    state.apiToken = "";
-    const key = state.keys.find((row) => row.key_id === keyId);
-    if (!key || !key.enabled || key.expired || key.revoked_at || !key.secret_recoverable) {
-      setConnection("需要可用 Key", "error");
-      showOnly("keyRequired");
-      resizeComposer();
-      return false;
-    }
-    setConnection("验证 API Key…");
-    try {
-      const payload = await apiJson("/api/user/keys/" + encodeURIComponent(keyId) + "/secret");
-      state.apiToken = String(payload.token || "");
-      if (!state.apiToken) throw new Error("API Key 密钥为空");
-      try { localStorage.setItem("chat2api.webchat.key." + state.user.user_id, keyId); } catch {}
-      await loadModels();
-      const conversation = currentConversation();
-      if (conversation?.apiKeyId && conversation.apiKeyId !== keyId) {
-        setConnection("此对话需要原 API Key", "error");
-      } else {
-        setConnection("已连接", "ready");
-      }
-      resizeComposer();
-      renderAll();
-      return true;
-    } catch (error) {
-      setConnection("Key 不可用", "error");
-      toast("无法读取所选 API Key：" + error.message + "。请创建一个新 Key。");
-      showOnly("keyRequired");
-      resizeComposer();
-      return false;
-    }
-  }
-
-  async function loadKeys() {
-    const payload = await apiJson("/api/user/keys");
-    state.keys = Array.isArray(payload.data) ? payload.data : [];
-    const usable = state.keys.filter((key) => key.enabled && !key.expired && !key.revoked_at && key.secret_recoverable &&
-      (!Array.isArray(key.scopes) || key.scopes.includes("chat") || key.scopes.includes("audio")));
-    const select = $("apiKeySelect");
-    select.replaceChildren();
-    if (!usable.length) {
-      const option = document.createElement("option");
-      option.value = "";
-      option.textContent = "无可用 API Key";
-      select.appendChild(option);
-      $("keyRequired").classList.remove("hidden");
-      showOnly("keyRequired");
-      setConnection("需要 API Key", "error");
-      return false;
-    }
-    usable.forEach((key) => {
-      const option = document.createElement("option");
-      option.value = key.key_id;
-      option.textContent = (key.name || "API Key") + " · " + (key.prefix || key.key_id);
-      select.appendChild(option);
+  async function loadWebChatSession() {
+    const payload = await apiJson("/api/user/chat/session");
+    state.webChatKeyId = String(payload.key_id || "");
+    state.webChatScopes = Array.isArray(payload.scopes) ? payload.scopes.map(String) : [];
+    if (!state.webChatKeyId) throw new Error("服务端没有返回有效的 Web Chat 账户身份");
+    state.conversations.forEach((conversation) => {
+      if (!conversation.apiKeyId) conversation.apiKeyId = state.webChatKeyId;
     });
-    let preferred = "";
-    try { preferred = localStorage.getItem("chat2api.webchat.key." + state.user.user_id) || ""; } catch {}
-    const conversationKeyId = currentConversation()?.apiKeyId || "";
-    const selected = usable.find((key) => key.key_id === conversationKeyId) ||
-      usable.find((key) => key.key_id === preferred) || usable[0];
-    select.value = selected.key_id;
-    return selectApiKey(selected.key_id);
+    await loadModels();
+    setConnection("已连接", "ready");
+    resizeComposer();
+    return true;
   }
 
   async function loadModels() {
     const select = $("modelSelect");
     let rows = [];
     try {
-      const payload = await apiJson("/v1/models", {headers:{"Authorization":"Bearer " + state.apiToken}});
+      const payload = await apiJson("/api/user/chat/models");
       rows = Array.isArray(payload.data) ? payload.data : [];
     } catch {
       try {
@@ -2984,7 +2923,15 @@
     }
     state.forceScrollToBottom = true;
     renderAll();
-    const ready = await loadKeys();
+    let ready = false;
+    try {
+      ready = await loadWebChatSession();
+    } catch (error) {
+      showOnly("serviceUnavailable");
+      setConnection("服务端配置不可用", "error");
+      toast("Web Chat 暂不可用：" + String(error?.message || error));
+      return;
+    }
     resumePendingMessages();
     void hydrateNativeSnapshots();
     if (!ready) return;
@@ -3024,19 +2971,6 @@
     } finally {
       event.target.value = "";
     }
-  });
-  $("apiKeySelect").addEventListener("change", (event) => {
-    const conversation = currentConversation();
-    if ((state.pendingImages.length || state.pendingFiles.length) && conversation?.apiKeyId && conversation.apiKeyId !== event.target.value) {
-      event.target.value = conversation.apiKeyId;
-      toast("待发送附件已绑定当前 API Key；请先移除附件再切换 Key。");
-      return;
-    }
-    if (state.voiceActive) {
-      void stopVoiceCall().then(() => selectApiKey(event.target.value));
-      return;
-    }
-    selectApiKey(event.target.value);
   });
   $("modelSelect").addEventListener("change", (event) => {
     state.selectedModel = event.target.value;
