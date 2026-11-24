@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import stat
@@ -640,3 +641,66 @@ def test_control_plane_rejects_invalid_client_domains_without_mutating_policy(tm
     with pytest.raises(ControlPlaneError, match="client_domain"):
         store.update_client({"client_domain": bad_domain})
     assert store.public_client()["client_domain"] == ""
+
+
+def test_client_policy_accepts_shared_api_key_without_persisting_or_exposing_secret(tmp_path: Path):
+    app = make_app(tmp_path)
+    key_public, key_token = asyncio.run(app.state.api_keys.create("shared-web-chat"))
+    with TestClient(app) as client:
+        assert login(client, "owner", "strong-root-password").status_code == 200
+        configured = client.put(
+            "/api/admin/control/client",
+            headers=ORIGIN,
+            json={"api_key": key_token},
+        )
+        assert configured.status_code == 200, configured.text
+        result = configured.json()
+        assert result["api_key_configured"] is True
+        assert result["api_key_enabled"] is True
+        assert result["api_key_name"] == "shared-web-chat"
+        assert result["api_key_prefix"] == key_public["prefix"]
+        assert "api_key_id" not in result
+        assert "api_key" not in result
+        public = client.get("/api/client/config").json()
+        assert public["api_key_configured"] is True
+        assert "api_key_id" not in public
+        assert "api_key" not in public
+
+        persisted = app.state.control_plane.path.read_text(encoding="utf-8")
+        assert key_public["key_id"] in persisted
+        assert key_token not in persisted
+        audit = json.dumps(app.state.admin_audit.recent(20), ensure_ascii=False)
+        assert key_token not in audit
+
+        invalid = client.put(
+            "/api/admin/control/client",
+            headers=ORIGIN,
+            json={"api_key": "sk-chat2api-invalid-token"},
+        )
+        assert invalid.status_code == 400
+        assert app.state.control_plane.client_api_key_id() == key_public["key_id"]
+
+        cleared = client.put(
+            "/api/admin/control/client",
+            headers=ORIGIN,
+            json={"clear_api_key": True},
+        )
+        assert cleared.status_code == 200, cleared.text
+        assert cleared.json()["api_key_configured"] is False
+        assert app.state.control_plane.client_api_key_id() == ""
+
+
+def test_control_plane_migrates_legacy_client_policy_without_api_key_id(tmp_path: Path):
+    store = ControlPlaneStore(tmp_path, "owner")
+    payload = json.loads(store.path.read_text(encoding="utf-8"))
+    payload["client"].pop("api_key_id", None)
+    store.path.write_text(json.dumps(payload), encoding="utf-8")
+
+    reopened = ControlPlaneStore(tmp_path, "owner")
+
+    assert reopened.client_api_key_id() == ""
+    assert reopened.public_client()["api_key_configured"] is False
+    reopened.update_client({"announcement": "migrated"})
+    persisted = json.loads(store.path.read_text(encoding="utf-8"))
+    assert persisted["client"]["api_key_id"] == ""
+    assert persisted["client"]["announcement"] == "migrated"
