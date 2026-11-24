@@ -241,8 +241,27 @@
     }
   }
 
+  async function resumeSyntheticMicContext(context) {
+    try {
+      await context.resume();
+    } catch (error) {
+      throw new Error("ChatGPT Voice synthetic microphone AudioContext could not resume: " + String(error?.message || error));
+    }
+    if (typeof context.state === "string" && context.state !== "running") {
+      throw new Error("ChatGPT Voice synthetic microphone AudioContext is not running (" + context.state + ")");
+    }
+  }
+
   async function ensureSyntheticMic() {
-    if (state.micDestination) return state.micDestination.stream;
+    if (state.micDestination && state.micContext?.state !== "closed") {
+      if (state.micContext) await resumeSyntheticMicContext(state.micContext);
+      return state.micDestination.stream;
+    }
+    // A closed AudioContext leaves an ended MediaStreamDestination behind.
+    // Do not hand that stale track back to ChatGPT on the next Voice session.
+    state.micContext = null;
+    state.micDestination = null;
+    state.micOscillator = null;
     const context = new AudioContext();
     const destination = context.createMediaStreamDestination();
     const gain = context.createGain();
@@ -254,7 +273,18 @@
     state.micContext = context;
     state.micDestination = destination;
     state.micOscillator = oscillator;
-    try { await context.resume(); } catch (_) {}
+    try {
+      await resumeSyntheticMicContext(context);
+    } catch (error) {
+      try { oscillator.stop(); } catch (_) {}
+      try { await context.close(); } catch (_) {}
+      if (state.micContext === context) {
+        state.micContext = null;
+        state.micDestination = null;
+        state.micOscillator = null;
+      }
+      throw error;
+    }
     return destination.stream;
   }
 
