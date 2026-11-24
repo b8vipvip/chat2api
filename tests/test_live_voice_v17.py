@@ -902,3 +902,35 @@ def test_voice_worker_event_ack_is_a_server_broker_ack_not_local_socket_send(tmp
                     "accepted": False,
                     "reason": "request-not-owned-or-active",
                 }
+
+
+def test_live_voice_idle_public_socket_terminates_when_worker_disconnects(tmp_path: Path) -> None:
+    """An idle browser call must not hang after its assigned Worker socket disappears."""
+    app = app_live(tmp_path)
+    with TestClient(app) as client:
+        managed_key = create_managed_key(client)
+        client_id, extension_token = pair_extension(client)
+        with client.websocket_connect(f"/ws/extensions/{client_id}?token={extension_token}") as extension:
+            assert extension.receive_json()["type"] == "server.hello"
+            with client.websocket_connect(
+                f"/v1/audio/realtime?client_id={client_id}",
+                headers={"Authorization": f"Bearer {managed_key}"},
+            ) as live:
+                live.send_json({"type": "session.start", "model": "gpt-live"})
+                started = extension.receive_json()
+                assert started["type"] == "voice.live.start"
+                request_id = started["request_id"]
+
+                # No microphone/audio frames or user controls are sent. Closing
+                # the assigned Worker must itself terminate the server relay.
+                extension.close()
+                error = live.receive_json()
+                assert error["type"] == "error"
+                assert error["code"] == "GPT_LIVE_WORKER_DISCONNECTED"
+                closed = live.receive_json()
+                assert closed["type"] == "session.closed"
+                assert closed["status"] == "error"
+
+        row = app.state.telemetry.get(request_id)
+        assert row["status"] == "error"
+        assert "disconnected" in row["error"].lower()
