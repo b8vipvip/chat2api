@@ -2172,11 +2172,17 @@
         dataLines.push(line.slice(5).trimStart());
       }
     }
+    const data = dataLines.join("\n");
+    // Only a validated frame may advance the durable replay cursor. A
+    // malformed JSON frame or an unknown empty event must not skip future
+    // events after reconnect. A cursor-only heartbeat is explicitly valid.
+    if (!data && eventName !== "cursor") return false;
+    if (data && data.trim() !== "[DONE]") {
+      try { JSON.parse(data); } catch { return false; }
+    }
     if (eventId && eventId > Number(assistant.lastEventId || 0)) {
       assistant.lastEventId = eventId;
     }
-    const data = dataLines.join("\n");
-    if (!data && eventName === "cursor") return false;
     if (!data) return false;
     if (data.trim() === "[DONE]") return true;
     let event;
