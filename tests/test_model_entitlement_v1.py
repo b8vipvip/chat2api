@@ -369,6 +369,35 @@ def test_api_key_and_owner_policies_filter_catalog_and_gate_dispatch(tmp_path: P
         reset_model_context(tokens)
 
 
+def test_web_chat_model_policy_intersects_user_and_shared_service_key(tmp_path: Path):
+    app, _ = build_app(tmp_path)
+    store = app.state.model_entitlements
+    registry = app.state.registry
+
+    store.upsert("global", "default", "allow", ["gpt-5.5", "gpt-5.6-sol"])
+    store.upsert("key", "key_1", "allow", ["gpt-5.5", "gpt-5.6-sol"])
+    store.upsert("key", "key_shared", "deny", ["gpt-5.5"])
+
+    registry.routing_key_context.set("key_1")
+    registry.shared_api_key_context.set("key_shared")
+    assert [row["id"] for row in registry.model_catalog()] == ["gpt-5.6-sol"]
+
+    tokens = set_model_context("gpt-5.5")
+    try:
+        with pytest.raises(HTTPException) as denied:
+            registry.resolve_client(None)
+        assert denied.value.status_code == 403
+        assert denied.value.detail["code"] == "model_not_entitled"
+    finally:
+        reset_model_context(tokens)
+
+    tokens = set_model_context("gpt-5.6-sol")
+    try:
+        assert registry.resolve_client(None) == "worker_1"
+    finally:
+        reset_model_context(tokens)
+
+
 def test_identity_and_tenant_lookup_failures_fail_closed(tmp_path: Path):
     app, _ = build_app(tmp_path)
     registry = app.state.registry
