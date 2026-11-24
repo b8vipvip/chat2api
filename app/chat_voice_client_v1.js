@@ -173,6 +173,14 @@
     }
     function playPcm(buffer) {
       if (!audioContext || cleaned) return;
+      if (typeof audioContext.state === "string" && audioContext.state !== "running") {
+        event({
+          type:"client.error",
+          message:"浏览器音频输出上下文已暂停（" + audioContext.state + "），实时语音已停止，请重新连接",
+        });
+        void cleanup();
+        return;
+      }
       const samples = decodePcm16(buffer);
       if (!samples || !samples.length) return;
       const audio = audioContext.createBuffer(1, samples.length, OUTPUT_RATE);
@@ -345,6 +353,9 @@
       // before any network or permission prompt can consume transient activation.
       audioContext = new AudioContextImpl();
       if (typeof audioContext.resume === "function") await audioContext.resume();
+      if (typeof audioContext.state === "string" && audioContext.state !== "running") {
+        throw new Error("浏览器音频输出上下文未进入运行状态（" + audioContext.state + "）");
+      }
       assertNotCancelled();
       if (beforeConnect) await beforeConnect();
       assertNotCancelled();
