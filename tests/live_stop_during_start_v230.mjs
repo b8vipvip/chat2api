@@ -39,7 +39,14 @@ function setup({deferAllocation=false, deferStartAck=false}={}) {
     sleep:async()=>{},
     trySendSocket:async event=>{events.push(["error",event.type]);return true},
     chrome:{
-      scripting:{executeScript:async()=>{}},
+      scripting:{executeScript:async details=>{
+        if (typeof details?.func === "function") {
+          return [{result:details.world === "MAIN"
+            ? {voiceMain:true,liveMain:true}
+            : {liveContent:true,textContext:true}}];
+        }
+        return [];
+      }},
       tabs:{async sendMessage(id,message){
         events.push(["send",id,message.type]);
         if(message.type === "chat2api.voice.live.start")
