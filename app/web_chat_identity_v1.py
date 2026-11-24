@@ -85,12 +85,17 @@ async def resolve_web_chat_principal(
                 if bound_tenant:
                     if tenant_memberships.user_for_key(identity_key_id) != user_id:
                         raise ValueError("Web Chat identity tenant owner mismatch")
-                else:
+                    if not identity_record.tenant_binding_initialized:
+                        identity_record.tenant_binding_initialized = True
+                        await api_keys.save()
+                elif not identity_record.tenant_binding_initialized:
                     memberships = tenant_memberships.list_for_user(user_id)
                     if memberships:
                         tenant_memberships.bind_key(
                             str(memberships[0]["tenant_id"]), user_id, identity_key_id
                         )
+                        identity_record.tenant_binding_initialized = True
+                        await api_keys.save()
             except Exception as error:
                 raise _private_error(503, "无法初始化 Web Chat 工作区身份") from error
 
