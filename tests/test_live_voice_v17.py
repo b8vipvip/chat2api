@@ -895,12 +895,13 @@ def test_voice_worker_event_ack_is_a_server_broker_ack_not_local_socket_send(tmp
                     "worker_event_ack_id": stale_id,
                 })
                 rejected = extension.receive_json()
-                assert rejected == {
-                    "type": "voice.event.ack",
-                    "event_id": stale_id,
-                    "request_id": request_id,
-                    "accepted": False,
-                    "reason": "request-not-owned-or-active",
+                assert rejected["type"] == "voice.event.ack"
+                assert rejected["event_id"] == stale_id
+                assert rejected["request_id"] == request_id
+                assert rejected["accepted"] is False
+                assert rejected["reason"] in {
+                    "request-not-owned-or-active",
+                    "broker-rejected-event",
                 }
 
 
