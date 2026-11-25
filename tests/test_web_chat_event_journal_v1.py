@@ -577,6 +577,35 @@ def test_delivery_journal_rejects_a_non_prefix_resume(tmp_path):
     asyncio.run(scenario())
 
 
+def test_worker_event_journal_deduplicates_replayed_deltas_by_source_id(tmp_path):
+    async def scenario():
+        journal = WebChatEventJournal(tmp_path)
+        await journal.open()
+        request_id = "req_worker_event_dedupe"
+        owner = "key-worker-event-dedupe"
+        first_event = {
+            "type": "chat.delta",
+            "worker_event_id": f"{request_id}:1",
+            "delta": "first ",
+        }
+        first_id = await journal.append_worker_event(request_id, owner, first_event)
+        duplicate_id = await journal.append_worker_event(request_id, owner, first_event)
+        second_id = await journal.append_worker_event(
+            request_id, owner,
+            {"type": "chat.delta", "worker_event_id": f"{request_id}:2", "delta": "second"},
+        )
+        assert first_id == duplicate_id
+        assert second_id == first_id + 1
+
+        snapshot = await journal.snapshot(request_id, owner)
+        assert snapshot["worker_partial_text"] == "first second"
+        page = await journal.events_after(request_id, owner, 0, limit=16)
+        assert [item["id"] for item in page["events"]] == [first_id, second_id]
+        assert [item["data"]["delta"] for item in page["events"]] == ["first ", "second"]
+
+    asyncio.run(scenario())
+
+
 def test_final_message_citation_metadata_is_durable_in_worker_and_terminal_records(tmp_path):
     async def scenario():
         journal = WebChatEventJournal(tmp_path)
