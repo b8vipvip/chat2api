@@ -2536,13 +2536,23 @@
       if (Array.isArray(event.references)) applyMessageReferences(assistant, event.references);
       if (event.status === "completed" && typeof event.response_text === "string") {
         assistant.content = limitAssistantText(event.response_text);
+        assistant.provisionalRecoveryText = false;
         assistant.replayTerminalStatus = "completed";
         return true;
       }
       if (event.status === "stalled" && typeof event.partial_text === "string") {
         assistant.content = limitAssistantText(event.partial_text);
+        assistant.provisionalRecoveryText = false;
         assistant.replayTerminalStatus = "stalled";
         return true;
+      }
+      if (
+        ["queued", "running", "recovering"].includes(String(event.status || ""))
+        && event.partial_text_unverified === true
+        && typeof event.partial_text === "string"
+      ) {
+        assistant.content = limitAssistantText(event.partial_text);
+        assistant.provisionalRecoveryText = true;
       }
       return false;
     }
