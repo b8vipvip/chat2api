@@ -132,9 +132,9 @@
     const ready = composerReady();
     if (ready && signedInEvidence() && document.readyState === "complete") {
       return {
-        account_type: "free",
-        confidence: "medium",
-        strategy: "ready-composer-without-model-selector",
+        account_type: "unknown",
+        confidence: "low",
+        strategy: "ready-composer-without-model-selector-unconfirmed-plan",
         plan_confirmed: false,
         detector: "account-v20",
         model_control_present: false,
