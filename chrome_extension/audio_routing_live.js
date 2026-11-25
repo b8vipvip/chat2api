@@ -225,6 +225,7 @@
           itemId: message.item_id || "",
           text: message.text || "",
           attachments: message.attachments || [],
+          videoFrame: message.video_frame || null,
         });
         if (!response?.ok) throw new Error(response?.error || "Live text/media input was rejected");
       } else if (type === "voice.live.cancel_response") {
