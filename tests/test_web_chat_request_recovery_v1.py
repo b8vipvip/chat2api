@@ -185,6 +185,38 @@ def test_sse_event_replay_is_owner_scoped_and_honors_last_event_id(tmp_path):
         assert "event: delivery.delta" not in future_cursor.text
 
 
+def test_completed_sse_replay_repairs_missing_delivery_terminal_after_crash(tmp_path):
+    app = make_app(tmp_path)
+    request_id = "req_completed_delivery_terminal_repair"
+    final_text = "A fully persisted answer whose terminal marker was interrupted."
+    with TestClient(app) as client:
+        user_id = register(client, "delivery-terminal-repair@example.org")
+        app.state.user_accounts.attach_key(user_id, "key_delivery_terminal_repair")
+        remember(
+            app, request_id, "key_delivery_terminal_repair",
+            status="completed", web_chat_mode=True,
+            response_text=final_text, response_text_available=True,
+        )
+        asyncio.run(app.state.web_chat_event_journal.append_delivery(
+            request_id, "key_delivery_terminal_repair", final_text,
+        ))
+        before = asyncio.run(app.state.web_chat_event_journal.snapshot(
+            request_id, "key_delivery_terminal_repair",
+        ))
+        assert before["terminal_status"] == ""
+
+        replay = client.get(f"/api/user/chat/requests/{request_id}/events")
+        assert replay.status_code == 200, replay.text
+        assert "event: recovery.terminal" in replay.text
+        assert final_text in replay.text
+
+        after = asyncio.run(app.state.web_chat_event_journal.snapshot(
+            request_id, "key_delivery_terminal_repair",
+        ))
+        assert after["terminal_status"] == "completed"
+        assert after["delivered_text"] == final_text
+
+
 def test_recovering_sse_replay_surfaces_unverified_worker_progress_before_terminal(tmp_path):
     app = make_app(tmp_path)
     request_id = "req_recoveryprogress123"
