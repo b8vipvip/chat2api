@@ -2451,12 +2451,35 @@
     if (data.trim() === "[DONE]") return true;
 
     if (eventName === "delivery.delta") {
+      if (assistant.provisionalRecoveryText === true) {
+        assistant.content = "";
+        assistant.provisionalRecoveryText = false;
+      }
       appendDelta(assistant, event.delta);
       return false;
     }
     if (eventName === "recovery.delta") {
       if (event.partial_text_unverified === true && typeof event.delta === "string") {
-        appendDelta(assistant, event.delta);
+        const current = String(assistant.content || "");
+        const offset = Number(event.offset);
+        if (Number.isSafeInteger(offset) && offset >= 0) {
+          if (current.length === offset) {
+            appendDelta(assistant, event.delta);
+            assistant.provisionalRecoveryText = true;
+          } else if (
+            current.length > offset
+            && current.slice(offset, offset + event.delta.length) === event.delta
+          ) {
+            // A reload may restore provisional text but not its event cursor.
+            // Matching the persisted UTF-16 offset makes this duplicate safe.
+            assistant.provisionalRecoveryText = true;
+          }
+          // If the current text is shorter than the offset, or diverges at
+          // that offset, fail closed rather than append a corrupt fragment.
+        } else {
+          appendDelta(assistant, event.delta);
+          assistant.provisionalRecoveryText = true;
+        }
       }
       return false;
     }
@@ -2481,11 +2504,13 @@
         // a shorter replay page overwrite progress already shown to the user.
         if (candidate.length > String(assistant.content || "").length) {
           assistant.content = candidate;
+          assistant.provisionalRecoveryText = true;
         }
       }
       return false;
     }
     if (eventName === "delivery.completed") {
+      assistant.provisionalRecoveryText = false;
       assistant.replayTerminalStatus = "completed";
       return true;
     }
@@ -2503,6 +2528,7 @@
       } else if (typeof event.partial_text === "string" && event.partial_text) {
         assistant.content = limitAssistantText(event.partial_text);
       }
+      assistant.provisionalRecoveryText = false;
       assistant.replayTerminalStatus = status;
       return true;
     }
@@ -2533,6 +2559,10 @@
       assistant.lastEventId = eventCursor;
     }
     if (choice?.delta && Object.prototype.hasOwnProperty.call(choice.delta, "content")) {
+      if (assistant.provisionalRecoveryText === true) {
+        assistant.content = "";
+        assistant.provisionalRecoveryText = false;
+      }
       appendDelta(assistant, choice.delta.content);
     }
     if (choice?.delta?.chat2api_tool) applyToolEvent(assistant,choice.delta.chat2api_tool);
