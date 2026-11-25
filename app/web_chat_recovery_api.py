@@ -379,7 +379,20 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                             ),
                         }
                     else:
-                        payload = {"status": "reset", "terminal": False}
+                        latest_status = str(latest_row.get("status") or "running").lower()
+                        partial_text = _best_partial_text(
+                            snapshot.get("delivered_text"),
+                            snapshot.get("worker_partial_text"),
+                        )
+                        payload = {
+                            "status": latest_status
+                            if latest_status in {"queued", "running", "recovering"}
+                            else "reset",
+                            "terminal": False,
+                        }
+                        if partial_text:
+                            payload["partial_text"] = partial_text
+                            payload["partial_text_unverified"] = True
                     reset_event_id = last_id if payload.get("terminal") is True else int(first_id) - 1
                     yield (
                         f"id: {reset_event_id}\nevent: replay.reset\ndata: "
