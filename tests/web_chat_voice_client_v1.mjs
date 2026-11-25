@@ -697,12 +697,26 @@ await new Promise(resolve=>setImmediate(resolve));
 let noAckFrames = noAckSocket.sent.map(value=>typeof value==="string" ? JSON.parse(value) : null)
   .filter(value=>value?.type==="input_video.frame");
 assert.equal(noAckFrames.length,1);
-noAckSocket.onmessage({data:JSON.stringify({
-  type:"error",code:"LIVE_VIDEO_FRAME_ACK_TIMEOUT",item_id:noAckFrames[0].item_id,
-})});
-clock += 200;
 const noAckCameraTimer = [...intervalCallbacks.values()].find(value=>value.ms===200);
 assert.ok(noAckCameraTimer);
+noAckSocket.onmessage({data:JSON.stringify({
+  type:"input_video.frame.sent",
+  item_id:noAckFrames[0].item_id,
+  sequence:999,
+  timestamp_ms:999,
+})});
+clock += 200;
+noAckCameraTimer.fn();
+await new Promise(resolve=>setTimeout(resolve,10));
+noAckFrames = noAckSocket.sent.map(value=>typeof value==="string" ? JSON.parse(value) : null)
+  .filter(value=>value?.type==="input_video.frame");
+assert.equal(noAckFrames.length,1,
+  "a stale or mismatched frame ACK must not release the current in-flight camera frame");
+noAckSocket.onmessage({data:JSON.stringify({
+  type:"error",code:"LIVE_VIDEO_FRAME_ACK_TIMEOUT",
+  item_id:noAckFrames[0].item_id,retryable:true,
+})});
+clock += 200;
 noAckCameraTimer.fn();
 await new Promise(resolve=>setTimeout(resolve,10));
 await new Promise(resolve=>setImmediate(resolve));
@@ -712,6 +726,74 @@ assert.equal(noAckFrames.length,2,
   "camera capture must resume after the server releases a timed-out in-flight frame");
 assert.equal(noAckFrames[1].sequence,1);
 await noAckClient.stop();
+
+// The client mirrors the server's cumulative 64 MiB budget. Once acknowledged
+// frames consume the budget, it stops before uploading or dispatching another
+// frame instead of producing a stream of non-retryable server errors.
+const budgetSource = source.replace(
+  "const MAX_VIDEO_TOTAL_BYTES = 64 * 1024 * 1024;",
+  "const MAX_VIDEO_TOTAL_BYTES = 200;",
+);
+assert.notEqual(budgetSource,source,"the client must expose a bounded total-frame byte budget");
+const budgetWindow = {
+  WebSocket:FakeWebSocket,
+  AudioContext:FakeAudioContext,
+  navigator:{mediaDevices},
+  location:window.location,
+  document:fakeDocument,
+  fetch:fetcher,
+  btoa:window.btoa,
+  setTimeout,clearTimeout,setInterval,clearInterval,
+};
+const budgetSandbox = vm.createContext({
+  window:budgetWindow,URL,Blob,ArrayBuffer,DataView,Uint8Array,Float32Array,
+  Number,String,Math,Set,Promise,Date,TypeError,Error,btoa:window.btoa,
+});
+vm.runInContext(budgetSource,budgetSandbox);
+const budgetApi = budgetWindow.Chat2APIVoiceClientV1;
+const budgetIntervals = new Map();
+let budgetIntervalId = 0;
+let budgetClock = 1000;
+const budgetEvents = [];
+const budgetClient = budgetApi.create({
+  apiToken:"managed-key",
+  fetcher,
+  WebSocketImpl:FakeWebSocket,
+  AudioContextImpl:FakeAudioContext,
+  mediaDevices,
+  location:window.location,
+  timers:{
+    setTimeout,clearTimeout,
+    setInterval(fn,ms){const id=++budgetIntervalId;budgetIntervals.set(id,{fn,ms});return id;},
+    clearInterval(id){budgetIntervals.delete(id);},
+  },
+  now:()=>budgetClock,
+  onEvent:event=>budgetEvents.push(event),
+});
+const uploadsBeforeBudget = uploads.length;
+await budgetClient.start();
+const budgetSocket = FakeWebSocket.last;
+await budgetClient.startCamera(video);
+await new Promise(resolve=>setTimeout(resolve,10));
+await new Promise(resolve=>setImmediate(resolve));
+let budgetFrames = budgetSocket.sent.map(value=>typeof value==="string" ? JSON.parse(value) : null)
+  .filter(value=>value?.type==="input_video.frame");
+assert.equal(budgetFrames.length,1);
+budgetClock = 1200;
+const budgetTimer = [...budgetIntervals.values()].find(value=>value.ms===200);
+assert.ok(budgetTimer);
+budgetTimer.fn();
+await new Promise(resolve=>setTimeout(resolve,10));
+await new Promise(resolve=>setImmediate(resolve));
+budgetFrames = budgetSocket.sent.map(value=>typeof value==="string" ? JSON.parse(value) : null)
+  .filter(value=>value?.type==="input_video.frame");
+assert.equal(budgetFrames.length,1,
+  "a frame that would exceed the total byte budget must not be uploaded or sent");
+assert.equal(uploads.length,uploadsBeforeBudget+1);
+assert.equal(budgetClient.isCameraActive(),false);
+assert.ok(budgetEvents.some(value=>value.type==="client.notice" &&
+  value.message.includes("总数据量上限")));
+await budgetClient.stop();
 
 // The setup acknowledgement may repeat the previous assistant's exact text.
 // It must be recognized as a new message by identity, not rejected by text equality.
