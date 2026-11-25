@@ -186,6 +186,8 @@
       // ACK schedules the next event for that request. This timer retries
       // events whose ACK was lost and services the next independent request.
       if (state.events.size) scheduleFlush(nextWait);
+      // A pending terminal may have been waiting on an event that just expired.
+      globalThis.__CHAT2API_BACKGROUND_TRANSPORT_RECOVERY_V47__?.scheduleFlush?.(0);
       return sentAny;
     } finally {
       state.flushing = false;
