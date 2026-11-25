@@ -146,6 +146,18 @@ assert.ok(posted.some(message=>
   message.sequence===0 && message.timestamp_ms===1000),
 "the Worker must acknowledge the exact rendered frame sequence and timestamp");
 
+dispatch("voice.live.video.frame",{
+  base64:"AA==",
+  mime_type:"image/jpeg",
+  sequence:0,
+  timestamp_ms:1001,
+});
+await new Promise(resolve=>setImmediate(resolve));
+assert.equal(drawCalls,1,"duplicate frame sequence must never overwrite a newer camera frame");
+assert.ok(posted.some(message=>
+  message.type==="voice.live.video.error" && message.sequence===0),
+"duplicate sequence must return a bounded frame-level error");
+
 const audioOnly = await mediaDevices.getUserMedia({audio:true,video:false});
 assert.deepEqual(audioOnly.getAudioTracks(),[audioTrack]);
 assert.deepEqual(audioOnly.getVideoTracks(),[],
