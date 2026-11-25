@@ -608,6 +608,55 @@ def test_worker_event_journal_deduplicates_replayed_deltas_by_source_id(tmp_path
     asyncio.run(scenario())
 
 
+def test_tool_event_metadata_citations_are_journaled_before_broker_normalization(tmp_path):
+    async def scenario():
+        journal = WebChatEventJournal(tmp_path)
+        await journal.open()
+        request_id = "req_tool_metadata_citations"
+        owner = "key-tool-metadata-citations"
+        event = {
+            "type": "chat.tool.result",
+            "worker_event_id": f"{request_id}:tool-result:call-1",
+            "tool_name": "browser.search",
+            "call_id": "call-1",
+            "result_id": "result-1",
+            "status": "completed",
+            "output": "Found the API docs",
+            "metadata": {
+                "annotations": [{
+                    "type": "url_citation",
+                    "url_citation": {
+                        "url": "https://docs.python.org/3/library/",
+                        "title": "Python library reference",
+                        "ref_id": "turn0search0",
+                    },
+                }],
+            },
+        }
+        first_id = await journal.append_worker_event(request_id, owner, event)
+        # Broker normalization can call the same journal append again with an
+        # explicit references array. It must not erase the metadata captured
+        # by the pre-publication Worker journal write.
+        duplicate_id = await journal.append_worker_event(
+            request_id, owner,
+            {
+                **event,
+                "references": [{
+                    "url": "https://docs.python.org/3/library/",
+                    "title": "Python library reference",
+                    "id": "turn0search0",
+                }],
+            },
+        )
+        assert duplicate_id == first_id
+        snapshot = await journal.snapshot(request_id, owner)
+        assert snapshot["references"][0]["url"] == "https://docs.python.org/3/library/"
+        page = await journal.events_after(request_id, owner, 0, limit=8)
+        assert page["events"][0]["data"]["references"][0]["id"] == "turn0search0"
+
+    asyncio.run(scenario())
+
+
 def test_worker_event_dedupe_and_citations_survive_event_window_pruning(tmp_path, monkeypatch):
     async def scenario():
         monkeypatch.setattr(event_journal_module, "_MAX_EVENTS_PER_REQUEST", 1)
