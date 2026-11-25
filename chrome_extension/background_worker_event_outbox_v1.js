@@ -60,12 +60,14 @@
     );
   }
 
+  const utf8Encoder = new TextEncoder();
+
   async function persist() {
     const rows = orderedRows();
     if (rows.length > MAX_EVENTS) return false;
     let bytes = 0;
     try {
-      for (const row of rows) bytes += JSON.stringify(row.payload).length;
+      for (const row of rows) bytes += utf8Encoder.encode(JSON.stringify(row.payload)).length;
     } catch { return false; }
     if (bytes > MAX_BYTES) return false;
     try {
