@@ -664,6 +664,9 @@ class RequestBroker:
                 references = extract_tool_references(event.get("metadata"))
                 if references:
                     normalized["references"] = references
+            event_cursor = event.get("event_id")
+            if isinstance(event_cursor, int) and event_cursor > 0:
+                normalized["event_id"] = event_cursor
             event = normalized
         elif event_type == "chat.references":
             # Final-message citation metadata is an auxiliary Mode 1 lane.
