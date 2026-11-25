@@ -196,8 +196,8 @@
           <span id="adminUserStatus" class="muted"></span>
         </div>
         <div class="scroll"><table>
-          <thead><tr><th>邮箱</th><th>昵称</th><th>用户 ID</th><th>状态</th><th>注册时间</th><th>API Key</th><th>会话</th><th>余额</th><th>操作</th></tr></thead>
-          <tbody id="adminUsersBody"><tr><td colspan="9" class="muted">打开用户管理后加载</td></tr></tbody>
+          <thead><tr><th>邮箱</th><th>昵称</th><th>用户 ID</th><th>类型</th><th>状态</th><th>system_role</th><th>注册时间</th><th>API Key</th><th>会话</th><th>余额</th><th>操作</th></tr></thead>
+          <tbody id="adminUsersBody"><tr><td colspan="11" class="muted">打开用户管理后加载</td></tr></tbody>
         </table></div>
       </div>
       <div class="panel" id="adminUserKeysPanel" style="display:none;margin-top:14px">
@@ -335,7 +335,7 @@
   function renderUsers() {
     const body = document.getElementById("adminUsersBody");
     if (!adminUserRows.length) {
-      body.innerHTML = '<tr><td colspan="9" class="muted">暂无匹配用户</td></tr>';
+      body.innerHTML = '<tr><td colspan="11" class="muted">暂无匹配用户</td></tr>';
       document.getElementById("adminUserPage").textContent = "0-0 / " + adminUserTotal;
       document.getElementById("adminUserPrev").disabled = true;
       document.getElementById("adminUserNext").disabled = true;
@@ -344,15 +344,22 @@
     body.innerHTML = adminUserRows.map((user) => {
       const enabled = Boolean(user.enabled);
       const balance = user.balance_cents == null ? "—" : "¥" + (Number(user.balance_cents) / 100).toFixed(2);
+      const role = String(user.system_role || "user");
+      const roleCell = canWriteUsers()
+        ? '<div class="rowactions"><input data-user-role type="text" maxlength="64" aria-label="用户 system_role" value="' + esc(role) + '" style="width:110px"><button class="action" data-user-action="role" data-user-id="' + esc(user.user_id) + '">保存角色</button></div>'
+        : '<code>' + esc(role) + '</code>';
       const writeActions = canWriteUsers()
         ? '<button class="action ' + (enabled ? 'danger' : 'good') + '" data-user-action="toggle" data-user-id="' + esc(user.user_id) + '" data-enabled="' + (enabled ? 'false' : 'true') + '">' + (enabled ? '停用' : '启用') + '</button>' +
-          '<button class="action" data-user-action="revoke" data-user-id="' + esc(user.user_id) + '">撤销会话</button>'
+          '<button class="action" data-user-action="revoke" data-user-id="' + esc(user.user_id) + '">撤销会话</button>' +
+          (!user.is_guest ? '<button class="action" data-user-action="password" data-user-id="' + esc(user.user_id) + '">修改密码</button>' : '')
         : '';
       return '<tr>' +
         '<td>' + esc(user.email) + '</td>' +
         '<td>' + esc(user.display_name) + '</td>' +
         '<td><code>' + esc(user.user_id) + '</code></td>' +
+        '<td>' + (user.is_guest ? '游客' : '注册用户') + '</td>' +
         '<td><span class="pill ' + (enabled ? 'ok' : 'bad') + '">' + (enabled ? '正常' : '已停用') + '</span></td>' +
+        '<td>' + roleCell + '</td>' +
         '<td>' + esc(user.created_at || '-') + '</td>' +
         '<td>' + Number(user.key_count || 0) + '</td>' +
         '<td>' + Number(user.active_sessions || 0) + '</td>' +
@@ -454,6 +461,59 @@
       button.disabled = false;
     }
   });
+  let pendingPasswordUserId = "";
+
+  function openUserPasswordDialog(userId) {
+    if (!canWriteUsers()) return;
+    const user = adminUserRows.find((row) => row.user_id === String(userId || ""));
+    if (!user || user.is_guest) return;
+    pendingPasswordUserId = user.user_id;
+    document.getElementById("userPasswordTarget").textContent = user.email + " · " + user.user_id;
+    document.getElementById("userPasswordNew").value = "";
+    document.getElementById("userPasswordConfirm").value = "";
+    document.getElementById("userPasswordStatus").textContent = "";
+    document.getElementById("userPasswordDialog").showModal();
+    document.getElementById("userPasswordNew").focus();
+  }
+
+  function closeUserPasswordDialog() {
+    const dialog = document.getElementById("userPasswordDialog");
+    if (dialog?.open) dialog.close();
+    pendingPasswordUserId = "";
+  }
+
+  document.getElementById("userPasswordDialogClose")?.addEventListener("click", closeUserPasswordDialog);
+  document.getElementById("userPasswordDialogCancel")?.addEventListener("click", closeUserPasswordDialog);
+  document.getElementById("userPasswordDialogSave")?.addEventListener("click", async () => {
+    const password = document.getElementById("userPasswordNew").value;
+    const confirmation = document.getElementById("userPasswordConfirm").value;
+    const status = document.getElementById("userPasswordStatus");
+    if (!pendingPasswordUserId || !canWriteUsers()) return;
+    if (password.length < 8 || password.length > 256) {
+      status.textContent = "密码长度需要为 8-256 个字符";
+      return;
+    }
+    if (password !== confirmation) {
+      status.textContent = "两次输入的密码不一致";
+      return;
+    }
+    const button = document.getElementById("userPasswordDialogSave");
+    button.disabled = true;
+    try {
+      const result = await adminApi("/api/admin/users/" + encodeURIComponent(pendingPasswordUserId) + "/password", {
+        method: "POST", body: JSON.stringify({new_password: password})
+      });
+      const revoked = Number(result.revoked_sessions || 0);
+      document.getElementById("adminUserStatus").textContent = "密码已更新，已撤销 " + revoked + " 个现有会话";
+      closeUserPasswordDialog();
+      await loadUsers();
+    } catch (error) {
+      status.textContent = "修改密码失败：" + error.message;
+    } finally {
+      button.disabled = false;
+    }
+  });
+
   document.getElementById("adminUsersBody").addEventListener("click", async (event) => {
     const button = event.target.closest("[data-user-action]");
     if (!button) return;
@@ -464,6 +524,18 @@
     try {
       if (action === "keys") {
         await loadUserKeys(userId);
+      } else if (action === "role") {
+        if (!canWriteUsers()) throw new Error("当前管理员角色无权修改用户角色");
+        const input = button.closest("tr")?.querySelector("[data-user-role]");
+        const systemRole = String(input?.value || "").trim();
+        if (!systemRole) throw new Error("system_role 不能为空");
+        const result = await adminApi("/api/admin/users/" + encodeURIComponent(userId) + "/role", {
+          method: "PUT", body: JSON.stringify({system_role: systemRole})
+        });
+        status.textContent = "用户角色已更新为 " + result.user.system_role;
+        await loadUsers();
+      } else if (action === "password") {
+        openUserPasswordDialog(userId);
       } else if (action === "toggle") {
         const enabled = button.dataset.enabled === "true";
         const prompt = enabled

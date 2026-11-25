@@ -7,8 +7,6 @@
     "client-policy": ["super_admin", "system_admin"],
     "client-logs": ["super_admin", "system_admin", "support"],
     "registration-invitations": ["super_admin", "system_admin", "user_admin"],
-    "tenants": ["super_admin", "system_admin"],
-    "user-roles": ["super_admin", "user_admin"],
     "subscriptions": ["super_admin", "billing_admin"],
     "model-entitlements": ["super_admin", "system_admin", "support"],
     "plugins": ["super_admin", "plugin_admin"],
@@ -19,7 +17,7 @@
     "admin-users": ["super_admin", "user_admin", "system_admin", "support"]
   };
   const WEB_USER_NAV_ITEMS = [
-    "client-policy", "client-logs", "registration-invitations", "tenants", "user-roles",
+    "client-policy", "client-logs", "registration-invitations",
     "subscriptions", "model-entitlements", "plugins", "quota-ledger",
     "user-pricing", "user-payments", "admin-users"
   ];
@@ -369,8 +367,6 @@
     if (view === "control-admins") loadAdmins();
     if (view === "client-policy") loadClientPolicy();
     if (view === "registration-invitations") loadInvitations();
-    if (view === "tenants") loadTenants();
-    if (view === "user-roles") loadUserRoles();
     if (view === "subscriptions") loadSubscriptions();
     if (view === "model-entitlements") loadEntitlements();
     if (view === "plugins") loadPlugins();
@@ -473,6 +469,7 @@
       $("cClientDomain").value = data.client_domain || "";
       $("cRegistrationMode").value = data.registration_mode;
       $("cWebChatEnabled").value = String(data.web_chat_enabled);
+      $("cGuestEnabled").value = String(data.guest_enabled === true);
       $("cAnnouncement").value = data.announcement || "";
       $("cClientApiKey").value = "";
       $("cClientClearApiKey").checked = false;
@@ -491,6 +488,7 @@
         client_domain: $("cClientDomain").value.trim(),
         registration_mode: $("cRegistrationMode").value,
         web_chat_enabled: $("cWebChatEnabled").value === "true",
+        guest_enabled: $("cGuestEnabled").value === "true",
         announcement: $("cAnnouncement").value
       };
       const apiKey = $("cClientApiKey").value.trim();
