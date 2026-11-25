@@ -185,6 +185,44 @@ def test_sse_event_replay_is_owner_scoped_and_honors_last_event_id(tmp_path):
         assert "event: delivery.delta" not in future_cursor.text
 
 
+def test_running_sse_replay_resumes_durable_worker_deltas_from_cursor(tmp_path):
+    app = make_app(tmp_path)
+    request_id = "req_running_worker_delta_replay"
+    with TestClient(app) as client:
+        user_id = register(client, "worker-delta-replay@example.org")
+        key_id = "key_worker_delta_replay"
+        app.state.user_accounts.attach_key(user_id, key_id)
+        remember(
+            app, request_id, key_id, status="running",
+            web_chat_mode=True, response_text="", response_text_available=False,
+        )
+        first_id = asyncio.run(app.state.web_chat_event_journal.append_worker_event(
+            request_id, key_id,
+            {"type": "chat.delta", "worker_event_id": f"{request_id}:1", "delta": "already received "},
+        ))
+        second_id = asyncio.run(app.state.web_chat_event_journal.append_worker_event(
+            request_id, key_id,
+            {"type": "chat.delta", "worker_event_id": f"{request_id}:2", "delta": "missing suffix"},
+        ))
+
+        received = []
+        with client.stream(
+            "GET",
+            f"/api/user/chat/requests/{request_id}/events",
+            headers={"Last-Event-ID": str(first_id)},
+        ) as replay:
+            assert replay.status_code == 200
+            for line in replay.iter_lines():
+                received.append(line)
+                if line.startswith("data: ") and "missing suffix" in line:
+                    break
+
+        body = "\n".join(received)
+        assert f"id: {second_id}\nevent: recovery.delta" in body
+        assert "already received" not in body
+        assert '"partial_text_unverified":true' in body
+
+
 def test_completed_sse_replay_repairs_missing_delivery_terminal_after_crash(tmp_path):
     app = make_app(tmp_path)
     request_id = "req_completed_delivery_terminal_repair"
