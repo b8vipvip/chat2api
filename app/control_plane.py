@@ -37,6 +37,7 @@ ITERATIONS = 310_000
 DEFAULT_CLIENT = {
     "registration_mode": "open",
     "web_chat_enabled": True,
+    "guest_enabled": False,
     "announcement": "",
     "client_domain": "",
     # Only the managed-key ID is persisted here. The secret remains in the
@@ -93,6 +94,8 @@ def permission_for_admin_route(path: str, method: str) -> str | None:
         return "tenants:" + suffix
     if re.fullmatch(r"/api/admin/users/[^/]+/role", path):
         return "users:" + suffix
+    if re.fullmatch(r"/api/admin/users/[^/]+/password", path):
+        return "users:write"
     if path == "/api/admin/subscription-plans" or re.fullmatch(
         r"/api/admin/subscription-plans/[^/]+", path
     ) or re.fullmatch(r"/api/admin/users/[^/]+/subscription", path):
@@ -318,6 +321,8 @@ class ControlPlaneStore:
             raise ControlPlaneError("registration_mode must be open, closed or invite_only")
         if type(payload.get("web_chat_enabled")) is not bool:
             raise ControlPlaneError("web_chat_enabled must be a boolean")
+        if type(payload.get("guest_enabled", False)) is not bool:
+            raise ControlPlaneError("guest_enabled must be a boolean")
         announcement = payload.get("announcement")
         if not isinstance(announcement, str) or len(announcement) > 500:
             raise ControlPlaneError("announcement must be a string up to 500 characters")

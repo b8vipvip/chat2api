@@ -31,6 +31,12 @@
         <div class="scroll"><table><thead><tr><th>模型</th><th>状态</th><th>模型来源</th><th>多模态能力证据</th><th>可尝试调用 Worker</th><th>管理</th></tr></thead>
           <tbody id="modelTableV147"></tbody></table></div>
       </div>
+      <div class="panel" id="modelAvailableModelsPanelV147" style="margin-top:14px">
+        <h3>可用模型</h3>
+        <div class="muted" id="modelAvailableModelsStatusV147">等待同步模型任务结果…</div>
+        <div class="scroll"><table><thead><tr><th>模型</th><th>Worker 来源</th><th>Worker 数</th><th>说明</th></tr></thead>
+          <tbody id="modelAvailableModelsTableV147"><tr><td colspan="4">尚未同步可用模型。</td></tr></tbody></table></div>
+      </div>
       <div class="panel" style="margin-top:14px">
         <h3>当前模型任务进度</h3><div class="muted">展示手动和定时同步任务；Worker 错误、步骤日志按任务保留并可导出。</div>
         <div class="scroll"><table><thead><tr><th>任务 ID / 目标</th><th>Worker</th><th>进度</th><th>结果 / 错误</th><th>日志</th></tr></thead>
@@ -178,6 +184,33 @@
           ${button(row.enabled?"停用":"启用","data-model-toggle",row.id,
             'data-model-enable="'+(!row.enabled)+'"')}</div></td></tr>`;
     }).join("")||'<tr><td colspan="6">暂无来自 Worker 的模型同步记录。点击「同步模型」执行任务。</td></tr>';
+    const availableRows = Array.isArray(tasks.available_models) ? tasks.available_models : [];
+    const availableTask = tasks.available_models_task || null;
+    const availableStatus = el("modelAvailableModelsStatusV147");
+    if (availableStatus) {
+      const stateLabel = {
+        completed: "最近一次同步已完成",
+        partial: "最近一次同步部分 Worker 成功",
+        running: "最近一次同步仍在执行",
+        failed: "最近一次同步未取得成功结果",
+        not_started: "尚未执行同步",
+      }[availableTask?.state || "not_started"];
+      availableStatus.textContent = stateLabel
+        + (availableTask ? " · 任务 " + availableTask.id + " · " + availableTask.completed_workers + "/" + availableTask.total_workers + " 个 Worker 完成" : "")
+        + " · Free 默认模型映射：" + (tasks.available_models_default_mapping || defaultModel || "未配置");
+    }
+    const availableBox = el("modelAvailableModelsTableV147");
+    if (availableBox) availableBox.innerHTML = availableRows.map(row => {
+      const workerNames = (row.workers || []).map(worker =>
+        esc(worker.name || worker.client_id) + " <small class=\"muted\">(" + (worker.online ? "在线" : "最近同步") + ")</small>"
+      ).join("<br>") || "—";
+      const description = row.is_default_only
+        ? "Free 账号页面默认选项；实际模型名称不可见，按上方默认模型映射路由"
+        : "来自 Worker 最近一次同步返回的模型菜单";
+      return "<tr><td><code>" + esc(row.id) + "</code><div class=\"muted\">" + esc(row.label) + "</div></td>"
+        + "<td>" + workerNames + "</td><td>" + Number(row.worker_count || 0) + "</td>"
+        + "<td>" + esc(description) + "</td></tr>";
+    }).join("") || '<tr><td colspan="4">最近一次同步没有返回可用模型。点击「同步模型」重新获取。</td></tr>';
     const hist=tasks.data||[];
     const current=hist[0]||null;
     const prog=el("modelTaskProgressV147");

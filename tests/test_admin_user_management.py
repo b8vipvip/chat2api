@@ -10,6 +10,8 @@ from app.config import Settings
 from app.main import create_app
 from app.user_commerce import USER_SESSION_COOKIE
 from app.user_console_v104_patch import install_user_console_v104_patch
+from app.model_entitlement_v1_patch import install_model_entitlements
+from app.tenant_membership import TenantMembershipStore
 from app.v17_patch import install_v17_patch
 
 
@@ -262,3 +264,46 @@ def test_admin_can_update_quota_disable_and_permanently_revoke_only_owned_api_ke
         assert "api_key.revoke_requested" in actions
         assert "api_key.revoke_completed" in actions
         assert token not in audit.text
+
+
+def test_admin_can_change_user_role_and_password_with_session_revocation(tmp_path: Path) -> None:
+    app = _production_admin_app(tmp_path)
+    app.state.tenant_memberships = TenantMembershipStore(tmp_path)
+    install_model_entitlements(app)
+    with TestClient(app) as client:
+        _admin_login(client)
+        accounts = app.state.user_accounts
+        user = accounts.register("password-reset@example.com", "user-password-long", "Password Reset")
+        user_id = user["user_id"]
+        client.cookies.set(USER_SESSION_COOKIE, accounts.create_session(user_id))
+        assert client.get("/api/user/me").status_code == 200
+        origin = {"Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"}
+
+        role = client.put(
+            f"/api/admin/users/{user_id}/role",
+            headers=origin,
+            json={"system_role": "seller_ops"},
+        )
+        assert role.status_code == 200, role.text
+        assert role.json()["user"]["system_role"] == "seller_ops"
+
+        changed = client.post(
+            f"/api/admin/users/{user_id}/password",
+            headers=origin,
+            json={"new_password": "new-user-password-long"},
+        )
+        assert changed.status_code == 200, changed.text
+        assert changed.json()["user"]["user_id"] == user_id
+        assert changed.json()["revoked_sessions"] == 1
+        assert client.get("/api/user/me").status_code == 401
+        assert accounts.verify("password-reset@example.com", "user-password-long") is None
+        assert accounts.verify("password-reset@example.com", "new-user-password-long")["user_id"] == user_id
+
+        audit = client.get("/api/admin/audit?limit=30")
+        assert audit.status_code == 200
+        actions = [row["action"] for row in audit.json()["data"]]
+        assert "user.system_role_update_requested" in actions
+        assert "user.system_role_update_completed" in actions
+        assert "user.password_reset_requested" in actions
+        assert "user.password_reset_completed" in actions
+        assert "new-user-password-long" not in audit.text

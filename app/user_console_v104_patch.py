@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
+import time
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -14,7 +15,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field, StrictInt
 
-from .admin_auth import SESSION_COOKIE as ADMIN_SESSION_COOKIE
+from .admin_auth import SESSION_COOKIE as ADMIN_SESSION_COOKIE, same_origin_admin_request
 from .admin_audit import AdminAuditError, AdminAuditStore
 from .api_keys import load_or_create_data_secret, token_hash
 from .responses_multimodal_input_v183 import verify_raster_image
@@ -70,6 +71,20 @@ class PricingBody(BaseModel):
 
 class AdminUserStatusBody(BaseModel):
     enabled: bool
+
+
+class AdminUserRoleBody(BaseModel):
+    system_role: str = Field(min_length=1, max_length=64)
+
+    class Config:
+        extra = "forbid"
+
+
+class AdminUserPasswordBody(BaseModel):
+    new_password: str = Field(min_length=8, max_length=256)
+
+    class Config:
+        extra = "forbid"
 
 
 class AdminUserKeyUpdateBody(BaseModel):
@@ -223,7 +238,9 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
     def current_user(request: Request) -> dict[str, Any]:
         user = accounts.authenticate(request.cookies.get(USER_SESSION_COOKIE))
         if not user:
-            raise HTTPException(status_code=401, detail="请先登录用户控制台")
+            raise HTTPException(status_code=401, detail="请先登录账户")
+        if user.get("is_guest") and request.url.path != "/api/user/me":
+            raise HTTPException(status_code=403, detail="游客账户仅支持 Web Chat")
         return user
 
     def public_key(item: dict[str, Any]) -> dict[str, Any]:
@@ -348,8 +365,12 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
 
     telemetry.upsert = metered_upsert
 
+    @app.get("/settings", include_in_schema=False)
     @app.get("/console", include_in_schema=False)
-    async def user_console() -> HTMLResponse:
+    async def user_console(request: Request) -> Response:
+        session_user = accounts.authenticate(request.cookies.get(USER_SESSION_COOKIE))
+        if session_user and session_user.get("is_guest"):
+            return RedirectResponse("/chat", status_code=303)
         template = Path(__file__).with_name("user_console_v104.html").read_text(encoding="utf-8")
         return HTMLResponse(template, headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
 
@@ -495,6 +516,66 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
         token = accounts.create_session(str(user["user_id"]))
         response = JSONResponse({"ok": True, "user": user})
         response.set_cookie(USER_SESSION_COOKIE, token, httponly=True, secure=request.url.scheme == "https", samesite="lax", max_age=accounts.session_ttl_seconds, path="/")
+        return response
+
+    guest_session_attempts: dict[str, list[float]] = {}
+
+    @app.post("/api/user/guest-session")
+    async def user_guest_session(request: Request) -> JSONResponse:
+        if not same_origin_admin_request(request):
+            raise HTTPException(status_code=403, detail="请求来源无效")
+        control = getattr(app.state, "control_plane", None)
+        if control is None:
+            raise HTTPException(status_code=503, detail="Web Chat 服务尚未完成服务端配置")
+        client_policy = control.public_client()
+        if client_policy.get("web_chat_enabled") is not True:
+            raise HTTPException(status_code=403, detail="Web Chat 当前已由管理员停用")
+        if client_policy.get("guest_enabled") is not True:
+            raise HTTPException(status_code=403, detail="游客使用已关闭，请登录账户")
+        api_keys = getattr(app.state, "api_keys", None)
+        configured_key_id = control.client_api_key_id()
+        if not configured_key_id or api_keys is None:
+            raise HTTPException(status_code=503, detail="管理员尚未配置 Web Chat 统一 API Key")
+        shared = await api_keys.authenticate_key_id(configured_key_id)
+        if shared is None or not {"chat", "models"}.issubset(set(shared.scopes)):
+            raise HTTPException(status_code=503, detail="Web Chat 统一 API Key 已失效或权限不足")
+        # Guest identities are short-lived. Reap their hidden Web Chat keys
+        # before deleting the account rows so a transient key-store failure
+        # leaves the account eligible for cleanup on the next guest request.
+        cleanup_time = time.time()
+        expired_guest_ids = accounts.expired_guest_user_ids(now=cleanup_time)
+        try:
+            for expired_user_id in expired_guest_ids:
+                await api_keys.purge_web_chat_user_key(expired_user_id)
+            accounts.purge_expired_guest_accounts(now=cleanup_time)
+        except (OSError, RuntimeError, ValueError) as error:
+            raise HTTPException(status_code=503, detail="游客会话清理暂不可用，请稍后重试") from error
+        existing = accounts.authenticate(request.cookies.get(USER_SESSION_COOKIE))
+        if existing is not None:
+            return JSONResponse(
+                {"ok": True, "user": existing, "guest": bool(existing.get("is_guest"))},
+                headers={"Cache-Control": "no-store"},
+            )
+        host = str(request.client.host if request.client else "unknown")
+        now = time.monotonic()
+        recent = [stamp for stamp in guest_session_attempts.get(host, []) if now - stamp < 60]
+        if len(recent) >= 12:
+            raise HTTPException(status_code=429, detail="游客会话创建过于频繁，请稍后重试")
+        recent.append(now)
+        guest_session_attempts[host] = recent
+        try:
+            user, token, max_age = accounts.create_guest_session()
+        except OSError as error:
+            raise HTTPException(status_code=503, detail="暂时无法创建游客会话，请稍后重试") from error
+        response = JSONResponse(
+            {"ok": True, "user": user, "guest": True},
+            headers={"Cache-Control": "no-store"},
+        )
+        response.set_cookie(
+            USER_SESSION_COOKIE, token, httponly=True,
+            secure=request.url.scheme == "https", samesite="lax",
+            max_age=max_age, path="/",
+        )
         return response
 
     @app.post("/api/user/logout")
@@ -909,7 +990,7 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
 
     @app.get("/api/user/payments/zpay/return", include_in_schema=False)
     async def zpay_return() -> RedirectResponse:
-        return RedirectResponse("/console#billing", status_code=303)
+        return RedirectResponse("/settings#billing", status_code=303)
 
     @app.get("/api/admin/users")
     async def admin_users(
@@ -944,6 +1025,39 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
                 row["reserved_cents"] = billing.reserved_cents(user_id)
                 row["available_balance_cents"] = billing.available_balance_cents(user_id)
         return {"data": page, "total": total, "limit": limit, "offset": offset}
+
+    @app.post("/api/admin/users/{user_id}/password")
+    async def admin_update_user_password(
+        user_id: str, body: AdminUserPasswordBody, request: Request, response: Response
+    ) -> dict[str, Any]:
+        if not admin_ok(request):
+            raise HTTPException(status_code=401, detail="Administrator login required")
+        audit_context = {
+            "actor": admin_actor(request),
+            "action": "user.password_reset_requested",
+            "target_type": "user",
+            "target_id": user_id,
+            "request_id": str(request.headers.get("x-request-id") or ""),
+            "details": {"password_changed": True},
+        }
+        mutation_applied = False
+        try:
+            admin_audit.append(**audit_context)
+            user, revoked_sessions = accounts.set_password(user_id, body.new_password)
+            mutation_applied = True
+            admin_audit.append(**{
+                **audit_context,
+                "action": "user.password_reset_completed",
+                "details": {"password_changed": True, "revoked_sessions": revoked_sessions},
+            })
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except AdminAuditError as error:
+            detail = "用户密码已更新，但完成审计事件写入失败；请检查服务端审计日志" if mutation_applied else "审计存储不可用，用户密码未修改"
+            raise HTTPException(status_code=503, detail=detail) from error
+        return {"user": user, "revoked_sessions": revoked_sessions}
 
     @app.patch("/api/admin/users/{user_id}")
     async def admin_update_user(

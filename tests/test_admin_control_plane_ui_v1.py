@@ -7,7 +7,7 @@ from app.admin_control_plane_ui_v1_patch import install_admin_control_plane_ui_v
 
 
 def test_admin_console_exposes_c_views_and_one_control_plane_asset():
-    html = admin_response("tenants").body.decode("utf-8")
+    html = admin_response("client-policy").body.decode("utf-8")
     assert 'data-view="control-admins"' in html
     assert 'data-view="client-policy"' in html
     assert 'data-view="client-logs"' in html
@@ -20,14 +20,16 @@ def test_admin_console_exposes_c_views_and_one_control_plane_asset():
     assert 'id="cClientDomain"' in html
     assert 'placeholder="https://chat.example.com"' in html
     assert 'id="cClientApiKey"' in html
+    assert 'id="cGuestEnabled"' in html
+    assert 'id="userPasswordDialog"' in html
     assert 'id="cClientClearApiKey"' in html
     assert "Web Chat 统一 API Key" in html
     assert "客户端配置仅保存密钥 ID 引用" in html
     assert 'value="invite_only"' in html
-    assert 'data-view="tenants"' in html
-    assert 'data-view="user-roles"' in html
+    assert 'data-view="tenants"' not in html
+    assert 'data-view="user-roles"' not in html
     assert 'data-view="subscriptions"' in html
-    assert 'id="view-user-roles"' in html
+    assert 'id="view-user-roles"' not in html
     assert 'id="view-subscriptions"' in html
     assert 'data-view="model-entitlements"' in html
     assert 'data-view="plugins"' in html
@@ -37,12 +39,11 @@ def test_admin_console_exposes_c_views_and_one_control_plane_asset():
     assert 'id="view-api-keys"' in html
     assert 'id="view-users"' not in html
     assert 'id="view-quota-ledger"' in html
-    assert 'id="view-tenants"' in html
+    assert 'id="view-tenants"' not in html
     assert 'id="view-model-entitlements"' in html
     assert 'value="tenant_role"' in html
     assert 'value="user_role"' in html
     assert 'value="subscription_plan"' in html
-    assert 'id="cUserRoleRows"' in html
     assert 'id="cSubHistory"' in html
     assert '/assets/chat2api-control-plane-admin-v1.js' in html
     assert 'id="adminSessionLoginDialog"' in html
@@ -87,7 +88,7 @@ def test_control_plane_ui_asset_is_served_with_safe_cache_and_content_headers():
         assert 'body.clear_api_key = true' in response.text
         assert 'cClientApiKeyStatus' in response.text
         assert "/api/admin/control/invitations" in response.text
-        assert '"user-roles": ["super_admin", "user_admin"]' in response.text
+        assert '"user-roles": ["super_admin", "user_admin"]' not in response.text
         assert '"subscriptions": ["super_admin", "billing_admin"]' in response.text
         assert "/api/admin/users/" in response.text
         assert "/role" in response.text
@@ -185,11 +186,16 @@ def test_web_user_navigation_is_grouped_and_duplicate_api_key_entry_is_removed()
     source = (root / "app" / "admin_control_plane_admin_v1.js").read_text(encoding="utf-8")
     assert 'group.dataset.navGroup = "web-user"' in source
     for view in (
-        "client-policy", "registration-invitations", "tenants", "user-roles",
+        "client-policy", "registration-invitations",
         "subscriptions", "model-entitlements", "plugins", "quota-ledger",
         "user-pricing", "user-payments", "admin-users",
     ):
         assert f'"{view}"' in source
+    assert '"tenants"' not in source
+    assert '"user-roles"' not in source
+    assert "selectedTenantId" not in source
+    assert "loadTenants" not in source
+    assert "/api/admin/tenants" not in source
     assert 'webGroup.hidden = visibleItems.length === 0' in source
     assert 'loginButton.hidden = authenticated' in source
     assert 'logoutButton.hidden = !authenticated' in source
@@ -240,3 +246,12 @@ def test_web_chat_client_diagnostics_admin_asset_uses_safe_dom_and_range_exports
     assert 'DOMContentLoaded' in source
     c_track = (root / "app" / "admin_control_plane_admin_v1.js").read_text(encoding="utf-8")
     assert '"client-logs": ["super_admin", "system_admin", "support"]' in c_track
+
+
+def test_user_admin_default_is_the_consolidated_user_management_view():
+    html = admin_response("user-roles").body.decode("utf-8")
+    assert "user-roles" not in html
+    assert "tenants" not in html
+    source = Path(__file__).resolve().parents[1] / "app" / "admin.py"
+    admin_source = source.read_text(encoding="utf-8")
+    assert "user_admin:'admin-users'" in admin_source

@@ -284,6 +284,27 @@ class ApiKeyStore:
                 scopes=tuple(item.scopes or ["chat", "models", "files", "images", "audio"]),
             )
 
+    async def purge_web_chat_user_key(self, user_id: str) -> int:
+        """Delete only internal Web Chat keys owned by an expired guest identity."""
+        owner = str(user_id or "").strip()
+        if not owner or len(owner) > 128:
+            return 0
+        async with self.lock:
+            removed = {
+                key_id: item for key_id, item in self.keys.items()
+                if item.internal_owner_user_id == owner
+            }
+            if not removed:
+                return 0
+            for key_id in removed:
+                self.keys.pop(key_id, None)
+            try:
+                await self.save()
+            except Exception:
+                self.keys.update(removed)
+                raise
+            return len(removed)
+
     def list_public(self) -> list[dict[str, Any]]:
         return sorted(
             (item.public() for item in self.keys.values() if not item.internal_owner_user_id),

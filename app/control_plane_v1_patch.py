@@ -41,6 +41,7 @@ class ClientPolicyUpdate(BaseModel):
     client_domain: str | None = Field(default=None, max_length=255)
     registration_mode: str | None = None
     web_chat_enabled: bool | None = None
+    guest_enabled: bool | None = None
     announcement: str | None = Field(default=None, max_length=500)
     # The plaintext token is accepted only for this request, validated against
     # ApiKeyStore, and reduced to a private key_id before persistence.

@@ -88,6 +88,18 @@ def test_manual_model_discovery_targets_all_online_and_logs_are_scoped(tmp_path)
     task = client.get("/api/admin/text-model-tasks", headers=auth).json()["data"][0]
     assert task["workers"]["ext_paid"]["state"] == "completed"
     assert task["workers"]["ext_paid"]["models"] == ["gpt-5.6-sol"]
+    snapshot = client.get("/api/admin/text-model-tasks", headers=auth).json()
+    assert [row["id"] for row in snapshot["available_models"]] == ["gpt-5.6-sol"]
+    assert snapshot["available_models"][0]["workers"][0]["client_id"] == "ext_paid"
+    asyncio.run(registry.touch("ext_free", {"model_task_report_v147": {
+        "task_id": data["id"], "state": "completed", "progress": 100,
+        "models": ["default"], "logs": ["Free account default model"],
+    }}))
+    snapshot = client.get("/api/admin/text-model-tasks", headers=auth).json()
+    assert {row["id"] for row in snapshot["available_models"]} == {"default", "gpt-5.6-sol"}
+    default_row = next(row for row in snapshot["available_models"] if row["id"] == "default")
+    assert default_row["is_default_only"] is True
+    assert default_row["workers"][0]["client_id"] == "ext_free"
     output = client.get(f"/api/admin/text-model-tasks/{data['id']}/logs", headers=auth)
     assert output.status_code == 200
     assert "Found Sol" in output.text
@@ -132,6 +144,8 @@ def test_manual_only_no_automatic_model_discovery_and_unified_id_column():
     assert "modelObservedChoices" in router
     assert "同步模型" in ui
     assert "任务记录" in ui
+    assert "可用模型" in ui
+    assert "modelAvailableModelsTableV147" in ui
     assert 'String(state.worker_id || "").startsWith("ext_")' in unified
     assert '(linuxBind.extension_client_id || "—（ext_ 扩展未绑定）")' in unified
 
