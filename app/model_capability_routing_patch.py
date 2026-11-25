@@ -204,7 +204,15 @@ class _ModelRequestContextMiddleware:
         if (
             scope.get("type") != "http"
             or scope.get("method") != "POST"
-            or path not in {"/v1/chat/completions", "/v1/images/generations"}
+            or path not in {
+                "/v1/chat/completions",
+                "/v1/images/generations",
+                # Mode 1 invokes the same Chat Completions handler directly
+                # under the account-session/shared-Key adapter. It must still
+                # receive the exact requested-model context so Worker
+                # capability routing and user/shared-key entitlements apply.
+                "/api/user/chat/completions",
+            }
         ):
             await self.app(scope, receive, send)
             return
