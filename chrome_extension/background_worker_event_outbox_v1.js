@@ -135,52 +135,58 @@
   async function flush() {
     if (state.restoring || state.flushing || !state.events.size || !socketReady()) return false;
     state.flushing = true;
+    let sentAny = false;
+    let nextWait = RETRY_MS;
     try {
-      const [key, row] = [...state.events.entries()].sort((left, right) =>
+      const rows = [...state.events.entries()].sort((left, right) =>
         Number(left[1].order || 0) - Number(right[1].order || 0)
-      )[0] || [];
-      if (!row) return false;
-      if (Date.now() - Number(row.queued_at_ms || 0) > RETENTION_MS) {
-        state.events.delete(key);
-        await persist();
-        scheduleFlush(0);
-        return false;
-      }
-      const now = Date.now();
-      const wait = RETRY_MS - (now - Number(row.last_sent_at_ms || 0));
-      if (wait > 0) {
-        scheduleFlush(wait);
-        return false;
-      }
+      );
+      const consideredRequests = new Set();
+      for (const [key, row] of rows) {
+        const requestId = String(row.payload?.request_id || "");
+        if (!requestId || consideredRequests.has(requestId)) continue;
+        consideredRequests.add(requestId);
+        if (Date.now() - Number(row.queued_at_ms || 0) > RETENTION_MS) {
+          state.events.delete(key);
+          continue;
+        }
+        const now = Date.now();
+        const wait = RETRY_MS - (now - Number(row.last_sent_at_ms || 0));
+        if (wait > 0) {
+          nextWait = Math.min(nextWait, wait);
+          continue;
+        }
 
-      // Persist the attempt before sending. If the service worker is suspended
-      // immediately after socket.send(), the same stable event identity is
-      // replayed after restart and the server journal deduplicates it.
-      row.last_sent_at_ms = now;
-      row.attempts = Number(row.attempts || 0) + 1;
-      await persist();
-      const payload = {
-        ...row.payload,
-        diagnostics: {
-          ...(row.payload?.diagnostics || {}),
-          worker_event_transport: "durable-outbox-v1",
-          worker_event_transport_attempt: row.attempts,
-          worker_event_transport_replayed: row.attempts > 1,
-        },
-      };
-      const sent = await baseTrySendSocket(payload).catch(() => false);
-      if (!sent) {
-        const current = state.events.get(key);
-        if (current === row) {
-          row.last_sent_at_ms = 0;
-          await persist();
+        // One in-flight event per request preserves its delta order, while
+        // independent requests can progress without waiting on one another.
+        row.last_sent_at_ms = now;
+        row.attempts = Number(row.attempts || 0) + 1;
+        await persist();
+        const payload = {
+          ...row.payload,
+          diagnostics: {
+            ...(row.payload?.diagnostics || {}),
+            worker_event_transport: "durable-outbox-v1",
+            worker_event_transport_attempt: row.attempts,
+            worker_event_transport_replayed: row.attempts > 1,
+          },
+        };
+        const sent = await baseTrySendSocket(payload).catch(() => false);
+        if (!sent) {
+          const current = state.events.get(key);
+          if (current === row) {
+            row.last_sent_at_ms = 0;
+            await persist();
+          }
+        } else {
+          sentAny = true;
         }
       }
-      // One in-flight event at a time preserves the Worker delta order. The
-      // correlated server ACK schedules the next event; this timer retries a
-      // lost ACK or a temporarily unavailable socket.
-      scheduleFlush(RETRY_MS);
-      return sent;
+      await persist();
+      // ACK schedules the next event for that request. This timer retries
+      // events whose ACK was lost and services the next independent request.
+      if (state.events.size) scheduleFlush(nextWait);
+      return sentAny;
     } finally {
       state.flushing = false;
     }
