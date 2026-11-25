@@ -105,7 +105,11 @@
 
   async function flush() {
     if (state.restoring || state.flushing || !state.outbox.size || !socketReady()) return false;
-    const workerEvents = globalThis.__CHAT2API_BACKGROUND_WORKER_EVENT_OUTBOX_V1__?.events;
+    const workerOutbox = globalThis.__CHAT2API_BACKGROUND_WORKER_EVENT_OUTBOX_V1__;
+    // Wait for server capability negotiation before deciding whether pending
+    // Worker events must be drained or can be discarded for an older server.
+    if (workerOutbox && workerOutbox.serverAckNegotiated !== true) return false;
+    const workerEvents = workerOutbox?.serverAckSupported ? workerOutbox.events : null;
     state.flushing = true;
     try {
       for (const [key, item] of [...state.outbox.entries()]) {
