@@ -618,8 +618,7 @@ def test_tool_event_metadata_citations_are_journaled_before_broker_normalization
             "type": "chat.tool.result",
             "worker_event_id": f"{request_id}:tool-result:call-1",
             "tool_name": "browser.search",
-            "call_id": "call-1",
-            "result_id": "result-1",
+            "id": "call-1",
             "status": "completed",
             "output": "Found the API docs",
             "metadata": {
@@ -653,6 +652,8 @@ def test_tool_event_metadata_citations_are_journaled_before_broker_normalization
         assert snapshot["references"][0]["url"] == "https://docs.python.org/3/library/"
         page = await journal.events_after(request_id, owner, 0, limit=8)
         assert page["events"][0]["data"]["references"][0]["id"] == "turn0search0"
+        assert page["events"][0]["data"]["call_id"] == "call-1"
+        assert page["events"][0]["data"]["result_id"] == "call-1"
 
     asyncio.run(scenario())
 
