@@ -182,51 +182,51 @@ def test_free_default_mini_browser_integration() -> None:
 
 
 def test_model_catalog_never_leaks_dynamic_model_eligibility_across_workers():
-        from fastapi import FastAPI
-        from app.worker_model_library_v145_patch import install_worker_model_library_v145_patch
+    from fastapi import FastAPI
+    from app.worker_model_library_v145_patch import install_worker_model_library_v145_patch
 
-        class Registry:
-            def __init__(self):
-                self.minimum = "gpt-5.6-sol"
-                self.clients = {
-                    "ext_free": SimpleNamespace(connection_enabled=True, metadata={
-                        "account_type": "free", "account_detection_confidence": "high",
-                        "account_plan_confirmed": True,
-                        "account_model_control_present": False, "models": [],
-                    }),
-                    "ext_paid": SimpleNamespace(connection_enabled=True, metadata={
-                        "account_type": "plus", "model_validation_state": "validated",
-                        "model_validation_revision": VALIDATION_REVISION,
-                        "models": [{"id": "gpt-6", "validated": True,
-                                    "validation_revision": VALIDATION_REVISION}],
-                    }),
-                }
-            def online_client_ids(self):
-                return list(self.clients)
-            def chatgpt_routing_ready(self, client_id):
-                return True
-            def legacy_minimum_model(self):
-                return self.minimum
-            def client_models(self, client_id):
-                return []
-            def supports_model(self, client_id, model):
-                return False
-            def model_catalog(self, online_only=True):
-                return []
-            async def attach(self, *args, **kwargs):
-                pass
-            async def register(self, *args, **kwargs):
-                return ("ext_free", "token")
-            async def set_connection_enabled(self, *args, **kwargs):
-                return None
-            async def save(self):
-                pass
+    class Registry:
+        def __init__(self):
+            self.minimum = "gpt-5.6-sol"
+            self.clients = {
+                "ext_free": SimpleNamespace(connection_enabled=True, metadata={
+                    "account_type": "free", "account_detection_confidence": "high",
+                    "account_plan_confirmed": True,
+                    "account_model_control_present": False, "models": [],
+                }),
+                "ext_paid": SimpleNamespace(connection_enabled=True, metadata={
+                    "account_type": "plus", "model_validation_state": "validated",
+                    "model_validation_revision": VALIDATION_REVISION,
+                    "models": [{"id": "gpt-6", "validated": True,
+                                "validation_revision": VALIDATION_REVISION}],
+                }),
+            }
+        def online_client_ids(self):
+            return list(self.clients)
+        def chatgpt_routing_ready(self, client_id):
+            return True
+        def legacy_minimum_model(self):
+            return self.minimum
+        def client_models(self, client_id):
+            return []
+        def supports_model(self, client_id, model):
+            return False
+        def model_catalog(self, online_only=True):
+            return []
+        async def attach(self, *args, **kwargs):
+            pass
+        async def register(self, *args, **kwargs):
+            return ("ext_free", "token")
+        async def set_connection_enabled(self, *args, **kwargs):
+            return None
+        async def save(self):
+            pass
 
-        from app import model_capability_routing_patch as routing
-        original_compatible = routing._compatible
-        original_dynamic = routing._is_dynamic_text_model
-        try:
-            registry = Registry()
+    from app import model_capability_routing_patch as routing
+    original_compatible = routing._compatible
+    original_dynamic = routing._is_dynamic_text_model
+    try:
+        registry = Registry()
         app = FastAPI()
         app.state.registry = registry
         install_worker_model_library_v145_patch(app)
@@ -248,9 +248,9 @@ def test_model_catalog_never_leaks_dynamic_model_eligibility_across_workers():
 
 
 
-    finally:
-        routing._compatible = original_compatible
-        routing._is_dynamic_text_model = original_dynamic
+finally:
+    routing._compatible = original_compatible
+    routing._is_dynamic_text_model = original_dynamic
 
 def test_picker_observations_are_candidates_not_served_model_proof():
     registry = _registry({
