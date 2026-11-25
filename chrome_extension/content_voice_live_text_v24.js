@@ -275,10 +275,14 @@
     assertLiveTurnOwner(active);
     const events = () => liveMainEvents(active);
     const latestSender = latestVideoSenderState(active);
-    if (
-      latestSender?.type === "voice.live.video.sender.attached"
-      && String(latestSender.track_state || "unknown") !== "ended"
-    ) {
+    if (latestSender?.type === "voice.live.video.sender.attached") {
+      if (String(latestSender.track_state || "unknown") === "ended") {
+        active.videoTrackReady = false;
+        active.videoTrackUnavailable = true;
+        active.videoTrackMode = "snapshot_fallback";
+        active.videoTrackError = "ChatGPT WebRTC camera sender attached an ended track";
+        return false;
+      }
       // A fresh addTrack/replaceTrack event is stronger than a sticky
       // snapshot-fallback flag from an earlier sender removal. Recover the
       // WebRTC path without preparing a second canvas track or duplicating
