@@ -918,8 +918,15 @@
         ...(Array.isArray(existing.references) ? existing.references : []),
         ...(Array.isArray(message.references) ? message.references : []),
       ]);
-      const withMergedReferences = row => mergedReferences.length
-        ? {...row,references:mergedReferences} : row;
+      const mergedEventCursor = Math.max(
+        Number.isSafeInteger(existing.lastEventId) ? existing.lastEventId : 0,
+        Number.isSafeInteger(message.lastEventId) ? message.lastEventId : 0,
+      );
+      const withMergedReferences = row => ({
+        ...row,
+        lastEventId: mergedEventCursor,
+        ...(mergedReferences.length ? {references:mergedReferences} : {}),
+      });
 
       // A terminal snapshot must never be resurrected by a stale pending copy
       // from another device. Keep the longer text/tool evidence, but preserve
