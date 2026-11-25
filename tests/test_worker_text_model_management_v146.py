@@ -156,3 +156,6 @@ def test_free_page_default_mapping_is_separate_from_picker_evidence(tmp_path):
         assert data["legacy_minimum_model"] == "gpt-6"
         assert data["data"][0]["default_mapping"] == "gpt-6"
         assert [x["id"] for x in data["data"]] == ["default"]
+        app.state.registry.clients["ext_free"].metadata["account_plan_confirmed"] = False
+        unconfirmed = client.get("/api/admin/text-models").json()
+        assert [x["id"] for x in unconfirmed["data"]] == [], "heuristic Free detection must not create a default mapping route"
