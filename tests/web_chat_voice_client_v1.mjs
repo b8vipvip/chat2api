@@ -399,7 +399,7 @@ const webChatVoiceClient = api.create({
     assert.equal(options.credentials,"same-origin");
     webChatSessionHeaders.push(options.headers);
     return {ok:true,status:200,json:async()=>({
-      websocket_path:"/api/user/chat/voice?session_token=web-chat-one-time-token",
+      websocket_path:"/v1/audio/realtime?session_token=web-chat-one-time-token",
     })};
   },
   WebSocketImpl:FakeWebSocket,
@@ -412,7 +412,7 @@ await webChatVoiceClient.start();
 assert.equal(webChatSessionHeaders.length,1);
 assert.equal(webChatSessionHeaders[0].Authorization,undefined);
 assert.equal(webChatSessionHeaders[0]["X-Chat2API-User-Key-ID"],"server-shared-web-chat-key");
-assert.match(FakeWebSocket.last.url,/wss:\/\/chat\.example\/api\/user\/chat\/voice/);
+assert.match(FakeWebSocket.last.url,/wss:\/\/chat\.example\/v1\/audio\/realtime/);
 assert.ok(FakeWebSocket.last.url.includes("web-chat-one-time-token"));
 await webChatVoiceClient.stop();
 
