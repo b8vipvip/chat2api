@@ -240,11 +240,11 @@
         try {
           pc.addTrack = function chat2apiAddTrack(track, ...streams) {
             const sender = nativeAddTrack(track, ...streams);
-            if (ownerRequestId && state.requestId === ownerRequestId &&
-                track?.kind === "video" && track === state.liveVideoTrack) {
+            const videoRequestId = state.requestId;
+            if (videoRequestId && track?.kind === "video" && track === state.liveVideoTrack) {
               post("voice.live.video.sender.attached", {
                 track_state: String(track.readyState || "unknown"),
-              }, ownerRequestId);
+              }, videoRequestId);
             }
             return sender;
           };
@@ -256,11 +256,11 @@
         try {
           pc.addTransceiver = function chat2apiAddTransceiver(trackOrKind, init) {
             const transceiver = nativeAddTransceiver(trackOrKind, init);
-            if (ownerRequestId && state.requestId === ownerRequestId &&
-                trackOrKind?.kind === "video" && trackOrKind === state.liveVideoTrack) {
+            const videoRequestId = state.requestId;
+            if (videoRequestId && trackOrKind?.kind === "video" && trackOrKind === state.liveVideoTrack) {
               post("voice.live.video.sender.attached", {
                 track_state: String(trackOrKind.readyState || "unknown"),
-              }, ownerRequestId);
+              }, videoRequestId);
             }
             return transceiver;
           };
