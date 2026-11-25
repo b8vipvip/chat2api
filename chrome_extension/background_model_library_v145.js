@@ -268,7 +268,7 @@
         );
         if (noPicker) {
           const profile = await globalThis.chat2apiDetectAccountProfileV20?.(true, tab);
-          if (profile?.account_type === "free" &&
+          if (profile?.account_type === "free" && profile.plan_confirmed === true &&
               ["medium", "high"].includes(profile.confidence) &&
               profile.model_control_present === false && profile.composer_ready === true &&
               profile.tab_id === tab.id) {
