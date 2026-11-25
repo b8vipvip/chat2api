@@ -459,6 +459,7 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                             event_type = "recovery.delta"
                             payload = {
                                 "delta": payload["delta"],
+                                "offset": payload.get("offset"),
                                 "partial_text_unverified": True,
                             }
                         else:
