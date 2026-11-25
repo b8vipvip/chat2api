@@ -146,7 +146,7 @@ test("does not advance the durable SSE cursor on malformed or empty unknown fram
     "explicit cursor-only heartbeats can safely advance after validation");
   assert.equal(parser(
     "id: 10\nevent: recovery.delta\ndata: " +
-      JSON.stringify({delta:" resumed",partial_text_unverified:true}) + "\n\n",
+      JSON.stringify({delta:" resumed",offset:5,partial_text_unverified:true}) + "\n\n",
     assistant,
   ),false);
   assert.equal(assistant.content,"hello resumed");
@@ -159,6 +159,14 @@ test("does not advance the durable SSE cursor on malformed or empty unknown fram
   assert.equal(assistant.content,"hello resumed",
     "duplicate replay cursors must not append the same Worker delta twice");
   assert.equal(assistant.lastEventId,10);
+  const restoredWithoutCursor = {content:"hello resumed",lastEventId:0};
+  assert.equal(parser(
+    "id: 10\nevent: recovery.delta\ndata: " +
+      JSON.stringify({delta:" resumed",offset:5,partial_text_unverified:true}) + "\n\n",
+    restoredWithoutCursor,
+  ),false);
+  assert.equal(restoredWithoutCursor.content,"hello resumed",
+    "UTF-16 offsets must prevent duplicate provisional text after cursor loss");
   assert.equal(parser(
     "id: 11\nevent: delivery.delta\ndata: " +
       JSON.stringify({delta:"authoritative final answer"}) + "\n\n",
