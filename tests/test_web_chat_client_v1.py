@@ -12,6 +12,7 @@ from app.config import Settings
 from app.main import create_app
 from app.control_plane_v1_patch import install_control_plane_v1
 from app.user_console_v104_patch import install_user_console_v104_patch
+from app.v17_patch import install_v17_patch
 from app.web_chat_integration_v1 import install_web_chat_features_v1
 
 
@@ -283,6 +284,7 @@ def test_configured_client_key_is_mode1_only_and_user_created_keys_remain_mode2(
     )
     app = create_app(settings)
     install_control_plane_v1(app)
+    install_v17_patch(app)
     install_user_console_v104_patch(app)
     install_web_chat_features_v1(app)
     origin = {"Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"}
