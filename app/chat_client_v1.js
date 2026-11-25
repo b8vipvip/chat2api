@@ -193,7 +193,7 @@
     camera.classList.toggle("hidden", !state.voiceActive || state.voiceStarting);
     camera.disabled = !state.voiceActive || state.voiceStarting || !selectedKeyHasScope("files");
     if (!selectedKeyHasScope("files")) camera.title = "服务端统一 API Key 缺少 files 权限";
-    else camera.title = "在同一 Voice 会话中发送摄像头快照";
+    else camera.title = "在同一 Voice 会话中发送实时视频；若上游不支持 WebRTC 将降级为图片帧";
     $("modelSelect").disabled = state.streaming || state.voiceActive;
     $("newChatButton").disabled = state.streaming || state.voiceActive;
     $("attachButton").disabled = state.streaming || state.voiceActive || !state.webChatKeyId || !selectedKeyHasScope("files");
@@ -282,11 +282,15 @@
   function handleVoiceEvent(payload) {
     if (!payload || typeof payload !== "object") return;
     if (payload.type === "session.ready") {
+      const setupMode = payload.instructions_delivery_mode === "user_setup_turn";
+      const systemInstructionNote = payload.system_instructions_applied === true
+        ? "系统级指令已应用"
+        : setupMode ? "开场指令通过普通对话消息发送（非系统级指令）" : "未应用系统级指令";
       $("voiceStatus").textContent = payload.context_injected === true
-        ? "GPT-Live 已连接，已将当前对话背景作为开场消息发送"
+        ? "GPT-Live 已连接；当前对话背景已作为开场消息发送；" + systemInstructionNote
         : payload.instructions_applied === true
-          ? "GPT-Live 已连接，已发送语音开场指令"
-          : "GPT-Live 已连接，未载入对话背景";
+          ? "GPT-Live 已连接；语音开场指令已发送；" + systemInstructionNote
+          : "GPT-Live 已连接；未载入对话背景或开场指令";
     } else if (payload.type === "response.created") {
       // Start a fresh persistence boundary for each assistant turn. Keep the
       // completed turn's guard set until this event so session-close cleanup
@@ -339,7 +343,9 @@
       }
       state.voiceAssistantLine = null;
     } else if (payload.type === "input_video.frame.sent") {
-      $("voiceStatus").textContent = "摄像头画面已送达 ChatGPT Voice";
+      $("voiceStatus").textContent = payload.video_track_mode === "web_rtc" && payload.video_track === true
+        ? "WebRTC 实时视频帧已送达 ChatGPT Voice"
+        : "图片帧已送达 ChatGPT Voice（当前上游未建立 WebRTC 视频轨道）";
     } else if (payload.type === "error" || payload.type === "client.error") {
       $("voiceStatus").textContent = "语音提示：" + String(payload.message || payload.code || "未知错误");
       if (payload.type === "client.error" && state.voiceClient && !state.voiceClient.isCameraActive()) {
