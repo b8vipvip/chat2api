@@ -310,29 +310,40 @@
         Number(data.size || 0) <= 0 || Number(data.size || 0) > 2 * 1024 * 1024) {
       throw new Error("Live video frame failed the Worker image validation");
     }
-    postMain("voice.live.video.frame", active, {
-      base64: data.base64,
-      mime_type: mime,
-      sequence: Number(videoFrame.sequence),
-      timestamp_ms: Number(videoFrame.timestamp_ms),
-    });
-    const events = () => liveMainEvents(active);
-    const received = await waitFor(() => events().find(item =>
-      item.type === "voice.live.video.frame.received" &&
-      Number(item.sequence) === Number(videoFrame.sequence)), 2000, 40);
-    const frameError = events().find(item =>
-      item.type === "voice.live.video.error" &&
-      Number(item.sequence) === Number(videoFrame.sequence));
-    if (!received) throw new Error(frameError?.error || "Synthetic WebRTC video track did not accept the frame");
-    assertLiveTurnOwner(active);
-    await emitLive(active, "input.media.sent", {
-      item_id: itemId || "",
-      attachment_count: 1,
-      video_track: true,
-      sequence: Number(videoFrame.sequence),
-      timestamp_ms: Number(videoFrame.timestamp_ms),
-    });
-    return true;
+    // Once a frame has been handed to MAIN world it may already have reached
+    // the WebRTC sender, even if a later acknowledgement is lost. Never send
+    // that same frame again through the composer fallback.
+    let submittedToMain = false;
+    try {
+      postMain("voice.live.video.frame", active, {
+        base64: data.base64,
+        mime_type: mime,
+        sequence: Number(videoFrame.sequence),
+        timestamp_ms: Number(videoFrame.timestamp_ms),
+      });
+      submittedToMain = true;
+      const events = () => liveMainEvents(active);
+      const received = await waitFor(() => events().find(item =>
+        item.type === "voice.live.video.frame.received" &&
+        Number(item.sequence) === Number(videoFrame.sequence)), 2000, 40);
+      const frameError = events().find(item =>
+        item.type === "voice.live.video.error" &&
+        Number(item.sequence) === Number(videoFrame.sequence));
+      if (!received) throw new Error(frameError?.error || "Synthetic WebRTC video track did not accept the frame");
+      assertLiveTurnOwner(active);
+      await emitLive(active, "input.media.sent", {
+        item_id: itemId || "",
+        attachment_count: 1,
+        video_track: true,
+        video_track_mode: "web_rtc",
+        sequence: Number(videoFrame.sequence),
+        timestamp_ms: Number(videoFrame.timestamp_ms),
+      });
+      return true;
+    } catch (error) {
+      if (submittedToMain) error.videoFrameMayHaveBeenRendered = true;
+      throw error;
+    }
   }
 
   async function sendLiveMedia(active, itemId, text, attachments, videoFrame = null) {
@@ -341,8 +352,11 @@
       try {
         if (await sendLiveVideoFrame(active, itemId, attachments, videoFrame)) return;
       } catch (error) {
-        // Keep the existing composer-based still-image path as a safe fallback
-        // when a ChatGPT build has no usable camera control or video sender.
+        // A frame submitted to MAIN world may already be visible to the remote
+        // WebRTC peer. Retrying it as a composer turn could duplicate the same
+        // camera frame after a lost ACK, so only pre-submit failures may fall
+        // back to the legacy still-image path.
+        if (error?.videoFrameMayHaveBeenRendered) throw error;
         active.videoTrackUnavailable = true;
         active.videoTrackMode = "snapshot_fallback";
         active.videoTrackError = String(error?.message || error).slice(0, 240);
@@ -368,6 +382,13 @@
     await emitLive(active, "input.media.sent", {
       item_id: itemId || "",
       attachment_count: attachments.length,
+      ...(videoFrame ? {
+        video_track: false,
+        video_track_mode: "snapshot_fallback",
+        video_track_error: String(active.videoTrackError || "ChatGPT Web Voice camera sender is unavailable").slice(0, 240),
+        sequence: Number(videoFrame.sequence),
+        timestamp_ms: Number(videoFrame.timestamp_ms),
+      } : {}),
     });
   }
 
