@@ -261,7 +261,7 @@
         try { videoElement.pause(); } catch {}
         videoElement.srcObject = null;
       }
-      state(ready ? "ready" : "idle", "摄像头抽帧已停止");
+      state(ready ? "ready" : "idle", "实时视频已停止");
     }
     async function cleanup() {
       if (cleanupPromise) return cleanupPromise;
