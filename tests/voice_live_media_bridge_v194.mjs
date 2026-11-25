@@ -26,6 +26,10 @@ assert.ok(liveText.includes("active.videoTrackMode = \"snapshot_fallback\""), "u
 assert.ok(voiceMain.includes("LIVE_VIDEO_FRAME_RATE = 5"), "the synthetic camera must use a bounded 5 FPS capture rate");
 assert.ok(voiceMain.includes("canvas.captureStream(LIVE_VIDEO_FRAME_RATE)"), "ChatGPT must receive a continuous synthetic camera MediaStreamTrack");
 assert.ok(voiceMain.includes('voice.live.video.sender.attached'), "the bridge must verify that the upstream PeerConnection attached the video track");
+assert.ok(voiceMain.includes('voice.live.video.sender.detached'), "replacing the synthetic sender must be observable");
+assert.ok(voiceMain.includes('voice.live.video.track.ended'), "an ended synthetic track must be observable");
+assert.ok(liveText.includes('item.type === "voice.live.video.sender.detached"'), "a replaced sender must trigger explicit snapshot fallback");
+assert.ok(liveText.includes('item.type === "voice.live.video.track.ended"'), "an ended sender must trigger explicit snapshot fallback");
 assert.ok(voiceMain.includes("voice.live.video.frame.received"), "the exact frame sequence must be acknowledged after rendering");
 assert.ok(liveRouting.includes("videoFrame: message.video_frame || null"), "the Broker must forward frame timestamps to the Worker tab");
 assert.ok(liveText.includes("refusing to overwrite it"), "draft conflicts must fail closed");
