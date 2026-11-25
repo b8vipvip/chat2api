@@ -2442,7 +2442,9 @@
     if (data && data.trim() !== "[DONE]") {
       try { event = JSON.parse(data); } catch { return false; }
     }
-    if (eventId && eventId > Number(assistant.lastEventId || 0)) {
+    if (eventId) {
+      const previousEventId = Number(assistant.lastEventId || 0);
+      if (eventId <= previousEventId) return false;
       assistant.lastEventId = eventId;
     }
     if (!data) return false;
@@ -2450,6 +2452,12 @@
 
     if (eventName === "delivery.delta") {
       appendDelta(assistant, event.delta);
+      return false;
+    }
+    if (eventName === "recovery.delta") {
+      if (event.partial_text_unverified === true && typeof event.delta === "string") {
+        appendDelta(assistant, event.delta);
+      }
       return false;
     }
     if (eventName === "chat.references") {
@@ -2519,7 +2527,9 @@
     const eventCursor = choice?.delta?.chat2api_event_id
       ?? choice?.delta?.chat2api_tool?.chat2api_event_id
       ?? choice?.delta?.chat2api_references?.chat2api_event_id;
-    if (Number.isSafeInteger(eventCursor) && eventCursor > Number(assistant.lastEventId || 0)) {
+    if (Number.isSafeInteger(eventCursor)) {
+      const previousEventId = Number(assistant.lastEventId || 0);
+      if (eventCursor <= previousEventId) return false;
       assistant.lastEventId = eventCursor;
     }
     if (choice?.delta && Object.prototype.hasOwnProperty.call(choice.delta, "content")) {
