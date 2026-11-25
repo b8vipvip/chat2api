@@ -42,8 +42,8 @@ def test_runtime_contract_publishes_single_authority_v02275():
     assert SERVER_RUNTIME_VERSION == "0.22.302"
     assert CHROME_BRIDGE_BUNDLE_VERSION == "0.22.302"
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
-    assert payload["chrome_bridge"]["version"] == "0.22.301"
-    assert payload["chrome_bridge"]["bundle_version"] == "0.22.301"
+    assert payload["chrome_bridge"]["version"] == "0.22.302"
+    assert payload["chrome_bridge"]["bundle_version"] == "0.22.302"
     assert payload["chrome_bridge"]["route_window_authority_revision"] == 30
     assert payload["chrome_bridge"]["window_observer_revision"] == 90
     assert payload["chrome_bridge"]["route_close_terminal_revision"] == 91
