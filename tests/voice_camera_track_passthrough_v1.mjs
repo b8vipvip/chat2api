@@ -37,6 +37,10 @@ class FakeRTCPeerConnection {
   addTrack(track) { return {track}; }
   addTransceiver(trackOrKind) { return {sender:{track:trackOrKind}}; }
 }
+class FakeRTCRtpSender {
+  constructor(){this.track=null;}
+  replaceTrack(track){this.track=track;return Promise.resolve();}
+}
 
 const mediaDevices = {
   async getUserMedia(constraints) {
@@ -77,6 +81,7 @@ const sandbox = vm.createContext({
   navigator:{mediaDevices},
   MediaStream:FakeMediaStream,
   RTCPeerConnection:FakeRTCPeerConnection,
+  RTCRtpSender:FakeRTCRtpSender,
   AudioContext:FakeAudioContext,
   document:{visibilityState:"visible",hasFocus:()=>true,createElement:tag=>{
     assert.equal(tag,"canvas");
@@ -132,6 +137,13 @@ const peer = new sandbox.RTCPeerConnection();
 peer.addTrack(generatedVideoTrack);
 assert.ok(posted.some(message=>message.type==="voice.live.video.sender.attached"),
   "the bridge must verify that ChatGPT actually attached the synthetic camera track");
+const attachedBeforeReplace = posted.filter(message=>message.type==="voice.live.video.sender.attached").length;
+const sender = new FakeRTCRtpSender();
+await sender.replaceTrack(generatedVideoTrack);
+assert.equal(sender.track,generatedVideoTrack);
+assert.equal(posted.filter(message=>message.type==="voice.live.video.sender.attached").length,
+  attachedBeforeReplace + 1,
+  "WebRTC sender replacement after renegotiation must be observed as a real track attachment");
 
 dispatch("voice.live.video.frame",{
   base64:"AA==",
