@@ -86,6 +86,7 @@ class WebChatEventJournal:
                     delivered_text_truncated INTEGER NOT NULL DEFAULT 0,
                     terminal_status TEXT NOT NULL DEFAULT '',
                     terminal_message TEXT NOT NULL DEFAULT '',
+                    references_json TEXT NOT NULL DEFAULT '[]',
                     updated_at REAL NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS web_chat_events (
@@ -103,6 +104,19 @@ class WebChatEventJournal:
                 );
                 CREATE INDEX IF NOT EXISTS idx_web_chat_events_retention
                     ON web_chat_events(created_at);
+                CREATE TABLE IF NOT EXISTS web_chat_event_dedupe (
+                    request_id TEXT NOT NULL,
+                    owner_key_id TEXT NOT NULL,
+                    source_event_id TEXT NOT NULL,
+                    sequence INTEGER NOT NULL,
+                    created_at REAL NOT NULL,
+                    PRIMARY KEY (request_id, source_event_id),
+                    FOREIGN KEY (request_id)
+                        REFERENCES web_chat_event_state(request_id)
+                        ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_web_chat_event_dedupe_retention
+                    ON web_chat_event_dedupe(created_at);
                 """
             )
             event_columns = {
@@ -113,6 +127,14 @@ class WebChatEventJournal:
                 connection.execute(
                     "ALTER TABLE web_chat_events ADD COLUMN source_event_id TEXT NOT NULL DEFAULT ''"
                 )
+            state_columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(web_chat_event_state)").fetchall()
+            }
+            if "references_json" not in state_columns:
+                connection.execute(
+                    "ALTER TABLE web_chat_event_state ADD COLUMN references_json TEXT NOT NULL DEFAULT '[]'"
+                )
             connection.execute(
                 """
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_web_chat_events_source_id
@@ -120,8 +142,52 @@ class WebChatEventJournal:
                 WHERE source_event_id <> ''
                 """
             )
+            # Keep source identities independently of the bounded event page.
+            # A replay older than the 50k visible-event window must not be
+            # re-appended merely because its original event row was pruned.
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO web_chat_event_dedupe(
+                    request_id, owner_key_id, source_event_id, sequence, created_at
+                )
+                SELECT request_id, owner_key_id, source_event_id, sequence, created_at
+                FROM web_chat_events WHERE source_event_id <> ''
+                """
+            )
+            # Backfill citation state before event retention can prune old
+            # reference-card rows from the replay window.
+            legacy_reference_rows = connection.execute(
+                """
+                SELECT request_id, payload FROM web_chat_events
+                WHERE event_type IN ('chat.references', 'chat.tool.call', 'chat.tool.result', 'worker.terminal')
+                ORDER BY sequence ASC
+                """
+            ).fetchall()
+            legacy_references: dict[str, list[dict[str, Any]]] = {}
+            for reference_row in legacy_reference_rows:
+                try:
+                    reference_payload = json.loads(str(reference_row["payload"]))
+                except (ValueError, TypeError):
+                    continue
+                if not isinstance(reference_payload, dict):
+                    continue
+                found = normalize_tool_references(reference_payload.get("references"))
+                if found:
+                    request_ref = str(reference_row["request_id"])
+                    legacy_references[request_ref] = normalize_tool_references([
+                        *legacy_references.get(request_ref, []), *found,
+                    ])
+            for request_ref, found in legacy_references.items():
+                connection.execute(
+                    """
+                    UPDATE web_chat_event_state SET references_json = ?
+                    WHERE request_id = ? AND references_json = '[]'
+                    """,
+                    (_json_payload({"references": found}), request_ref),
+                )
             cutoff = time.time() - _RETENTION_SECONDS
             connection.execute("DELETE FROM web_chat_events WHERE created_at < ?", (cutoff,))
+            connection.execute("DELETE FROM web_chat_event_dedupe WHERE created_at < ?", (cutoff,))
             connection.execute(
                 """
                 DELETE FROM web_chat_event_state
@@ -380,7 +446,7 @@ class WebChatEventJournal:
             if source_event_id:
                 existing = connection.execute(
                     """
-                    SELECT sequence FROM web_chat_events
+                    SELECT sequence FROM web_chat_event_dedupe
                     WHERE request_id = ? AND source_event_id = ?
                     LIMIT 1
                     """,
@@ -410,6 +476,7 @@ class WebChatEventJournal:
                 delivered_truncated = False
                 terminal_status = ""
                 terminal_message = ""
+                references: list[dict[str, Any]] = []
             else:
                 last_sequence = int(state["last_sequence"])
                 worker_text = str(state["worker_text"] or "")
@@ -418,6 +485,11 @@ class WebChatEventJournal:
                 delivered_truncated = bool(state["delivered_text_truncated"])
                 terminal_status = str(state["terminal_status"] or "")
                 terminal_message = str(state["terminal_message"] or "")
+                try:
+                    stored_references = json.loads(str(state["references_json"] or "[]"))
+                except (ValueError, TypeError):
+                    stored_references = []
+                references = normalize_tool_references(stored_references)
 
             sequences: list[int] = []
             for event_type, payload in records:
@@ -442,6 +514,21 @@ class WebChatEventJournal:
                         now, source_event_id,
                     ),
                 )
+                if source_event_id:
+                    connection.execute(
+                        """
+                        INSERT INTO web_chat_event_dedupe(
+                            request_id, owner_key_id, source_event_id, sequence, created_at
+                        ) VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (request_id, owner_key_id, source_event_id, last_sequence, now),
+                    )
+                if event_type in {"chat.references", "chat.tool.call", "chat.tool.result", "worker.terminal"}:
+                    incoming_references = normalize_tool_references(payload.get("references"))
+                    if incoming_references:
+                        references = normalize_tool_references([
+                            *references, *incoming_references,
+                        ])
                 if event_type == "worker.delta":
                     addition = _text(payload.get("delta"), 65_536)
                     remaining = max(0, _MAX_TEXT_CHARS - len(worker_text))
@@ -488,13 +575,15 @@ class WebChatEventJournal:
                 UPDATE web_chat_event_state
                 SET last_sequence = ?, worker_text = ?, delivered_text = ?,
                     worker_text_truncated = ?, delivered_text_truncated = ?,
-                    terminal_status = ?, terminal_message = ?, updated_at = ?
+                    terminal_status = ?, terminal_message = ?, references_json = ?,
+                    updated_at = ?
                 WHERE request_id = ? AND owner_key_id = ?
                 """,
                 (
                     last_sequence, worker_text, delivered_text,
                     int(worker_truncated), int(delivered_truncated),
-                    terminal_status, terminal_message, now, request_id, owner_key_id,
+                    terminal_status, terminal_message,
+                    _json_payload({"references": references}), now, request_id, owner_key_id,
                 ),
             )
             connection.execute(
@@ -575,32 +664,21 @@ class WebChatEventJournal:
                 """
                 SELECT last_sequence, worker_text, delivered_text,
                        worker_text_truncated, delivered_text_truncated,
-                       terminal_status, terminal_message, updated_at
+                       terminal_status, terminal_message, references_json, updated_at
                 FROM web_chat_event_state
                 WHERE request_id = ? AND owner_key_id = ?
                 """,
                 (request_id, owner_key_id),
             ).fetchone()
-            reference_rows = connection.execute(
-                """
-                SELECT payload FROM web_chat_events
-                WHERE request_id = ? AND owner_key_id = ?
-                  AND event_type IN ('chat.references', 'chat.tool.result', 'worker.terminal')
-                ORDER BY sequence ASC
-                """,
-                (request_id, owner_key_id),
-            ).fetchall()
         references: list[dict[str, str]] = []
-        for reference_row in reference_rows:
+        if row is not None:
             try:
-                payload = json.loads(str(reference_row["payload"]))
+                stored_references = json.loads(str(row["references_json"] or "[]"))
+                if isinstance(stored_references, dict):
+                    stored_references = stored_references.get("references", [])
             except (ValueError, TypeError):
-                continue
-            if isinstance(payload, dict):
-                references = normalize_tool_references([
-                    *references,
-                    *(payload.get("references") if isinstance(payload.get("references"), list) else []),
-                ])
+                stored_references = []
+            references = normalize_tool_references(stored_references)
         if row is None:
             return {
                 "last_event_id": 0, "worker_partial_text": "",
