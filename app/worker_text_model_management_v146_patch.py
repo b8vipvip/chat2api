@@ -228,7 +228,7 @@ def install_worker_text_model_management_v146_patch(app: FastAPI) -> FastAPI:
                     "selectable": False, "label": "默认模型",
                     "method": "free-page-default-unverified", "at": state["updated_at"],
                 }
-                if ready and _free_default_composer_eligible(registry, client_id):
+                if minimum_model and minimum_model not in disabled and ready and _free_default_composer_eligible(registry, client_id):
                     entry["routable_by"].append(client_id)
         for entry in models.values():
             entry["state"] = (
