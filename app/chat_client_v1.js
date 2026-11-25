@@ -2923,11 +2923,16 @@
           request_id: requestId, model_id: state.selectedModel, http_status: response.status, phase: "dispatch",
         }, "warning");
         const guestAccessClosed = guestLoginRequired(response.status, payload);
-        if (response.status === 401 || guestAccessClosed) {
+        if (response.status === 401) {
           state.user = null;
           showOnly("authRequired");
-          setConnection(guestAccessClosed ? "游客访问已关闭" : "登录已失效", "error");
-          openLoginDialog(guestAccessClosed ? String(payload.detail || "游客使用已关闭，请登录账户") : "");
+          setConnection("登录已失效", "error");
+          openLoginDialog();
+        } else if (guestAccessClosed) {
+          state.user = null;
+          showOnly("authRequired");
+          setConnection("游客访问已关闭", "error");
+          openLoginDialog(String(payload.detail || "游客使用已关闭，请登录账户"));
         } else if (response.status === 403 || response.status === 503) {
           showOnly("serviceUnavailable");
           setConnection("服务端统一 API Key 不可用", "error");
