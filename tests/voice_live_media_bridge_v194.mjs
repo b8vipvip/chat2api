@@ -116,6 +116,12 @@ const endedSenderSession = {
 };
 assert.equal(await ensureLiveVideoTrack(endedSenderSession),false,
   "an attachment event for an already-ended track must not restore WebRTC delivery");
+const staleEndedSenderSession = {
+  requestId:"voice-test",videoTrackReady:true,videoTrackUnavailable:false,
+};
+assert.equal(await ensureLiveVideoTrack(staleEndedSenderSession),false,
+  "an ended attachment must invalidate a stale ready flag");
+assert.equal(staleEndedSenderSession.videoTrackUnavailable,true);
 
 assert.ok(liveRouting.includes("videoFrame: message.video_frame || null"), "the Broker must forward frame timestamps to the Worker tab");
 assert.ok(liveText.includes("refusing to overwrite it"), "draft conflicts must fail closed");
