@@ -5,6 +5,7 @@
   const INPUT_RATE = 16000;
   const OUTPUT_RATE = 24000;
   const MAX_VIDEO_FRAME_BYTES = 2 * 1024 * 1024;
+  const MAX_VIDEO_TOTAL_BYTES = 64 * 1024 * 1024;
   const MAX_VIDEO_FRAMES = 300;
   const VIDEO_FRAME_INTERVAL_MS = 200;
   // The Broker allows up to 5 seconds for the Worker to drain its final
@@ -145,8 +146,12 @@
     let closeResolve = null;
     let videoPending = false;
     let pendingVideoItemId = "";
+    let pendingVideoSequence = -1;
+    let pendingVideoTimestampMs = -1;
+    let pendingVideoBytes = 0;
     let videoSequence = 0;
     let videoFrameCount = 0;
+    let videoFrameBytes = 0;
     let sessionStartedAt = 0;
     let lastVideoTimestampMs = -1;
     let lastVideoCaptureAt = -Infinity;
@@ -320,14 +325,20 @@
         void cleanup();
         return;
       } else if (payload.type === "input_video.frame.sent") {
-        if (!payload.item_id || payload.item_id === pendingVideoItemId) {
-          videoPending = false;
-          pendingVideoItemId = "";
+        if (payload.item_id === pendingVideoItemId &&
+            Number(payload.sequence) === pendingVideoSequence &&
+            Number(payload.timestamp_ms) === pendingVideoTimestampMs) {
+          videoFrameBytes += pendingVideoBytes;
+          clearPendingVideoFrame();
         }
       } else if (payload.type === "error") {
         if (payload.item_id && payload.item_id === pendingVideoItemId) {
-          videoPending = false;
-          pendingVideoItemId = "";
+          // The server releases the corresponding frame slot on every
+          // item-scoped error. Keep the browser's frame budget in sync so a
+          // retryable Worker timeout does not consume the whole session cap.
+          videoFrameCount = Math.max(0,videoFrameCount - 1);
+          clearPendingVideoFrame();
+          if (payload.retryable !== true) stopCamera();
         }
         event(payload);
       }
@@ -473,10 +484,16 @@
       const buffer = await blob.arrayBuffer();
       return arrayBufferToBase64(buffer, value => window.btoa(value));
     }
-    function releaseUnsentVideoFrame(itemId) {
-      if (pendingVideoItemId !== itemId) return;
+    function clearPendingVideoFrame() {
       videoPending = false;
       pendingVideoItemId = "";
+      pendingVideoSequence = -1;
+      pendingVideoTimestampMs = -1;
+      pendingVideoBytes = 0;
+    }
+    function releaseUnsentVideoFrame(itemId) {
+      if (pendingVideoItemId !== itemId) return;
+      clearPendingVideoFrame();
     }
     function cameraCaptureIsCurrent(generation,itemId) {
       return generation === cameraGeneration &&
@@ -495,6 +512,7 @@
       const sequence = videoSequence++;
       const itemId = "webchat-video-" + sequence;
       pendingVideoItemId = itemId;
+      pendingVideoSequence = sequence;
       try {
         const scale = Math.min(1,1280 / width,720 / height);
         const targetWidth = Math.max(1,Math.round(width * scale));
@@ -518,6 +536,19 @@
           }
         }
         if (!blob || blob.size > MAX_VIDEO_FRAME_BYTES) throw new Error("摄像头画面超过 2 MiB 限制");
+        if (videoFrameBytes + blob.size > MAX_VIDEO_TOTAL_BYTES) {
+          releaseUnsentVideoFrame(itemId);
+          event({type:"client.notice",message:"已达到本次实时视频总数据量上限，实时视频已停止"});
+          stopCamera();
+          return;
+        }
+        pendingVideoBytes = blob.size;
+        const timestampMs = Math.max(
+          lastVideoTimestampMs + 1,
+          Math.floor(captureAt - sessionStartedAt),
+        );
+        lastVideoTimestampMs = timestampMs;
+        pendingVideoTimestampMs = timestampMs;
         const dataBase64 = await blobBase64(blob);
         if (!cameraCaptureIsCurrent(captureGeneration,itemId)) {
           releaseUnsentVideoFrame(itemId);
@@ -558,10 +589,7 @@
           type:"input_video.frame",
           item_id:itemId,
           sequence,
-          timestamp_ms:(lastVideoTimestampMs = Math.max(
-            lastVideoTimestampMs + 1,
-            Math.floor(captureAt - sessionStartedAt),
-          )),
+          timestamp_ms:timestampMs,
           file_id:fileId,
           text:"摄像头画面",
         })) throw new Error("实时语音连接已断开");
@@ -616,7 +644,7 @@
         }
         cameraTimer = timers.setInterval(() => { void captureAndSendFrame(); },VIDEO_FRAME_INTERVAL_MS);
         void captureAndSendFrame();
-        state("camera_ready","摄像头已开启（实时视频，最高 5 FPS，最多约 60 秒）");
+        state("camera_ready","摄像头已开启（最高 5 FPS，最多 300 帧 / 64 MiB）");
       } catch (error) {
         if (generation === cameraGeneration) stopCamera();
         throw error;
