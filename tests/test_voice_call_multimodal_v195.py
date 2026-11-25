@@ -537,3 +537,66 @@ def test_live_video_frame_ack_timeout_releases_slot_and_unconfirmed_grant(tmp_pa
         assert row["input_file_ids"] == [frame_id]
         assert row["diagnostics"]["attachments_confirmed"] == 1
 
+
+
+def test_live_video_frame_budget_is_bounded_per_session(tmp_path, monkeypatch):
+    assert live_voice_patch_module.MAX_LIVE_VIDEO_FRAMES == 300
+    assert live_voice_patch_module.MAX_LIVE_VIDEO_TOTAL_BYTES == 64 * 1024 * 1024
+    assert live_voice_patch_module.MIN_LIVE_VIDEO_FRAME_INTERVAL_SECONDS == 0.2
+    monkeypatch.setattr(live_voice_patch_module, "MAX_LIVE_VIDEO_TOTAL_BYTES", 1)
+
+    with TestClient(app_live(tmp_path)) as client:
+        token = issue_key(client, "video-budget-caller")
+        ext_id, secret = pair(client)
+        frame_id = client.post(
+            "/v1/files",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "filename": "budget-frame.png",
+                "mime_type": "image/png",
+                "purpose": "vision",
+                "data_base64": base64.b64encode(_tiny_png()).decode(),
+            },
+        ).json()["id"]
+        request_id = "voicereq_videobudget"
+        with client.websocket_connect(f"/ws/extensions/{ext_id}?token={secret}") as ext:
+            assert ext.receive_json()["type"] == "server.hello"
+            with client.websocket_connect(
+                f"/v1/audio/realtime?client_id={ext_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            ) as live:
+                live.send_json({"type": "session.start", "model": "gpt-live", "request_id": request_id})
+                assert ext.receive_json()["request_id"] == request_id
+                ext.send_json({
+                    "type": "image.progress",
+                    "kind": "voice-live",
+                    "request_id": request_id,
+                    "live_event": "session.ready",
+                })
+                assert live.receive_json()["type"] == "session.ready"
+
+                live.send_json({
+                    "type": "input_video.frame",
+                    "item_id": "frame-over-budget",
+                    "sequence": 0,
+                    "timestamp_ms": 1000,
+                    "file_id": frame_id,
+                    "text": "观察实时画面",
+                })
+                rejected = live.receive_json()
+                assert rejected["type"] == "error"
+                assert rejected["code"] == "INVALID_MEDIA_INPUT"
+                assert rejected["item_id"] == "frame-over-budget"
+                assert "64 MiB" in rejected["message"]
+                live.send_json({"type": "session.finish"})
+                assert ext.receive_json()["type"] == "voice.live.stop"
+                ext.send_json({
+                    "type": "image.progress",
+                    "kind": "voice-live",
+                    "request_id": request_id,
+                    "live_event": "session.closed",
+                    "status": "cancelled",
+                })
+                closed = live.receive_json()
+                assert closed["type"] == "session.closed"
+                assert closed["status"] == "cancelled"
