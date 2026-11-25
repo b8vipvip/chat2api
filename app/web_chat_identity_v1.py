@@ -55,6 +55,14 @@ async def resolve_web_chat_principal(
     shared = await api_keys.authenticate_key_id(configured_key_id)
     if shared is None:
         raise _private_error(503, "Web Chat 统一 API Key 已失效或不可用，请联系管理员")
+    # The shared Mode 1 service key must be server-managed, not a key created
+    # under any end-user account. This check also protects installations whose
+    # client policy predates the stricter configuration validation.
+    if accounts.owner_for_key(configured_key_id):
+        raise _private_error(
+            503,
+            "Web Chat 统一 API Key 必须是未绑定用户账户的服务端托管 Key；用户创建的 API Key 仅用于 Mode 2",
+        )
     if "chat" not in shared.scopes or "models" not in shared.scopes:
         raise _private_error(503, "Web Chat 统一 API Key 缺少 chat 或 models 权限")
 
