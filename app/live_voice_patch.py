@@ -704,6 +704,23 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     }
                     if video_frame:
                         ack["sequence"], ack["timestamp_ms"] = video_frame[:2]
+                        # Surface whether the Worker attached the frame to the
+                        # upstream WebRTC sender or had to use the composer
+                        # snapshot fallback. Missing/contradictory evidence is
+                        # deliberately reported as fallback, never as success.
+                        video_track_mode = str(event.get("video_track_mode") or "")
+                        video_track_attached = (
+                            event.get("video_track") is True
+                            and video_track_mode == "web_rtc"
+                        )
+                        ack["video_track"] = video_track_attached
+                        ack["video_track_mode"] = (
+                            "web_rtc" if video_track_attached else "snapshot_fallback"
+                        )
+                        if not video_track_attached:
+                            video_track_error = str(event.get("video_track_error") or "").strip()
+                            if video_track_error:
+                                ack["video_track_error"] = video_track_error[:240]
                     await send_json(ack)
                 elif event_type == "input.error":
                     failed_item_id = str(event.get("item_id") or "")
