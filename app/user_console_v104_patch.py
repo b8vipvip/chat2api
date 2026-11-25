@@ -539,6 +539,17 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
         shared = await api_keys.authenticate_key_id(configured_key_id)
         if shared is None or not {"chat", "models"}.issubset(set(shared.scopes)):
             raise HTTPException(status_code=503, detail="Web Chat 统一 API Key 已失效或权限不足")
+        # Guest identities are short-lived. Reap their hidden Web Chat keys
+        # before deleting the account rows so a transient key-store failure
+        # leaves the account eligible for cleanup on the next guest request.
+        cleanup_time = time.time()
+        expired_guest_ids = accounts.expired_guest_user_ids(now=cleanup_time)
+        try:
+            for expired_user_id in expired_guest_ids:
+                await api_keys.purge_web_chat_user_key(expired_user_id)
+            accounts.purge_expired_guest_accounts(now=cleanup_time)
+        except (OSError, RuntimeError, ValueError) as error:
+            raise HTTPException(status_code=503, detail="游客会话清理暂不可用，请稍后重试") from error
         existing = accounts.authenticate(request.cookies.get(USER_SESSION_COOKIE))
         if existing is not None:
             return JSONResponse(

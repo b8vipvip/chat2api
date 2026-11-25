@@ -336,6 +336,43 @@ class UserAccountStore:
                 raise
             return token
 
+    def expired_guest_user_ids(self, *, now: float | None = None) -> list[str]:
+        current = time.time() if now is None else float(now)
+        with self.lock:
+            expired: list[str] = []
+            for user_id, row in self.users.items():
+                if not row.get("is_guest"):
+                    continue
+                try:
+                    expires_at = float(row.get("guest_expires_at") or 0)
+                except (TypeError, ValueError):
+                    expires_at = 0
+                if expires_at <= current:
+                    expired.append(user_id)
+            return sorted(expired)
+
+    def purge_expired_guest_accounts(self, *, now: float | None = None) -> list[str]:
+        current = time.time() if now is None else float(now)
+        with self.lock:
+            expired_ids = self.expired_guest_user_ids(now=current)
+            if not expired_ids:
+                return []
+            previous_users = copy.deepcopy(self.users)
+            previous_sessions = copy.deepcopy(self.sessions)
+            expired_set = set(expired_ids)
+            for user_id in expired_ids:
+                self.users.pop(user_id, None)
+            for digest, session in list(self.sessions.items()):
+                if str(session.get("user_id") or "") in expired_set:
+                    self.sessions.pop(digest, None)
+            try:
+                self._save()
+            except Exception:
+                self.users = previous_users
+                self.sessions = previous_sessions
+                raise
+            return expired_ids
+
     def create_guest_session(self, ttl_seconds: int = 12 * 3600) -> tuple[dict[str, Any], str, int]:
         """Create an isolated, short-lived account identity for public Web Chat."""
         ttl = max(300, min(24 * 3600, int(ttl_seconds)))

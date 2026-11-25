@@ -1,4 +1,5 @@
 import asyncio
+import time
 import base64
 from pathlib import Path
 import shutil
@@ -342,6 +343,22 @@ def test_guest_web_chat_is_policy_gated_and_uses_account_scoped_identity(tmp_pat
         identity_key_id = session.json()["key_id"]
         assert identity_key_id
         assert identity_key_id != shared_public["key_id"]
+
+        # Expired guest account rows and their internal ownership keys are
+        # removed before the next anonymous session is created.
+        old_user_id = guest["user_id"]
+        accounts = app.state.user_accounts
+        with accounts.lock:
+            accounts.users[old_user_id]["guest_expires_at"] = time.time() - 1
+            for session_row in accounts.sessions.values():
+                if session_row.get("user_id") == old_user_id:
+                    session_row["expires_at"] = time.time() - 1
+            accounts._save()
+        renewed = client.post("/api/user/guest-session", headers=origin)
+        assert renewed.status_code == 200, renewed.text
+        assert renewed.json()["user"]["user_id"] != old_user_id
+        assert old_user_id not in accounts.users
+        assert identity_key_id not in app.state.api_keys.keys
 
         app.state.control_plane.update_client({"guest_enabled": False})
         blocked = client.get("/api/user/chat/session")
