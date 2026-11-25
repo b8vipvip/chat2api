@@ -17,6 +17,18 @@ The distinction is the client interaction and delivery contract:
 
 Both modes authenticate Chat2API requests with a selected Chat2API API Key and dispatch generation to the existing Worker fleet. The API Key is a Chat2API request principal; it is not a ChatGPT credential and must not be used as a Worker/runtime identity.
 
+## 1.1 API Key routing contract
+
+The key selected in server-side Client Configuration is a **Mode 1-only Web Chat service key**. It is a server-side credential reference, not a browser credential:
+
+- Only an unbound server-managed API Key may be selected. A key created under a user's Account Settings is account-owned and cannot be promoted to the shared Web Chat key.
+- Once selected, that key is reserved for Mode 1. Requests presenting it to the generic `/v1` API-key dependency are rejected rather than silently routed through Mode 2.
+- The Web Chat browser authenticates with its HttpOnly Chat2API account session. The server resolves the configured key internally, then uses a separate per-user internal identity for request, file, conversation and billing ownership.
+- API Keys created by users in Account Settings remain Mode 2 by default and continue to work with the original OpenAI-compatible `/v1` endpoints. They are not used by the Web Chat adapter.
+- Clearing the Client Configuration releases the server-managed key from the Mode 1 reservation; it can then be used as a normal Mode 2 managed key again.
+
+This selection is server-controlled. A request header, user role, browser-supplied key ID or `X-Chat2API-Mode` value cannot promote an account-owned key to Mode 1.
+
 ## 2. Correct request and generation flow
 
 `Chat2API Web Chat → client configuration selects a Chat2API API Key → authenticated Mode 1 Web Chat adapter → existing API Key authorization / model policy / quota / file ownership → existing Worker selection and reconnect handling → RequestBroker + ChatRequestService + ClientRegistry → existing Worker device → its already logged-in ChatGPT browser → existing native capture / media transfer → validated native-content delivery → Web Chat Renderer`
