@@ -384,6 +384,38 @@ assert.equal(intervalCallbacks.size,0,"heartbeat and camera timers must be clear
 assert.ok(states.some(value=>value.status==="ready"));
 assert.ok(states.some(value=>value.status==="closed"));
 
+// Web Chat uses the server-managed shared Key through its authenticated
+// same-origin session endpoint; it must not require or transmit a user API token.
+const webChatSessionHeaders = [];
+const webChatVoiceClient = api.create({
+  sessionEndpoint:"/api/user/chat/voice-session",
+  fileUploadEndpoint:"/api/user/chat/files",
+  userKeyId:"server-shared-web-chat-key",
+  instructions:"Use concise Chinese responses.",
+  context:"用户：请继续之前的对话。",
+  fetcher:async(url,options={})=>{
+    assert.equal(url,"/api/user/chat/voice-session");
+    assert.equal(options.method,"POST");
+    assert.equal(options.credentials,"same-origin");
+    webChatSessionHeaders.push(options.headers);
+    return {ok:true,status:200,json:async()=>({
+      websocket_path:"/api/user/chat/voice?session_token=web-chat-one-time-token",
+    })};
+  },
+  WebSocketImpl:FakeWebSocket,
+  AudioContextImpl:FakeAudioContext,
+  mediaDevices,
+  location:window.location,
+  timers,
+});
+await webChatVoiceClient.start();
+assert.equal(webChatSessionHeaders.length,1);
+assert.equal(webChatSessionHeaders[0].Authorization,undefined);
+assert.equal(webChatSessionHeaders[0]["X-Chat2API-User-Key-ID"],"server-shared-web-chat-key");
+assert.match(FakeWebSocket.last.url,/wss:\/\/chat\.example\/api\/user\/chat\/voice/);
+assert.ok(FakeWebSocket.last.url.includes("web-chat-one-time-token"));
+await webChatVoiceClient.stop();
+
 // Stopping while the microphone permission prompt is open must cancel startup.
 // A late permission grant must have its tracks stopped and must not create a
 // server session or WebSocket.
