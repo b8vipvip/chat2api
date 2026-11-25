@@ -231,6 +231,12 @@
   }
 
   function latestVideoSenderState(active) {
+    const current = active?.videoSenderState;
+    if (current && [
+      "voice.live.video.sender.attached",
+      "voice.live.video.sender.detached",
+      "voice.live.video.track.ended",
+    ].includes(current.type)) return current;
     const senderEvents = liveMainEvents(active).filter(item =>
       item.type === "voice.live.video.sender.attached" ||
       item.type === "voice.live.video.sender.detached" ||
