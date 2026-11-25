@@ -443,7 +443,10 @@ def test_web_chat_live_voice_uses_account_session_and_shared_server_key(tmp_path
                 assert live.receive_json()["type"] == "session.ready"
                 live.send_json({"type": "session.finish"})
                 events = acknowledge_live_stop(live, extension, request_id)
-                assert events[-1]["status"] == "cancelled"
+                # A confirmed video input without a completed model response
+                # is a failed generation, not an idle user cancellation.
+                assert events[-1]["status"] == "error"
+                assert events[-1]["error"] == "GPT-Live session ended without a completed response"
 
     row = app.state.telemetry.get(request_id)
     assert row["status"] == "cancelled"
