@@ -809,11 +809,15 @@ def test_windows_platform_os_normalization_is_advertised():
     assert payload["features"]["windows_worker_platform_os_normalization_v1"] is True
 
 
-def test_v0_22_301_model_sync_release_runtime_revision_is_advertised():
+def test_v0_22_302_live_video_track_release_runtime_revision_is_advertised():
     assert SERVER_RUNTIME_VERSION == RELEASE_VERSION == "0.22.302"
     assert "web-chat-shared-api-key-v1" in RUNTIME_FEATURE_REVISION
-    assert "worker-model-sync-daily-v1" in RUNTIME_FEATURE_REVISION
-    assert "free-default-mapping-v1" in RUNTIME_FEATURE_REVISION
+    assert "webchat-live-video-track-v1" in RUNTIME_FEATURE_REVISION
+    assert "live-video-frame-budget-v1" in RUNTIME_FEATURE_REVISION
+    payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
+    assert payload["features"]["web_chat_live_video_track_v1"] is True
+    assert payload["features"]["web_chat_live_video_frame_budget_v1"] is True
+    assert payload["features"]["web_chat_live_video_av_sync_v1"] is False
 
 
 def test_runtime_contract_advertises_web_chat_and_user_admin_features():
