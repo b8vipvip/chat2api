@@ -34,16 +34,6 @@
     return text.length <= max ? text : text.slice(0, max) + "\n<chat2api-truncated>";
   }
 
-  function stableEventHash(value) {
-    let hash = 2166136261;
-    const text = String(value || "");
-    for (let index = 0; index < text.length; index += 1) {
-      hash ^= text.charCodeAt(index);
-      hash = Math.imul(hash, 16777619);
-    }
-    return (hash >>> 0).toString(16);
-  }
-
   function cleanMetadata(value) {
     if (!value || typeof value !== "object") return {};
     try {
@@ -56,6 +46,18 @@
   }
 
   async function emitFinalReferences(detail, requestId) {
+    // Keep this helper local to the bridge function: isolated bridge tests
+    // extract this exact function, and production must not depend on an
+    // unbound closure from another content-script module.
+    const stableEventHash = value => {
+      let hash = 2166136261;
+      const text = String(value || "");
+      for (let index = 0; index < text.length; index += 1) {
+        hash ^= text.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+      }
+      return (hash >>> 0).toString(16);
+    };
     const metadata = cleanMetadata(detail?.metadata);
     if (!metadata || typeof metadata !== "object" || !Object.keys(metadata).length
         || metadata.truncated === true) return;
