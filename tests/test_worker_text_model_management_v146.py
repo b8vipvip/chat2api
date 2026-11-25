@@ -151,10 +151,12 @@ def test_free_page_default_mapping_is_separate_from_picker_evidence(tmp_path):
         initial = client.get("/api/admin/text-models").json()
         assert initial["data"][0]["id"] == "default"
         assert initial["data"][0]["verified_by"] == []
+        assert initial["data"][0]["routable_by"] == [], "no mapping means the page-default route is not callable"
         assert client.patch("/api/admin/text-model-minimum", json={"model_id":"gpt-6"}).status_code == 200
         data = client.get("/api/admin/text-models").json()
         assert data["legacy_minimum_model"] == "gpt-6"
         assert data["data"][0]["default_mapping"] == "gpt-6"
+        assert data["data"][0]["routable_by"] == ["ext_free"]
         assert [x["id"] for x in data["data"]] == ["default"]
         app.state.registry.clients["ext_free"].metadata["account_plan_confirmed"] = False
         unconfirmed = client.get("/api/admin/text-models").json()
