@@ -128,6 +128,7 @@ test("does not advance the durable SSE cursor on malformed or empty unknown fram
     source.slice(start,end) + "\nconsumeSseFrame",
     {
       appendDelta:(assistant,value)=>{assistant.content += String(value || "");},
+      limitAssistantText:value=>String(value || "").slice(0,32000),
       Number,JSON,Array,String,Object,
     },
   );
