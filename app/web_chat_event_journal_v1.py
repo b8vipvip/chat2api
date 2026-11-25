@@ -183,7 +183,7 @@ class WebChatEventJournal:
                     UPDATE web_chat_event_state SET references_json = ?
                     WHERE request_id = ? AND references_json = '[]'
                     """,
-                    (_json_payload({"references": found}), request_ref),
+                    (json.dumps(found, ensure_ascii=False, separators=(",", ":")), request_ref),
                 )
             cutoff = time.time() - _RETENTION_SECONDS
             connection.execute("DELETE FROM web_chat_events WHERE created_at < ?", (cutoff,))
