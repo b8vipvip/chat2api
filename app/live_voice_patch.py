@@ -63,13 +63,13 @@ MAX_LIVE_ATTACHMENTS_PER_INPUT = 4
 MAX_LIVE_PENDING_INPUTS = 128
 MAX_LIVE_CONTROL_CHARS = 64 * 1024
 # The current upstream ChatGPT Web Voice bridge submits camera images as
-# serialized composer turns. Keep this as bounded sampled-frame input; it is
-# not a negotiated continuous WebRTC video track.
-MAX_LIVE_VIDEO_FRAMES = 64
+# serialized input frames are relayed into the Worker-side synthetic camera
+# MediaStreamTrack; frame count and total bytes remain bounded per session.
+MAX_LIVE_VIDEO_FRAMES = 300
 MAX_LIVE_VIDEO_FRAME_BYTES = 2 * 1024 * 1024
 MAX_LIVE_VIDEO_TOTAL_BYTES = 64 * 1024 * 1024
 MAX_LIVE_VIDEO_DURATION_MS = 6 * 60 * 60 * 1000
-MIN_LIVE_VIDEO_FRAME_INTERVAL_SECONDS = 1.0
+MIN_LIVE_VIDEO_FRAME_INTERVAL_SECONDS = 0.2
 LIVE_VIDEO_FRAME_ACK_TIMEOUT_SECONDS = 15.0
 LIVE_VIDEO_FRAME_MONITOR_INTERVAL_SECONDS = 0.5
 LIVE_SESSION_STOP_TIMEOUT_SECONDS = 5.0
