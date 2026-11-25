@@ -425,7 +425,7 @@
     const client = voiceApi.create({
       sessionEndpoint:"/api/user/chat/voice-session",
       fileUploadEndpoint:"/api/user/chat/files",
-      userKeyId:voiceConversation.apiKeyId,
+      userKeyId:state.webChatKeyId,
       instructions:DEFAULT_VOICE_INSTRUCTIONS,
       context:buildVoiceContext(voiceConversation),
       beforeConnect:async () => {
