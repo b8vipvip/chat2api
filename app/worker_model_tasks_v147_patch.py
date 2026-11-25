@@ -409,10 +409,63 @@ def install_manual_worker_text_model_tasks_v147_patch(app: FastAPI) -> FastAPI:
         async with lock:
             if expire_tasks():
                 await save()
+            latest_sync = next((item for item in reversed(tasks) if item.get("kind") == "sync"), None)
+            available: dict[str, dict[str, Any]] = {}
+            online_ids = set(registry.online_client_ids())
+            if latest_sync is not None:
+                for client_id, worker in (latest_sync.get("workers") or {}).items():
+                    if not isinstance(worker, dict) or worker.get("state") != "completed":
+                        continue
+                    for raw_model in worker.get("models") or []:
+                        if not isinstance(raw_model, str):
+                            continue
+                        candidate = raw_model.strip()
+                        model_id = "default" if candidate.casefold() == "default" else normalize_concrete_model_id(candidate)
+                        if not model_id:
+                            continue
+                        row = available.setdefault(model_id, {
+                            "id": model_id,
+                            "label": "默认模型（实际型号不可见）" if model_id == "default" else model_id,
+                            "workers": [],
+                            "worker_count": 0,
+                            "is_default_only": model_id == "default",
+                        })
+                        if not any(item.get("client_id") == client_id for item in row["workers"]):
+                            client = registry.clients.get(client_id)
+                            row["workers"].append({
+                                "client_id": client_id,
+                                "name": str(getattr(client, "name", "") or ""),
+                                "online": client_id in online_ids,
+                            })
+                for row in available.values():
+                    row["workers"].sort(key=lambda item: (item["name"], item["client_id"]))
+                    row["worker_count"] = len(row["workers"])
+            sync_workers = (latest_sync or {}).get("workers") or {}
+            sync_states = [str(worker.get("state") or "") for worker in sync_workers.values() if isinstance(worker, dict)]
+            completed_workers = sum(state == "completed" for state in sync_states)
+            if not latest_sync:
+                sync_state = "not_started"
+            elif any(state in {"queued", "running"} for state in sync_states):
+                sync_state = "running"
+            elif sync_states and completed_workers == len(sync_states):
+                sync_state = "completed"
+            elif completed_workers:
+                sync_state = "partial"
+            else:
+                sync_state = "failed"
             return {
                 "data": list(reversed(tasks[-MAX_TASKS:])),
                 "revision": 147,
                 "schedule": {**schedule, "last_scheduled_day": last_scheduled_day},
+                "available_models": sorted(available.values(), key=lambda item: item["id"]),
+                "available_models_task": ({
+                    "id": latest_sync.get("id"),
+                    "created_at": latest_sync.get("created_at"),
+                    "state": sync_state,
+                    "completed_workers": completed_workers,
+                    "total_workers": len(sync_states),
+                } if latest_sync else None),
+                "available_models_default_mapping": str(snapshot().get("legacy_minimum_model") or ""),
                 # A read-only projection of the same final registry catalog:
                 # the administrator can inspect current capability evidence
                 # without a second model list owner or a duplicate API route.
