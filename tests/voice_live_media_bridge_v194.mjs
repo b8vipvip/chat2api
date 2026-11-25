@@ -23,7 +23,8 @@ assert.ok(liveText.includes("video_track: true"), "the Broker must acknowledge t
 assert.ok(liveText.includes('video_track_mode: "web_rtc"'), "the Worker must identify successful WebRTC sender attachment");
 assert.ok(liveText.includes('video_track_mode: "snapshot_fallback"'), "unsupported camera controls must be explicitly reported as snapshot fallback");
 assert.ok(liveText.includes("active.videoTrackMode = \"snapshot_fallback\""), "unsupported upstream camera controls must retain the safe snapshot fallback");
-assert.ok(voiceMain.includes("canvas.captureStream(5)"), "ChatGPT must receive a continuous synthetic camera MediaStreamTrack");
+assert.ok(voiceMain.includes("LIVE_VIDEO_FRAME_RATE = 5"), "the synthetic camera must use a bounded 5 FPS capture rate");
+assert.ok(voiceMain.includes("canvas.captureStream(LIVE_VIDEO_FRAME_RATE)"), "ChatGPT must receive a continuous synthetic camera MediaStreamTrack");
 assert.ok(voiceMain.includes('voice.live.video.sender.attached'), "the bridge must verify that the upstream PeerConnection attached the video track");
 assert.ok(voiceMain.includes("voice.live.video.frame.received"), "the exact frame sequence must be acknowledged after rendering");
 assert.ok(liveRouting.includes("videoFrame: message.video_frame || null"), "the Broker must forward frame timestamps to the Worker tab");
