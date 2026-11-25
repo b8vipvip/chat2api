@@ -31,6 +31,37 @@ assert.ok(voiceMain.includes('voice.live.video.track.ended'), "an ended syntheti
 assert.ok(liveText.includes('item.type === "voice.live.video.sender.detached"'), "a replaced sender must trigger explicit snapshot fallback");
 assert.ok(liveText.includes('item.type === "voice.live.video.track.ended"'), "an ended sender must trigger explicit snapshot fallback");
 assert.ok(voiceMain.includes("voice.live.video.frame.received"), "the exact frame sequence must be acknowledged after rendering");
+assert.ok(liveText.includes("videoSenderUnavailable(active)"),
+  "sender removal during frame upload or rendering must be rechecked before a positive WebRTC ACK");
+assert.ok(liveText.includes("videoFrameMayHaveBeenRendered = true"),
+  "a sender-loss race after MAIN-world submission must not duplicate the frame through snapshot fallback");
+const senderStateStart = liveText.indexOf("  function latestVideoSenderState(active) {");
+const senderStateEnd = liveText.indexOf("  function liveCameraButton()",senderStateStart);
+assert.ok(senderStateStart >= 0 && senderStateEnd > senderStateStart);
+let senderStateEvents = [{type:"voice.live.video.sender.attached"}];
+const senderStateHelpers = vm.runInNewContext(
+  liveText.slice(senderStateStart,senderStateEnd)
+    + "\n({latestVideoSenderState,videoSenderUnavailable,markVideoSenderUnavailable})",
+  {liveMainEvents(){return senderStateEvents;},String,Boolean},
+);
+const attachedVideoSession = {videoTrackReady:true};
+assert.equal(senderStateHelpers.videoSenderUnavailable(attachedVideoSession),false);
+senderStateEvents = [
+  {type:"voice.live.video.sender.attached"},
+  {type:"voice.live.video.sender.detached",reason:"sender-replaced"},
+];
+assert.equal(senderStateHelpers.videoSenderUnavailable(attachedVideoSession),true,
+  "a detach event arriving while the browser uploads a frame must invalidate the sender");
+senderStateHelpers.markVideoSenderUnavailable(attachedVideoSession);
+assert.equal(attachedVideoSession.videoTrackUnavailable,true);
+assert.equal(attachedVideoSession.videoTrackMode,"snapshot_fallback");
+assert.equal(attachedVideoSession.videoTrackError,"sender-replaced");
+senderStateEvents = [
+  {type:"voice.live.video.sender.detached"},
+  {type:"voice.live.video.sender.attached"},
+];
+assert.equal(senderStateHelpers.videoSenderUnavailable(attachedVideoSession),false,
+  "a newer verified attachment supersedes an older detach event");
 const ensureStart = liveText.indexOf("  async function ensureLiveVideoTrack(active) {");
 const ensureEnd = liveText.indexOf("  async function sendLiveVideoFrame(",ensureStart);
 assert.ok(ensureStart >= 0 && ensureEnd > ensureStart);
