@@ -129,4 +129,5 @@ freePlan = false;
 const paidFailure = await authority.syncObservedChoices("manual-paid-failure", true);
 assert.equal(paidFailure.ok, false);
 assert.equal(paidFailure.default_only, undefined);
+assert.equal(stored.modelValidationState, "failed", "failed fresh paid inspection must not retain the Free default as live evidence");
 assert.equal(selectMessages, 0);

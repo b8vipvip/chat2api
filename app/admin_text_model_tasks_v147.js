@@ -74,6 +74,7 @@
         b.disabled=true;
         try{
           await api("/api/admin/text-model-minimum",{method:"PATCH",body:{model_id:b.dataset.modelDefault}});
+          el("modelDefaultMappingV147").dataset.loaded="";
           await refresh(true);
         }catch(error){alert("设置默认模型失败："+String(error.message||error))}
         finally{b.disabled=false}
@@ -176,7 +177,7 @@
           ${isDefault?'<span class="muted" style="align-self:center">当前默认</span>':row.enabled?button("设为默认","data-model-default",row.id):''}
           ${button(row.enabled?"停用":"启用","data-model-toggle",row.id,
             'data-model-enable="'+(!row.enabled)+'"')}</div></td></tr>`;
-    }).join("")||'<tr><td colspan="6">暂无来自 Worker 的模型发现记录。点击「同步模型」执行任务。</td></tr>';
+    }).join("")||'<tr><td colspan="6">暂无来自 Worker 的模型同步记录。点击「同步模型」执行任务。</td></tr>';
     const hist=tasks.data||[];
     const current=hist[0]||null;
     const prog=el("modelTaskProgressV147");

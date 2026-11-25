@@ -85,7 +85,7 @@
         if (!visible(control)) continue;
         const text = normalize(`${control.getAttribute("aria-label") || ""} ${control.getAttribute("data-testid") || ""} ${control.innerText || control.textContent || ""}`);
         if (!text || text.length > 160) continue;
-        if (/\bGPT[- ]?\d+(?:\.\d+)?\b|\b\d+\.\d+\b|model\s*(selector|picker)|选择模型|模型选择/i.test(text)) {
+        if (/\bGPT[- ]?\d+(?:\.\d+)?\b|\b5\.(?:5|6)\b|model\s*(selector|picker)|选择模型|模型选择/i.test(text)) {
           return { text: text.slice(0, 120), strategy: "selectable-model-control" };
         }
       }
