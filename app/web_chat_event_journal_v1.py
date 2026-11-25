@@ -230,7 +230,9 @@ class WebChatEventJournal:
                 "status": _text(event.get("status"), 24),
                 field: _text(event.get(field), _MAX_TOOL_TEXT_CHARS),
             }
-            references = normalize_tool_references(event.get("references"))
+            references = extract_tool_references(event.get("metadata"))
+            if not references:
+                references = normalize_tool_references(event.get("references"))
             if references:
                 payload["references"] = references
             return event_type, payload
