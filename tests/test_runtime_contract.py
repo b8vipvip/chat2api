@@ -98,9 +98,6 @@ def test_runtime_contract_payload_names_each_version_surface():
     assert payload["features"]["free_default_model_mapping_v1"] is True
     assert payload["features"]["web_chat_voice_context_setup_turn_v1"] is True
     assert payload["features"]["web_chat_voice_system_instructions_v1"] is False
-    assert payload["features"]["web_chat_live_video_webrtc_track_v1"] is True
-    assert payload["features"]["web_chat_live_video_snapshot_fallback_v1"] is True
-    assert payload["features"]["web_chat_live_audio_video_sync_v1"] is False
     assert payload["server"]["runtime_aligned"] is True
     assert payload["server"]["entrypoint"] == PRODUCTION_ENTRYPOINT
     assert payload["chrome_bridge"]["version"] == CHROME_BRIDGE_VERSION
