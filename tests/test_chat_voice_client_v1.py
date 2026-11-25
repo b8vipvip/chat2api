@@ -1,4 +1,4 @@
-"""Browser-side Web Chat GPT-Live audio and sampled-camera contract."""
+"""Browser-side Web Chat GPT-Live audio and WebRTC camera-track contract."""
 import shutil
 import subprocess
 from pathlib import Path
