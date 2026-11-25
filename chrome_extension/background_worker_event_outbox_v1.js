@@ -18,6 +18,7 @@
     flushTimer: null,
     enqueueChain: Promise.resolve(),
     nextOrder: 1,
+    serverAckSupported: false,
   };
   globalThis[KEY] = state;
 
@@ -203,6 +204,11 @@
   }
 
   handleServerMessage = async function handleServerMessageWithWorkerEventAck(message) {
+    if (message?.type === "server.hello") {
+      state.serverAckSupported = Array.isArray(message.capabilities)
+        && message.capabilities.includes("worker_event_ack_v1");
+      return baseHandleServerMessage(message);
+    }
     if (message?.type === "chat.event.ack") {
       const identity = stableEventIdentity({
         type: "chat.delta",
@@ -229,7 +235,10 @@
   };
 
   trySendSocket = async function trySendSocketWithDurableWorkerEvents(payload) {
-    if (EVENT_TYPES.has(String(payload?.type || ""))) {
+    if (
+      state.serverAckSupported
+      && EVENT_TYPES.has(String(payload?.type || ""))
+    ) {
       const result = await queueWorkerEvent(payload);
       if (result === "queued") return true;
       if (result === "conflict") return false;
