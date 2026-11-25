@@ -132,7 +132,7 @@ def test_free_page_default_mapping_is_separate_from_picker_evidence(tmp_path):
     class Registry:
         def __init__(self):
             self.clients = {"ext_free": SimpleNamespace(name="Free", metadata={
-                "account_type":"free", "account_detection_confidence":"high",
+                "account_type":"free", "account_detection_confidence":"high", "account_plan_confirmed":True,
                 "account_model_control_present":False, "model_validation_state":"default-only",
                 "model_observed_choices":[], "models":[],
             })}
