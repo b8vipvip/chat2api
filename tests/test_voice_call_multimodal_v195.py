@@ -547,6 +547,10 @@ def test_live_video_frame_budget_is_bounded_per_session(tmp_path, monkeypatch):
     assert live_voice_patch_module.MAX_LIVE_VIDEO_FRAMES == 300
     assert live_voice_patch_module.MAX_LIVE_VIDEO_TOTAL_BYTES == 64 * 1024 * 1024
     assert live_voice_patch_module.MIN_LIVE_VIDEO_FRAME_INTERVAL_SECONDS == 0.2
+    assert live_voice_patch_module._live_session_media_file_limit(0, False) == 64
+    assert live_voice_patch_module._live_session_media_file_limit(0, True) == 65
+    assert live_voice_patch_module._live_session_media_file_limit(299, True) == 364
+    assert live_voice_patch_module._live_session_media_file_limit(300, False) == 364
     monkeypatch.setattr(live_voice_patch_module, "MAX_LIVE_VIDEO_TOTAL_BYTES", 1)
 
     with TestClient(app_live(tmp_path)) as client:
