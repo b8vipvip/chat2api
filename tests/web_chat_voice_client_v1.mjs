@@ -130,6 +130,8 @@ class FakeWebSocket {
         sequence:payload.sequence,
         timestamp_ms:payload.timestamp_ms,
         attachment_count:1,
+        video_track:true,
+        video_track_mode:"web_rtc",
       })}));
     } else if (payload.type === "session.finish") {
       queueMicrotask(() => {
