@@ -175,12 +175,13 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
                 "/assets/katex/0.19.1/fonts/../../main.py"
             ).status_code == 404
 
-        console = client.get("/console")
-        assert console.status_code == 200
+        console = client.get("/console", follow_redirects=False)
+        assert console.status_code == 303
+        assert console.headers["location"] == "/settings"
         settings_page = client.get("/settings")
         assert settings_page.status_code == 200
         assert "账户设置" in settings_page.text
-        assert 'href="/chat"' in console.text
+        assert "控制台" not in settings_page.text
 
         # The HTML shell is public, but all user data and API Key operations
         # remain behind the existing user-session boundary.
@@ -337,6 +338,9 @@ def test_guest_web_chat_is_policy_gated_and_uses_account_scoped_identity(tmp_pat
         guest_settings = client.get("/settings", follow_redirects=False)
         assert guest_settings.status_code == 303
         assert guest_settings.headers["location"] == "/chat"
+        legacy_guest_settings = client.get("/console", follow_redirects=False)
+        assert legacy_guest_settings.status_code == 303
+        assert legacy_guest_settings.headers["location"] == "/chat"
 
         session = client.get("/api/user/chat/session")
         assert session.status_code == 200, session.text
@@ -371,3 +375,12 @@ def test_every_web_chat_session_expiry_path_opens_inline_login_dialog() -> None:
     assert 'if (response.status === 401) {\n          state.user = null;\n          showOnly("authRequired");\n          setConnection("登录已失效", "error");\n          openLoginDialog();' in source
     assert 'state.user = null;\n        showOnly("authRequired");\n        setConnection("登录已失效", "error");\n        openLoginDialog();\n        throw new Error("用户登录状态已失效，请重新登录后再继续聊天")' in source
     assert 'state.user = null;\n        showOnly("authRequired");\n        openLoginDialog();\n        $("composerArea").classList.add("hidden");' in source
+
+
+def test_guest_policy_revocation_also_opens_inline_login_dialog() -> None:
+    source = (Path(__file__).resolve().parents[1] / "app" / "chat_client_v1.js").read_text(encoding="utf-8")
+    assert 'function guestLoginRequired(status, payload)' in source
+    assert 'String(payload?.detail || "").includes("游客使用已关闭")' in source
+    assert 'else if (guestLoginRequired(response.status, payload))' in source
+    assert 'const guestAccessClosed = guestLoginRequired(response.status, payload);' in source
+    assert 'openLoginDialog(guestAccessClosed ? String(payload.detail || "游客使用已关闭，请登录账户") : "");' in source

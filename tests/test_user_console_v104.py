@@ -1350,3 +1350,11 @@ def test_legacy_completed_requests_without_admission_are_not_retroactively_charg
     assert reopened.charge_for_request("req_legacy_without_hold") is None
     assert reopened.charge_for_request("req_legacy_missing_usage") is None
     assert reopened.balance_cents("usr_legacy_history") == 1000
+
+
+def test_admin_password_dialog_clears_sensitive_fields_when_closed() -> None:
+    source = (ROOT / "app" / "admin_user_commerce_v104.js").read_text(encoding="utf-8")
+    assert "function clearUserPasswordFields()" in source
+    assert 'document.getElementById("userPasswordDialog")?.addEventListener("close", clearUserPasswordFields);' in source
+    assert 'document.getElementById("userPasswordNew").value = "";' in source
+    assert 'document.getElementById("userPasswordConfirm").value = "";' in source
