@@ -53,7 +53,7 @@
     );
     for (const node of accountScopes) {
       const descriptor = normalize(
-        `${node.getAttribute("aria-label") || ""} ${node.getAttribute("data-testid") || ""}`
+        String(node.getAttribute("aria-label") || "") + " " + String(node.getAttribute("data-testid") || "")
       );
       candidates.push({
         node,
@@ -68,14 +68,14 @@
       const text = normalize(scope.innerText || scope.textContent || "");
       if (!text || text.length > 4000) continue;
       const freePattern = candidate.allowStandaloneFree
-        ? /(^|\\s)(ChatGPT\\s+)?Free($|\\s)|Free\\s+plan|免费版|免费计划/i
-        : /\\bChatGPT\\s+Free\\b|\\bFree\\s+plan\\b|免费版|免费计划/i;
+        ? /(^|\s)(ChatGPT\s+)?Free($|\s)|Free\s+plan|免费版|免费计划/i
+        : /\bChatGPT\s+Free\b|\bFree\s+plan\b|免费版|免费计划/i;
       if (freePattern.test(text)) {
         return { account_type: "free", confidence: "high", strategy: "account-ui-free", plan_confirmed: true };
       }
       const paidPattern = candidate.allowStandaloneFree
-        ? /(^|\\s)(ChatGPT\\s+)?(Plus|Pro|Team|Business|Enterprise|Edu)($|\\s)|企业版|团队版/i
-        : /\\bChatGPT\\s+(Plus|Pro|Team|Business|Enterprise|Edu)\\b|企业版|团队版/i;
+        ? /(^|\s)(ChatGPT\s+)?(Plus|Pro|Team|Business|Enterprise|Edu)($|\s)|企业版|团队版/i
+        : /\bChatGPT\s+(Plus|Pro|Team|Business|Enterprise|Edu)\b|企业版|团队版/i;
       if (paidPattern.test(text)) {
         return { account_type: "paid", confidence: "high", strategy: "account-ui-paid", plan_confirmed: true };
       }
