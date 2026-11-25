@@ -153,14 +153,22 @@ test("does not advance the durable SSE cursor on malformed or empty unknown fram
   assert.equal(assistant.lastEventId,10);
   assert.equal(parser(
     "id: 10\nevent: recovery.delta\ndata: " +
-      JSON.stringify({delta:" resumed",partial_text_unverified:true}) + "\n\n",
+      JSON.stringify({delta:" resumed",offset:5,partial_text_unverified:true}) + "\n\n",
     assistant,
   ),false);
   assert.equal(assistant.content,"hello resumed",
     "duplicate replay cursors must not append the same Worker delta twice");
   assert.equal(assistant.lastEventId,10);
-  assert.equal(parser("id: 11\ndata: [DONE]\n\n",assistant),true);
-  assert.equal(assistant.lastEventId,11);
+  assert.equal(parser(
+    "id: 11\nevent: delivery.delta\ndata: " +
+      JSON.stringify({delta:"authoritative final answer"}) + "\n\n",
+    assistant,
+  ),false);
+  assert.equal(assistant.content,"authoritative final answer",
+    "the canonical final delivery must replace unverified recovery text");
+  assert.equal(assistant.provisionalRecoveryText,false);
+  assert.equal(parser("id: 12\ndata: [DONE]\n\n",assistant),true);
+  assert.equal(assistant.lastEventId,12);
 });
 
 test("preserves request-scoped tool calls and results as safe presentation state", () => {
