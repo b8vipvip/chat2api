@@ -47,6 +47,9 @@ class RequestState:
     last_event_id: int = 0
     delivery_event_ids: list[int] = field(default_factory=list)
     delivery_terminal_event_id: int = 0
+    # Stable Worker event IDs prevent a lost server ACK from applying the same
+    # delta twice in Mode 2, where no persistent Web Chat journal is attached.
+    worker_event_ids: set[str] = field(default_factory=set, repr=False)
 
     def owns_dispatch_socket(self, client_id: str, websocket: Any, current_socket: Any) -> bool:
         """Require the assigned Worker and exact original/current socket."""
@@ -595,7 +598,15 @@ class RequestBroker:
             client_id, websocket, current_socket
         ):
             return False
-        return await self.publish(request_id, event)
+        source_event_id = str(event.get("worker_event_id") or "").strip()[:180]
+        if source_event_id and source_event_id in state.worker_event_ids:
+            return True
+        accepted = await self.publish(request_id, event)
+        if accepted and source_event_id:
+            state.worker_event_ids.add(source_event_id)
+            if len(state.worker_event_ids) > 8192:
+                state.worker_event_ids.pop()
+        return accepted
 
     async def publish(self, request_id: str, event: dict[str, Any]) -> bool:
         state = self.requests.get(request_id)

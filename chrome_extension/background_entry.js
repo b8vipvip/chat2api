@@ -82,6 +82,11 @@ importScripts(
   // Isolated read-only history diagnosis for Windows Chrome extensions.
   "background_native_page_diagnostic_v1.js",
   "background_native_editor_state_v297.js",
+
+  // Final transport wrapper: it must load after every module that wraps
+  // handleServerMessage/trySendSocket so ACKs and durable replay cannot be
+  // bypassed by a later-loaded capacity, Voice or model-library handler.
+  "background_worker_event_outbox_v1.js",
 );
 
 globalThis.__CHAT2API_WINDOW_OBSERVER_V90__?.report?.(true).catch?.(() => {});

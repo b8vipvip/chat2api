@@ -105,9 +105,19 @@
 
   async function flush() {
     if (state.restoring || state.flushing || !state.outbox.size || !socketReady()) return false;
+    const workerOutbox = globalThis.__CHAT2API_BACKGROUND_WORKER_EVENT_OUTBOX_V1__;
+    // Wait for server capability negotiation before deciding whether pending
+    // Worker events must be drained or can be discarded for an older server.
+    if (workerOutbox && workerOutbox.serverAckNegotiated !== true) return false;
+    const workerEvents = workerOutbox?.serverAckSupported ? workerOutbox.events : null;
     state.flushing = true;
     try {
       for (const [key, item] of [...state.outbox.entries()]) {
+        const requestId = String(item.payload?.request_id || "");
+        const hasEarlierWorkerEvents = workerEvents && [...workerEvents.values()].some(
+          event => String(event.payload?.request_id || "") === requestId,
+        );
+        if (hasEarlierWorkerEvents) continue;
         if (Date.now() - Number(item.queued_at_ms || 0) > RETENTION_MS) {
           state.outbox.delete(key);
           continue;
@@ -146,6 +156,7 @@
     clearTimeout(state.flushTimer);
     state.flushTimer = setTimeout(() => flush().catch(() => {}), Math.max(0, Number(delay || 0)));
   }
+  state.scheduleFlush = scheduleFlush;
 
   // All current background modules call this shared global helper. A terminal
   // event produced while the WebSocket is briefly down is acknowledged locally

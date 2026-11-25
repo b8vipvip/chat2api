@@ -193,6 +193,35 @@ def test_broker_normalizes_tool_ids_and_preserves_pre_normalized_citations() -> 
     asyncio.run(scenario())
 
 
+def test_worker_event_replay_with_lost_ack_does_not_duplicate_mode2_delta() -> None:
+    async def scenario() -> None:
+        broker = RequestBroker()
+        state = await broker.create("req_worker_event_dedupe_123", "worker-a")
+        worker_socket = object()
+        state.dispatch_socket = worker_socket
+        event = {
+            "type": "chat.delta",
+            "request_id": state.request_id,
+            "worker_event_id": f"{state.request_id}:1",
+            "delta": "one token",
+        }
+        assert await broker.publish_worker_event(
+            state.request_id, event, client_id="worker-a",
+            websocket=worker_socket, current_socket=worker_socket,
+        )
+        # Simulate the server ACK being lost: the Worker replays the exact
+        # event ID. It must not append the same token twice to Mode 2 state.
+        assert await broker.publish_worker_event(
+            state.request_id, event, client_id="worker-a",
+            websocket=worker_socket, current_socket=worker_socket,
+        )
+        assert state.text == "one token"
+        assert state.queue.qsize() == 1
+        assert state.worker_event_ids == {f"{state.request_id}:1"}
+
+    asyncio.run(scenario())
+
+
 def test_all_request_scoped_worker_sidecars_require_original_dispatch_socket() -> None:
     source = (ROOT / "app/main.py").read_text(encoding="utf-8")
     # File chunks, DOM evidence, native sidecars, probes and generic

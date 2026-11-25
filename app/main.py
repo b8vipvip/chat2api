@@ -4012,7 +4012,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         window_target_synced = False
         socket_runtime_epoch = ""  # bound to this socket, not shared metadata
         try:
-            await websocket.send_json({"type": "server.hello", "client_id": client_id, "version": APP_VERSION})
+            await websocket.send_json({
+                "type": "server.hello",
+                "client_id": client_id,
+                "version": APP_VERSION,
+                "capabilities": ["worker_event_ack_v1"],
+            })
             while True:
                 message = await websocket.receive_json()
                 message_type = message.get("type")
@@ -4423,6 +4428,59 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 "reason": "request_not_recoverable",
                             })
                         continue
+                    if (
+                        active_state is None
+                        and message_type in {
+                            "chat.delta", "chat.snapshot", "chat.references",
+                            "chat.tool.call", "chat.tool.result",
+                        }
+                        and str(message.get("worker_event_id") or "").strip()
+                    ):
+                        # A server restart destroys the Broker lease but keeps
+                        # the owner-scoped Mode 1 journal and telemetry row.
+                        # Re-journal replayed nonterminal Worker events for the
+                        # same assigned Worker so the client can still recover
+                        # token-level progress; Mode 2 or stale requests are
+                        # explicitly discarded so they cannot block the
+                        # durable terminal outbox behind an orphaned event.
+                        recovered_event_row = telemetry.get(request_id) or {}
+                        recovered_owner = str(recovered_event_row.get("api_key_id") or "")
+                        recovered_worker = str(recovered_event_row.get("client_id") or "")
+                        recovered_status = str(recovered_event_row.get("status") or "").lower()
+                        recovered_mode1 = (
+                            recovered_event_row.get("web_chat_mode") is True
+                            and bool(recovered_owner)
+                            and recovered_worker == client_id
+                            and recovered_status in {"running", "recovering"}
+                        )
+                        journal_event_id = None
+                        journal_error = ""
+                        if recovered_mode1:
+                            try:
+                                journal_event_id = await event_journal.append_worker_event(
+                                    request_id, recovered_owner, message,
+                                )
+                            except Exception as error:
+                                journal_error = type(error).__name__
+                                logger.exception(
+                                    "Cannot journal recovered Worker event request_id=%s type=%s",
+                                    request_id, message_type,
+                                )
+                        await websocket.send_json({
+                            "type": "chat.event.ack",
+                            "request_id": request_id,
+                            "worker_event_id": str(message.get("worker_event_id") or "")[:180],
+                            "event_id": int(journal_event_id or 0),
+                            "accepted": bool(recovered_mode1 and journal_event_id),
+                            "durable": bool(recovered_mode1 and journal_event_id),
+                            "discarded": bool(not journal_error and not (recovered_mode1 and journal_event_id)),
+                            "reason": (
+                                "journal-not-durable" if journal_error
+                                else "" if recovered_mode1 and journal_event_id
+                                else "request-not-recoverable"
+                            ),
+                        })
+                        continue
                     if not active_state or not active_state.owns_dispatch_socket(
                         client_id, websocket, registry.sockets.get(client_id)
                     ):
@@ -4454,12 +4512,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     # Persist Mode 1 Worker observations before Broker publication.
                     # A Broker/HTTP disconnect must not erase deltas that the
                     # server has already accepted from the assigned Worker.
-                    if active_state.mode1_web_chat and message_type in {
+                    journal_event_id: int | None = None
+                    worker_event_ack_types = {
                         "chat.delta", "chat.snapshot", "chat.references",
-                        "chat.tool.call", "chat.tool.result", "chat.completed",
-                        "chat.error", "chat.cancelled", "image.completed",
-                        "image.error", "image.cancelled",
-                    }:
+                        "chat.tool.call", "chat.tool.result",
+                    }
+                    if (
+                        active_state.mode1_web_chat
+                        and message_type in {
+                            *worker_event_ack_types,
+                            "chat.completed", "chat.error", "chat.cancelled",
+                            "image.completed", "image.error", "image.cancelled",
+                        }
+                        and (
+                            message_type not in worker_event_ack_types
+                            or (
+                                active_state.terminal_event_type is None
+                                and active_state.completed_mono is None
+                            )
+                        )
+                    ):
                         try:
                             if not message.get("worker_event_id"):
                                 if message_type == "chat.tool.call":
@@ -4498,6 +4570,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         websocket=websocket,
                         current_socket=registry.sockets.get(client_id),
                     )
+                    worker_event_id = str(message.get("worker_event_id") or "").strip()
+                    if message_type in worker_event_ack_types and worker_event_id:
+                        # The Worker keeps each nonterminal event in its
+                        # persistent outbox until this correlated ACK arrives.
+                        # For Mode 1, ACK only after the owner-scoped journal
+                        # commit; for Mode 2, Broker acceptance is sufficient.
+                        mode1_durable = (
+                            not active_state.mode1_web_chat
+                            or bool(journal_event_id)
+                        )
+                        discarded = bool(
+                            not accepted
+                            and (
+                                active_state.terminal_event_type is not None
+                                or active_state.completed_mono is not None
+                            )
+                        )
+                        await websocket.send_json({
+                            "type": "chat.event.ack",
+                            "request_id": request_id,
+                            "worker_event_id": worker_event_id[:180],
+                            "event_id": int(journal_event_id or 0),
+                            "accepted": bool(accepted and mode1_durable),
+                            "durable": bool(active_state.mode1_web_chat and journal_event_id),
+                            "discarded": discarded,
+                            "reason": (
+                                "request-terminal-closed" if discarded
+                                else "journal-not-durable" if active_state.mode1_web_chat and not journal_event_id
+                                else "" if accepted else "broker-rejected-event"
+                            ),
+                        })
                     if voice_event_ack_id:
                         await websocket.send_json({
                             "type": "voice.event.ack",
