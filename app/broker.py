@@ -640,7 +640,7 @@ class RequestBroker:
             tool_name = re.sub(r"[^A-Za-z0-9_.:-]", "_",
                                str(event.get("tool_name") or "tool").strip())[:80] or "tool"
             call_id = re.sub(r"[^A-Za-z0-9_.:-]", "",
-                             str(event.get("call_id") or ""))[:128]
+                             str(event.get("call_id") or event.get("id") or event.get("tool_call_id") or ""))[:128]
             result_id = re.sub(r"[^A-Za-z0-9_.:-]", "",
                                str(event.get("result_id") or ""))[:128]
             raw_status = str(event.get("status") or "").lower()
@@ -662,8 +662,13 @@ class RequestBroker:
             # lane. Ordinary Mode 2 SDK streams must not receive UI-only sources.
             if state.mode1_web_chat:
                 references = extract_tool_references(event.get("metadata"))
+                if not references:
+                    references = normalize_tool_references(event.get("references"))
                 if references:
                     normalized["references"] = references
+            event_cursor = event.get("event_id")
+            if isinstance(event_cursor, int) and event_cursor > 0:
+                normalized["event_id"] = event_cursor
             event = normalized
         elif event_type == "chat.references":
             # Final-message citation metadata is an auxiliary Mode 1 lane.
@@ -671,6 +676,8 @@ class RequestBroker:
             if not state.mode1_web_chat:
                 return True
             references = extract_tool_references(event.get("metadata"))
+            if not references:
+                references = normalize_tool_references(event.get("references"))
             if not references:
                 return True
             state.references = normalize_tool_references([
@@ -687,6 +694,8 @@ class RequestBroker:
         elif event_type == "chat.completed":
             if state.mode1_web_chat:
                 terminal_references = extract_tool_references(event.get("metadata"))
+                if not terminal_references:
+                    terminal_references = normalize_tool_references(event.get("references"))
                 if terminal_references:
                     state.references = normalize_tool_references([
                         *state.references, *terminal_references,

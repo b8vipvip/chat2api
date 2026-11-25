@@ -73,7 +73,7 @@ def test_stream_status_keeps_final_content_separate_and_is_nonterminal():
     broker = (ROOT / "app/broker.py").read_text()
     assert 'chunk_payload(response_id, model, {"chat2api_status":' in main
     assert 'if observed["text"] != last_reasoning_text:' in main
-    assert '"reasoning": preview' in main
+    assert 'delta_payload["reasoning"] = preview' in main
     assert "final_chunks = list(final_text_chunks(display_final_text))" in main
     assert "for index, delta in enumerate(final_chunks):" in main
     assert 'chunk_delta: dict[str, object] = {"content": delta}' in main

@@ -409,6 +409,7 @@
       contextInjected: false,
       instructionsApplied: false,
       setupResponseText: "",
+      videoSenderState: null,
       stopped: false,
     };
     state.active = active;
@@ -547,13 +548,27 @@
       return;
     }
     if (!state.active || item.request_id !== state.active.requestId) return;
+    const active = state.active;
+    if ([
+      "voice.live.video.sender.attached",
+      "voice.live.video.sender.detached",
+      "voice.live.video.track.ended",
+    ].includes(item.type)) {
+      // Keep the latest sender lifecycle state outside the bounded diagnostic
+      // ring. A valid reattachment must still recover after older events are
+      // evicted during a long-running 5 FPS camera session.
+      active.videoSenderState = {
+        type: item.type,
+        track_state: String(item.track_state || "unknown").slice(0, 24),
+        reason: String(item.reason || "").slice(0, 240),
+      };
+    }
     // Streaming PCM chunks must never accumulate in the long-lived DOM
     // controller's diagnostics list (hundreds of MB in a long session).
     if (item.type !== "voice.live.audio" && item.type !== "voice.audio.level") {
       state.mainEvents.push(item);
       if (state.mainEvents.length > 250) state.mainEvents.splice(0, 125);
     }
-    const active = state.active;
     if (item.type === "voice.live.input.speech_started") {
       emitLive(active, "input.speech_started").catch(() => {});
     } else if (item.type === "voice.live.input.speech_stopped") {

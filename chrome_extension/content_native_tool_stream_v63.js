@@ -46,12 +46,28 @@
   }
 
   async function emitFinalReferences(detail, requestId) {
+    // Keep this helper local to the bridge function: isolated bridge tests
+    // extract this exact function, and production must not depend on an
+    // unbound closure from another content-script module.
+    const stableEventHash = value => {
+      let hash = 2166136261;
+      const text = String(value || "");
+      for (let index = 0; index < text.length; index += 1) {
+        hash ^= text.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+      }
+      return (hash >>> 0).toString(16);
+    };
     const metadata = cleanMetadata(detail?.metadata);
     if (!metadata || typeof metadata !== "object" || !Object.keys(metadata).length
         || metadata.truncated === true) return;
     const messageId = String(detail?.message_id || "").slice(0, 128);
     let signature = "";
-    try { signature = JSON.stringify(metadata).slice(0, 2048); } catch (_) { return; }
+    let serializedMetadata = "";
+    try {
+      serializedMetadata = JSON.stringify(metadata);
+      signature = serializedMetadata.slice(0, 2048);
+    } catch (_) { return; }
     const requestState = globalThis.__CHAT2API_REQUEST_CONTENT_V6__?.active;
     if (requestState?.requestId === requestId) {
       requestState.nativeCitationMetadata = metadata;
@@ -66,6 +82,7 @@
     await emit({
       type: "chat.references",
       request_id: requestId,
+      worker_event_id: `${String(requestId).slice(0, 72)}:references:${stableEventHash(`${messageId}:${serializedMetadata}`)}`,
       message_id: messageId,
       metadata,
       native: true,

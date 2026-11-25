@@ -128,6 +128,7 @@ test("does not advance the durable SSE cursor on malformed or empty unknown fram
     source.slice(start,end) + "\nconsumeSseFrame",
     {
       appendDelta:(assistant,value)=>{assistant.content += String(value || "");},
+      limitAssistantText:value=>String(value || "").slice(0,32000),
       Number,JSON,Array,String,Object,
     },
   );
@@ -144,8 +145,63 @@ test("does not advance the durable SSE cursor on malformed or empty unknown fram
   assert.equal(parser("id: 9\nevent: cursor\n\n",assistant),false);
   assert.equal(assistant.lastEventId,9,
     "explicit cursor-only heartbeats can safely advance after validation");
-  assert.equal(parser("id: 10\ndata: [DONE]\n\n",assistant),true);
+  assert.equal(parser(
+    "id: 10\nevent: recovery.delta\ndata: " +
+      JSON.stringify({delta:" resumed",offset:5,partial_text_unverified:true}) + "\n\n",
+    assistant,
+  ),false);
+  assert.equal(assistant.content,"hello resumed");
   assert.equal(assistant.lastEventId,10);
+  assert.equal(parser(
+    "id: 10\nevent: recovery.delta\ndata: " +
+      JSON.stringify({delta:" resumed",offset:5,partial_text_unverified:true}) + "\n\n",
+    assistant,
+  ),false);
+  assert.equal(assistant.content,"hello resumed",
+    "duplicate replay cursors must not append the same Worker delta twice");
+  assert.equal(assistant.lastEventId,10);
+  const restoredWithoutCursor = {content:"hello resumed",lastEventId:0};
+  assert.equal(parser(
+    "id: 10\nevent: recovery.delta\ndata: " +
+      JSON.stringify({delta:" resumed",offset:5,partial_text_unverified:true}) + "\n\n",
+    restoredWithoutCursor,
+  ),false);
+  assert.equal(restoredWithoutCursor.content,"hello resumed",
+    "UTF-16 offsets must prevent duplicate provisional text after cursor loss");
+  assert.equal(parser(
+    "id: 11\nevent: delivery.delta\ndata: " +
+      JSON.stringify({delta:"authoritative final answer"}) + "\n\n",
+    assistant,
+  ),false);
+  assert.equal(assistant.content,"authoritative final answer",
+    "the canonical final delivery must replace unverified recovery text");
+  assert.equal(assistant.provisionalRecoveryText,false);
+  const resetAssistant = {content:"",lastEventId:0};
+  assert.equal(parser(
+    "id: 13\nevent: replay.reset\ndata: " +
+      JSON.stringify({
+        status:"running",partial_text:"recovered prefix",
+        partial_text_unverified:true,
+      }) + "\n\n",
+    resetAssistant,
+  ),false);
+  assert.equal(resetAssistant.content,"recovered prefix");
+  assert.equal(resetAssistant.provisionalRecoveryText,true);
+  assert.equal(parser("id: 12\ndata: [DONE]\n\n",assistant),true);
+  assert.equal(assistant.lastEventId,12);
+  const alreadyDelivered = {content:"authoritative answer",lastEventId:5};
+  assert.equal(parser(
+    "data: " + JSON.stringify({choices:[{delta:{chat2api_event_id:10}}]}) + "\n\n",
+    alreadyDelivered,
+  ),false);
+  assert.equal(alreadyDelivered.lastEventId,10);
+  assert.equal(parser(
+    "id: 8\nevent: delivery.delta\ndata: " +
+      JSON.stringify({delta:"authoritative answer"}) + "\n\n",
+    alreadyDelivered,
+  ),false);
+  assert.equal(alreadyDelivered.content,"authoritative answer",
+    "a replay after an idempotent terminal send must not duplicate the final answer");
 });
 
 test("preserves request-scoped tool calls and results as safe presentation state", () => {

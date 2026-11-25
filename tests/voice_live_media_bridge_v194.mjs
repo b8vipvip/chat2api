@@ -97,9 +97,45 @@ senderEvents = [
   {type:"voice.live.video.sender.detached"},
   {type:"voice.live.video.sender.attached"},
 ];
-const reattachedSession = {requestId:"voice-test",videoTrackReady:true};
+const reattachedSession = {
+  requestId:"voice-test",
+  videoTrackReady:false,
+  videoTrackUnavailable:true,
+  videoTrackMode:"snapshot_fallback",
+  videoTrackError:"sender-replaced",
+};
 assert.equal(await ensureLiveVideoTrack(reattachedSession),true,
-  "a newer verified sender attachment supersedes an older detached observation");
+  "a newer verified sender attachment must recover a previously unavailable WebRTC track");
+assert.equal(reattachedSession.videoTrackUnavailable,false);
+assert.equal(reattachedSession.videoTrackMode,"web_rtc");
+assert.equal(reattachedSession.videoTrackError,"");
+senderEvents = [{type:"voice.live.video.sender.attached",track_state:"ended"}];
+const endedSenderSession = {
+  requestId:"voice-test",videoTrackReady:false,videoTrackUnavailable:true,
+  videoTrackMode:"snapshot_fallback",
+};
+assert.equal(await ensureLiveVideoTrack(endedSenderSession),false,
+  "an attachment event for an already-ended track must not restore WebRTC delivery");
+const staleEndedSenderSession = {
+  requestId:"voice-test",videoTrackReady:true,videoTrackUnavailable:false,
+};
+assert.equal(await ensureLiveVideoTrack(staleEndedSenderSession),false,
+  "an ended attachment must invalidate a stale ready flag");
+assert.equal(staleEndedSenderSession.videoTrackUnavailable,true);
+senderEvents = [];
+const reattachedAfterHistoryPrune = {
+  requestId:"voice-test",
+  videoTrackReady:false,
+  videoTrackUnavailable:true,
+  videoTrackMode:"snapshot_fallback",
+  videoSenderState:{
+    type:"voice.live.video.sender.attached",
+    track_state:"live",
+  },
+};
+assert.equal(await ensureLiveVideoTrack(reattachedAfterHistoryPrune),true,
+  "the latest sender state must survive bounded diagnostic-event pruning");
+assert.equal(reattachedAfterHistoryPrune.videoTrackUnavailable,false);
 
 assert.ok(liveRouting.includes("videoFrame: message.video_frame || null"), "the Broker must forward frame timestamps to the Worker tab");
 assert.ok(liveText.includes("refusing to overwrite it"), "draft conflicts must fail closed");

@@ -12,6 +12,7 @@ from app.config import Settings
 from app.main import create_app
 from app.control_plane_v1_patch import install_control_plane_v1
 from app.user_console_v104_patch import install_user_console_v104_patch
+from app.v17_patch import install_v17_patch
 from app.web_chat_integration_v1 import install_web_chat_features_v1
 
 
@@ -273,6 +274,103 @@ def test_web_chat_uses_shared_server_key_but_keeps_user_identity_isolated(tmp_pa
         assert upload_b.status_code == 200, upload_b.text
         assert app.state.file_store.get(file_a).owner_key_id == key_a
         assert app.state.file_store.get(upload_b.json()["id"]).owner_key_id == key_b
+
+
+def test_configured_client_key_is_mode1_only_and_user_created_keys_remain_mode2(tmp_path: Path) -> None:
+    settings = Settings(
+        CHAT2API_DATA_DIR=str(tmp_path),
+        CHAT2API_ADMIN_USERNAME="owner",
+        CHAT2API_ADMIN_PASSWORD="strong-root-password",
+    )
+    app = create_app(settings)
+    install_control_plane_v1(app)
+    install_v17_patch(app)
+    install_user_console_v104_patch(app)
+    install_web_chat_features_v1(app)
+    origin = {"Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"}
+
+    with TestClient(app) as client:
+        registered = client.post("/api/user/register", json={
+            "email": "mode-routing@example.com",
+            "password": "mode-routing-user-password-123",
+        })
+        assert registered.status_code == 200, registered.text
+        logged_in = client.post("/api/user/login", json={
+            "email": "mode-routing@example.com",
+            "password": "mode-routing-user-password-123",
+        })
+        assert logged_in.status_code == 200, logged_in.text
+
+        created_user_key = client.post("/api/user/keys", json={"name": "user-mode2-key"})
+        assert created_user_key.status_code == 200, created_user_key.text
+        user_key_id = created_user_key.json()["key"]["key_id"]
+        user_token = created_user_key.json()["token"]
+        assert app.state.user_accounts.owner_for_key(user_key_id)
+
+        # A user-created key cannot be promoted into the server's shared Mode 1
+        # credential, even by a root administrator.
+        admin_login = client.post(
+            "/api/admin/auth/login",
+            headers=origin,
+            json={"username": "owner", "password": "strong-root-password"},
+        )
+        assert admin_login.status_code == 200, admin_login.text
+        rejected_user_key = client.put(
+            "/api/admin/control/client",
+            headers=origin,
+            json={"api_key": user_token},
+        )
+        assert rejected_user_key.status_code == 400
+        assert "Mode 2" in rejected_user_key.json()["detail"]
+        assert app.state.control_plane.client_api_key_id() == ""
+
+        shared_public, shared_token = asyncio.run(
+            app.state.api_keys.create("server-managed-web-chat")
+        )
+        configured = client.put(
+            "/api/admin/control/client",
+            headers=origin,
+            json={"api_key": shared_token},
+        )
+        assert configured.status_code == 200, configured.text
+        assert app.state.control_plane.client_api_key_id() == shared_public["key_id"]
+
+        # The configured server key is reserved for Mode 1 and is rejected by
+        # every endpoint protected by the generic Mode 2 API-key dependency.
+        shared_on_mode2 = client.get(
+            "/v1/models", headers={"Authorization": f"Bearer {shared_token}"},
+        )
+        assert shared_on_mode2.status_code == 403
+        assert "Mode 1" in shared_on_mode2.json()["error"]["message"]
+
+        # User-created keys remain ordinary OpenAI-compatible Mode 2 keys.
+        user_on_mode2 = client.get(
+            "/v1/models", headers={"Authorization": f"Bearer {user_token}"},
+        )
+        assert user_on_mode2.status_code == 200, user_on_mode2.text
+
+        # The browser uses its HttpOnly account session; neither the shared
+        # service key nor the user's API token is returned by the session API.
+        web_chat_session = client.get("/api/user/chat/session")
+        assert web_chat_session.status_code == 200, web_chat_session.text
+        assert web_chat_session.json()["key_id"] not in {user_key_id, shared_public["key_id"]}
+        assert shared_token not in web_chat_session.text
+        assert user_token not in web_chat_session.text
+
+        # Removing the Web Chat configuration releases the server key back to
+        # its ordinary Mode 2 behavior; the user's own key is unaffected.
+        cleared = client.put(
+            "/api/admin/control/client", headers=origin, json={"clear_api_key": True},
+        )
+        assert cleared.status_code == 200, cleared.text
+        shared_after_clear = client.get(
+            "/v1/models", headers={"Authorization": f"Bearer {shared_token}"},
+        )
+        assert shared_after_clear.status_code == 200, shared_after_clear.text
+        user_after_clear = client.get(
+            "/v1/models", headers={"Authorization": f"Bearer {user_token}"},
+        )
+        assert user_after_clear.status_code == 200, user_after_clear.text
 
 
 def test_web_chat_usage_is_counted_for_user_and_shared_key_once(tmp_path: Path) -> None:

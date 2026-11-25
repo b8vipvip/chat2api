@@ -379,7 +379,20 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                             ),
                         }
                     else:
-                        payload = {"status": "reset", "terminal": False}
+                        latest_status = str(latest_row.get("status") or "running").lower()
+                        partial_text = _best_partial_text(
+                            snapshot.get("delivered_text"),
+                            snapshot.get("worker_partial_text"),
+                        )
+                        payload = {
+                            "status": latest_status
+                            if latest_status in {"queued", "running", "recovering"}
+                            else "reset",
+                            "terminal": False,
+                        }
+                        if partial_text:
+                            payload["partial_text"] = partial_text
+                            payload["partial_text_unverified"] = True
                     reset_event_id = last_id if payload.get("terminal") is True else int(first_id) - 1
                     yield (
                         f"id: {reset_event_id}\nevent: replay.reset\ndata: "
@@ -392,7 +405,9 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
 
                 events = page.get("events") if isinstance(page.get("events"), list) else []
                 latest_row = telemetry.get(request_id) or {}
-                recovering_after_restart = str(latest_row.get("status") or "").lower() == "recovering"
+                latest_status = str(latest_row.get("status") or "").lower()
+                recovering_after_restart = latest_status == "recovering"
+                replay_running = latest_status in {"queued", "running"}
                 recovery_partial_sent = False
                 for item in events:
                     sequence = int(item.get("id") or 0)
@@ -452,9 +467,27 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                         else:
                             event_type = "cursor"
                             payload = {}
-                    elif event_type in {"worker.delta", "worker.snapshot"}:
-                        event_type = "cursor"
-                        payload = {}
+                    elif event_type == "worker.delta":
+                        if replay_running and isinstance(payload.get("delta"), str):
+                            event_type = "recovery.delta"
+                            payload = {
+                                "delta": payload["delta"],
+                                "offset": payload.get("offset"),
+                                "partial_text_unverified": True,
+                            }
+                        else:
+                            event_type = "cursor"
+                            payload = {}
+                    elif event_type == "worker.snapshot":
+                        if replay_running and isinstance(payload.get("text"), str):
+                            event_type = "recovery.partial.snapshot"
+                            payload = {
+                                "partial_text": payload["text"],
+                                "partial_text_unverified": True,
+                            }
+                        else:
+                            event_type = "cursor"
+                            payload = {}
                     elif event_type == "delivery.stalled" and not payload.get("partial_text"):
                         snapshot = await journal.snapshot(request_id, key_id)
                         latest_row = telemetry.get(request_id) or {}
@@ -481,6 +514,27 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                 latest_status = str(latest.get("status") or "unknown").lower()
                 if latest_status in _TERMINAL:
                     snapshot = await journal.snapshot(request_id, key_id)
+                    if latest_status == "completed" and snapshot.get("terminal_status") != "completed":
+                        canonical_text = _completed_delivery_text(latest, snapshot)
+                        delivered_text = snapshot.get("delivered_text")
+                        if (
+                            isinstance(delivered_text, str)
+                            and delivered_text == canonical_text
+                            and snapshot.get("delivered_text_truncated") is not True
+                        ):
+                            try:
+                                # Repair the crash window between durable text
+                                # chunks and the terminal cursor. Never publish
+                                # a completed journal marker for a partial body.
+                                await journal.append_delivery_terminal(
+                                    request_id, key_id, len(canonical_text),
+                                )
+                                snapshot = await journal.snapshot(request_id, key_id)
+                            except Exception:
+                                logger.exception(
+                                    "Unable to repair Web Chat delivery terminal request_id=%s",
+                                    request_id,
+                                )
                     if latest_status == "completed":
                         payload = {
                             "status": "completed",

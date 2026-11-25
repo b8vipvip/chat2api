@@ -475,7 +475,7 @@
       const apiKeyStatus = !data.api_key_configured
         ? "未配置；Web Chat 用户暂时无法发起请求"
         : (data.api_key_enabled
-          ? "已配置：" + (data.api_key_name || "API Key") + " · " + (data.api_key_prefix || "已隐藏")
+          ? "已配置：" + (data.api_key_name || "API Key") + " · " + (data.api_key_prefix || "已隐藏") + " · Mode 1 专用"
           : "已配置但当前不可用；请重新配置或启用该 Key");
       setStatus("cClientApiKeyStatus", apiKeyStatus, Boolean(data.api_key_configured && !data.api_key_enabled));
       setStatus("cClientStatus", "配置已读取 · policy v" + data.policy_version);

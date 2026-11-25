@@ -559,6 +559,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         principal = await api_keys.authenticate(supplied)
         if not principal:
             raise HTTPException(status_code=401, detail="Invalid or disabled API key")
+        # A managed key selected in Client Configuration is reserved for the
+        # authenticated Web Chat Mode 1 adapter. Do not let the same bearer
+        # credential silently fall back to the generic OpenAI-compatible Mode 2
+        # ingress. User-owned keys are never selected as the shared key and
+        # continue to use the original /v1 Mode 2 contract.
+        control_plane = getattr(app.state, "control_plane", None)
+        configured_mode1_key_id = (
+            control_plane.client_api_key_id() if control_plane is not None else ""
+        )
+        if configured_mode1_key_id and principal.key_id == configured_mode1_key_id:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "This API Key is reserved for Web Chat Mode 1. "
+                    "Use the signed-in Web Chat client; user-created API Keys remain Mode 2."
+                ),
+            )
         return principal
 
     async def require_admin_key(
@@ -1966,6 +1983,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
             state.diagnostics["native_identity_archived_count"] = len(items)
             state.diagnostics["native_identity_dom_image_count"] = summary["images"]
+        delivery_journal_ready = False
         if state.mode1_web_chat and state.mode1_owner_key_id:
             try:
                 if status_value == "completed":
@@ -1976,6 +1994,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     state.delivery_event_ids = [
                         int(value) for value in delivery.get("chunk_event_ids", [])
                     ]
+                    delivery_snapshot = await event_journal.snapshot(
+                        state.request_id, state.mode1_owner_key_id,
+                    )
+                    delivery_journal_ready = bool(
+                        delivery_snapshot.get("delivered_text") == journal_text
+                        and delivery_snapshot.get("delivered_text_truncated") is not True
+                        and delivery_snapshot.get("terminal_status") in {"", "completed"}
+                    )
+                    if not delivery_journal_ready:
+                        raise RuntimeError("Durable Web Chat delivery does not match the final projection")
             except Exception as journal_error:
                 state.diagnostics["web_chat_event_journal_error"] = type(journal_error).__name__
                 logger.exception(
@@ -2029,9 +2057,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             try:
                 if status_value == "completed":
                     journal_text = final_text if delivery_text is None else delivery_text
-                    terminal_id = await event_journal.append_delivery_terminal(
-                        state.request_id, state.mode1_owner_key_id, len(journal_text),
-                    )
+                    terminal_id = None
+                    if delivery_journal_ready:
+                        terminal_id = await event_journal.append_delivery_terminal(
+                            state.request_id, state.mode1_owner_key_id, len(journal_text),
+                        )
+                        if not terminal_id:
+                            terminal_snapshot = await event_journal.snapshot(
+                                state.request_id, state.mode1_owner_key_id,
+                            )
+                            if (
+                                terminal_snapshot.get("terminal_status") == "completed"
+                                and terminal_snapshot.get("delivered_text") == journal_text
+                                and terminal_snapshot.get("delivered_text_truncated") is not True
+                            ):
+                                terminal_id = int(terminal_snapshot.get("last_event_id") or 0)
                 elif status_value in {"error", "cancelled", "stalled"}:
                     terminal_id = await event_journal.append_terminal(
                         state.request_id, state.mode1_owner_key_id,
@@ -2079,13 +2119,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not isinstance(delivered, str):
             return False
         if terminal_status:
-            return terminal_status == "completed" and delivered == final_text
-        if delivered and not final_text.startswith(delivered):
-            # Never append a second copy over an unrelated or divergent stream.
+            return bool(
+                terminal_status == "completed"
+                and snapshot.get("delivered_text_truncated") is not True
+                and delivered == final_text
+            )
+        # append_delivery atomically compares the durable prefix and appends
+        # only the missing suffix. It is safe to retry after any process crash.
+        await event_journal.append_delivery(request_id, owner, final_text)
+        verified_delivery = await event_journal.snapshot(request_id, owner)
+        if (
+            verified_delivery.get("delivered_text") != final_text
+            or verified_delivery.get("delivered_text_truncated") is True
+        ):
             return False
-        remainder = final_text[len(delivered):]
-        if remainder:
-            await event_journal.append_delivery(request_id, owner, remainder)
         await event_journal.append_delivery_terminal(
             request_id, owner, len(final_text),
         )
@@ -2093,6 +2140,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return bool(
             verified.get("terminal_status") == "completed"
             and verified.get("delivered_text") == final_text
+            and verified.get("delivered_text_truncated") is not True
         )
 
     async def ensure_replayed_usage_settlement(record: dict[str, Any]) -> bool:
@@ -2742,6 +2790,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         delta = snapshot[len(raw_seen):] if snapshot.startswith(raw_seen) else ""
                         if delta:
                             raw_seen = snapshot
+                    delta_payload: dict[str, object] = {}
                     if delta:
                         # The visible ChatGPT analysis/preview is optionally
                         # streamed in a separate, non-answer lane. It must not
@@ -2752,10 +2801,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             enabled=state.diagnostics.get("visible_reasoning_status_kind") == "reasoning",
                         )
                         if preview:
-                            yield "data: " + json.dumps(
-                                chunk_payload(response_id, model, {"reasoning": preview}),
-                                ensure_ascii=False,
-                            ) + "\n\n"
+                            delta_payload["reasoning"] = preview
+                    if state.mode1_web_chat and isinstance(event.get("event_id"), int):
+                        # Even when the raw delta is not user-visible, advance
+                        # the durable cursor so a reconnect replays only events
+                        # the browser did not receive.
+                        delta_payload["chat2api_event_id"] = event["event_id"]
+                    if delta_payload:
+                        yield "data: " + json.dumps(
+                            chunk_payload(response_id, model, delta_payload),
+                            ensure_ascii=False,
+                        ) + "\n\n"
                 elif event_type == "chat.completed":
                     raw_final = str(event.get("text") or state.text)
                     try:
@@ -2819,6 +2875,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             chunk_delta["chat2api_event_id"] = state.delivery_event_ids[index]
                         yield "data: " + json.dumps(
                             chunk_payload(response_id, model, chunk_delta),
+                            ensure_ascii=False,
+                        ) + "\n\n"
+                    if (
+                        state.mode1_web_chat
+                        and isinstance(state.delivery_terminal_event_id, int)
+                        and state.delivery_terminal_event_id > 0
+                    ):
+                        # Advance the browser's durable cursor only after all
+                        # final content chunks have been sent. This also covers
+                        # idempotent replay where append_delivery returns no
+                        # new chunk IDs because the exact final projection was
+                        # already durable before the reconnect.
+                        yield "data: " + json.dumps(
+                            chunk_payload(response_id, model, {
+                                "chat2api_event_id": state.delivery_terminal_event_id,
+                            }),
                             ensure_ascii=False,
                         ) + "\n\n"
                     meta = chat2api_meta(state, token_meta, principal)
@@ -4379,6 +4451,44 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         active_state.diagnostics["terminal_transport_server_seen"] = True
                         active_state.diagnostics["terminal_transport_server_received_at"] = time.time()
                         active_state.diagnostics["terminal_transport_payload_chars"] = len(str(message.get("text") or ""))
+                    # Persist Mode 1 Worker observations before Broker publication.
+                    # A Broker/HTTP disconnect must not erase deltas that the
+                    # server has already accepted from the assigned Worker.
+                    if active_state.mode1_web_chat and message_type in {
+                        "chat.delta", "chat.snapshot", "chat.references",
+                        "chat.tool.call", "chat.tool.result", "chat.completed",
+                        "chat.error", "chat.cancelled", "image.completed",
+                        "image.error", "image.cancelled",
+                    }:
+                        try:
+                            if not message.get("worker_event_id"):
+                                if message_type == "chat.tool.call":
+                                    call_id = str(message.get("call_id") or message.get("id") or "")
+                                    if call_id:
+                                        message["worker_event_id"] = f"{str(request_id)[:64]}:tool-call:{call_id[:48]}"
+                                elif message_type == "chat.tool.result":
+                                    result_id = str(message.get("result_id") or message.get("call_id") or "")
+                                    if result_id:
+                                        message["worker_event_id"] = f"{str(request_id)[:64]}:tool-result:{result_id[:48]}"
+                                elif message_type.startswith("image."):
+                                    message["worker_event_id"] = f"{str(request_id)[:96]}:{message_type}"
+                            journal_event_id = await event_journal.append_worker_event(
+                                request_id, active_state.mode1_owner_key_id, message,
+                            )
+                            if journal_event_id:
+                                message["event_id"] = int(journal_event_id)
+                                active_state.last_event_id = max(
+                                    active_state.last_event_id, int(journal_event_id),
+                                )
+                                if terminal_message:
+                                    active_state.diagnostics["web_chat_worker_terminal_journaled_type"] = message_type
+                                    active_state.diagnostics["web_chat_worker_terminal_journaled_event_id"] = int(journal_event_id)
+                        except Exception as journal_error:
+                            active_state.diagnostics["web_chat_worker_event_journal_error"] = type(journal_error).__name__
+                            logger.exception(
+                                "Mode 1 Worker event journal append failed request_id=%s type=%s",
+                                request_id, message_type,
+                            )
                     # The Broker repeats the socket/assignment check at its
                     # publication boundary and rejects any server-finalized state.
                     accepted = await broker.publish_worker_event(

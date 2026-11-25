@@ -15,6 +15,7 @@ from app.config import Settings
 from app.main import create_app, web_chat_delivery_text
 from app.telemetry import TelemetryStore
 from app.user_console_v104_patch import install_user_console_v104_patch
+import app.web_chat_event_journal_v1 as event_journal_module
 from app.web_chat_event_journal_v1 import WebChatEventJournal
 
 
@@ -523,6 +524,182 @@ def test_worker_terminal_outbox_replays_across_two_server_instances(tmp_path):
         assert "chat2api-staged:" not in snapshot["delivered_text"]
         assert "/api/media/" in snapshot["delivered_text"]
         assert "/api/generated-files/pending/" in snapshot["delivered_text"]
+
+
+def test_delivery_journal_resume_is_idempotent_and_appends_only_missing_suffix(tmp_path):
+    async def scenario():
+        journal = WebChatEventJournal(tmp_path)
+        await journal.open()
+        request_id = "req_delivery_resume_idempotent"
+        owner = "key-delivery-resume"
+        prefix = "The answer was partly persisted. "
+        final_text = prefix + "This suffix must appear exactly once."
+
+        first = await journal.append_delivery(request_id, owner, prefix)
+        second = await journal.append_delivery(request_id, owner, final_text)
+        repeated = await journal.append_delivery(request_id, owner, final_text)
+        assert first["chunk_event_ids"]
+        assert second["chunk_event_ids"]
+        assert repeated["chunk_event_ids"] == []
+        assert repeated["text_chars"] == len(final_text)
+
+        snapshot = await journal.snapshot(request_id, owner)
+        assert snapshot["delivered_text"] == final_text
+        assert snapshot["delivered_text_truncated"] is False
+
+        page = await journal.events_after(request_id, owner, 0, limit=512)
+        replayed = "".join(
+            item["data"]["delta"] for item in page["events"]
+            if item["type"] == "delivery.delta"
+        )
+        assert replayed == final_text
+        terminal = await journal.append_delivery_terminal(
+            request_id, owner, len(final_text),
+        )
+        assert terminal > 0
+        assert await journal.append_delivery(request_id, owner, final_text) == {
+            "chunk_event_ids": [], "terminal_event_id": 0, "text_chars": len(final_text),
+        }
+        completed = await journal.snapshot(request_id, owner)
+        assert completed["terminal_status"] == "completed"
+        assert completed["delivered_text"] == final_text
+
+    asyncio.run(scenario())
+
+
+def test_delivery_journal_rejects_a_non_prefix_resume(tmp_path):
+    async def scenario():
+        journal = WebChatEventJournal(tmp_path)
+        await journal.open()
+        await journal.append_delivery("req_delivery_prefix_conflict", "key-prefix", "first version")
+        with pytest.raises(ValueError, match="conflicts with its durable prefix"):
+            await journal.append_delivery("req_delivery_prefix_conflict", "key-prefix", "different version")
+
+    asyncio.run(scenario())
+
+
+def test_worker_event_journal_deduplicates_replayed_deltas_by_source_id(tmp_path):
+    async def scenario():
+        journal = WebChatEventJournal(tmp_path)
+        await journal.open()
+        request_id = "req_worker_event_dedupe"
+        owner = "key-worker-event-dedupe"
+        first_event = {
+            "type": "chat.delta",
+            "worker_event_id": f"{request_id}:1",
+            "delta": "first ",
+        }
+        first_id = await journal.append_worker_event(request_id, owner, first_event)
+        duplicate_id = await journal.append_worker_event(request_id, owner, first_event)
+        second_id = await journal.append_worker_event(
+            request_id, owner,
+            {"type": "chat.delta", "worker_event_id": f"{request_id}:2", "delta": "second"},
+        )
+        assert first_id == duplicate_id
+        assert second_id == first_id + 1
+
+        snapshot = await journal.snapshot(request_id, owner)
+        assert snapshot["worker_partial_text"] == "first second"
+        page = await journal.events_after(request_id, owner, 0, limit=16)
+        assert [item["id"] for item in page["events"]] == [first_id, second_id]
+        assert [item["data"]["delta"] for item in page["events"]] == ["first ", "second"]
+        assert [item["data"]["offset"] for item in page["events"]] == [0, 6]
+
+    asyncio.run(scenario())
+
+
+def test_tool_event_metadata_citations_are_journaled_before_broker_normalization(tmp_path):
+    async def scenario():
+        journal = WebChatEventJournal(tmp_path)
+        await journal.open()
+        request_id = "req_tool_metadata_citations"
+        owner = "key-tool-metadata-citations"
+        event = {
+            "type": "chat.tool.result",
+            "worker_event_id": f"{request_id}:tool-result:call-1",
+            "tool_name": "browser.search",
+            "id": "call-1",
+            "status": "completed",
+            "output": "Found the API docs",
+            "metadata": {
+                "annotations": [{
+                    "type": "url_citation",
+                    "url_citation": {
+                        "url": "https://docs.python.org/3/library/",
+                        "title": "Python library reference",
+                        "ref_id": "turn0search0",
+                    },
+                }],
+            },
+        }
+        first_id = await journal.append_worker_event(request_id, owner, event)
+        # Broker normalization can call the same journal append again with an
+        # explicit references array. It must not erase the metadata captured
+        # by the pre-publication Worker journal write.
+        duplicate_id = await journal.append_worker_event(
+            request_id, owner,
+            {
+                **event,
+                "references": [{
+                    "url": "https://docs.python.org/3/library/",
+                    "title": "Python library reference",
+                    "id": "turn0search0",
+                }],
+            },
+        )
+        assert duplicate_id == first_id
+        snapshot = await journal.snapshot(request_id, owner)
+        assert snapshot["references"][0]["url"] == "https://docs.python.org/3/library/"
+        page = await journal.events_after(request_id, owner, 0, limit=8)
+        assert page["events"][0]["data"]["references"][0]["id"] == "turn0search0"
+        assert page["events"][0]["data"]["call_id"] == "call-1"
+        assert page["events"][0]["data"]["result_id"] == ""
+
+    asyncio.run(scenario())
+
+
+def test_worker_event_dedupe_and_citations_survive_event_window_pruning(tmp_path, monkeypatch):
+    async def scenario():
+        monkeypatch.setattr(event_journal_module, "_MAX_EVENTS_PER_REQUEST", 1)
+        journal = WebChatEventJournal(tmp_path)
+        await journal.open()
+        request_id = "req_pruned_worker_dedupe"
+        owner = "key-pruned-worker-dedupe"
+        reference_event = {
+            "type": "chat.references",
+            "worker_event_id": f"{request_id}:references:1",
+            "message_id": "assistant-1",
+            "references": [{
+                "url": "https://docs.python.org/3/library/",
+                "title": "Python docs",
+                "snippet": "Official docs",
+            }],
+        }
+        first_id = await journal.append_worker_event(request_id, owner, reference_event)
+        second_id = await journal.append_worker_event(
+            request_id, owner,
+            {
+                "type": "chat.delta",
+                "worker_event_id": f"{request_id}:2",
+                "delta": "later",
+            },
+        )
+        assert second_id == first_id + 1
+        page = await journal.events_after(request_id, owner, 0, limit=8)
+        assert [item["id"] for item in page["events"]] == [second_id]
+
+        # The original reference event is outside the bounded replay window,
+        # but its card metadata and source identity remain durable for replay
+        # deduplication and terminal snapshots.
+        snapshot = await journal.snapshot(request_id, owner)
+        assert snapshot["references"][0]["url"] == "https://docs.python.org/3/library/"
+        duplicate_id = await journal.append_worker_event(request_id, owner, reference_event)
+        assert duplicate_id == first_id
+        after_duplicate = await journal.snapshot(request_id, owner)
+        assert after_duplicate["last_event_id"] == second_id
+        assert after_duplicate["references"] == snapshot["references"]
+
+    asyncio.run(scenario())
 
 
 def test_final_message_citation_metadata_is_durable_in_worker_and_terminal_records(tmp_path):

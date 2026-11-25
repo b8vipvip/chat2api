@@ -86,6 +86,7 @@ class WebChatEventJournal:
                     delivered_text_truncated INTEGER NOT NULL DEFAULT 0,
                     terminal_status TEXT NOT NULL DEFAULT '',
                     terminal_message TEXT NOT NULL DEFAULT '',
+                    references_json TEXT NOT NULL DEFAULT '[]',
                     updated_at REAL NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS web_chat_events (
@@ -95,6 +96,7 @@ class WebChatEventJournal:
                     event_type TEXT NOT NULL,
                     payload TEXT NOT NULL,
                     created_at REAL NOT NULL,
+                    source_event_id TEXT NOT NULL DEFAULT '',
                     PRIMARY KEY (request_id, sequence),
                     FOREIGN KEY (request_id)
                         REFERENCES web_chat_event_state(request_id)
@@ -102,10 +104,90 @@ class WebChatEventJournal:
                 );
                 CREATE INDEX IF NOT EXISTS idx_web_chat_events_retention
                     ON web_chat_events(created_at);
+                CREATE TABLE IF NOT EXISTS web_chat_event_dedupe (
+                    request_id TEXT NOT NULL,
+                    owner_key_id TEXT NOT NULL,
+                    source_event_id TEXT NOT NULL,
+                    sequence INTEGER NOT NULL,
+                    created_at REAL NOT NULL,
+                    PRIMARY KEY (request_id, source_event_id),
+                    FOREIGN KEY (request_id)
+                        REFERENCES web_chat_event_state(request_id)
+                        ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_web_chat_event_dedupe_retention
+                    ON web_chat_event_dedupe(created_at);
                 """
             )
+            event_columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(web_chat_events)").fetchall()
+            }
+            if "source_event_id" not in event_columns:
+                connection.execute(
+                    "ALTER TABLE web_chat_events ADD COLUMN source_event_id TEXT NOT NULL DEFAULT ''"
+                )
+            state_columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(web_chat_event_state)").fetchall()
+            }
+            if "references_json" not in state_columns:
+                connection.execute(
+                    "ALTER TABLE web_chat_event_state ADD COLUMN references_json TEXT NOT NULL DEFAULT '[]'"
+                )
+            connection.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_web_chat_events_source_id
+                ON web_chat_events(request_id, source_event_id)
+                WHERE source_event_id <> ''
+                """
+            )
+            # Keep source identities independently of the bounded event page.
+            # A replay older than the 50k visible-event window must not be
+            # re-appended merely because its original event row was pruned.
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO web_chat_event_dedupe(
+                    request_id, owner_key_id, source_event_id, sequence, created_at
+                )
+                SELECT request_id, owner_key_id, source_event_id, sequence, created_at
+                FROM web_chat_events WHERE source_event_id <> ''
+                """
+            )
+            # Backfill citation state before event retention can prune old
+            # reference-card rows from the replay window.
+            legacy_reference_rows = connection.execute(
+                """
+                SELECT request_id, payload FROM web_chat_events
+                WHERE event_type IN ('chat.references', 'chat.tool.call', 'chat.tool.result', 'worker.terminal')
+                ORDER BY sequence ASC
+                """
+            ).fetchall()
+            legacy_references: dict[str, list[dict[str, Any]]] = {}
+            for reference_row in legacy_reference_rows:
+                try:
+                    reference_payload = json.loads(str(reference_row["payload"]))
+                except (ValueError, TypeError):
+                    continue
+                if not isinstance(reference_payload, dict):
+                    continue
+                found = normalize_tool_references(reference_payload.get("references"))
+                if found:
+                    request_ref = str(reference_row["request_id"])
+                    legacy_references[request_ref] = normalize_tool_references([
+                        *legacy_references.get(request_ref, []), *found,
+                    ])
+            for request_ref, found in legacy_references.items():
+                connection.execute(
+                    """
+                    UPDATE web_chat_event_state SET references_json = ?
+                    WHERE request_id = ? AND references_json = '[]'
+                    """,
+                    (json.dumps(found, ensure_ascii=False, separators=(",", ":")), request_ref),
+                )
             cutoff = time.time() - _RETENTION_SECONDS
             connection.execute("DELETE FROM web_chat_events WHERE created_at < ?", (cutoff,))
+            connection.execute("DELETE FROM web_chat_event_dedupe WHERE created_at < ?", (cutoff,))
             connection.execute(
                 """
                 DELETE FROM web_chat_event_state
@@ -143,12 +225,16 @@ class WebChatEventJournal:
             field = "arguments" if event_type == "chat.tool.call" else "output"
             payload: dict[str, Any] = {
                 "tool_name": _text(event.get("tool_name"), 80) or "tool",
-                "call_id": _text(event.get("call_id"), 128),
+                "call_id": _text(
+                    event.get("call_id") or event.get("id") or event.get("tool_call_id"), 128,
+                ),
                 "result_id": _text(event.get("result_id"), 128),
                 "status": _text(event.get("status"), 24),
                 field: _text(event.get(field), _MAX_TOOL_TEXT_CHARS),
             }
-            references = normalize_tool_references(event.get("references"))
+            references = extract_tool_references(event.get("metadata"))
+            if not references:
+                references = normalize_tool_references(event.get("references"))
             if references:
                 payload["references"] = references
             return event_type, payload
@@ -184,29 +270,132 @@ class WebChatEventJournal:
         record = self._worker_record(event)
         if record is None:
             return None
+        source_event_id = _text(event.get("worker_event_id"), 128)
+        if source_event_id and any(
+            not (character.isascii() and (character.isalnum() or character in "._:-"))
+            for character in source_event_id
+        ):
+            source_event_id = ""
         rows = await asyncio.to_thread(
-            self._append_records, request_id, owner_key_id, [record],
+            self._append_records, request_id, owner_key_id, [record], source_event_id,
         )
         return rows[0] if rows else None
 
     async def append_delivery(
         self, request_id: str, owner_key_id: str, final_text: str,
     ) -> dict[str, Any]:
+        """Idempotently append the missing suffix of the exact final delivery.
+
+        The snapshot comparison and suffix append happen under one SQLite
+        IMMEDIATE transaction. If the process crashes after some chunks are
+        durable but before the terminal marker, replaying the same final text
+        appends only the missing suffix instead of duplicating the answer.
+        """
         if not request_id or not owner_key_id:
             raise ValueError("Web Chat event ownership is required")
-        text = _text(final_text, _MAX_TEXT_CHARS)
-        records = [
-            ("delivery.delta", {"delta": text[start:start + FINAL_CHUNK_CHARS]})
-            for start in range(0, len(text), FINAL_CHUNK_CHARS)
-        ]
+        if not isinstance(final_text, str) or len(final_text) > _MAX_TEXT_CHARS:
+            raise ValueError("Web Chat final delivery exceeds the durable text limit")
         sequences = await asyncio.to_thread(
-            self._append_records, request_id, owner_key_id, records,
-        ) if records else []
+            self._append_delivery, request_id, owner_key_id, final_text,
+        ) if final_text else []
         return {
             "chunk_event_ids": sequences,
             "terminal_event_id": 0,
-            "text_chars": len(text),
+            "text_chars": len(final_text),
         }
+
+    def _append_delivery(
+        self, request_id: str, owner_key_id: str, final_text: str,
+    ) -> list[int]:
+        now = time.time()
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            state = connection.execute(
+                "SELECT * FROM web_chat_event_state WHERE request_id = ?",
+                (request_id,),
+            ).fetchone()
+            if state is not None and str(state["owner_key_id"]) != owner_key_id:
+                connection.rollback()
+                raise PermissionError("Web Chat event request owner mismatch")
+
+            if state is None:
+                connection.execute(
+                    """
+                    INSERT INTO web_chat_event_state(request_id, owner_key_id, updated_at)
+                    VALUES (?, ?, ?)
+                    """,
+                    (request_id, owner_key_id, now),
+                )
+                last_sequence = 0
+                delivered_text = ""
+                delivered_truncated = False
+            else:
+                last_sequence = int(state["last_sequence"])
+                delivered_text = str(state["delivered_text"] or "")
+                delivered_truncated = bool(state["delivered_text_truncated"])
+                terminal_status = str(state["terminal_status"] or "")
+                if terminal_status:
+                    if (
+                        terminal_status == "completed"
+                        and not delivered_truncated
+                        and delivered_text == final_text
+                    ):
+                        connection.rollback()
+                        return []
+                    # Preserve the journal's first-terminal-wins contract. A
+                    # conflicting or non-completed terminal blocks later text;
+                    # callers verify the snapshot before publishing completion.
+                    connection.rollback()
+                    return []
+                if delivered_truncated:
+                    connection.rollback()
+                    raise ValueError("Existing Web Chat delivery is truncated and cannot be resumed safely")
+                if not final_text.startswith(delivered_text):
+                    connection.rollback()
+                    raise ValueError("Web Chat final delivery conflicts with its durable prefix")
+
+            remainder = final_text[len(delivered_text):]
+            if not remainder:
+                connection.rollback()
+                return []
+
+            sequences: list[int] = []
+            for start in range(0, len(remainder), FINAL_CHUNK_CHARS):
+                delta = remainder[start:start + FINAL_CHUNK_CHARS]
+                last_sequence += 1
+                sequences.append(last_sequence)
+                connection.execute(
+                    """
+                    INSERT INTO web_chat_events(
+                        request_id, owner_key_id, sequence, event_type, payload, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        request_id, owner_key_id, last_sequence, "delivery.delta",
+                        _json_payload({"delta": delta}), now,
+                    ),
+                )
+                delivered_text += delta
+
+            connection.execute(
+                """
+                UPDATE web_chat_event_state
+                SET last_sequence = ?, delivered_text = ?,
+                    delivered_text_truncated = 0, updated_at = ?
+                WHERE request_id = ? AND owner_key_id = ?
+                """,
+                (last_sequence, delivered_text, now, request_id, owner_key_id),
+            )
+            connection.execute(
+                """
+                DELETE FROM web_chat_events
+                WHERE request_id = ? AND sequence <= ?
+                """,
+                (request_id, max(0, last_sequence - _MAX_EVENTS_PER_REQUEST)),
+            )
+            connection.commit()
+            self._secure_sqlite_files()
+        return sequences
 
     async def append_delivery_terminal(
         self, request_id: str, owner_key_id: str, text_chars: int,
@@ -244,11 +433,11 @@ class WebChatEventJournal:
         request_id: str,
         owner_key_id: str,
         records: list[tuple[str, dict[str, Any]]],
+        source_event_id: str = "",
     ) -> list[int]:
         if not records:
             return []
         now = time.time()
-        encoded = [(kind, _json_payload(payload)) for kind, payload in records]
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             state = connection.execute(
@@ -258,6 +447,18 @@ class WebChatEventJournal:
             if state is not None and str(state["owner_key_id"]) != owner_key_id:
                 connection.rollback()
                 raise PermissionError("Web Chat event request owner mismatch")
+            if source_event_id:
+                existing = connection.execute(
+                    """
+                    SELECT sequence FROM web_chat_event_dedupe
+                    WHERE request_id = ? AND source_event_id = ?
+                    LIMIT 1
+                    """,
+                    (request_id, source_event_id),
+                ).fetchone()
+                if existing is not None:
+                    connection.rollback()
+                    return [int(existing["sequence"])]
             if state is not None and str(state["terminal_status"] or ""):
                 # The first durable delivery terminal is absorbing. Do not
                 # append late Worker retries, delivery chunks, or competing
@@ -279,6 +480,7 @@ class WebChatEventJournal:
                 delivered_truncated = False
                 terminal_status = ""
                 terminal_message = ""
+                references: list[dict[str, Any]] = []
             else:
                 last_sequence = int(state["last_sequence"])
                 worker_text = str(state["worker_text"] or "")
@@ -287,19 +489,50 @@ class WebChatEventJournal:
                 delivered_truncated = bool(state["delivered_text_truncated"])
                 terminal_status = str(state["terminal_status"] or "")
                 terminal_message = str(state["terminal_message"] or "")
+                try:
+                    stored_references = json.loads(str(state["references_json"] or "[]"))
+                except (ValueError, TypeError):
+                    stored_references = []
+                references = normalize_tool_references(stored_references)
 
             sequences: list[int] = []
-            for (event_type, payload_json), (_, payload) in zip(encoded, records):
+            for event_type, payload in records:
+                stored_payload = dict(payload)
+                if event_type == "worker.delta":
+                    # JavaScript string offsets are UTF-16 code units; persist
+                    # the matching offset so replay can deduplicate even when a
+                    # browser's last-event cursor was not saved before reload.
+                    stored_payload["offset"] = len(worker_text.encode("utf-16-le")) // 2
+                payload_json = _json_payload(stored_payload)
                 last_sequence += 1
                 sequences.append(last_sequence)
                 connection.execute(
                     """
                     INSERT INTO web_chat_events(
-                        request_id, owner_key_id, sequence, event_type, payload, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                        request_id, owner_key_id, sequence, event_type, payload, created_at,
+                        source_event_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (request_id, owner_key_id, last_sequence, event_type, payload_json, now),
+                    (
+                        request_id, owner_key_id, last_sequence, event_type, payload_json,
+                        now, source_event_id,
+                    ),
                 )
+                if source_event_id:
+                    connection.execute(
+                        """
+                        INSERT INTO web_chat_event_dedupe(
+                            request_id, owner_key_id, source_event_id, sequence, created_at
+                        ) VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (request_id, owner_key_id, source_event_id, last_sequence, now),
+                    )
+                if event_type in {"chat.references", "chat.tool.call", "chat.tool.result", "worker.terminal"}:
+                    incoming_references = normalize_tool_references(payload.get("references"))
+                    if incoming_references:
+                        references = normalize_tool_references([
+                            *references, *incoming_references,
+                        ])
                 if event_type == "worker.delta":
                     addition = _text(payload.get("delta"), 65_536)
                     remaining = max(0, _MAX_TEXT_CHARS - len(worker_text))
@@ -346,13 +579,16 @@ class WebChatEventJournal:
                 UPDATE web_chat_event_state
                 SET last_sequence = ?, worker_text = ?, delivered_text = ?,
                     worker_text_truncated = ?, delivered_text_truncated = ?,
-                    terminal_status = ?, terminal_message = ?, updated_at = ?
+                    terminal_status = ?, terminal_message = ?, references_json = ?,
+                    updated_at = ?
                 WHERE request_id = ? AND owner_key_id = ?
                 """,
                 (
                     last_sequence, worker_text, delivered_text,
                     int(worker_truncated), int(delivered_truncated),
-                    terminal_status, terminal_message, now, request_id, owner_key_id,
+                    terminal_status, terminal_message,
+                    json.dumps(references, ensure_ascii=False, separators=(",", ":")),
+                    now, request_id, owner_key_id,
                 ),
             )
             connection.execute(
@@ -433,32 +669,21 @@ class WebChatEventJournal:
                 """
                 SELECT last_sequence, worker_text, delivered_text,
                        worker_text_truncated, delivered_text_truncated,
-                       terminal_status, terminal_message, updated_at
+                       terminal_status, terminal_message, references_json, updated_at
                 FROM web_chat_event_state
                 WHERE request_id = ? AND owner_key_id = ?
                 """,
                 (request_id, owner_key_id),
             ).fetchone()
-            reference_rows = connection.execute(
-                """
-                SELECT payload FROM web_chat_events
-                WHERE request_id = ? AND owner_key_id = ?
-                  AND event_type IN ('chat.references', 'chat.tool.result', 'worker.terminal')
-                ORDER BY sequence ASC
-                """,
-                (request_id, owner_key_id),
-            ).fetchall()
         references: list[dict[str, str]] = []
-        for reference_row in reference_rows:
+        if row is not None:
             try:
-                payload = json.loads(str(reference_row["payload"]))
+                stored_references = json.loads(str(row["references_json"] or "[]"))
+                if isinstance(stored_references, dict):
+                    stored_references = stored_references.get("references", [])
             except (ValueError, TypeError):
-                continue
-            if isinstance(payload, dict):
-                references = normalize_tool_references([
-                    *references,
-                    *(payload.get("references") if isinstance(payload.get("references"), list) else []),
-                ])
+                stored_references = []
+            references = normalize_tool_references(stored_references)
         if row is None:
             return {
                 "last_event_id": 0, "worker_partial_text": "",

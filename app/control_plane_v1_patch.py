@@ -226,8 +226,15 @@ def install_control_plane_v1(app: FastAPI) -> FastAPI:
                 if principal is None or principal.kind != "managed":
                     raise HTTPException(status_code=400, detail="API Key 无效、已停用或已过期")
                 key_record = getattr(api_keys, "keys", {}).get(principal.key_id)
-                if key_record is None or key_record.internal_owner_user_id:
-                    raise HTTPException(status_code=400, detail="只能配置服务端已创建的托管 API Key")
+                accounts = getattr(app.state, "user_accounts", None)
+                account_owner = (
+                    accounts.owner_for_key(principal.key_id) if accounts is not None else None
+                )
+                if key_record is None or key_record.internal_owner_user_id or account_owner:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="只能配置未绑定用户账户的服务端托管 API Key；账户设置中创建的 API Key 固定走 Mode 2",
+                    )
                 if "chat" not in principal.scopes or "models" not in principal.scopes:
                     raise HTTPException(status_code=400, detail="统一 API Key 必须具有 chat 和 models 权限")
                 if key_record.token_quota is not None:

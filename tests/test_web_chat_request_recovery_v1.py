@@ -10,6 +10,7 @@ from fastapi import Response
 from fastapi.testclient import TestClient
 
 from app.user_commerce import USER_SESSION_COOKIE
+import app.web_chat_event_journal_v1 as event_journal_module
 
 from app.config import Settings
 from app.main import create_app
@@ -183,6 +184,114 @@ def test_sse_event_replay_is_owner_scoped_and_honors_last_event_id(tmp_path):
         assert '"status":"completed"' in future_cursor.text
         assert '"response_text":"xxxxx' in future_cursor.text
         assert "event: delivery.delta" not in future_cursor.text
+
+
+def test_running_sse_replay_resumes_durable_worker_deltas_from_cursor(tmp_path):
+    app = make_app(tmp_path)
+    request_id = "req_running_worker_delta_replay"
+    with TestClient(app) as client:
+        user_id = register(client, "worker-delta-replay@example.org")
+        key_id = "key_worker_delta_replay"
+        app.state.user_accounts.attach_key(user_id, key_id)
+        remember(
+            app, request_id, key_id, status="running",
+            web_chat_mode=True, response_text="", response_text_available=False,
+        )
+        first_id = asyncio.run(app.state.web_chat_event_journal.append_worker_event(
+            request_id, key_id,
+            {"type": "chat.delta", "worker_event_id": f"{request_id}:1", "delta": "already received "},
+        ))
+        second_id = asyncio.run(app.state.web_chat_event_journal.append_worker_event(
+            request_id, key_id,
+            {"type": "chat.delta", "worker_event_id": f"{request_id}:2", "delta": "missing suffix"},
+        ))
+
+        received = []
+        with client.stream(
+            "GET",
+            f"/api/user/chat/requests/{request_id}/events",
+            headers={"Last-Event-ID": str(first_id)},
+        ) as replay:
+            assert replay.status_code == 200
+            for line in replay.iter_lines():
+                received.append(line)
+                if line.startswith("data: ") and "missing suffix" in line:
+                    break
+
+        body = "\n".join(received)
+        assert f"id: {second_id}\nevent: recovery.delta" in body
+        assert "already received" not in body
+        assert '"partial_text_unverified":true' in body
+
+
+def test_replay_cursor_gap_restores_latest_unverified_worker_snapshot(tmp_path, monkeypatch):
+    monkeypatch.setattr(event_journal_module, "_MAX_EVENTS_PER_REQUEST", 1)
+    app = make_app(tmp_path)
+    request_id = "req_replay_cursor_gap_123"
+    with TestClient(app) as client:
+        user_id = register(client, "cursor-gap@example.org")
+        key_id = "key_cursor_gap"
+        app.state.user_accounts.attach_key(user_id, key_id)
+        remember(
+            app, request_id, key_id, status="running",
+            web_chat_mode=True, response_text="", response_text_available=False,
+        )
+        first_id = asyncio.run(app.state.web_chat_event_journal.append_worker_event(
+            request_id, key_id,
+            {"type": "chat.delta", "worker_event_id": f"{request_id}:1", "delta": "first "},
+        ))
+        second_id = asyncio.run(app.state.web_chat_event_journal.append_worker_event(
+            request_id, key_id,
+            {"type": "chat.delta", "worker_event_id": f"{request_id}:2", "delta": "latest"},
+        ))
+        page = asyncio.run(app.state.web_chat_event_journal.events_after(
+            request_id, key_id, 0, limit=8,
+        ))
+        assert page["first_event_id"] == second_id
+        assert page["last_event_id"] == second_id
+
+        replay = client.get(
+            f"/api/user/chat/requests/{request_id}/events",
+            headers={"Last-Event-ID": "0"},
+        )
+        assert replay.status_code == 200, replay.text
+        assert "event: replay.reset" in replay.text
+        assert '"status":"running"' in replay.text
+        assert '"partial_text":"first latest"' in replay.text
+        assert '"partial_text_unverified":true' in replay.text
+        assert f"id: {second_id}\nevent: recovery.delta" in replay.text
+
+
+def test_completed_sse_replay_repairs_missing_delivery_terminal_after_crash(tmp_path):
+    app = make_app(tmp_path)
+    request_id = "req_completed_delivery_terminal_repair"
+    final_text = "A fully persisted answer whose terminal marker was interrupted."
+    with TestClient(app) as client:
+        user_id = register(client, "delivery-terminal-repair@example.org")
+        app.state.user_accounts.attach_key(user_id, "key_delivery_terminal_repair")
+        remember(
+            app, request_id, "key_delivery_terminal_repair",
+            status="completed", web_chat_mode=True,
+            response_text=final_text, response_text_available=True,
+        )
+        asyncio.run(app.state.web_chat_event_journal.append_delivery(
+            request_id, "key_delivery_terminal_repair", final_text,
+        ))
+        before = asyncio.run(app.state.web_chat_event_journal.snapshot(
+            request_id, "key_delivery_terminal_repair",
+        ))
+        assert before["terminal_status"] == ""
+
+        replay = client.get(f"/api/user/chat/requests/{request_id}/events")
+        assert replay.status_code == 200, replay.text
+        assert "event: recovery.terminal" in replay.text
+        assert final_text in replay.text
+
+        after = asyncio.run(app.state.web_chat_event_journal.snapshot(
+            request_id, "key_delivery_terminal_repair",
+        ))
+        assert after["terminal_status"] == "completed"
+        assert after["delivered_text"] == final_text
 
 
 def test_recovering_sse_replay_surfaces_unverified_worker_progress_before_terminal(tmp_path):
