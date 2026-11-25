@@ -481,6 +481,27 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                 latest_status = str(latest.get("status") or "unknown").lower()
                 if latest_status in _TERMINAL:
                     snapshot = await journal.snapshot(request_id, key_id)
+                    if latest_status == "completed" and snapshot.get("terminal_status") != "completed":
+                        canonical_text = _completed_delivery_text(latest, snapshot)
+                        delivered_text = snapshot.get("delivered_text")
+                        if (
+                            isinstance(delivered_text, str)
+                            and delivered_text == canonical_text
+                            and snapshot.get("delivered_text_truncated") is not True
+                        ):
+                            try:
+                                # Repair the crash window between durable text
+                                # chunks and the terminal cursor. Never publish
+                                # a completed journal marker for a partial body.
+                                await journal.append_delivery_terminal(
+                                    request_id, key_id, len(canonical_text),
+                                )
+                                snapshot = await journal.snapshot(request_id, key_id)
+                            except Exception:
+                                logger.exception(
+                                    "Unable to repair Web Chat delivery terminal request_id=%s",
+                                    request_id,
+                                )
                     if latest_status == "completed":
                         payload = {
                             "status": "completed",
