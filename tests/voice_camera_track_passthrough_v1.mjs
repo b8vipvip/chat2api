@@ -35,6 +35,7 @@ class FakeAudioContext {
 class FakeRTCPeerConnection {
   addEventListener() {}
   addTrack(track) { return {track}; }
+  removeTrack(sender) { this.removedSender = sender; }
   addTransceiver(trackOrKind) { return {sender:{track:trackOrKind}}; }
 }
 class FakeRTCRtpSender {
@@ -157,6 +158,12 @@ assert.ok(posted.some(message=>message.type==="voice.live.video.sender.detached"
   && message.reason==="sender-replaced"),
   "replacing the synthetic sender with another track must be observable");
 await sender.replaceTrack(generatedVideoTrack);
+const removePeer = new sandbox.RTCPeerConnection();
+removePeer.removeTrack({track:generatedVideoTrack});
+assert.ok(posted.some(message=>message.type==="voice.live.video.sender.detached"
+  && message.reason==="sender-removed"),
+  "RTCPeerConnection.removeTrack must be reported when ChatGPT stops using the synthetic camera");
+removePeer.addTrack(generatedVideoTrack);
 
 dispatch("voice.live.video.frame",{
   base64:"AA==",
