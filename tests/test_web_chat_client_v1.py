@@ -321,10 +321,11 @@ def test_guest_web_chat_is_policy_gated_and_uses_account_scoped_identity(tmp_pat
     shared_public, _shared_token = asyncio.run(app.state.api_keys.create("guest-web-chat-shared"))
 
     with TestClient(app) as client:
-        assert client.post("/api/user/guest-session").status_code == 403
+        origin = {"Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"}
+        assert client.post("/api/user/guest-session", headers=origin).status_code == 403
         app.state.control_plane.update_client({"api_key_id": shared_public["key_id"], "guest_enabled": True})
 
-        created = client.post("/api/user/guest-session")
+        created = client.post("/api/user/guest-session", headers=origin)
         assert created.status_code == 200, created.text
         guest = created.json()["user"]
         assert guest["is_guest"] is True

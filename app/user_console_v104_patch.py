@@ -15,7 +15,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field, StrictInt
 
-from .admin_auth import SESSION_COOKIE as ADMIN_SESSION_COOKIE
+from .admin_auth import SESSION_COOKIE as ADMIN_SESSION_COOKIE, same_origin_admin_request
 from .admin_audit import AdminAuditError, AdminAuditStore
 from .api_keys import load_or_create_data_secret, token_hash
 from .responses_multimodal_input_v183 import verify_raster_image
@@ -517,9 +517,23 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
 
     @app.post("/api/user/guest-session")
     async def user_guest_session(request: Request) -> JSONResponse:
+        if not same_origin_admin_request(request):
+            raise HTTPException(status_code=403, detail="请求来源无效")
         control = getattr(app.state, "control_plane", None)
-        if control is None or control.public_client().get("guest_enabled") is not True:
+        if control is None:
+            raise HTTPException(status_code=503, detail="Web Chat 服务尚未完成服务端配置")
+        client_policy = control.public_client()
+        if client_policy.get("web_chat_enabled") is not True:
+            raise HTTPException(status_code=403, detail="Web Chat 当前已由管理员停用")
+        if client_policy.get("guest_enabled") is not True:
             raise HTTPException(status_code=403, detail="游客使用已关闭，请登录账户")
+        api_keys = getattr(app.state, "api_keys", None)
+        configured_key_id = control.client_api_key_id()
+        if not configured_key_id or api_keys is None:
+            raise HTTPException(status_code=503, detail="管理员尚未配置 Web Chat 统一 API Key")
+        shared = await api_keys.authenticate_key_id(configured_key_id)
+        if shared is None or not {"chat", "models"}.issubset(set(shared.scopes)):
+            raise HTTPException(status_code=503, detail="Web Chat 统一 API Key 已失效或权限不足")
         existing = accounts.authenticate(request.cookies.get(USER_SESSION_COOKIE))
         if existing is not None:
             return JSONResponse(
