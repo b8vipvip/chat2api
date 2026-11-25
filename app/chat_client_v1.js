@@ -535,6 +535,7 @@
         setConnection("登录已失效", "error");
         openLoginDialog();
       } else if (guestLoginRequired(response.status, payload)) {
+        state.user = null;
         showOnly("authRequired");
         setConnection("游客访问已关闭", "error");
         openLoginDialog(String(payload.detail || "游客使用已关闭，请登录账户"));
