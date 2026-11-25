@@ -341,7 +341,7 @@ def test_configured_client_key_is_mode1_only_and_user_created_keys_remain_mode2(
             "/v1/models", headers={"Authorization": f"Bearer {shared_token}"},
         )
         assert shared_on_mode2.status_code == 403
-        assert "Mode 1" in shared_on_mode2.json()["detail"]
+        assert "Mode 1" in shared_on_mode2.json()["error"]["message"]
 
         # User-created keys remain ordinary OpenAI-compatible Mode 2 keys.
         user_on_mode2 = client.get(
