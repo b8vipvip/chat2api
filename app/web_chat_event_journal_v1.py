@@ -225,8 +225,12 @@ class WebChatEventJournal:
             field = "arguments" if event_type == "chat.tool.call" else "output"
             payload: dict[str, Any] = {
                 "tool_name": _text(event.get("tool_name"), 80) or "tool",
-                "call_id": _text(event.get("call_id"), 128),
-                "result_id": _text(event.get("result_id"), 128),
+                "call_id": _text(
+                    event.get("call_id") or event.get("id") or event.get("tool_call_id"), 128,
+                ),
+                "result_id": _text(
+                    event.get("result_id") or event.get("call_id") or event.get("id"), 128,
+                ),
                 "status": _text(event.get("status"), 24),
                 field: _text(event.get(field), _MAX_TOOL_TEXT_CHARS),
             }
