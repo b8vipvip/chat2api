@@ -72,6 +72,9 @@ def test_v02296_runtime_contract_advertises_only_active_authorities() -> None:
     assert features["same_api_parallel_requests"] is True
     assert features["browser_side_same_api_queue"] is False
     assert features["speculative_worker_windows"] is False
+    assert features["web_chat_live_video_track_v1"] is True
+    assert features["web_chat_live_video_frame_budget_v1"] is True
+    assert features["web_chat_live_video_av_sync_v1"] is False
 
     # Historical v57/v27/v28/v29/v88 owners remain code history only.
     assert features["worker_key_capacity_fifo_queue"] is False
@@ -92,6 +95,7 @@ def test_v02296_runtime_contract_advertises_only_active_authorities() -> None:
         "route-close-terminal-v91",
         "release-v02275",
         "linux-device-worker-console-v122",
+        "web-chat-live-video-track-v1",
     ):
         assert marker in revision
 
