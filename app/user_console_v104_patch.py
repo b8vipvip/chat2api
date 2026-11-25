@@ -365,7 +365,10 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
 
     @app.get("/settings", include_in_schema=False)
     @app.get("/console", include_in_schema=False)
-    async def user_console() -> HTMLResponse:
+    async def user_console(request: Request) -> Response:
+        session_user = accounts.authenticate(request.cookies.get(USER_SESSION_COOKIE))
+        if session_user and session_user.get("is_guest"):
+            return RedirectResponse("/chat", status_code=303)
         template = Path(__file__).with_name("user_console_v104.html").read_text(encoding="utf-8")
         return HTMLResponse(template, headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
 
