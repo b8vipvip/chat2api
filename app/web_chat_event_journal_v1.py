@@ -192,21 +192,115 @@ class WebChatEventJournal:
     async def append_delivery(
         self, request_id: str, owner_key_id: str, final_text: str,
     ) -> dict[str, Any]:
+        """Idempotently append the missing suffix of the exact final delivery.
+
+        The snapshot comparison and suffix append happen under one SQLite
+        IMMEDIATE transaction. If the process crashes after some chunks are
+        durable but before the terminal marker, replaying the same final text
+        appends only the missing suffix instead of duplicating the answer.
+        """
         if not request_id or not owner_key_id:
             raise ValueError("Web Chat event ownership is required")
-        text = _text(final_text, _MAX_TEXT_CHARS)
-        records = [
-            ("delivery.delta", {"delta": text[start:start + FINAL_CHUNK_CHARS]})
-            for start in range(0, len(text), FINAL_CHUNK_CHARS)
-        ]
+        if not isinstance(final_text, str) or len(final_text) > _MAX_TEXT_CHARS:
+            raise ValueError("Web Chat final delivery exceeds the durable text limit")
         sequences = await asyncio.to_thread(
-            self._append_records, request_id, owner_key_id, records,
-        ) if records else []
+            self._append_delivery, request_id, owner_key_id, final_text,
+        ) if final_text else []
         return {
             "chunk_event_ids": sequences,
             "terminal_event_id": 0,
-            "text_chars": len(text),
+            "text_chars": len(final_text),
         }
+
+    def _append_delivery(
+        self, request_id: str, owner_key_id: str, final_text: str,
+    ) -> list[int]:
+        now = time.time()
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            state = connection.execute(
+                "SELECT * FROM web_chat_event_state WHERE request_id = ?",
+                (request_id,),
+            ).fetchone()
+            if state is not None and str(state["owner_key_id"]) != owner_key_id:
+                connection.rollback()
+                raise PermissionError("Web Chat event request owner mismatch")
+
+            if state is None:
+                connection.execute(
+                    """
+                    INSERT INTO web_chat_event_state(request_id, owner_key_id, updated_at)
+                    VALUES (?, ?, ?)
+                    """,
+                    (request_id, owner_key_id, now),
+                )
+                last_sequence = 0
+                delivered_text = ""
+                delivered_truncated = False
+            else:
+                last_sequence = int(state["last_sequence"])
+                delivered_text = str(state["delivered_text"] or "")
+                delivered_truncated = bool(state["delivered_text_truncated"])
+                terminal_status = str(state["terminal_status"] or "")
+                if terminal_status:
+                    if (
+                        terminal_status == "completed"
+                        and not delivered_truncated
+                        and delivered_text == final_text
+                    ):
+                        connection.rollback()
+                        return []
+                    connection.rollback()
+                    raise ValueError("Web Chat delivery already has a conflicting terminal")
+                if delivered_truncated:
+                    connection.rollback()
+                    raise ValueError("Existing Web Chat delivery is truncated and cannot be resumed safely")
+                if not final_text.startswith(delivered_text):
+                    connection.rollback()
+                    raise ValueError("Web Chat final delivery conflicts with its durable prefix")
+
+            remainder = final_text[len(delivered_text):]
+            if not remainder:
+                connection.rollback()
+                return []
+
+            sequences: list[int] = []
+            for start in range(0, len(remainder), FINAL_CHUNK_CHARS):
+                delta = remainder[start:start + FINAL_CHUNK_CHARS]
+                last_sequence += 1
+                sequences.append(last_sequence)
+                connection.execute(
+                    """
+                    INSERT INTO web_chat_events(
+                        request_id, owner_key_id, sequence, event_type, payload, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        request_id, owner_key_id, last_sequence, "delivery.delta",
+                        _json_payload({"delta": delta}), now,
+                    ),
+                )
+                delivered_text += delta
+
+            connection.execute(
+                """
+                UPDATE web_chat_event_state
+                SET last_sequence = ?, delivered_text = ?,
+                    delivered_text_truncated = 0, updated_at = ?
+                WHERE request_id = ? AND owner_key_id = ?
+                """,
+                (last_sequence, delivered_text, now, request_id, owner_key_id),
+            )
+            connection.execute(
+                """
+                DELETE FROM web_chat_events
+                WHERE request_id = ? AND sequence <= ?
+                """,
+                (request_id, max(0, last_sequence - _MAX_EVENTS_PER_REQUEST)),
+            )
+            connection.commit()
+            self._secure_sqlite_files()
+        return sequences
 
     async def append_delivery_terminal(
         self, request_id: str, owner_key_id: str, text_chars: int,
