@@ -1015,38 +1015,6 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
                 row["available_balance_cents"] = billing.available_balance_cents(user_id)
         return {"data": page, "total": total, "limit": limit, "offset": offset}
 
-    @app.put("/api/admin/users/{user_id}/role")
-    async def admin_update_user_role(
-        user_id: str, body: AdminUserRoleBody, request: Request, response: Response
-    ) -> dict[str, Any]:
-        if not admin_ok(request):
-            raise HTTPException(status_code=401, detail="Administrator login required")
-        audit_context = {
-            "actor": admin_actor(request),
-            "action": "user.role_change_requested",
-            "target_type": "user",
-            "target_id": user_id,
-            "request_id": str(request.headers.get("x-request-id") or ""),
-            "details": {"system_role": body.system_role},
-        }
-        mutation_applied = False
-        try:
-            admin_audit.append(**audit_context)
-            user = accounts.set_system_role(user_id, body.system_role)
-            mutation_applied = True
-            admin_audit.append(**{
-                **audit_context,
-                "action": "user.role_change_completed",
-            })
-        except KeyError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-        except AdminAuditError as error:
-            detail = "用户角色已更新，但完成审计事件写入失败；请检查服务端审计日志" if mutation_applied else "审计存储不可用，用户角色未修改"
-            raise HTTPException(status_code=503, detail=detail) from error
-        return {"user": user}
-
     @app.post("/api/admin/users/{user_id}/password")
     async def admin_update_user_password(
         user_id: str, body: AdminUserPasswordBody, request: Request, response: Response

@@ -44,7 +44,6 @@ def test_admin_console_exposes_c_views_and_one_control_plane_asset():
     assert 'value="tenant_role"' in html
     assert 'value="user_role"' in html
     assert 'value="subscription_plan"' in html
-    assert 'id="cUserRoleRows"' in html
     assert 'id="cSubHistory"' in html
     assert '/assets/chat2api-control-plane-admin-v1.js' in html
     assert 'id="adminSessionLoginDialog"' in html
@@ -187,11 +186,13 @@ def test_web_user_navigation_is_grouped_and_duplicate_api_key_entry_is_removed()
     source = (root / "app" / "admin_control_plane_admin_v1.js").read_text(encoding="utf-8")
     assert 'group.dataset.navGroup = "web-user"' in source
     for view in (
-        "client-policy", "registration-invitations", "tenants", "user-roles",
+        "client-policy", "registration-invitations",
         "subscriptions", "model-entitlements", "plugins", "quota-ledger",
         "user-pricing", "user-payments", "admin-users",
     ):
         assert f'"{view}"' in source
+    assert '"tenants"' not in source
+    assert '"user-roles"' not in source
     assert 'webGroup.hidden = visibleItems.length === 0' in source
     assert 'loginButton.hidden = authenticated' in source
     assert 'logoutButton.hidden = !authenticated' in source
