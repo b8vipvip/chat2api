@@ -39,7 +39,7 @@ let senderEvents = [
   {type:"voice.live.video.sender.detached",reason:"sender-replaced"},
 ];
 const ensureLiveVideoTrack = vm.runInNewContext(
-  liveText.slice(ensureStart,ensureEnd) + "\\nensureLiveVideoTrack",
+  liveText.slice(ensureStart,ensureEnd) + "\nensureLiveVideoTrack",
   {
     assertLiveTurnOwner(){},
     liveMainEvents(){return senderEvents;},
