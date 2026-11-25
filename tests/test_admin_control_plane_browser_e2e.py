@@ -262,11 +262,11 @@ def test_delegated_admin_browser_navigation_permissions_csrf_and_revocation(tmp_
                     assert response.status == 201, (role, response.status, response.text())
 
                 visible_views = {
-                    "super_admin": {"control-admins", "client-policy", "registration-invitations", "tenants", "model-entitlements", "plugins", "quota-ledger", "user-pricing", "user-payments", "admin-users"},
+                    "super_admin": {"control-admins", "client-policy", "registration-invitations", "model-entitlements", "plugins", "quota-ledger", "user-pricing", "user-payments", "admin-users"},
                     "user_admin": {"registration-invitations", "admin-users"},
                     "billing_admin": {"quota-ledger", "user-pricing", "user-payments"},
                     "support": {"model-entitlements", "admin-users"},
-                    "system_admin": {"client-policy", "registration-invitations", "tenants", "model-entitlements", "quota-ledger", "admin-users"},
+                    "system_admin": {"client-policy", "registration-invitations", "model-entitlements", "quota-ledger", "admin-users"},
                     "plugin_admin": {"plugins"},
                     "api_key_admin": {"quota-ledger"},
                 }
@@ -275,7 +275,7 @@ def test_delegated_admin_browser_navigation_permissions_csrf_and_revocation(tmp_
                     "user_admin": "admin-users",
                     "billing_admin": "user-pricing",
                     "support": "model-entitlements",
-                    "system_admin": "tenants",
+                    "system_admin": "client-policy",
                     "plugin_admin": "plugins",
                     "api_key_admin": "api-keys",
                 }
@@ -654,39 +654,13 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                 finally:
                     mobile_context.close()
 
-                # Exercise the real tenant-list DOM sink with hostile API text.
-                # The C-track UI must render it as text, never as executable markup.
-                page.evaluate(
-                    """() => {
-                      window.__c07_xss_fired = false;
-                      window.__c07_original_fetch = window.fetch.bind(window);
-                      window.fetch = async (input, init = {}) => {
-                        const url = typeof input === "string" ? input : input?.url || "";
-                        const method = String(init.method || "GET").toUpperCase();
-                        if (url === "/api/admin/tenants" && method === "GET") {
-                          return new Response(JSON.stringify({data: [{
-                            tenant_id: "ten_xss_123456",
-                            slug: "xss-fixture",
-                            display_name: '<img src=x onerror="window.__c07_xss_fired=true">'
-                          }]}), {status: 200, headers: {"Content-Type": "application/json"}});
-                        }
-                        return window.__c07_original_fetch(input, init);
-                      };
-                    }"""
-                )
-                # Web-user views intentionally live in a collapsed second-level menu.
-                page.locator("#web-user-nav-group > summary").click()
-                page.locator('[data-view="tenants"]').wait_for(state="visible")
-                page.locator('[data-view="tenants"]').click()
-                page.wait_for_function(
-                    "() => document.getElementById('cTenantRows')?.textContent.includes('<img src=x')",
-                    timeout=5000,
-                )
-                assert page.locator("#cTenantRows img").count() == 0
-                assert page.evaluate("window.__c07_xss_fired === false")
-                page.evaluate(
-                    "() => { window.fetch = window.__c07_original_fetch; delete window.__c07_original_fetch; }"
-                )
+                # Tenant management has been retired from the admin UI.
+                # Legacy membership APIs/data remain for compatibility, but no
+                # tenant-management navigation or view may be rendered.
+                assert page.locator('[data-view="tenants"]').count() == 0
+                assert page.locator("#view-tenants").count() == 0
+                assert page.locator('[data-view="user-roles"]').count() == 0
+                assert page.locator("#view-user-roles").count() == 0
 
                 page.locator('[data-view="control-admins"]').click()
                 page.wait_for_function(
@@ -757,7 +731,7 @@ def test_control_plane_admin_console_enforces_delegated_role_in_browser(tmp_path
                 assert page.locator('[data-view="api-keys"]').count() == 0
                 assert page.locator('[data-view="control-admins"]').is_hidden()
                 assert page.locator('[data-view="plugins"]').is_hidden()
-                assert page.locator('[data-view="tenants"]').is_hidden()
+                assert page.locator('[data-view="tenants"]').count() == 0
                 assert page.locator('[data-view="overview"]').is_hidden()
                 # Existing Commerce views must remain available according to
                 # their role rather than being treated as legacy root-only nav.
