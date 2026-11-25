@@ -583,7 +583,8 @@ class WebChatEventJournal:
                     last_sequence, worker_text, delivered_text,
                     int(worker_truncated), int(delivered_truncated),
                     terminal_status, terminal_message,
-                    _json_payload({"references": references}), now, request_id, owner_key_id,
+                    json.dumps(references, ensure_ascii=False, separators=(",", ":")),
+                    now, request_id, owner_key_id,
                 ),
             )
             connection.execute(
