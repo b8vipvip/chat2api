@@ -36,7 +36,7 @@ def test_v0837_worker_bundle_loads_route_recovery_v136() -> None:
         "chrome_extension/content_runtime_contract_v48.js",
         "chrome_extension/content_runtime_contract_v71.js",
     ):
-        assert "0.22.301" in read(path), path
+        assert "0.22.302" in read(path), path
 
 def test_v02286_installs_request_id_namespace_v136() -> None:
     entry = read("app/entry.py")
