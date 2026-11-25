@@ -3,6 +3,9 @@
   if (globalThis[KEY]) return;
 
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const LIVE_VIDEO_FRAME_RATE = 5;
+  const MAX_LIVE_VIDEO_FRAMES = 300;
+  const MAX_LIVE_VIDEO_FRAME_BYTES = 2 * 1024 * 1024;
   const state = {
     requestId: null,
     mode: "speech",
@@ -372,7 +375,7 @@
     }
     context.fillStyle = "#000";
     context.fillRect(0, 0, canvas.width, canvas.height);
-    const stream = canvas.captureStream(5);
+    const stream = canvas.captureStream(LIVE_VIDEO_FRAME_RATE);
     const track = stream?.getVideoTracks?.()[0];
     if (!track || track.readyState === "ended") {
       for (const item of stream?.getTracks?.() || []) {
@@ -400,7 +403,8 @@
     const sequence = Number(message.sequence);
     const timestampMs = Number(message.timestamp_ms);
     const mime = String(message.mime_type || "image/jpeg").toLowerCase();
-    if (!Number.isSafeInteger(sequence) || sequence < 0 ||
+    if (!Number.isSafeInteger(sequence) || sequence < 0 || sequence >= MAX_LIVE_VIDEO_FRAMES ||
+        state.liveVideoFrameCount >= MAX_LIVE_VIDEO_FRAMES ||
         !Number.isSafeInteger(timestampMs) || timestampMs < 0 ||
         sequence <= state.liveVideoFrameCount - 1 ||
         timestampMs <= state.liveVideoLastTimestamp) {
@@ -410,7 +414,7 @@
       throw new Error("Live video frames must be JPEG, PNG or WebP images");
     }
     const bytes = decodeBase64(message.base64 || "");
-    if (!bytes.byteLength || bytes.byteLength > 2 * 1024 * 1024) {
+    if (!bytes.byteLength || bytes.byteLength > MAX_LIVE_VIDEO_FRAME_BYTES) {
       throw new Error("Live video frame must be between 1 byte and 2 MiB");
     }
     const bitmap = await createImageBitmap(new Blob([bytes], { type: mime }));
@@ -614,7 +618,7 @@
         const track = prepareLiveVideo(state.requestId);
         post("voice.live.video.prepared", {
           track_state: String(track.readyState || "unknown"),
-          frame_rate: 5,
+          frame_rate: LIVE_VIDEO_FRAME_RATE,
         });
       } catch (error) {
         post("voice.live.video.error", { error: String(error?.message || error) });
