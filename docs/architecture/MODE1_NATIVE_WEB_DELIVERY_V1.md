@@ -138,7 +138,7 @@ A second vertical slice closes the queued-request cancellation race:
 - The cancel endpoint waits briefly for a queued cancellation to reach its terminal telemetry projection and returns whether it was queued. The browser preserves that result and waits for the cancel handshake before aborting the generation POST, avoiding a transport-abort race that could strand a queued request.
 - Add tests for queued cancellation idempotency, owner-scoped queued signal delivery, admission-task interruption and the browser recovery client's queued flag.
 
-The running Worker remains the terminal authority after dispatch; the Web Chat API never fabricates a Worker completion. W-02 does not claim durable token-level SSE replay.
+The running Worker remains the terminal authority after dispatch; the Web Chat API never fabricates a Worker completion. The W-02 cancellation slice is separate from the W-04 durable SSE event journal described below.
 
 ### W-03 — safe citation links in native content
 
@@ -158,4 +158,10 @@ The authenticated Worker socket now forwards bounded chat.tool.call and chat.too
 
 The Playwright regression now opens the same owner-scoped conversation in two isolated browser profiles, verifies a persisted tool-only assistant activity card, races two writes against the same server revision and confirms one succeeds while the stale writer receives a conflict, then verifies a deletion tombstone prevents resurrection on the second profile. This covers browser-level cross-device sync and optimistic-concurrency behavior.
 
-Full citation/reference-card parity, arbitrary live audio/video capture and complete ChatGPT component parity remain open acceptance items. KaTeX rendering is implemented for supported TeX expressions with a MathML/text fallback for unsupported or invalid input. Durable token-level SSE replay remains open before the issue is complete.
+### W-04 — durable Worker event replay and terminal consistency
+
+The Mode 1 event journal now persists bounded Worker deltas, snapshots, citation metadata, tool observations and terminal evidence before Broker publication. Worker-originated delta events carry stable request-scoped event IDs; SQLite enforces per-request source-event uniqueness so a replayed Worker message does not append a second copy. The event journal records UTF-16 offsets for provisional deltas so the browser can safely reconcile a replay even if its last-event cursor was not persisted before reload.
+
+For a still-running request, the authenticated SSE recovery endpoint replays missing Worker deltas from Last-Event-ID as explicitly unverified provisional text. The browser ignores duplicate event cursors, restores provisional snapshots after cursor reset, and replaces provisional text with the canonical final delivery when it arrives. Final delivery append is an atomic prefix-resume operation: a process restart after some chunks are durable appends only the missing suffix. A completed terminal marker is written only after the exact final projection is durable; if the process stops between text persistence and terminal publication, recovery repairs the terminal cursor from matching completed Telemetry and journal state. Conflicting prefixes fail closed, and first-terminal-wins remains authoritative.
+
+This is code-level durable SSE replay; it does not claim that a Worker event never received by the server can be reconstructed from nowhere. Full citation/reference-card parity, arbitrary live audio/video capture and complete ChatGPT component parity remain open acceptance items. KaTeX rendering is implemented for supported TeX expressions with a MathML/text fallback for unsupported or invalid input. Real Worker disconnect/reconnect and Broker/server restart behavior remain part of the end-to-end acceptance matrix.
