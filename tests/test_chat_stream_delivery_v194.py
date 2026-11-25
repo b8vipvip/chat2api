@@ -48,7 +48,7 @@ def test_main_stream_does_not_use_unretractable_prefix_reconciliation():
     end = source.index('    @app.post("/v1/chat/completions")', start)
     stream = source[start:end]
     assert "final_text.startswith(sent_text)" not in stream
-    assert 'chunk_payload(response_id, model, {"reasoning": preview})' in stream
+    assert 'delta_payload["reasoning"] = preview' in stream
     assert "final_chunks = list(final_text_chunks(display_final_text))" in stream
     assert "for index, delta in enumerate(final_chunks):" in stream
     assert 'chunk_delta: dict[str, object] = {"content": delta}' in stream
