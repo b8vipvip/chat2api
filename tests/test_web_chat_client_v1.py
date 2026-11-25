@@ -39,6 +39,9 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         assert "会话同步保存在当前账户" in page.text
         assert "客户端诊断日志不会记录你的消息或模型回复内容" in page.text
         assert "ChatGPT" in page.text
+        assert 'id="webChatLoginDialog"' in page.text
+        assert 'id="webChatOpenLoginButton"' in page.text
+        assert 'href="/console"' not in page.text
         assert 'id="pluginsButton"' in page.text
         assert 'id="libraryButton"' in page.text
         sidebar_html = page.text.split('<aside class="sidebar"', 1)[1].split("</aside>", 1)[0]
@@ -88,6 +91,8 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         assert "/api/user/chat/requests/" in script.text
         assert "localStorage" in script.text
         assert "/api/user/chat/client-logs" in script.text
+        assert "/api/user/guest-session" in script.text
+        assert "登录成功后会留在当前聊天页面" in page.text
         assert "chat.request.started" in script.text
         assert "webchat.models.catalog_loaded" in script.text
         assert "attachment.image.upload_completed" in script.text
@@ -170,6 +175,9 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
 
         console = client.get("/console")
         assert console.status_code == 200
+        settings_page = client.get("/settings")
+        assert settings_page.status_code == 200
+        assert "账户设置" in settings_page.text
         assert 'href="/chat"' in console.text
 
         # The HTML shell is public, but all user data and API Key operations
@@ -301,3 +309,35 @@ def test_web_chat_usage_is_counted_for_user_and_shared_key_once(tmp_path: Path) 
     assert api_keys.keys[user_key_id].tokens_used == 19
     assert api_keys.get_public(identity_key_id) is None
     assert all(row["key_id"] != identity_key_id for row in api_keys.list_public())
+
+
+def test_guest_web_chat_is_policy_gated_and_uses_account_scoped_identity(tmp_path: Path) -> None:
+    settings = Settings(CHAT2API_DATA_DIR=str(tmp_path))
+    app = create_app(settings)
+    install_control_plane_v1(app)
+    install_user_console_v104_patch(app)
+    install_web_chat_features_v1(app)
+    shared_public, _shared_token = asyncio.run(app.state.api_keys.create("guest-web-chat-shared"))
+
+    with TestClient(app) as client:
+        assert client.post("/api/user/guest-session").status_code == 403
+        app.state.control_plane.update_client({"api_key_id": shared_public["key_id"], "guest_enabled": True})
+
+        created = client.post("/api/user/guest-session")
+        assert created.status_code == 200, created.text
+        guest = created.json()["user"]
+        assert guest["is_guest"] is True
+        assert guest["display_name"] == "游客"
+        assert "password_hash" not in created.text
+        assert client.get("/api/user/me").json()["user"]["is_guest"] is True
+
+        session = client.get("/api/user/chat/session")
+        assert session.status_code == 200, session.text
+        identity_key_id = session.json()["key_id"]
+        assert identity_key_id
+        assert identity_key_id != shared_public["key_id"]
+
+        app.state.control_plane.update_client({"guest_enabled": False})
+        blocked = client.get("/api/user/chat/session")
+        assert blocked.status_code == 403
+        assert "游客使用已关闭" in blocked.text

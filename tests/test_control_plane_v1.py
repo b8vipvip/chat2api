@@ -45,6 +45,7 @@ def login(client: TestClient, name: str, password: str):
 def test_control_plane_store_fails_closed_and_never_persists_raw_password(tmp_path: Path):
     store = ControlPlaneStore(tmp_path, "owner")
     assert store.public_client()["registration_mode"] == "open"
+    assert store.public_client()["guest_enabled"] is False
     assert not store.path.exists()
     with pytest.raises(ControlPlaneError):
         store.create_admin("owner", "long-enough-password", "support")
@@ -106,6 +107,7 @@ def test_client_policy_audit_completion_failure_preserves_committed_success(tmp_
 
 def test_role_route_map_is_explicit_and_secret_read_denied_to_key_admin():
     assert permission_for_admin_route("/api/admin/users/u1", "PATCH") == "users:write"
+    assert permission_for_admin_route("/api/admin/users/u1/password", "POST") == "users:write"
     assert permission_for_admin_route("/api/admin/users/u1/keys", "GET") == "user_keys:read"
     assert permission_for_admin_route("/api/admin/users/u1/keys/key1", "PATCH") == "user_keys:write"
     assert "user_keys:read" not in ROLES["api_key_admin"]
@@ -817,3 +819,23 @@ def test_shared_web_chat_api_key_requires_root_super_admin(tmp_path: Path):
         )
         assert denied_clear.status_code == 403
         assert app.state.control_plane.client_api_key_id() == shared["key_id"]
+
+
+def test_guest_policy_is_admin_configurable_and_publicly_exposed(tmp_path: Path):
+    app = make_app(tmp_path)
+    with TestClient(app) as client:
+        assert login(client, "owner", "strong-root-password").status_code == 200
+        assert client.get("/api/client/config").json()["guest_enabled"] is False
+        updated = client.put(
+            "/api/admin/control/client",
+            headers=ORIGIN,
+            json={"guest_enabled": True},
+        )
+        assert updated.status_code == 200, updated.text
+        assert updated.json()["guest_enabled"] is True
+        assert client.get("/api/client/config").json()["guest_enabled"] is True
+        assert client.put(
+            "/api/admin/control/client",
+            headers=ORIGIN,
+            json={"guest_enabled": "true"},
+        ).status_code == 422
