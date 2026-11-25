@@ -95,6 +95,7 @@ class WebChatEventJournal:
                     event_type TEXT NOT NULL,
                     payload TEXT NOT NULL,
                     created_at REAL NOT NULL,
+                    source_event_id TEXT NOT NULL DEFAULT '',
                     PRIMARY KEY (request_id, sequence),
                     FOREIGN KEY (request_id)
                         REFERENCES web_chat_event_state(request_id)
@@ -102,6 +103,21 @@ class WebChatEventJournal:
                 );
                 CREATE INDEX IF NOT EXISTS idx_web_chat_events_retention
                     ON web_chat_events(created_at);
+                """
+            )
+            event_columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(web_chat_events)").fetchall()
+            }
+            if "source_event_id" not in event_columns:
+                connection.execute(
+                    "ALTER TABLE web_chat_events ADD COLUMN source_event_id TEXT NOT NULL DEFAULT ''"
+                )
+            connection.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_web_chat_events_source_id
+                ON web_chat_events(request_id, source_event_id)
+                WHERE source_event_id <> ''
                 """
             )
             cutoff = time.time() - _RETENTION_SECONDS
@@ -184,8 +200,14 @@ class WebChatEventJournal:
         record = self._worker_record(event)
         if record is None:
             return None
+        source_event_id = _text(event.get("worker_event_id"), 128)
+        if source_event_id and any(
+            not (character.isascii() and (character.isalnum() or character in "._:-"))
+            for character in source_event_id
+        ):
+            source_event_id = ""
         rows = await asyncio.to_thread(
-            self._append_records, request_id, owner_key_id, [record],
+            self._append_records, request_id, owner_key_id, [record], source_event_id,
         )
         return rows[0] if rows else None
 
@@ -341,6 +363,7 @@ class WebChatEventJournal:
         request_id: str,
         owner_key_id: str,
         records: list[tuple[str, dict[str, Any]]],
+        source_event_id: str = "",
     ) -> list[int]:
         if not records:
             return []
@@ -355,6 +378,18 @@ class WebChatEventJournal:
             if state is not None and str(state["owner_key_id"]) != owner_key_id:
                 connection.rollback()
                 raise PermissionError("Web Chat event request owner mismatch")
+            if source_event_id:
+                existing = connection.execute(
+                    """
+                    SELECT sequence FROM web_chat_events
+                    WHERE request_id = ? AND source_event_id = ?
+                    LIMIT 1
+                    """,
+                    (request_id, source_event_id),
+                ).fetchone()
+                if existing is not None:
+                    connection.rollback()
+                    return [int(existing["sequence"])]
             if state is not None and str(state["terminal_status"] or ""):
                 # The first durable delivery terminal is absorbing. Do not
                 # append late Worker retries, delivery chunks, or competing
@@ -392,10 +427,14 @@ class WebChatEventJournal:
                 connection.execute(
                     """
                     INSERT INTO web_chat_events(
-                        request_id, owner_key_id, sequence, event_type, payload, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                        request_id, owner_key_id, sequence, event_type, payload, created_at,
+                        source_event_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (request_id, owner_key_id, last_sequence, event_type, payload_json, now),
+                    (
+                        request_id, owner_key_id, last_sequence, event_type, payload_json,
+                        now, source_event_id,
+                    ),
                 )
                 if event_type == "worker.delta":
                     addition = _text(payload.get("delta"), 65_536)
