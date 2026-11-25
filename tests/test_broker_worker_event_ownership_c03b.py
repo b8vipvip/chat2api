@@ -112,6 +112,36 @@ def test_worker_event_publication_requires_assigned_worker_and_current_socket() 
     asyncio.run(scenario())
 
 
+def test_mode1_tool_event_keeps_durable_journal_cursor_after_normalization() -> None:
+    async def scenario() -> None:
+        broker = RequestBroker()
+        state = await broker.create("req_tool_event_cursor_123", "worker-a")
+        state.mode1_web_chat = True
+        worker_socket = object()
+        state.dispatch_socket = worker_socket
+        assert await broker.publish_worker_event(
+            state.request_id,
+            {
+                "type": "chat.tool.call",
+                "request_id": state.request_id,
+                "event_id": 17,
+                "tool_name": "search",
+                "call_id": "call-17",
+                "arguments": "{\"query\":\"test\"}",
+                "status": "running",
+            },
+            client_id="worker-a",
+            websocket=worker_socket,
+            current_socket=worker_socket,
+        )
+        published = state.queue.get_nowait()
+        assert published["type"] == "chat.tool.call"
+        assert published["event_id"] == 17
+        assert published["call_id"] == "call-17"
+
+    asyncio.run(scenario())
+
+
 def test_all_request_scoped_worker_sidecars_require_original_dispatch_socket() -> None:
     source = (ROOT / "app/main.py").read_text(encoding="utf-8")
     # File chunks, DOM evidence, native sidecars, probes and generic
