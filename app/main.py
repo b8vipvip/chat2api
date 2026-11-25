@@ -2802,7 +2802,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         )
                         if preview:
                             delta_payload["reasoning"] = preview
-                    if request.scope.get("chat2api_mode1_web_chat") is True and isinstance(event.get("event_id"), int):
+                    if state.mode1_web_chat and isinstance(event.get("event_id"), int):
                         # Even when the raw delta is not user-visible, advance
                         # the durable cursor so a reconnect replays only events
                         # the browser did not receive.
