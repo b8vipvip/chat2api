@@ -98,7 +98,8 @@
         if (element.getAttribute("aria-haspopup")) score += 40;
         if (/chatgpt|gpt|模型|model|instant|thinking/i.test(labelOf(element)) &&
             element.closest("header,nav,[data-testid*=header i]")) score += 110;
-        if (score) candidates.push({ element, score });
+        // Generic menu buttons (account, share, settings) are not model pickers.
+        if (score >= 110) candidates.push({ element, score });
       }
     }
     candidates.sort((a, b) => b.score - a.score);
@@ -290,7 +291,11 @@
   async function openModelMenu() {
     closeMenus();
     const picker = await waitFor(() => modelPicker(), OPEN_TIMEOUT_MS, 120);
-    if (!picker) throw new Error("ChatGPT model picker was not found");
+    if (!picker) {
+      const failure = new Error("ChatGPT model picker was not found");
+      failure.code = "model_picker_not_found";
+      throw failure;
+    }
     // A header may render before the conversation composer has hydrated.
     // A picker click on that transitional page can be ignored entirely.
     await waitFor(() => document.querySelector(
@@ -312,7 +317,11 @@
         return rows.length ? rows : null;
       }, OPEN_TIMEOUT_MS, 100);
     }
-    if (!choices) throw emptyMenuFailure();
+    if (!choices) {
+      const failure = emptyMenuFailure();
+      closeMenus();
+      throw failure;
+    }
     const expansion = expansionChoice();
     if (expansion) {
       expansion.click();
@@ -414,19 +423,29 @@
     );
   }
 
-  function automaticInspectionSafe() {
+  function automaticInspectionSafe(allowIdleFocus = false) {
     if (requestActive()) return false;
     const active = document.activeElement;
     if (!active || active === document.body || active === document.documentElement) return true;
     const tag = String(active.tagName || "").toUpperCase();
+    if (allowIdleFocus) {
+      // An automation Worker often retains composer or picker focus after a
+      // request. Do not defer forever on an empty idle composer, but never
+      // interrupt an unsent draft or an unrelated editable control.
+      const composer = document.querySelector("#prompt-textarea");
+      const draft = String(composer?.value || composer?.textContent || "").trim();
+      if (draft) return false;
+      if (active === composer || composer?.contains?.(active)) return true;
+      if (tag === "BUTTON" && active === modelPicker()) return true;
+    }
     return !["INPUT", "TEXTAREA", "BUTTON", "SELECT"].includes(tag) &&
       active.isContentEditable !== true &&
       !active.closest?.("[contenteditable='true']");
   }
 
-  async function validateModels({ automatic = false } = {}) {
+  async function validateModels({ automatic = false, allowIdleFocus = false } = {}) {
     if (state.running) return state.running;
-    if (requestActive() || (automatic && !automaticInspectionSafe())) {
+    if (requestActive() || (automatic && !automaticInspectionSafe(allowIdleFocus))) {
       const error = new Error(automatic ? "Automatic model catalog inspection deferred while ChatGPT is in use" : "Worker model validation deferred while a ChatGPT request is active");
       error.code = "model_validation_busy";
       throw error;
@@ -624,7 +643,7 @@
       return true;
     }
     if (message?.type === "chat2api.models.validate.v145") {
-      validateModels({ automatic: Boolean(message.automatic) })
+      validateModels({ automatic: Boolean(message.automatic), allowIdleFocus: Boolean(message.allow_idle_focus) })
         .then(data => sendResponse({ ok: true, data }))
         .catch(error => sendResponse({ ok: false, code: String(error?.code || ""), stage: String(error?.stage || ""), evidence: error?.evidence || [], after: error?.after || [], error: String(error?.message || error) }));
       return true;

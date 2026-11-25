@@ -125,7 +125,7 @@ def test_manual_only_no_automatic_model_discovery_and_unified_id_column():
     assert 'schedule("worker-enable"' not in bg
     assert 'schedule("model-validation-retry"' not in bg
     assert "modelObservedChoices" in router
-    assert "发现模型" in ui
+    assert "同步模型" in ui
     assert "任务记录" in ui
     assert 'String(state.worker_id || "").startsWith("ext_")' in unified
     assert '(linuxBind.extension_client_id || "—（ext_ 扩展未绑定）")' in unified
@@ -141,3 +141,35 @@ def test_manual_only_no_automatic_model_discovery_and_unified_id_column():
             p=root/"chrome_extension"/script
             result=subprocess.run(["node","--check",str(p)],text=True,capture_output=True,timeout=20)
             assert result.returncode == 0, result.stderr
+
+def test_daily_model_sync_persists_and_deduplicates(tmp_path):
+    from datetime import datetime, timezone
+    app, registry, client = setup(tmp_path)
+    auth = {"Authorization": "Bearer admin-token"}
+    endpoint = "/api/admin/text-model-sync-schedule"
+    assert client.get(endpoint).status_code == 401
+    assert client.patch(endpoint, headers=auth, json={"enabled": True, "time": "08:30", "utc_offset_minutes": 480}).status_code == 200
+    assert client.patch(endpoint, headers=auth, json={"enabled": True, "time": "25:00", "utc_offset_minutes": 480}).status_code == 422
+    before = datetime(2026, 11, 25, 0, 29, tzinfo=timezone.utc)
+    due = datetime(2026, 11, 25, 0, 30, tzinfo=timezone.utc)
+    asyncio.run(app.state.model_sync_schedule_tick(before))
+    assert registry.sent == []
+    asyncio.run(app.state.model_sync_schedule_tick(due))
+    assert len(registry.sent) == 2
+    assert all(payload["action"] == "sync" for _, payload in registry.sent)
+    asyncio.run(app.state.model_sync_schedule_tick(due))
+    assert len(registry.sent) == 2
+    assert client.get(endpoint, headers=auth).json()["last_scheduled_day"] == "2026-11-25"
+    app2, registry2, client2 = setup(tmp_path)
+    asyncio.run(app2.state.model_sync_schedule_tick(due))
+    assert registry2.sent == []
+    assert client2.get(endpoint, headers=auth).json()["enabled"] is True
+
+def test_sync_endpoint_all_online_and_duplicate_guard(tmp_path):
+    app, registry, client = setup(tmp_path)
+    auth = {"Authorization": "Bearer admin-token"}
+    response = client.post("/api/admin/text-model-tasks/sync", headers=auth)
+    assert response.status_code == 200
+    assert response.json()["kind"] == "sync"
+    assert set(response.json()["workers"]) == {"ext_paid", "ext_free"}
+    assert client.post("/api/admin/text-model-tasks/sync", headers=auth).status_code == 409

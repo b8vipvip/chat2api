@@ -14,6 +14,7 @@ from fastapi.routing import APIRoute
 from pydantic import BaseModel
 
 from .model_catalog import normalize_concrete_model_id
+from .worker_model_library_v145_patch import _free_default_composer_eligible
 
 PATCH_ID = "worker-text-model-management-v146"
 ASSET_PATH = "/assets/chat2api-text-model-management-v146.js"
@@ -214,10 +215,24 @@ def install_worker_text_model_management_v146_patch(app: FastAPI) -> FastAPI:
                         entry["verified_by"].append(client_id)
                         if ready and model_id not in disabled:
                             entry["routable_by"].append(client_id)
-            # Free's hardcoded old default must never create a fake discovered model.
+            # Page-default is a separate logical route, never concrete picker evidence.
+            if state["validation_state"] == "default-only" and state["account_type"] == "free":
+                entry = models.setdefault("default", {
+                    "id": "default", "label": "默认模型", "enabled": True,
+                    "observed_by": [], "verified_by": [], "routable_by": [],
+                    "source_details": {}, "default_mapping": minimum_model,
+                })
+                entry["observed_by"].append(client_id)
+                entry["source_details"][client_id] = {
+                    "selectable": False, "label": "默认模型",
+                    "method": "free-page-default-unverified", "at": state["updated_at"],
+                }
+                if ready and _free_default_composer_eligible(registry, client_id):
+                    entry["routable_by"].append(client_id)
         for entry in models.values():
             entry["state"] = (
                 "disabled" if not entry["enabled"]
+                else "default-unverified" if entry["id"] == "default"
                 else "routable" if entry["routable_by"]
                 else "verified-offline" if entry["verified_by"]
                 else "observed-unverified"
@@ -262,11 +277,9 @@ def install_worker_text_model_management_v146_patch(app: FastAPI) -> FastAPI:
         model = normalize_concrete_model_id(body.model_id) if body.model_id else None
         if body.model_id and (not model or model in TEXT_SPECIAL_IDS):
             raise HTTPException(400, "Select a valid concrete text model")
-        # The administrator selects only real observed/verified models, not a
-        # guessed model; the request router subsequently requires it to be
-        # enabled and available on a ready Worker.
-        if model and (model in disabled or model not in {row["id"] for row in snapshot()["data"]}):
-            raise HTTPException(400, "Model must be enabled and discovered before it can be configured")
+        # Explicit administrator alias for Free's page default, not picker proof.
+        if model and model in disabled:
+            raise HTTPException(400, "Default mapping model must not be disabled")
         minimum_model = model
         await record({"event": "admin-set-legacy-minimum", "model_id": model})
         return {"legacy_minimum_model": model, "authority": PATCH_ID}

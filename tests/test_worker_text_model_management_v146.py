@@ -124,3 +124,35 @@ def test_console_live_worker_dropdowns_have_no_static_fallback():
             capture_output=True, text=True, timeout=20, check=False,
         )
         assert run.returncode == 0, run.stderr
+
+def test_free_page_default_mapping_is_separate_from_picker_evidence(tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from types import SimpleNamespace
+    class Registry:
+        def __init__(self):
+            self.clients = {"ext_free": SimpleNamespace(name="Free", metadata={
+                "account_type":"free", "account_detection_confidence":"high",
+                "account_model_control_present":False, "model_validation_state":"default-only",
+                "model_observed_choices":[], "models":[],
+            })}
+        def online_client_ids(self): return ["ext_free"]
+        def chatgpt_routing_ready(self, cid): return True
+        def supports_model(self, cid, model): return False
+        def model_catalog(self, online_only=True): return []
+        async def touch(self, cid, metadata=None, *, websocket=None): return True
+    app = FastAPI()
+    app.state.registry = Registry()
+    app.state.settings = SimpleNamespace(data_dir=tmp_path)
+    @app.get("/api/admin/overview")
+    def overview(): return {}
+    install_worker_text_model_management_v146_patch(app)
+    with TestClient(app) as client:
+        initial = client.get("/api/admin/text-models").json()
+        assert initial["data"][0]["id"] == "default"
+        assert initial["data"][0]["verified_by"] == []
+        assert client.patch("/api/admin/text-model-minimum", json={"model_id":"gpt-6"}).status_code == 200
+        data = client.get("/api/admin/text-models").json()
+        assert data["legacy_minimum_model"] == "gpt-6"
+        assert data["data"][0]["default_mapping"] == "gpt-6"
+        assert [x["id"] for x in data["data"]] == ["default"]

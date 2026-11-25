@@ -133,8 +133,9 @@ def permission_for_admin_route(path: str, method: str) -> str | None:
         "/api/admin/payment-channels-v106/test",
     } or re.fullmatch(r"/api/admin/payment-channels-v106/usdt-orders/[^/]+/(confirm|reject)", path):
         return "billing:" + suffix
-    if path in {"/api/admin/models", "/api/admin/text-models", "/api/admin/text-model-minimum"} or re.fullmatch(
-        r"/api/admin/text-models/[^/]+", path
+    if path in {"/api/admin/models", "/api/admin/text-models", "/api/admin/text-model-minimum", "/api/admin/text-model-sync-schedule",
+                "/api/admin/text-model-tasks", "/api/admin/text-model-tasks/discover", "/api/admin/text-model-tasks/sync"} or re.fullmatch(
+        r"/api/admin/text-models/[^/]+(?:/validate)?|/api/admin/text-model-tasks/[^/]+/logs", path
     ):
         return "models:" + suffix
     # Raw request detail and media can contain user content or credentials.
