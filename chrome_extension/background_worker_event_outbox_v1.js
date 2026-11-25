@@ -18,6 +18,7 @@
     flushTimer: null,
     enqueueChain: Promise.resolve(),
     nextOrder: 1,
+    serverAckNegotiated: false,
     serverAckSupported: false,
   };
   globalThis[KEY] = state;
@@ -136,7 +137,10 @@
   }
 
   async function flush() {
-    if (state.restoring || state.flushing || !state.events.size || !socketReady()) return false;
+    if (
+      state.restoring || !state.serverAckSupported
+      || state.flushing || !state.events.size || !socketReady()
+    ) return false;
     state.flushing = true;
     let sentAny = false;
     let nextWait = RETRY_MS;
@@ -207,8 +211,18 @@
 
   handleServerMessage = async function handleServerMessageWithWorkerEventAck(message) {
     if (message?.type === "server.hello") {
+      state.serverAckNegotiated = true;
       state.serverAckSupported = Array.isArray(message.capabilities)
         && message.capabilities.includes("worker_event_ack_v1");
+      if (!state.serverAckSupported && state.events.size) {
+        // A rollback/older server cannot ACK this protocol. Drop the stale
+        // event queue and let the existing terminal outbox deliver finality.
+        state.events.clear();
+        await persist();
+      } else if (state.serverAckSupported) {
+        scheduleFlush(0);
+      }
+      globalThis.__CHAT2API_BACKGROUND_TRANSPORT_RECOVERY_V47__?.scheduleFlush?.(0);
       return baseHandleServerMessage(message);
     }
     if (message?.type === "chat.event.ack") {
@@ -252,7 +266,7 @@
   };
 
   setInterval(() => {
-    if (state.events.size && socketReady()) scheduleFlush(0);
+    if (state.serverAckSupported && state.events.size && socketReady()) scheduleFlush(0);
   }, 1500);
 
   restore().catch(() => { state.restoring = false; });
