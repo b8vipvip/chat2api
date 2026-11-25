@@ -87,7 +87,7 @@ def test_runtime_contract_still_exposes_supported_features():
     app = FastAPI(version=SERVER_RUNTIME_VERSION)
     payload = version_contract_payload(app)
     assert payload["server"]["runtime_version"] == SERVER_RUNTIME_VERSION
-    assert payload["chrome_bridge"]["bundle_version"] == "0.22.301"
+    assert payload["chrome_bridge"]["bundle_version"] == "0.22.302"
     assert payload["features"]["network_response_recovery"] is True
     assert payload["features"]["single_response_observer"] is True
     assert payload["features"]["worker_content_runtime_epoch_v71"] is True
