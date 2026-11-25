@@ -41,11 +41,11 @@
           <div class="avatar account-avatar" id="accountAvatar">U</div>
           <div class="account-meta">
             <div class="account-name" id="accountName">正在验证登录…</div>
-            <a href="/console">账户设置</a>
+            <a href="/settings">账户设置</a>
           </div>
         </div>
         <div class="sidebar-actions">
-          <a href="/console">控制台</a>
+          <a href="/settings">控制台</a>
           <button class="text-button" id="themeToggle" type="button">切换主题</button>
         </div>
       </div>
@@ -107,9 +107,9 @@
       <section class="auth-required hidden" id="authRequired">
         <div class="auth-card">
           <div class="welcome-mark">c</div>
-          <h1>请先登录 Chat2API</h1>
-          <p>登录账户后即可使用 Web Chat，无需自行配置 API Key。</p>
-          <a class="primary-link" href="/console">前往用户控制台登录</a>
+          <h1>登录后继续聊天</h1>
+          <p>登录账户后即可继续使用当前 Web Chat，无需自行配置 API Key。</p>
+          <button class="primary-link" id="webChatOpenLoginButton" type="button">登录账户</button>
         </div>
       </section>
 
@@ -118,7 +118,6 @@
           <div class="welcome-mark">c</div>
           <h1>Web Chat 服务暂不可用</h1>
           <p>服务端尚未配置有效的统一 API Key，或当前服务密钥不可用。请联系管理员在服务端后台的「客户端动态配置」中完成配置。</p>
-          <a class="primary-link" href="/console">返回用户控制台</a>
         </div>
       </section>
 
@@ -159,6 +158,21 @@
       </footer>
     </main>
   </div>
+  <dialog id="webChatLoginDialog" class="webchat-login-dialog" aria-labelledby="webChatLoginTitle">
+    <form id="webChatLoginForm">
+      <div class="webchat-login-head">
+        <div><strong id="webChatLoginTitle">登录 Chat2API</strong><p>登录成功后会留在当前聊天页面。</p></div>
+        <button class="icon-button" id="webChatLoginClose" type="button" aria-label="关闭登录窗口">×</button>
+      </div>
+      <label>邮箱<input id="webChatLoginEmail" type="email" autocomplete="username" required maxlength="254"></label>
+      <label>密码<input id="webChatLoginPassword" type="password" autocomplete="current-password" required maxlength="256"></label>
+      <div id="webChatLoginError" class="webchat-login-error" role="status" aria-live="polite"></div>
+      <div class="webchat-login-actions">
+        <button class="attach-button" id="webChatLoginCancel" type="button">稍后</button>
+        <button class="send-button" id="webChatLoginSubmit" type="submit">登录并继续</button>
+      </div>
+    </form>
+  </dialog>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 </body>
 </html>

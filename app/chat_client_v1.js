@@ -520,7 +520,15 @@
     let payload = {};
     try { payload = await response.json(); } catch {}
     if (!response.ok) {
-      throw new Error(payload.detail || payload?.error?.message || "HTTP " + response.status);
+      const error = new Error(payload.detail || payload?.error?.message || "HTTP " + response.status);
+      error.status = response.status;
+      if (response.status === 401 && state.user) {
+        state.user = null;
+        showOnly("authRequired");
+        setConnection("登录已失效", "error");
+        openLoginDialog();
+      }
+      throw error;
     }
     return payload;
   }
@@ -3214,16 +3222,34 @@
   }
 
   async function bootstrap() {
+    let payload;
     try {
-      const payload = await apiJson("/api/user/me");
-      state.user = payload.user;
-      recordClientDiagnostic("webchat.session.authenticated", {phase: "bootstrap"});
-    } catch {
-      showOnly("authRequired");
-      setConnection("未登录", "error");
-      $("composerArea").classList.add("hidden");
-      return;
+      payload = await apiJson("/api/user/me");
+    } catch (error) {
+      if (error.status !== 401) {
+        showOnly("serviceUnavailable");
+        setConnection("账户状态暂不可用", "error");
+        toast("无法读取账户状态：" + String(error.message || error));
+        return;
+      }
+      try {
+        payload = await apiJson("/api/user/guest-session", {method: "POST"});
+        recordClientDiagnostic("webchat.session.guest_created", {phase: "bootstrap"});
+      } catch (guestError) {
+        if (guestError.status === 403) {
+          showOnly("authRequired");
+          setConnection("需要登录", "error");
+          openLoginDialog();
+          return;
+        }
+        showOnly("serviceUnavailable");
+        setConnection("游客会话不可用", "error");
+        toast("无法创建游客会话：" + String(guestError.message || guestError));
+        return;
+      }
     }
+    state.user = payload.user;
+    recordClientDiagnostic("webchat.session.authenticated", {phase: "bootstrap", guest: Boolean(state.user?.is_guest)});
     $("accountName").textContent = state.user.display_name || state.user.email || "Chat2API 用户";
     $("accountAvatar").textContent = String(state.user.display_name || state.user.email || "U").trim().slice(0,1).toUpperCase();
     state.storageKey = historyKey(state.user.user_id);
@@ -3233,6 +3259,13 @@
     try {
       ready = await loadWebChatSession();
     } catch (error) {
+      if (error.status === 403 && state.user?.is_guest) {
+        state.user = null;
+        showOnly("authRequired");
+        setConnection("游客访问已关闭", "error");
+        openLoginDialog("游客使用已关闭，请登录账户");
+        return;
+      }
       showOnly("serviceUnavailable");
       setConnection("服务端配置不可用", "error");
       toast("Web Chat 暂不可用：" + String(error?.message || error));
@@ -3375,6 +3408,52 @@
       resizeComposer();
       $("messageInput").focus();
     });
+  });
+
+  function openLoginDialog(message = "") {
+    const dialog = $("webChatLoginDialog");
+    if (!dialog) return;
+    $("webChatLoginError").textContent = message;
+    if (!dialog.open) dialog.showModal();
+    window.setTimeout(() => $("webChatLoginEmail")?.focus(), 0);
+  }
+
+  function closeLoginDialog() {
+    const dialog = $("webChatLoginDialog");
+    if (dialog?.open) dialog.close();
+  }
+
+  $("webChatOpenLoginButton")?.addEventListener("click", () => openLoginDialog());
+  $("webChatLoginClose")?.addEventListener("click", closeLoginDialog);
+  $("webChatLoginCancel")?.addEventListener("click", closeLoginDialog);
+  $("webChatLoginForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const submit = $("webChatLoginSubmit");
+    const errorBox = $("webChatLoginError");
+    submit.disabled = true;
+    errorBox.textContent = "";
+    try {
+      const response = await fetch("/api/user/login", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          email: $("webChatLoginEmail").value.trim(),
+          password: $("webChatLoginPassword").value,
+        }),
+      });
+      let payload = {};
+      try { payload = await response.json(); } catch {}
+      if (!response.ok) throw new Error(payload.detail || "登录失败，请检查邮箱和密码");
+      $("webChatLoginPassword").value = "";
+      closeLoginDialog();
+      state.user = null;
+      await bootstrap();
+    } catch (error) {
+      errorBox.textContent = String(error?.message || error);
+    } finally {
+      submit.disabled = false;
+    }
   });
 
   try {
