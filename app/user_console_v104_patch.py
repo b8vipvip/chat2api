@@ -546,6 +546,11 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
         shared = await api_keys.authenticate_key_id(configured_key_id)
         if shared is None or not {"chat", "models"}.issubset(set(shared.scopes)):
             raise HTTPException(status_code=503, detail="Web Chat 统一 API Key 已失效或权限不足")
+        if accounts.owner_for_key(configured_key_id):
+            raise HTTPException(
+                status_code=503,
+                detail="Web Chat 统一 API Key 必须是未绑定用户账户的服务端托管 Key；用户创建的 API Key 仅用于 Mode 2",
+            )
         # Guest identities are short-lived. Reap their hidden Web Chat keys
         # before deleting the account rows so a transient key-store failure
         # leaves the account eligible for cleanup on the next guest request.
