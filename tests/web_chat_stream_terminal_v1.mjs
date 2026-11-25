@@ -189,6 +189,19 @@ test("does not advance the durable SSE cursor on malformed or empty unknown fram
   assert.equal(resetAssistant.provisionalRecoveryText,true);
   assert.equal(parser("id: 12\ndata: [DONE]\n\n",assistant),true);
   assert.equal(assistant.lastEventId,12);
+  const alreadyDelivered = {content:"authoritative answer",lastEventId:5};
+  assert.equal(parser(
+    "data: " + JSON.stringify({choices:[{delta:{chat2api_event_id:10}}]}) + "\n\n",
+    alreadyDelivered,
+  ),false);
+  assert.equal(alreadyDelivered.lastEventId,10);
+  assert.equal(parser(
+    "id: 8\nevent: delivery.delta\ndata: " +
+      JSON.stringify({delta:"authoritative answer"}) + "\n\n",
+    alreadyDelivered,
+  ),false);
+  assert.equal(alreadyDelivered.content,"authoritative answer",
+    "a replay after an idempotent terminal send must not duplicate the final answer");
 });
 
 test("preserves request-scoped tool calls and results as safe presentation state", () => {
