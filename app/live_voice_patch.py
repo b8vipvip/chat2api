@@ -1250,9 +1250,12 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                             video_frame[0], video_frame[1], time.monotonic(), video_frame_size,
                         )
                         video_frame_bytes += video_frame_size
-                        # Count before yielding to the Worker so an immediate
-                        # input.error/ACK cannot race the per-session frame budget.
+                        # Reserve sequence, pacing and budget before yielding
+                        # to the Worker; it may ACK or reject the frame immediately.
                         video_frame_count += 1
+                        last_video_sequence = video_frame[0]
+                        last_video_timestamp_ms = video_frame[1]
+                        last_video_dispatch_mono = time.monotonic()
                     try:
                         await registry.send(selected_client, {
                             "type": "voice.live.multimodal" if attachments else "voice.live.text",
@@ -1272,9 +1275,6 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                             video_frame_bytes = max(0, video_frame_bytes - failed_video_frame[3])
                         raise
                     if video_frame:
-                        last_video_sequence = video_frame[0]
-                        last_video_timestamp_ms = video_frame[1]
-                        last_video_dispatch_mono = time.monotonic()
                         await send_json({
                             "type": "input_video.frame.queued",
                             "item_id": item_id,
