@@ -102,6 +102,8 @@
     const sessionEndpoint = String(options.sessionEndpoint || "/v1/audio/realtime/sessions");
     const fileUploadEndpoint = String(options.fileUploadEndpoint || "/v1/files");
     const userKeyId = String(options.userKeyId || "");
+    const isWebChatAccountSession = sessionEndpoint.startsWith("/api/user/chat/");
+    const bearerToken = isWebChatAccountSession ? "" : token;
     const instructions = sliceCodePoints(String(options.instructions || DEFAULT_SESSION_INSTRUCTIONS).trim(),0,MAX_SESSION_INSTRUCTIONS_CHARS);
     const context = sliceCodePoints(String(options.context || "").trim(),0,MAX_SESSION_CONTEXT_CHARS);
     const beforeConnect = typeof options.beforeConnect === "function" ? options.beforeConnect : null;
@@ -349,7 +351,8 @@
     }
     async function start() {
       if (started || starting) return;
-      if (!token) throw new Error("请先选择一个 API Key");
+      if (!isWebChatAccountSession && !token) throw new Error("当前实时语音 API 需要 API Key");
+      if (isWebChatAccountSession && !userKeyId) throw new Error("Web Chat 实时语音缺少用户会话身份");
       if (!mediaDevices || typeof mediaDevices.getUserMedia !== "function") {
         throw new Error("当前浏览器无法访问麦克风");
       }
@@ -388,7 +391,7 @@
       }
       microphoneStream = requestedMicrophoneStream;
       const sessionHeaders = {Accept:"application/json"};
-      if (token) sessionHeaders.Authorization = "Bearer " + token;
+      if (bearerToken) sessionHeaders.Authorization = "Bearer " + bearerToken;
       if (userKeyId) sessionHeaders["X-Chat2API-User-Key-ID"] = userKeyId;
       const response = await fetcher(sessionEndpoint, {
         method:"POST",
@@ -526,7 +529,7 @@
           "Content-Type":"application/json",
           "X-Chat2API-Source":"web-chat",
         };
-        if (token) uploadHeaders.Authorization = "Bearer " + token;
+        if (bearerToken) uploadHeaders.Authorization = "Bearer " + bearerToken;
         if (userKeyId) uploadHeaders["X-Chat2API-User-Key-ID"] = userKeyId;
         const upload = await fetcher(fileUploadEndpoint, {
           method:"POST",

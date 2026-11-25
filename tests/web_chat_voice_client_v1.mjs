@@ -371,8 +371,72 @@ assert.equal(frames.length,2);
 assert.equal(frames[1].sequence,1,"camera restart must not reset server-owned sequence");
 assert.equal(frames[1].timestamp_ms,1000,"camera restart must preserve monotonic session timestamps and one-second pacing");
 
+
 await client.stop();
 assert.equal(client.isActive(),false);
+
+// Web Chat uses the signed-in account session plus a server-issued per-user
+// identity ID. It must not require or send a browser-held API Key.
+const accountRequests = [];
+const accountFetcher = async (url,options={}) => {
+  accountRequests.push({url,options});
+  if (url === "/api/user/chat/voice-session") {
+    assert.equal(options.method,"POST");
+    assert.equal(options.credentials,"same-origin");
+    assert.equal(options.headers.Authorization,undefined);
+    assert.equal(options.headers["X-Chat2API-User-Key-ID"],"internal-user-key");
+    return {ok:true,status:200,json:async()=>({
+      websocket_path:"/api/user/chat/voice?session_token=one-time-user-session-token",
+    })};
+  }
+  if (url === "/api/user/chat/files") {
+    assert.equal(options.method,"POST");
+    assert.equal(options.credentials,"same-origin");
+    assert.equal(options.headers.Authorization,undefined);
+    assert.equal(options.headers["X-Chat2API-User-Key-ID"],"internal-user-key");
+    const body = JSON.parse(options.body);
+    assert.equal(body.purpose,"vision");
+    return {ok:true,status:200,json:async()=>({id:"file_abcdefgh"})};
+  }
+  throw new Error("unexpected account-session fetch: "+url);
+};
+const accountClient = api.create({
+  sessionEndpoint:"/api/user/chat/voice-session",
+  fileUploadEndpoint:"/api/user/chat/files",
+  userKeyId:"internal-user-key",
+  fetcher:accountFetcher,
+  WebSocketImpl:FakeWebSocket,
+  AudioContextImpl:FakeAudioContext,
+  mediaDevices,
+  location:window.location,
+  timers,
+  now:()=>clock,
+});
+await accountClient.start();
+assert.equal(accountClient.isActive(),true);
+const accountSocket = FakeWebSocket.last;
+assert.ok(accountSocket.url.includes("one-time-user-session-token"));
+assert.ok(!accountSocket.url.includes("internal-user-key"));
+await accountClient.startCamera(video);
+await new Promise(resolve=>setTimeout(resolve,10));
+await new Promise(resolve=>setImmediate(resolve));
+assert.ok(accountRequests.some(row=>row.url==="/api/user/chat/voice-session"));
+assert.ok(accountRequests.some(row=>row.url==="/api/user/chat/files"));
+assert.equal(accountClient.isCameraActive(),true);
+await accountClient.stop();
+assert.equal(accountClient.isActive(),false);
+
+// Direct OpenAI-compatible realtime sessions still require an API Key.
+const noTokenApiClient = api.create({
+  fetcher,
+  WebSocketImpl:FakeWebSocket,
+  AudioContextImpl:FakeAudioContext,
+  mediaDevices,
+  location:window.location,
+  timers,
+});
+await assert.rejects(noTokenApiClient.start(),/API Key/);
+
 assert.ok(socket.sent.some(value=>typeof value==="string" && JSON.parse(value).type==="session.finish"));
 assert.ok(audioContexts[0].closed);
 assert.ok(stoppedTracks.length >= 2);
