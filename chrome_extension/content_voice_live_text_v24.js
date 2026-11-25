@@ -214,8 +214,138 @@
     await emitLive(active, "input.text.sent", { item_id: itemId || "", text });
   }
 
-  async function sendLiveMedia(active, itemId, text, attachments) {
+  function postMain(type, active, data = {}) {
+    window.postMessage({
+      source: "chat2api-isolated",
+      type,
+      request_id: active.requestId,
+      session_id: active.sessionId,
+      ...data,
+    }, "*");
+  }
+
+  function liveMainEvents(active) {
+    const current = globalThis.__CHAT2API_VOICE_LIVE_CONTENT_V2__;
+    return current?.active === active && Array.isArray(current.mainEvents)
+      ? current.mainEvents : [];
+  }
+
+  function liveCameraButton() {
+    const buttons = [...document.querySelectorAll("button")]
+      .filter(button => visible(button) && !button.disabled);
+    const enabled = buttons.find(button => {
+      const label = labelOf(button);
+      return /(turn on camera|start camera|share camera|share video|open camera|enable camera|打开摄像头|开启摄像头|开始视频|打开视频|开启视频)/i.test(label);
+    });
+    if (enabled) return enabled;
+    return buttons.find(button => {
+      const label = labelOf(button);
+      return /(camera|video|摄像头|视频)/i.test(label) &&
+        !/(turn off|stop|close|disable|关闭|停止|结束)/i.test(label);
+    }) || null;
+  }
+
+  async function ensureLiveVideoTrack(active) {
     assertLiveTurnOwner(active);
+    if (active.videoTrackReady === true) return true;
+    if (active.videoTrackUnavailable === true) return false;
+    const events = () => liveMainEvents(active);
+    try {
+      postMain("voice.live.video.prepare", active);
+      const prepared = await waitFor(() => events().find(item =>
+        item.type === "voice.live.video.prepared"), 5000, 50);
+      const prepareError = events().find(item => item.type === "voice.live.video.error");
+      if (!prepared) throw new Error(prepareError?.error || "Synthetic WebRTC video track could not be prepared");
+
+      const alreadyAttached = events().find(item => item.type === "voice.live.video.sender.attached");
+      if (!alreadyAttached) {
+        const alreadyOn = [...document.querySelectorAll("button")]
+          .filter(visible).some(button => /(turn off camera|stop camera|关闭摄像头|停止视频)/i.test(labelOf(button)));
+        if (!alreadyOn) {
+          const camera = await waitFor(liveCameraButton, 7000, 100);
+          if (!camera) throw new Error("ChatGPT Voice camera control is unavailable");
+          assertLiveTurnOwner(active);
+          camera.click();
+        }
+      }
+      const provided = await waitFor(() => events().find(item =>
+        item.type === "voice.live.video.track.provided"), 7000, 50);
+      const attached = await waitFor(() => events().find(item =>
+        item.type === "voice.live.video.sender.attached"), 7000, 50);
+      const videoError = events().find(item => item.type === "voice.live.video.error");
+      if (!provided || !attached) {
+        throw new Error(videoError?.error || "ChatGPT did not attach the synthetic WebRTC camera track");
+      }
+      assertLiveTurnOwner(active);
+      active.videoTrackReady = true;
+      active.videoTrackMode = "web_rtc";
+      return true;
+    } catch (error) {
+      active.videoTrackUnavailable = true;
+      active.videoTrackMode = "snapshot_fallback";
+      active.videoTrackError = String(error?.message || error).slice(0, 240);
+      return false;
+    }
+  }
+
+  async function sendLiveVideoFrame(active, itemId, attachments, videoFrame) {
+    assertLiveTurnOwner(active);
+    if (!Array.isArray(attachments) || attachments.length !== 1) return false;
+    if (!await ensureLiveVideoTrack(active)) return false;
+    const fileId = String(attachments[0]?.file_id || "");
+    if (!/^file_[A-Za-z0-9]{8,64}$/.test(fileId)) return false;
+    const fetched = await chrome.runtime.sendMessage({
+      type: "chat2api.attachment.fetch",
+      fileId,
+      requestId: active.requestId,
+    });
+    if (!fetched?.ok || !fetched.data?.base64) {
+      throw new Error(fetched?.error || "Worker could not fetch the authorized live video frame");
+    }
+    const data = fetched.data;
+    const mime = String(data.mime_type || "").toLowerCase();
+    if (!["image/jpeg", "image/png", "image/webp"].includes(mime) ||
+        Number(data.size || 0) <= 0 || Number(data.size || 0) > 2 * 1024 * 1024) {
+      throw new Error("Live video frame failed the Worker image validation");
+    }
+    postMain("voice.live.video.frame", active, {
+      base64: data.base64,
+      mime_type: mime,
+      sequence: Number(videoFrame.sequence),
+      timestamp_ms: Number(videoFrame.timestamp_ms),
+    });
+    const events = () => liveMainEvents(active);
+    const received = await waitFor(() => events().find(item =>
+      item.type === "voice.live.video.frame.received" &&
+      Number(item.sequence) === Number(videoFrame.sequence)), 6000, 40);
+    const frameError = events().find(item =>
+      item.type === "voice.live.video.error" &&
+      Number(item.sequence) === Number(videoFrame.sequence));
+    if (!received) throw new Error(frameError?.error || "Synthetic WebRTC video track did not accept the frame");
+    assertLiveTurnOwner(active);
+    await emitLive(active, "input.media.sent", {
+      item_id: itemId || "",
+      attachment_count: 1,
+      video_track: true,
+      sequence: Number(videoFrame.sequence),
+      timestamp_ms: Number(videoFrame.timestamp_ms),
+    });
+    return true;
+  }
+
+  async function sendLiveMedia(active, itemId, text, attachments, videoFrame = null) {
+    assertLiveTurnOwner(active);
+    if (videoFrame) {
+      try {
+        if (await sendLiveVideoFrame(active, itemId, attachments, videoFrame)) return;
+      } catch (error) {
+        // Keep the existing composer-based still-image path as a safe fallback
+        // when a ChatGPT build has no usable camera control or video sender.
+        active.videoTrackUnavailable = true;
+        active.videoTrackMode = "snapshot_fallback";
+        active.videoTrackError = String(error?.message || error).slice(0, 240);
+      }
+    }
     if (!Array.isArray(attachments) || !attachments.length || attachments.length > 4)
       throw new Error("Live media message requires 1-4 uploaded attachments");
     if (!globalThis.__CHAT2API_MULTIMODAL_V4__?.attach)
@@ -336,7 +466,7 @@
         return false;
       }
       queueTurn(() => sendLiveMedia(active, String(message.itemId || ""),
-        String(message.text || ""), message.attachments || []))
+        String(message.text || ""), message.attachments || [], message.videoFrame || null))
         .then(() => sendResponse({ ok: true, controller: "voice-live-multimodal-v195" }))
         .catch(error => sendResponse({ ok: false, error: String(error?.message || error), controller: "voice-live-multimodal-v195" }));
       return true;
