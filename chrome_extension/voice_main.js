@@ -439,6 +439,30 @@
     }
   }
 
+  const NativeRtpSender = globalThis.RTCRtpSender;
+  if (NativeRtpSender?.prototype && typeof NativeRtpSender.prototype.replaceTrack === "function") {
+    const nativeReplaceTrack = NativeRtpSender.prototype.replaceTrack;
+    try {
+      NativeRtpSender.prototype.replaceTrack = function chat2apiReplaceTrack(track) {
+        const ownerRequestId = state.requestId;
+        const result = nativeReplaceTrack.call(this, track);
+        const reportAttached = () => {
+          if (ownerRequestId && state.requestId === ownerRequestId &&
+              track?.kind === "video" && track === state.liveVideoTrack) {
+            post("voice.live.video.sender.attached", {
+              track_state: String(track.readyState || "unknown"),
+            }, ownerRequestId);
+          }
+        };
+        if (result && typeof result.then === "function") {
+          return result.then(value => { reportAttached(); return value; });
+        }
+        reportAttached();
+        return result;
+      };
+    } catch (_) {}
+  }
+
   const mediaDevices = navigator.mediaDevices;
   const nativeGetUserMedia = mediaDevices?.getUserMedia?.bind(mediaDevices);
   if (mediaDevices && nativeGetUserMedia) {
