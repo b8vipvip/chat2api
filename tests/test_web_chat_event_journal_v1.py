@@ -602,6 +602,7 @@ def test_worker_event_journal_deduplicates_replayed_deltas_by_source_id(tmp_path
         page = await journal.events_after(request_id, owner, 0, limit=16)
         assert [item["id"] for item in page["events"]] == [first_id, second_id]
         assert [item["data"]["delta"] for item in page["events"]] == ["first ", "second"]
+        assert [item["data"]["offset"] for item in page["events"]] == [0, 6]
 
     asyncio.run(scenario())
 
