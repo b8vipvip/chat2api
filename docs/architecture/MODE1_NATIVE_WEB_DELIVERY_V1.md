@@ -35,7 +35,7 @@ This selection is server-controlled. A request header, user role, browser-suppli
 
 The exact Worker is selected by the existing Worker scheduling/routing rules (including any existing explicit Worker-routing input). Do not create a new `user_id → worker_id` binding, and do not infer Worker identity from API Key ID.
 
-The selected API Key must flow through the same existing Chat2API principal checks and ownership accounting used by API requests:
+The server-resolved shared Mode 1 API Key (or SDK-supplied Mode 2 API Key) must flow through the same existing Chat2API principal checks and ownership accounting used by API requests:
 
 - authenticate the Key and enforce its `chat` scope;
 - enforce existing model entitlement and quota/billing rules;
