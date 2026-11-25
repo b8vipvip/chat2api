@@ -2790,6 +2790,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         delta = snapshot[len(raw_seen):] if snapshot.startswith(raw_seen) else ""
                         if delta:
                             raw_seen = snapshot
+                    delta_payload: dict[str, object] = {}
                     if delta:
                         # The visible ChatGPT analysis/preview is optionally
                         # streamed in a separate, non-answer lane. It must not
@@ -2800,10 +2801,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             enabled=state.diagnostics.get("visible_reasoning_status_kind") == "reasoning",
                         )
                         if preview:
-                            yield "data: " + json.dumps(
-                                chunk_payload(response_id, model, {"reasoning": preview}),
-                                ensure_ascii=False,
-                            ) + "\n\n"
+                            delta_payload["reasoning"] = preview
+                    if request.scope.get("chat2api_mode1_web_chat") is True and isinstance(event.get("event_id"), int):
+                        # Even when the raw delta is not user-visible, advance
+                        # the durable cursor so a reconnect replays only events
+                        # the browser did not receive.
+                        delta_payload["chat2api_event_id"] = event["event_id"]
+                    if delta_payload:
+                        yield "data: " + json.dumps(
+                            chunk_payload(response_id, model, delta_payload),
+                            ensure_ascii=False,
+                        ) + "\n\n"
                 elif event_type == "chat.completed":
                     raw_final = str(event.get("text") or state.text)
                     try:
@@ -4427,6 +4435,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         active_state.diagnostics["terminal_transport_server_seen"] = True
                         active_state.diagnostics["terminal_transport_server_received_at"] = time.time()
                         active_state.diagnostics["terminal_transport_payload_chars"] = len(str(message.get("text") or ""))
+                    # Persist Mode 1 Worker observations before Broker publication.
+                    # A Broker/HTTP disconnect must not erase deltas that the
+                    # server has already accepted from the assigned Worker.
+                    if active_state.mode1_web_chat and message_type in {
+                        "chat.delta", "chat.snapshot", "chat.references",
+                        "chat.tool.call", "chat.tool.result", "chat.completed",
+                        "chat.error", "chat.cancelled", "image.completed",
+                        "image.error", "image.cancelled",
+                    }:
+                        try:
+                            journal_event_id = await event_journal.append_worker_event(
+                                request_id, active_state.mode1_owner_key_id, message,
+                            )
+                            if journal_event_id:
+                                message["event_id"] = int(journal_event_id)
+                                active_state.last_event_id = max(
+                                    active_state.last_event_id, int(journal_event_id),
+                                )
+                                if terminal_message:
+                                    active_state.diagnostics["web_chat_worker_terminal_journaled_type"] = message_type
+                                    active_state.diagnostics["web_chat_worker_terminal_journaled_event_id"] = int(journal_event_id)
+                        except Exception as journal_error:
+                            active_state.diagnostics["web_chat_worker_event_journal_error"] = type(journal_error).__name__
+                            logger.exception(
+                                "Mode 1 Worker event journal append failed request_id=%s type=%s",
+                                request_id, message_type,
+                            )
                     # The Broker repeats the socket/assignment check at its
                     # publication boundary and rejects any server-finalized state.
                     accepted = await broker.publish_worker_event(
