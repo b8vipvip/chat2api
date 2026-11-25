@@ -132,4 +132,33 @@ await context.handleServerMessage({type:"heartbeat.ack"});
 assert.equal(handled.some(message => message.type === "server.hello"),true);
 assert.equal(handled.filter(message => message.type === "heartbeat.ack").length,1);
 
+const legacySent = [];
+const legacyStorage = {};
+const legacyContext = {
+  trySendSocket: async payload => { legacySent.push(payload); return true; },
+  socketReady: () => true,
+  handleServerMessage: async () => {},
+  TextEncoder,
+  chrome: {
+    storage: {
+      local: {
+        get: async defaults => ({...defaults, ...legacyStorage}),
+        set: async value => Object.assign(legacyStorage, value),
+      },
+    },
+  },
+  setTimeout: callback => { const id = ++timerId; timers.set(id, callback); return id; },
+  clearTimeout: id => timers.delete(id),
+  setInterval: () => 1,
+};
+vm.runInNewContext(terminalSource, legacyContext);
+vm.runInNewContext(eventSource, legacyContext);
+await new Promise(resolve => setImmediate(resolve));
+assert.equal(await legacyContext.trySendSocket({
+  type:"chat.delta",request_id:"req_legacy_server",worker_event_id:"req_legacy_server:1",delta:"best effort",
+}),true);
+assert.equal(legacySent.length,1,
+  "an older server without the negotiated ACK capability retains best-effort delivery");
+assert.equal(legacyContext.__CHAT2API_BACKGROUND_WORKER_EVENT_OUTBOX_V1__.events.size,0);
+
 console.log("Worker nonterminal events persist, replay in request order, and gate only their own terminal");
