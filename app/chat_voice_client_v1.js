@@ -152,6 +152,7 @@
     let videoSequence = 0;
     let videoFrameCount = 0;
     let videoFrameBytes = 0;
+    let videoModeNoticeSent = false;
     let sessionStartedAt = 0;
     let lastVideoTimestampMs = -1;
     let lastVideoCaptureAt = -Infinity;
@@ -330,6 +331,21 @@
             Number(payload.timestamp_ms) === pendingVideoTimestampMs) {
           videoFrameBytes += pendingVideoBytes;
           clearPendingVideoFrame();
+          if (payload.video_track === true && payload.video_track_mode === "web_rtc") {
+            state("camera_ready","WebRTC 实时视频轨道已连接（最高 5 FPS，最多 300 帧 / 64 MiB）");
+          } else {
+            const detail = "当前上游未建立 WebRTC 摄像头轨道，已降级为图片帧输入；处理速度取决于上游";
+            state("camera_ready",detail);
+            if (!videoModeNoticeSent) {
+              videoModeNoticeSent = true;
+              event({
+                type:"client.notice",
+                message:detail,
+                video_track_mode:"snapshot_fallback",
+                video_track_error:String(payload.video_track_error || ""),
+              });
+            }
+          }
         }
       } else if (payload.type === "error") {
         if (payload.item_id && payload.item_id === pendingVideoItemId) {
