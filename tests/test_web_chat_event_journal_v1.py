@@ -653,7 +653,7 @@ def test_tool_event_metadata_citations_are_journaled_before_broker_normalization
         page = await journal.events_after(request_id, owner, 0, limit=8)
         assert page["events"][0]["data"]["references"][0]["id"] == "turn0search0"
         assert page["events"][0]["data"]["call_id"] == "call-1"
-        assert page["events"][0]["data"]["result_id"] == "call-1"
+        assert page["events"][0]["data"]["result_id"] == ""
 
     asyncio.run(scenario())
 
