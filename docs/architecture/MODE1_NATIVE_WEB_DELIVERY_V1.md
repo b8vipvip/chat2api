@@ -31,7 +31,7 @@ This selection is server-controlled. A request header, user role, browser-suppli
 
 ## 2. Correct request and generation flow
 
-`Chat2API Web Chat → client configuration selects a Chat2API API Key → authenticated Mode 1 Web Chat adapter → existing API Key authorization / model policy / quota / file ownership → existing Worker selection and reconnect handling → RequestBroker + ChatRequestService + ClientRegistry → existing Worker device → its already logged-in ChatGPT browser → existing native capture / media transfer → validated native-content delivery → Web Chat Renderer`
+`Chat2API Web Chat → server-side Client Configuration shared API Key → authenticated Mode 1 Web Chat adapter → existing API Key authorization / model policy / quota / file ownership → existing Worker selection and reconnect handling → RequestBroker + ChatRequestService + ClientRegistry → existing Worker device → its already logged-in ChatGPT browser → existing native capture / media transfer → validated native-content delivery → Web Chat Renderer`
 
 The exact Worker is selected by the existing Worker scheduling/routing rules (including any existing explicit Worker-routing input). Do not create a new `user_id → worker_id` binding, and do not infer Worker identity from API Key ID.
 
@@ -42,7 +42,7 @@ The selected API Key must flow through the same existing Chat2API principal chec
 - associate request telemetry, uploaded files and generated artifacts with the authenticated Key owner;
 - prevent a user from reading another user's requests, conversations, files or native media.
 
-The Web Chat conversation UX should reuse the interaction patterns of `app/admin_playground_chat_v69.js` (multi-turn messages, selected business API Key, model/reasoning selection, attachments and request status), while replacing administrator-only endpoints and master-key assumptions with user/client-config-safe endpoints and Key authorization.
+The Web Chat conversation UX should reuse the interaction patterns of `app/admin_playground_chat_v69.js` (multi-turn messages, model/reasoning selection, attachments and request status), while replacing administrator-only endpoints and master-key assumptions with the signed-in account session and the server-side shared-key policy. The browser must not select, receive or store the shared API Key.
 
 ## 3. Mode 1 vs Mode 2 — what is shared and what differs
 
@@ -50,7 +50,7 @@ The Web Chat conversation UX should reuse the interaction patterns of `app/admin
 |---|---|---|---|
 | Generation source | Existing Worker devices and their current ChatGPT browser sessions | Same | Same |
 | Worker dispatch | Existing Worker registry, selection, reconnect handling and request lease | Same path | Same path |
-| Request identity | Chat2API API Key principal, request ID and existing quota/ownership rules | Selected by Web Chat client configuration | Supplied by SDK/API client |
+| Request identity | Signed-in account session + per-user internal ownership identity; server-managed shared API Key authorizes Mode 1 | Resolved only by server-side Client Configuration; never sent to the browser | Supplied by SDK/API client |
 | User interface | — | Chat2API multi-turn Web Chat | External SDK/API client |
 | Delivery | Existing Worker terminal and native evidence authorities | Native rich content, media, files, charts/math and tool state | OpenAI-compatible response contract |
 | Conversation UX | Existing authenticated ownership rules | Web Chat conversation history and reconnect experience | Client-managed message history |
@@ -61,8 +61,8 @@ Mode 1 is not a second generation backend, not a per-user browser product and no
 
 | Component | Responsibility | Required invariant |
 |---|---|---|
-| Web Chat client | Multi-turn conversation UI, model selection, attachments, selected API Key, native rendering | User stays in Chat2API |
-| Client configuration / Key selector | Select the Chat2API API Key used by this client | Never substitute the administrator master key silently |
+| Web Chat client | Multi-turn conversation UI, model selection, attachments, native rendering; authenticates with the account session | User stays in Chat2API; no API Key selector or token in browser |
+| Server-side Client Configuration / shared API Key | Select an unbound server-managed API Key reserved for Web Chat Mode 1 | Never expose the token to the browser or silently substitute the administrator master key |
 | Mode 1 Web Chat adapter | Validate the selected Key, establish request/conversation identity, manage Web Chat transport, cancellation and recovery | Same principal, quota and owner checks as existing API requests |
 | Existing API policy layer | Key scope, model policy, quota, file and artifact ownership | No weaker authorization path for Web Chat |
 | Existing Worker registry/scheduler | Select and route to an available compatible Worker | Reuse existing Worker fleet; no per-user runtime binding |
@@ -74,7 +74,7 @@ Mode 1 is not a second generation backend, not a per-user browser product and no
 ## 5. Implementation phases
 
 1. **Legacy cleanup** — remove the obsolete Mode 1 Cookie-proxy test switch, its persistence/API/UI and the old mode-selection branch. Keep Mode 2 behavior unchanged.
-2. **Web Chat Key/config contract** — make the Web Chat client select the intended Chat2API API Key from client configuration. Use existing API Key authentication, model permissions, quota and ownership checks. Do not expose or hardcode the administrator master key.
+2. **Web Chat Key/config contract** — the server-side Client Configuration selects an unbound managed API Key for all Web Chat Mode 1 requests. The browser authenticates with its HttpOnly account session and never receives or selects this Key. Keep user-created Account Settings API Keys on the original Mode 2 `/v1` path. Use existing API Key authentication, model permissions, quota and ownership checks; never expose or hardcode the administrator master key.
 3. **Mode 1 Web Chat adapter** — implement the multi-turn Web Chat request path using the selected Key and the existing Worker selection, Broker, `ChatRequestService` and registry dispatch path. Keep the existing Worker scheduling authority; do not create user-to-browser bindings.
 4. **Native rich-content delivery** — connect the Web Chat request to existing Worker native snapshot/chunk events, `NativeContentStore`, `NativeChunkAssembler`, `NativeDomEvidenceStore`, `FileStore` and media/generated-file archives. Ensure a partial or unverified snapshot is never presented as complete.
 5. **Conversation, streaming and recovery** — persist stable user/key-owned conversation and request associations; implement streaming/progress, cancellation, reconnect and recovery without duplicate generation or a second terminal owner.
@@ -83,7 +83,7 @@ Mode 1 is not a second generation backend, not a per-user browser product and no
 
 ## 6. Issue #854 acceptance matrix
 
-- Web Chat behaves like the Playground “聊天对话” experience: multi-turn, model selection, attachments and selected Chat2API API Key.
+- Web Chat behaves like the Playground “聊天对话” experience: multi-turn, model selection, attachments and native content, using the server-configured shared Mode 1 Key without exposing a per-user API Key selector.
 - The selected Key is the request principal for authorization, model access, quota, request telemetry and file/artifact ownership.
 - Generation is executed by the same existing Worker devices and already logged-in ChatGPT browser sessions used by Mode 2.
 - Web Chat requests reuse the existing Worker scheduling/registry, Broker and ChatRequestService dispatch path.
@@ -123,7 +123,7 @@ The first W-01 vertical slice is now implemented:
 
 - Add a private SQLite-backed conversation store at data_dir/web_chat_conversations_v1.sqlite3. Rows are keyed by (authenticated user_id, conversation_id), with a per-row revision and a payload-free deletion tombstone.
 - Add GET /api/user/chat/conversations, PUT /api/user/chat/conversations/{conversation_id}, and DELETE /api/user/chat/conversations/{conversation_id}?expected_revision=N. All routes require the existing HttpOnly user session, return private/no-store with Vary: Cookie, and do not accept caller-supplied user IDs.
-- Validate conversation/message IDs, message roles, bounded content and attachment metadata, request ID format, selected API Key ownership and any request owner already present in Telemetry. Reject cross-account Key/request associations.
+- Validate conversation/message IDs, message roles, bounded content and attachment metadata, request ID format, the configured shared API Key's server-managed ownership and any request owner already present in Telemetry. Reject cross-account Key/request associations.
 - Use optimistic revisions and return 409 with the current row on stale writes. The browser merges messages by stable message ID and retries; a tombstone prevents an offline device from resurrecting a deleted conversation.
 - Bootstrap merges the existing per-user localStorage history with server rows, uploads local-only legacy conversations, and then treats the server as the cross-device source of truth while keeping localStorage as a cache/offline fallback.
 - Preserve empty pending assistant placeholders so a refresh can retain the original request ID and allow the existing recovery path to reconcile the original request rather than dropping the placeholder.
