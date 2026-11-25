@@ -66,6 +66,8 @@ def _free_default_composer_eligible(registry: Any, client_id: str) -> bool:
         return False
     if str(metadata.get("account_detection_confidence") or "").lower() not in {"medium", "high"}:
         return False
+    if metadata.get("account_plan_confirmed") is not True:
+        return False
     if metadata.get("account_model_control_present") is not False:
         return False
     checker = getattr(registry, "chatgpt_routing_ready", None)
