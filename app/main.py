@@ -4428,6 +4428,68 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 "reason": "request_not_recoverable",
                             })
                         continue
+                    if (
+                        active_state is None
+                        and message_type in {
+                            "chat.delta", "chat.snapshot", "chat.references",
+                            "chat.tool.call", "chat.tool.result",
+                        }
+                        and str(message.get("worker_event_id") or "").strip()
+                    ):
+                        # A server restart destroys the Broker lease but keeps
+                        # the owner-scoped Mode 1 journal and telemetry row.
+                        # Re-journal replayed nonterminal Worker events for the
+                        # same assigned Worker so the client can still recover
+                        # token-level progress; Mode 2 or stale requests are
+                        # explicitly discarded so they cannot block the
+                        # durable terminal outbox behind an orphaned event.
+                        recovered_event_row = telemetry.get(request_id) or {}
+                        recovered_owner = str(recovered_event_row.get("api_key_id") or "")
+                        recovered_worker = str(recovered_event_row.get("client_id") or "")
+                        recovered_status = str(recovered_event_row.get("status") or "").lower()
+                        recovered_mode1 = (
+                            recovered_event_row.get("web_chat_mode") is True
+                            and bool(recovered_owner)
+                            and recovered_worker == client_id
+                            and recovered_status in {"running", "recovering"}
+                        )
+                        journal_event_id = None
+                        journal_error = ""
+                        if recovered_mode1:
+                            try:
+                                if not message.get("worker_event_id"):
+                                    if message_type == "chat.tool.call":
+                                        call_id = str(message.get("call_id") or message.get("id") or "")
+                                        if call_id:
+                                            message["worker_event_id"] = f"{str(request_id)[:64]}:tool-call:{call_id[:48]}"
+                                    elif message_type == "chat.tool.result":
+                                        result_id = str(message.get("result_id") or message.get("call_id") or "")
+                                        if result_id:
+                                            message["worker_event_id"] = f"{str(request_id)[:64]}:tool-result:{result_id[:48]}"
+                                journal_event_id = await event_journal.append_worker_event(
+                                    request_id, recovered_owner, message,
+                                )
+                            except Exception as error:
+                                journal_error = type(error).__name__
+                                logger.exception(
+                                    "Cannot journal recovered Worker event request_id=%s type=%s",
+                                    request_id, message_type,
+                                )
+                        await websocket.send_json({
+                            "type": "chat.event.ack",
+                            "request_id": request_id,
+                            "worker_event_id": str(message.get("worker_event_id") or "")[:180],
+                            "event_id": int(journal_event_id or 0),
+                            "accepted": bool(recovered_mode1 and journal_event_id),
+                            "durable": bool(recovered_mode1 and journal_event_id),
+                            "discarded": bool(not journal_error and not (recovered_mode1 and journal_event_id)),
+                            "reason": (
+                                "journal-not-durable" if journal_error
+                                else "" if recovered_mode1 and journal_event_id
+                                else "request-not-recoverable"
+                            ),
+                        })
+                        continue
                     if not active_state or not active_state.owns_dispatch_socket(
                         client_id, websocket, registry.sockets.get(client_id)
                     ):
