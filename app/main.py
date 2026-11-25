@@ -4457,15 +4457,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         journal_error = ""
                         if recovered_mode1:
                             try:
-                                if not message.get("worker_event_id"):
-                                    if message_type == "chat.tool.call":
-                                        call_id = str(message.get("call_id") or message.get("id") or "")
-                                        if call_id:
-                                            message["worker_event_id"] = f"{str(request_id)[:64]}:tool-call:{call_id[:48]}"
-                                    elif message_type == "chat.tool.result":
-                                        result_id = str(message.get("result_id") or message.get("call_id") or "")
-                                        if result_id:
-                                            message["worker_event_id"] = f"{str(request_id)[:64]}:tool-result:{result_id[:48]}"
                                 journal_event_id = await event_journal.append_worker_event(
                                     request_id, recovered_owner, message,
                                 )
