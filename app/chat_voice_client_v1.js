@@ -332,10 +332,15 @@
           videoFrameBytes += pendingVideoBytes;
           clearPendingVideoFrame();
           if (payload.video_track === true && payload.video_track_mode === "web_rtc") {
-            state("camera_ready","WebRTC 实时视频轨道已连接（最高 5 FPS，最多 300 帧 / 64 MiB）");
+            state(
+              cameraStream ? "camera_ready" : "ready",
+              cameraStream
+                ? "WebRTC 实时视频轨道已连接（最高 5 FPS，最多 300 帧 / 64 MiB）"
+                : "实时视频已停止",
+            );
           } else {
             const detail = "当前上游未建立 WebRTC 摄像头轨道，已降级为图片帧输入；处理速度取决于上游";
-            state("camera_ready",detail);
+            state(cameraStream ? "camera_ready" : "ready",cameraStream ? detail : "实时视频已停止");
             if (!videoModeNoticeSent) {
               videoModeNoticeSent = true;
               event({
