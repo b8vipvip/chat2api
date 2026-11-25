@@ -127,12 +127,16 @@ assert.equal(defaultResult.default_only, true);
 assert.equal(stored.modelValidationState, "default-only");
 assert.equal(stored.models.length, 0);
 assert.equal(stored.modelObservedChoices.length, 0);
+stored.models = [{id:"gpt-6", validated:true}];
+stored.modelObservedChoices = [{id:"gpt-6", selectable:true, validated:true}];
 freePlan = false;
 planConfirmed = false;
 const paidFailure = await authority.syncObservedChoices("manual-paid-failure", true);
 assert.equal(paidFailure.ok, false);
 assert.equal(paidFailure.default_only, undefined);
 assert.equal(stored.modelValidationState, "failed", "failed fresh paid inspection must not retain the Free default as live evidence");
+assert.equal(stored.models.length, 1, "failed refresh should retain prior evidence for diagnostics");
+assert.equal(stored.modelObservedChoices.length, 1, "failed refresh should not erase the last picker snapshot");
 assert.equal(selectMessages, 0);
 
 freePlan = true;
