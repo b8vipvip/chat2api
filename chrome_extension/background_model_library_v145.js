@@ -266,8 +266,10 @@
           response?.code === "model_menu_no_concrete_choices" ||
           String(response?.error || "") === "ChatGPT model picker was not found"
         );
+        let accountEvidence = "";
         if (noPicker) {
           const profile = await globalThis.chat2apiDetectAccountProfileV20?.(true, tab);
+          accountEvidence = `Account plan evidence: type=${String(profile?.account_type || "unknown")}; confidence=${String(profile?.confidence || "low")}; plan_confirmed=${profile?.plan_confirmed === true}; strategy=${String(profile?.strategy || "unknown")}; model_control_present=${String(profile?.model_control_present)}; composer_ready=${profile?.composer_ready === true}`;
           if (profile?.account_type === "free" && profile.plan_confirmed === true &&
               ["medium", "high"].includes(profile.confidence) &&
               profile.model_control_present === false && profile.composer_ready === true &&
@@ -293,7 +295,7 @@
             state.lastDiscoveryAt = 0;
             return { ok: false, deferred: true };
           }
-          throw new Error(response?.error || "ChatGPT model picker inspection failed");
+          throw new Error([response?.error || "ChatGPT model picker inspection failed", accountEvidence].filter(Boolean).join("; "));
         }
         const data = response.data || {};
         const observed = (Array.isArray(data.observed_models) ? data.observed_models : [])
