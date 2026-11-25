@@ -31,6 +31,40 @@ assert.ok(voiceMain.includes('voice.live.video.track.ended'), "an ended syntheti
 assert.ok(liveText.includes('item.type === "voice.live.video.sender.detached"'), "a replaced sender must trigger explicit snapshot fallback");
 assert.ok(liveText.includes('item.type === "voice.live.video.track.ended"'), "an ended sender must trigger explicit snapshot fallback");
 assert.ok(voiceMain.includes("voice.live.video.frame.received"), "the exact frame sequence must be acknowledged after rendering");
+const ensureStart = liveText.indexOf("  async function ensureLiveVideoTrack(active) {");
+const ensureEnd = liveText.indexOf("  async function sendLiveVideoFrame(",ensureStart);
+assert.ok(ensureStart >= 0 && ensureEnd > ensureStart);
+let senderEvents = [
+  {type:"voice.live.video.sender.attached"},
+  {type:"voice.live.video.sender.detached",reason:"sender-replaced"},
+];
+const ensureLiveVideoTrack = vm.runInNewContext(
+  liveText.slice(ensureStart,ensureEnd) + "\\nensureLiveVideoTrack",
+  {
+    assertLiveTurnOwner(){},
+    liveMainEvents(){return senderEvents;},
+  },
+);
+const replacedSenderSession = {requestId:"voice-test",videoTrackReady:true};
+assert.equal(await ensureLiveVideoTrack(replacedSenderSession),false);
+assert.equal(replacedSenderSession.videoTrackUnavailable,true);
+assert.equal(replacedSenderSession.videoTrackMode,"snapshot_fallback");
+assert.equal(replacedSenderSession.videoTrackError,"sender-replaced");
+senderEvents = [
+  {type:"voice.live.video.sender.attached"},
+  {type:"voice.live.video.track.ended"},
+];
+const endedTrackSession = {requestId:"voice-test",videoTrackReady:true};
+assert.equal(await ensureLiveVideoTrack(endedTrackSession),false);
+assert.equal(endedTrackSession.videoTrackUnavailable,true);
+senderEvents = [
+  {type:"voice.live.video.sender.detached"},
+  {type:"voice.live.video.sender.attached"},
+];
+const reattachedSession = {requestId:"voice-test",videoTrackReady:true};
+assert.equal(await ensureLiveVideoTrack(reattachedSession),true,
+  "a newer verified sender attachment supersedes an older detached observation");
+
 assert.ok(liveRouting.includes("videoFrame: message.video_frame || null"), "the Broker must forward frame timestamps to the Worker tab");
 assert.ok(liveText.includes("refusing to overwrite it"), "draft conflicts must fail closed");
 assert.ok(liveText.includes("const hasNewUserTurn = () =>"), "composer lag must be checked against the new user turn");
