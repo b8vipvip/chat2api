@@ -43,6 +43,7 @@
     liveVideoStream: null,
     liveVideoTrack: null,
     liveVideoLastTimestamp: -1,
+    liveVideoLastSequence: -1,
     liveVideoFrameCount: 0,
   };
   globalThis[KEY] = state;
@@ -358,6 +359,7 @@
     state.liveVideoStream = null;
     state.liveVideoTrack = null;
     state.liveVideoLastTimestamp = -1;
+    state.liveVideoLastSequence = -1;
     state.liveVideoFrameCount = 0;
   }
 
@@ -389,6 +391,7 @@
     state.liveVideoStream = stream;
     state.liveVideoTrack = track;
     state.liveVideoLastTimestamp = -1;
+    state.liveVideoLastSequence = -1;
     state.liveVideoFrameCount = 0;
     return track;
   }
@@ -406,7 +409,7 @@
     if (!Number.isSafeInteger(sequence) || sequence < 0 || sequence >= MAX_LIVE_VIDEO_FRAMES ||
         state.liveVideoFrameCount >= MAX_LIVE_VIDEO_FRAMES ||
         !Number.isSafeInteger(timestampMs) || timestampMs < 0 ||
-        sequence <= state.liveVideoFrameCount - 1 ||
+        sequence <= state.liveVideoLastSequence ||
         timestampMs <= state.liveVideoLastTimestamp) {
       throw new Error("Live video frame sequence and timestamp must increase monotonically");
     }
@@ -434,6 +437,7 @@
       context.fillRect(0, 0, canvas.width, canvas.height);
       context.drawImage(bitmap, left, top, width, height);
       state.liveVideoLastTimestamp = timestampMs;
+      state.liveVideoLastSequence = sequence;
       state.liveVideoFrameCount += 1;
       post("voice.live.video.frame.received", {
         sequence, timestamp_ms: timestampMs, frame_count: state.liveVideoFrameCount,
