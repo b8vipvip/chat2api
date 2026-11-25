@@ -392,7 +392,9 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
 
                 events = page.get("events") if isinstance(page.get("events"), list) else []
                 latest_row = telemetry.get(request_id) or {}
-                recovering_after_restart = str(latest_row.get("status") or "").lower() == "recovering"
+                latest_status = str(latest_row.get("status") or "").lower()
+                recovering_after_restart = latest_status == "recovering"
+                replay_running = latest_status in {"queued", "running"}
                 recovery_partial_sent = False
                 for item in events:
                     sequence = int(item.get("id") or 0)
@@ -452,9 +454,26 @@ def install_web_chat_recovery_api(app: FastAPI) -> FastAPI:
                         else:
                             event_type = "cursor"
                             payload = {}
-                    elif event_type in {"worker.delta", "worker.snapshot"}:
-                        event_type = "cursor"
-                        payload = {}
+                    elif event_type == "worker.delta":
+                        if replay_running and isinstance(payload.get("delta"), str):
+                            event_type = "recovery.delta"
+                            payload = {
+                                "delta": payload["delta"],
+                                "partial_text_unverified": True,
+                            }
+                        else:
+                            event_type = "cursor"
+                            payload = {}
+                    elif event_type == "worker.snapshot":
+                        if replay_running and isinstance(payload.get("text"), str):
+                            event_type = "recovery.partial.snapshot"
+                            payload = {
+                                "partial_text": payload["text"],
+                                "partial_text_unverified": True,
+                            }
+                        else:
+                            event_type = "cursor"
+                            payload = {}
                     elif event_type == "delivery.stalled" and not payload.get("partial_text"):
                         snapshot = await journal.snapshot(request_id, key_id)
                         latest_row = telemetry.get(request_id) or {}
