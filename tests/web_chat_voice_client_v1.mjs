@@ -437,7 +437,7 @@ await assert.rejects(pendingCameraStart,/已取消/);
 assert.equal(delayedCameraTrack.stopped,true,"late camera permission must release its track");
 assert.equal(cameraRaceClient.isCameraActive(),false);
 assert.equal(video.srcObject,null);
-assert.equal([...intervalCallbacks.values()].some(value=>value.ms===1000),false,
+assert.equal([...intervalCallbacks.values()].some(value=>value.ms===200),false,
   "cancelled camera startup must not install a capture timer");
 await cameraRaceClient.stop();
 
@@ -701,7 +701,7 @@ noAckSocket.onmessage({data:JSON.stringify({
   type:"error",code:"LIVE_VIDEO_FRAME_ACK_TIMEOUT",item_id:noAckFrames[0].item_id,
 })});
 clock += 200;
-const noAckCameraTimer = [...intervalCallbacks.values()].find(value=>value.ms===1000);
+const noAckCameraTimer = [...intervalCallbacks.values()].find(value=>value.ms===200);
 assert.ok(noAckCameraTimer);
 noAckCameraTimer.fn();
 await new Promise(resolve=>setTimeout(resolve,10));
