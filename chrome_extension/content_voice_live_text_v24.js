@@ -274,7 +274,6 @@
   async function ensureLiveVideoTrack(active) {
     assertLiveTurnOwner(active);
     const events = () => liveMainEvents(active);
-    const latestSenderState = latestVideoSenderState(active);
     if (videoSenderUnavailable(active)) markVideoSenderUnavailable(active);
     if (active.videoTrackReady === true) return true;
     if (active.videoTrackUnavailable === true) return false;
