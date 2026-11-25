@@ -248,9 +248,9 @@ def test_model_catalog_never_leaks_dynamic_model_eligibility_across_workers():
 
 
 
-finally:
-    routing._compatible = original_compatible
-    routing._is_dynamic_text_model = original_dynamic
+    finally:
+        routing._compatible = original_compatible
+        routing._is_dynamic_text_model = original_dynamic
 
 def test_picker_observations_are_candidates_not_served_model_proof():
     registry = _registry({
