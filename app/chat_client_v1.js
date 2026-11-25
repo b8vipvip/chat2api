@@ -2461,7 +2461,8 @@
     if (eventName === "recovery.delta") {
       if (event.partial_text_unverified === true && typeof event.delta === "string") {
         const current = String(assistant.content || "");
-        const offset = Number(event.offset);
+        const offset = event.offset === null || event.offset === undefined
+          ? Number.NaN : Number(event.offset);
         if (Number.isSafeInteger(offset) && offset >= 0) {
           if (current.length === offset) {
             appendDelta(assistant, event.delta);
