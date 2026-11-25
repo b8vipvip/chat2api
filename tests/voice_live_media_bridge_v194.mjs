@@ -5,7 +5,9 @@ import vm from "node:vm";
 const liveMain = readFileSync("chrome_extension/voice_live_main.js", "utf8");
 const liveContent = readFileSync("chrome_extension/content_voice_live.js", "utf8");
 const liveText = readFileSync("chrome_extension/content_voice_live_text_v24.js", "utf8");
-for (const src of [liveMain, liveContent, liveText]) new vm.Script(src);
+const voiceMain = readFileSync("chrome_extension/voice_main.js", "utf8");
+const liveRouting = readFileSync("chrome_extension/audio_routing_live.js", "utf8");
+for (const src of [liveMain, liveContent, liveText, voiceMain, liveRouting]) new vm.Script(src);
 assert.ok(liveMain.includes("state.remoteTrack"), "stream from actual WebRTC track");
 assert.ok(!liveMain.includes("state?.recorder?.stream"), "never wait on an unarmed MediaRecorder");
 assert.ok(!liveMain.includes("recorderChunks.splice"), "live stream cannot mutate batch recording");
@@ -14,6 +16,15 @@ assert.ok(liveContent.includes('voice.mic.synthetic'), "ready only after microph
 assert.ok(!liveContent.includes("ready when you are"), "generic body text is not Voice UI readiness");
 assert.ok(liveText.includes("baselineUsers"), "text receipt needs a real new ChatGPT user turn");
 assert.ok(liveText.includes("assertComposerDraftSafe"), "live input must not overwrite a user-owned composer draft");
+assert.ok(liveText.includes("sendLiveVideoFrame"), "timestamped camera frames must use the dedicated video-track bridge");
+assert.ok(liveText.includes('type: "chat2api.attachment.fetch"'), "the Worker must fetch the owner-scoped frame bytes");
+assert.ok(liveText.includes('postMain("voice.live.video.frame"'), "the frame must be delivered into the MAIN-world camera track");
+assert.ok(liveText.includes("video_track: true"), "the Broker must acknowledge the frame as track delivery");
+assert.ok(liveText.includes("active.videoTrackMode = \"snapshot_fallback\""), "unsupported upstream camera controls must retain the safe snapshot fallback");
+assert.ok(voiceMain.includes("canvas.captureStream(5)"), "ChatGPT must receive a continuous synthetic camera MediaStreamTrack");
+assert.ok(voiceMain.includes('voice.live.video.sender.attached'), "the bridge must verify that the upstream PeerConnection attached the video track");
+assert.ok(voiceMain.includes("voice.live.video.frame.received"), "the exact frame sequence must be acknowledged after rendering");
+assert.ok(liveRouting.includes("videoFrame: message.video_frame || null"), "the Broker must forward frame timestamps to the Worker tab");
 assert.ok(liveText.includes("refusing to overwrite it"), "draft conflicts must fail closed");
 assert.ok(liveText.includes("const hasNewUserTurn = () =>"), "composer lag must be checked against the new user turn");
 assert.ok(liveText.includes("if (!sent && !hasNewUserTurn() && !dispatchedEnter)"),
