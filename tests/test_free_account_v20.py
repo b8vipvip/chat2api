@@ -20,6 +20,9 @@ def test_free_account_detector_is_passive_and_loaded() -> None:
     assert "content_account_v20.js" in scripts
     assert "client-bootstrap-free" in source
     assert "ready-composer-without-model-selector" in source
+    assert "plan_confirmed: true" in source
+    assert "plan_confirmed: false" in source
+    assert "account_plan_confirmed" in background
     assert "selectable-model-control" in source
     assert ".click()" not in source
     assert 'url.includes("/api/extensions/register")' in background
