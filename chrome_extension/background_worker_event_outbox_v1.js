@@ -27,8 +27,8 @@
   const baseHandleServerMessage = handleServerMessage;
 
   function stableEventIdentity(payload) {
-    const requestId = String(payload?.request_id || "").slice(0, 120);
-    if (!requestId) return null;
+    const requestId = String(payload?.request_id || "").trim();
+    if (!requestId || requestId.length > 128) return null;
     let eventId = String(payload?.worker_event_id || "").trim();
     if (!eventId && payload?.type === "chat.tool.call") {
       const callId = String(payload.call_id || payload.id || payload.tool_call_id || "").trim();
