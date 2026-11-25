@@ -247,9 +247,25 @@
 
   async function ensureLiveVideoTrack(active) {
     assertLiveTurnOwner(active);
+    const events = () => liveMainEvents(active);
+    const senderStates = events().filter(item =>
+      item.type === "voice.live.video.sender.attached" ||
+      item.type === "voice.live.video.sender.detached" ||
+      item.type === "voice.live.video.track.ended");
+    const latestSenderState = senderStates[senderStates.length - 1] || null;
+    if (latestSenderState && (
+      latestSenderState.type === "voice.live.video.sender.detached" ||
+      latestSenderState.type === "voice.live.video.track.ended"
+    )) {
+      active.videoTrackReady = false;
+      active.videoTrackUnavailable = true;
+      active.videoTrackMode = "snapshot_fallback";
+      active.videoTrackError = String(
+        latestSenderState.reason || "ChatGPT WebRTC camera sender stopped",
+      ).slice(0, 240);
+    }
     if (active.videoTrackReady === true) return true;
     if (active.videoTrackUnavailable === true) return false;
-    const events = () => liveMainEvents(active);
     try {
       postMain("voice.live.video.prepare", active);
       const prepared = await waitFor(() => events().find(item =>
