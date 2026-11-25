@@ -238,7 +238,7 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
     def current_user(request: Request) -> dict[str, Any]:
         user = accounts.authenticate(request.cookies.get(USER_SESSION_COOKIE))
         if not user:
-            raise HTTPException(status_code=401, detail="请先登录用户控制台")
+            raise HTTPException(status_code=401, detail="请先登录账户")
         return user
 
     def public_key(item: dict[str, Any]) -> dict[str, Any]:
