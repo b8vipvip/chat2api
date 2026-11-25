@@ -383,4 +383,4 @@ def test_guest_policy_revocation_also_opens_inline_login_dialog() -> None:
     assert 'String(payload?.detail || "").includes("游客使用已关闭")' in source
     assert 'else if (guestLoginRequired(response.status, payload))' in source
     assert 'const guestAccessClosed = guestLoginRequired(response.status, payload);' in source
-    assert 'openLoginDialog(guestAccessClosed ? String(payload.detail || "游客使用已关闭，请登录账户") : "");' in source
+    assert source.count('openLoginDialog(String(payload.detail || "游客使用已关闭，请登录账户"));') == 2
