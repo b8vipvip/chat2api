@@ -559,6 +559,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         principal = await api_keys.authenticate(supplied)
         if not principal:
             raise HTTPException(status_code=401, detail="Invalid or disabled API key")
+        # A managed key selected in Client Configuration is reserved for the
+        # authenticated Web Chat Mode 1 adapter. Do not let the same bearer
+        # credential silently fall back to the generic OpenAI-compatible Mode 2
+        # ingress. User-owned keys are never selected as the shared key and
+        # continue to use the original /v1 Mode 2 contract.
+        control_plane = getattr(app.state, "control_plane", None)
+        configured_mode1_key_id = (
+            control_plane.client_api_key_id() if control_plane is not None else ""
+        )
+        if configured_mode1_key_id and principal.key_id == configured_mode1_key_id:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "This API Key is reserved for Web Chat Mode 1. "
+                    "Use the signed-in Web Chat client; user-created API Keys remain Mode 2."
+                ),
+            )
         return principal
 
     async def require_admin_key(
