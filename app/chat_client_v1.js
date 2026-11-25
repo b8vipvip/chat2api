@@ -513,6 +513,11 @@
       view === "pluginsScreen" || view === "libraryScreen");
   }
 
+  function guestLoginRequired(status, payload) {
+    return status === 403 && Boolean(state.user?.is_guest)
+      && String(payload?.detail || "").includes("游客使用已关闭");
+  }
+
   async function apiJson(path, options = {}) {
     const response = await fetch(path, {
       credentials: "same-origin",
@@ -529,6 +534,11 @@
         showOnly("authRequired");
         setConnection("登录已失效", "error");
         openLoginDialog();
+      } else if (guestLoginRequired(response.status, payload)) {
+        state.user = null;
+        showOnly("authRequired");
+        setConnection("游客访问已关闭", "error");
+        openLoginDialog(String(payload.detail || "游客使用已关闭，请登录账户"));
       }
       throw error;
     }
@@ -2913,11 +2923,17 @@
         recordClientDiagnostic("chat.request.http_error", {
           request_id: requestId, model_id: state.selectedModel, http_status: response.status, phase: "dispatch",
         }, "warning");
+        const guestAccessClosed = guestLoginRequired(response.status, payload);
         if (response.status === 401) {
           state.user = null;
           showOnly("authRequired");
           setConnection("登录已失效", "error");
           openLoginDialog();
+        } else if (guestAccessClosed) {
+          state.user = null;
+          showOnly("authRequired");
+          setConnection("游客访问已关闭", "error");
+          openLoginDialog(String(payload.detail || "游客使用已关闭，请登录账户"));
         } else if (response.status === 403 || response.status === 503) {
           showOnly("serviceUnavailable");
           setConnection("服务端统一 API Key 不可用", "error");

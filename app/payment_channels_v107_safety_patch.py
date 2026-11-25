@@ -68,10 +68,10 @@ def install_payment_channels_v107_safety_patch(app: FastAPI) -> FastAPI:
         # normal query parameter placed before the fragment.
         if path == "/api/user/payments/v106/paypal/return" and 300 <= response.status_code < 400:
             location = response.headers.get("location", "")
-            if location == "/console#billing&payment=success":
-                response.headers["location"] = "/console?payment=success#billing"
-            elif location == "/console#billing&payment=failed":
-                response.headers["location"] = "/console?payment=failed#billing"
+            if location == "/settings#billing&payment=success":
+                response.headers["location"] = "/settings?payment=success#billing"
+            elif location == "/settings#billing&payment=failed":
+                response.headers["location"] = "/settings?payment=failed#billing"
         return response
 
     return app

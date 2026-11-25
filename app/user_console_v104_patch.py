@@ -366,13 +366,20 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
     telemetry.upsert = metered_upsert
 
     @app.get("/settings", include_in_schema=False)
-    @app.get("/console", include_in_schema=False)
-    async def user_console(request: Request) -> Response:
+    async def user_account_settings(request: Request) -> Response:
         session_user = accounts.authenticate(request.cookies.get(USER_SESSION_COOKIE))
         if session_user and session_user.get("is_guest"):
             return RedirectResponse("/chat", status_code=303)
         template = Path(__file__).with_name("user_console_v104.html").read_text(encoding="utf-8")
         return HTMLResponse(template, headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
+
+    @app.get("/console", include_in_schema=False)
+    async def legacy_user_console_redirect(request: Request) -> Response:
+        session_user = accounts.authenticate(request.cookies.get(USER_SESSION_COOKIE))
+        return RedirectResponse(
+            "/chat" if session_user and session_user.get("is_guest") else "/settings",
+            status_code=303,
+        )
 
     @app.get("/chat", include_in_schema=False)
     async def chat_client(request: Request) -> HTMLResponse:
@@ -929,7 +936,7 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
             "type": provider_channel,
             "out_trade_no": str(order.get("merchant_trade_no") or ""),
             "notify_url": f"{origin}/api/user/payments/zpay/notify",
-            "return_url": f"{origin}/console#billing",
+            "return_url": f"{origin}/settings#billing",
             "name": "chat2api 账户充值",
             "money": f"{int(order.get('amount_cents') or 0) / 100:.2f}",
             "param": str(order.get("order_id") or ""),

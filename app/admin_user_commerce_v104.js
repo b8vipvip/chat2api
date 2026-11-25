@@ -476,12 +476,20 @@
     document.getElementById("userPasswordNew").focus();
   }
 
+  function clearUserPasswordFields() {
+    document.getElementById("userPasswordNew").value = "";
+    document.getElementById("userPasswordConfirm").value = "";
+    document.getElementById("userPasswordStatus").textContent = "";
+  }
+
   function closeUserPasswordDialog() {
     const dialog = document.getElementById("userPasswordDialog");
     if (dialog?.open) dialog.close();
+    clearUserPasswordFields();
     pendingPasswordUserId = "";
   }
 
+  document.getElementById("userPasswordDialog")?.addEventListener("close", clearUserPasswordFields);
   document.getElementById("userPasswordDialogClose")?.addEventListener("click", closeUserPasswordDialog);
   document.getElementById("userPasswordDialogCancel")?.addEventListener("click", closeUserPasswordDialog);
   document.getElementById("userPasswordDialogSave")?.addEventListener("click", async () => {

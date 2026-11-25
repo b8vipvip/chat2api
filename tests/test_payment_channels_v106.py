@@ -299,3 +299,10 @@ def test_invalid_payment_channel_update_does_not_partially_mutate_memory(tmp_pat
     assert store.payload == previous
     assert store.zpay_key() == "old-zpay-secret"
     assert store.paypal_secret() == "old-paypal-secret"
+
+
+def test_account_settings_route_receives_user_payment_assets() -> None:
+    source = (Path(__file__).resolve().parents[1] / "app" / "payment_channels_v106_patch.py").read_text(encoding="utf-8")
+    assert 'request.url.path not in {"/settings", "/console", "/admin"}' in source
+    assert 'asset = USER_ASSET if request.url.path in {"/settings", "/console"} else ADMIN_ASSET' in source
+    assert '"return_url": f"{origin_for(request)}/settings#billing"' in source
