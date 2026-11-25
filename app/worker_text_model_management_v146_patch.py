@@ -74,6 +74,7 @@ def _worker_snapshot(metadata: Any) -> dict[str, Any]:
         "validation_trigger": str(meta.get("model_validation_trigger") or "")[:80],
         "updated_at": str(meta.get("model_validation_updated_at") or "")[:48],
         "account_type": str(meta.get("account_type") or "unknown")[:40],
+        "account_plan_confirmed": meta.get("account_plan_confirmed") is True,
         "candidates": int(meta.get("model_validation_candidate_count") or 0),
         "verified_count": int(meta.get("model_validation_validated_count") or 0),
         "observed": observed,
@@ -216,7 +217,7 @@ def install_worker_text_model_management_v146_patch(app: FastAPI) -> FastAPI:
                         if ready and model_id not in disabled:
                             entry["routable_by"].append(client_id)
             # Page-default is a separate logical route, never concrete picker evidence.
-            if state["validation_state"] == "default-only" and state["account_type"] == "free":
+            if state["validation_state"] == "default-only" and state["account_type"] == "free" and _free_default_composer_eligible(registry, client_id):
                 entry = models.setdefault("default", {
                     "id": "default", "label": "默认模型", "enabled": True,
                     "observed_by": [], "verified_by": [], "routable_by": [],
@@ -227,7 +228,7 @@ def install_worker_text_model_management_v146_patch(app: FastAPI) -> FastAPI:
                     "selectable": False, "label": "默认模型",
                     "method": "free-page-default-unverified", "at": state["updated_at"],
                 }
-                if ready and _free_default_composer_eligible(registry, client_id):
+                if minimum_model and minimum_model not in disabled and ready and _free_default_composer_eligible(registry, client_id):
                     entry["routable_by"].append(client_id)
         for entry in models.values():
             entry["state"] = (

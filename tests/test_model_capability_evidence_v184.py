@@ -148,6 +148,7 @@ def test_unverified_free_default_does_not_claim_picker_validation_or_image_opera
         free = SimpleNamespace(connection_enabled=True, metadata={
             "account_type": "free",
             "account_detection_confidence": "high",
+            "account_plan_confirmed": True,
             "account_model_control_present": False,
             "model_validation_state": "failed", "models": [],
             "capabilities": ["text", "image-generation"],

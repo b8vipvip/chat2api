@@ -25,7 +25,7 @@
       /[\"'](?:subscription_tier|subscriptionTier|account_tier|accountTier)[\"']\s*[:=]\s*[\"']free[\"']/i,
     ];
     if (freePatterns.some(pattern => pattern.test(raw))) {
-      return { account_type: "free", confidence: "high", strategy: "client-bootstrap-free" };
+      return { account_type: "free", confidence: "high", strategy: "client-bootstrap-free", plan_confirmed: true };
     }
     const paidPatterns = [
       /[\"'](?:plan|plan_type|planType|account_plan|subscription_plan|subscriptionPlan)[\"']\s*[:=]\s*[\"'](?:plus|pro|team|business|enterprise|edu)[\"']/i,
@@ -33,32 +33,51 @@
       /[\"'](?:is_paid|isPaid|paid)[\"']\s*[:=]\s*true/i,
     ];
     if (paidPatterns.some(pattern => pattern.test(raw))) {
-      return { account_type: "paid", confidence: "high", strategy: "client-bootstrap-paid" };
+      return { account_type: "paid", confidence: "high", strategy: "client-bootstrap-paid", plan_confirmed: true };
     }
     if (/\bchatgpt\s+(plus|pro|team|business|enterprise|edu)\b/i.test(lower)) {
-      return { account_type: "paid", confidence: "high", strategy: "client-bootstrap-plan-name" };
+      return { account_type: "paid", confidence: "high", strategy: "client-bootstrap-plan-name", plan_confirmed: true };
     }
     return null;
   }
 
   function explicitUiPlan() {
-    const scopes = [
-      document.querySelector("nav"),
-      document.querySelector("aside"),
-      document.querySelector("header"),
-      ...document.querySelectorAll("[data-testid*='account'],[data-testid*='profile'],[data-testid*='plan'],[aria-label*='account' i],[aria-label*='profile' i]"),
-    ].filter(Boolean);
+    // Do not infer a plan from the whole sidebar: conversation titles can
+    // contain words such as "Free". Short plan labels are trusted only inside
+    // account/profile/plan-specific UI elements.
+    const candidates = [];
+    const header = document.querySelector("header");
+    if (header) candidates.push({ node: header, allowStandaloneFree: false });
+    const accountScopes = document.querySelectorAll(
+      "[data-testid*='account'],[data-testid*='profile'],[data-testid*='plan'],[aria-label*='account' i],[aria-label*='profile' i],[aria-label*='plan' i]"
+    );
+    for (const node of accountScopes) {
+      const descriptor = normalize(
+        String(node.getAttribute("aria-label") || "") + " " + String(node.getAttribute("data-testid") || "")
+      );
+      candidates.push({
+        node,
+        allowStandaloneFree: /account|profile|plan/i.test(descriptor),
+      });
+    }
     const seen = new Set();
-    for (const scope of scopes) {
-      if (seen.has(scope)) continue;
+    for (const candidate of candidates) {
+      const scope = candidate.node;
+      if (!scope || seen.has(scope)) continue;
       seen.add(scope);
       const text = normalize(scope.innerText || scope.textContent || "");
       if (!text || text.length > 4000) continue;
-      if (/(^|\s)(ChatGPT\s+)?Free($|\s)|免费版|免费计划/i.test(text)) {
-        return { account_type: "free", confidence: "high", strategy: "account-ui-free" };
+      const freePattern = candidate.allowStandaloneFree
+        ? /(^|\s)(ChatGPT\s+)?Free($|\s)|Free\s+plan|免费版|免费计划/i
+        : /\bChatGPT\s+Free\b|\bFree\s+plan\b|免费版|免费计划/i;
+      if (freePattern.test(text)) {
+        return { account_type: "free", confidence: "high", strategy: "account-ui-free", plan_confirmed: true };
       }
-      if (/(^|\s)ChatGPT\s+(Plus|Pro|Team|Business|Enterprise|Edu)($|\s)|企业版|团队版/i.test(text)) {
-        return { account_type: "paid", confidence: "high", strategy: "account-ui-paid" };
+      const paidPattern = candidate.allowStandaloneFree
+        ? /(^|\s)(ChatGPT\s+)?(Plus|Pro|Team|Business|Enterprise|Edu)($|\s)|企业版|团队版/i
+        : /\bChatGPT\s+(Plus|Pro|Team|Business|Enterprise|Edu)\b|企业版|团队版/i;
+      if (paidPattern.test(text)) {
+        return { account_type: "paid", confidence: "high", strategy: "account-ui-paid", plan_confirmed: true };
       }
     }
     return null;
@@ -122,6 +141,7 @@
         account_type: "paid",
         confidence: "medium",
         strategy: modelControl.strategy,
+        plan_confirmed: false,
         detector: "account-v20",
         model_control_present: true,
         composer_ready: composerReady(),
@@ -131,9 +151,10 @@
     const ready = composerReady();
     if (ready && signedInEvidence() && document.readyState === "complete") {
       return {
-        account_type: "free",
-        confidence: "medium",
-        strategy: "ready-composer-without-model-selector",
+        account_type: "unknown",
+        confidence: "low",
+        strategy: "ready-composer-without-model-selector-unconfirmed-plan",
+        plan_confirmed: false,
         detector: "account-v20",
         model_control_present: false,
         composer_ready: true,
@@ -144,6 +165,7 @@
       account_type: "unknown",
       confidence: "low",
       strategy: "insufficient-passive-evidence",
+      plan_confirmed: false,
       detector: "account-v20",
       model_control_present: false,
       composer_ready: ready,

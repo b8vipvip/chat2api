@@ -131,6 +131,7 @@ def test_free_default_mini_route_requires_ready_composer_and_reliable_plan() -> 
     details = {
         "account_type": "free",
         "account_detection_confidence": "high",
+        "account_plan_confirmed": True,
         "account_model_control_present": False,
         "chatgpt_login_state": "ready",
         "chatgpt_login_composer_ready": True,
@@ -142,6 +143,8 @@ def test_free_default_mini_route_requires_ready_composer_and_reliable_plan() -> 
     assert not _free_default_composer_eligible(r(details, False), "ext_test")
     assert not _free_default_composer_eligible(r({**details, "account_type": "paid"}), "ext_test")
     assert not _free_default_composer_eligible(r({**details, "account_detection_confidence": "low"}), "ext_test")
+    assert not _free_default_composer_eligible(r({**details, "account_plan_confirmed": False}), "ext_test")
+    assert not _free_default_composer_eligible(r({k:v for k,v in details.items() if k != "account_plan_confirmed"}), "ext_test")
     assert not _free_default_composer_eligible(r({**details, "account_model_control_present": True}), "ext_test")
     assert _validated_model_rows(r(details), "ext_test") == []
 
@@ -188,6 +191,7 @@ def test_model_catalog_never_leaks_dynamic_model_eligibility_across_workers():
             self.clients = {
                 "ext_free": SimpleNamespace(connection_enabled=True, metadata={
                     "account_type": "free", "account_detection_confidence": "high",
+                    "account_plan_confirmed": True,
                     "account_model_control_present": False, "models": [],
                 }),
                 "ext_paid": SimpleNamespace(connection_enabled=True, metadata={
@@ -221,30 +225,32 @@ def test_model_catalog_never_leaks_dynamic_model_eligibility_across_workers():
     from app import model_capability_routing_patch as routing
     original_compatible = routing._compatible
     original_dynamic = routing._is_dynamic_text_model
-    registry = Registry()
-    app = FastAPI()
-    app.state.registry = registry
-    install_worker_model_library_v145_patch(app)
-    rows = {row["id"]: row for row in registry.model_catalog()}
-    assert rows["gpt-5.6-sol"]["clients"] == ["ext_free"]
-    assert rows["gpt-5.6-sol"]["validated"] is False
-    assert rows["gpt-6"]["clients"] == ["ext_paid"]
-    assert registry.supports_model("ext_free", "gpt-5.6-sol")
-    assert not registry.supports_model("ext_free", "gpt-6")
+    try:
+        registry = Registry()
+        app = FastAPI()
+        app.state.registry = registry
+        install_worker_model_library_v145_patch(app)
+        rows = {row["id"]: row for row in registry.model_catalog()}
+        assert rows["gpt-5.6-sol"]["clients"] == ["ext_free"]
+        assert rows["gpt-5.6-sol"]["validated"] is False
+        assert rows["gpt-6"]["clients"] == ["ext_paid"]
+        assert registry.supports_model("ext_free", "gpt-5.6-sol")
+        assert not registry.supports_model("ext_free", "gpt-6")
 
-    registry.minimum = "gpt-6"
-    rows = {row["id"]: row for row in registry.model_catalog()}
-    assert "gpt-5.6-sol" not in rows
-    assert rows["gpt-6"]["clients"] == ["ext_free", "ext_paid"]
-    assert rows["gpt-6"]["compatibility_clients"] == ["ext_free"]
-    assert rows["gpt-6"]["validated"] is True
-    assert registry.is_free_default_route("ext_free", "gpt-6")
-    assert not registry.is_free_default_route("ext_paid", "gpt-6")
-    # Restore global hooks after this isolated installer test.
-    routing._compatible = original_compatible
-    routing._is_dynamic_text_model = original_dynamic
+        registry.minimum = "gpt-6"
+        rows = {row["id"]: row for row in registry.model_catalog()}
+        assert "gpt-5.6-sol" not in rows
+        assert rows["gpt-6"]["clients"] == ["ext_free", "ext_paid"]
+        assert rows["gpt-6"]["compatibility_clients"] == ["ext_free"]
+        assert rows["gpt-6"]["validated"] is True
+        assert registry.is_free_default_route("ext_free", "gpt-6")
+        assert not registry.is_free_default_route("ext_paid", "gpt-6")
 
 
+
+    finally:
+        routing._compatible = original_compatible
+        routing._is_dynamic_text_model = original_dynamic
 
 def test_picker_observations_are_candidates_not_served_model_proof():
     registry = _registry({

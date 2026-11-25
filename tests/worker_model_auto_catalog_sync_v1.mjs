@@ -22,9 +22,10 @@ let selectMessages = 0;
 let busy = false;
 let noPicker = false;
 let freePlan = false;
+let planConfirmed = false;
 const listeners = {};
 const context = {
-  chat2apiDetectAccountProfileV20: async (_force, tab) => ({account_type:freePlan?"free":"paid", confidence:"high", model_control_present:false, composer_ready:true, tab_id:tab.id}),
+  chat2apiDetectAccountProfileV20: async (_force, tab) => ({account_type:freePlan?"free":"paid", confidence:"high", plan_confirmed:planConfirmed, model_control_present:false, composer_ready:true, tab_id:tab.id}),
   URL,
   Date,
   Math,
@@ -120,14 +121,28 @@ console.log("worker-model-auto-catalog-sync-v1-passed");
 busy = false;
 noPicker = true;
 freePlan = true;
+planConfirmed = true;
 const defaultResult = await authority.syncObservedChoices("manual-free-sync", true);
 assert.equal(defaultResult.default_only, true);
 assert.equal(stored.modelValidationState, "default-only");
 assert.equal(stored.models.length, 0);
 assert.equal(stored.modelObservedChoices.length, 0);
+stored.models = [{id:"gpt-6", validated:true}];
+stored.modelObservedChoices = [{id:"gpt-6", selectable:true, validated:true}];
 freePlan = false;
+planConfirmed = false;
 const paidFailure = await authority.syncObservedChoices("manual-paid-failure", true);
 assert.equal(paidFailure.ok, false);
 assert.equal(paidFailure.default_only, undefined);
 assert.equal(stored.modelValidationState, "failed", "failed fresh paid inspection must not retain the Free default as live evidence");
+assert.equal(stored.models.length, 1, "failed refresh should retain prior evidence for diagnostics");
+assert.equal(stored.modelObservedChoices.length, 1, "failed refresh should not erase the last picker snapshot");
 assert.equal(selectMessages, 0);
+
+freePlan = true;
+planConfirmed = false;
+const unconfirmedFree = await authority.syncObservedChoices("heuristic-free-no-picker", true);
+assert.equal(unconfirmedFree.ok, false);
+assert.equal(unconfirmedFree.default_only, undefined);
+assert.equal(stored.modelValidationState, "failed");
+assert.match(stored.modelValidationError, /plan_confirmed=false/);
