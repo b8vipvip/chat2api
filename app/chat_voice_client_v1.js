@@ -5,7 +5,8 @@
   const INPUT_RATE = 16000;
   const OUTPUT_RATE = 24000;
   const MAX_VIDEO_FRAME_BYTES = 2 * 1024 * 1024;
-  const MAX_VIDEO_FRAMES = 64;
+  const MAX_VIDEO_FRAMES = 300;
+  const VIDEO_FRAME_INTERVAL_MS = 200;
   // The Broker allows up to 5 seconds for the Worker to drain its final
   // interruption snapshot. Leave network/terminal-delivery margin before the
   // browser gives up and closes the public WebSocket.
@@ -485,7 +486,7 @@
       if (!ready || stopping || !cameraStream || videoPending || videoFrameCount >= MAX_VIDEO_FRAMES) return;
       const captureGeneration = cameraGeneration;
       const captureAt = monotonicNow();
-      if (captureAt - lastVideoCaptureAt < 1000) return;
+      if (captureAt - lastVideoCaptureAt < VIDEO_FRAME_INTERVAL_MS) return;
       const width = Number(videoElement?.videoWidth || 0);
       const height = Number(videoElement?.videoHeight || 0);
       if (!width || !height) return;
@@ -568,7 +569,7 @@
         event({type:"input_video.frame.queued",sequence});
         if (videoFrameCount >= MAX_VIDEO_FRAMES) {
           stopCamera();
-          event({type:"client.notice",message:"已达到本次语音会话 64 帧上限，摄像头抽帧已停止"});
+          event({type:"client.notice",message:"已达到本次语音会话 300 帧上限，实时视频已停止"});
         }
       } catch (error) {
         const stillCurrent = cameraCaptureIsCurrent(captureGeneration,itemId);
@@ -580,8 +581,8 @@
     }
     async function startCamera(targetVideo) {
       if (!ready || stopping || cleaned) throw new Error("请先连接 GPT-Live 语音");
-      if (!supportsVideoFrames) throw new Error("当前 Worker 会话不支持摄像头抽帧");
-      if (videoFrameCount >= MAX_VIDEO_FRAMES) throw new Error("本次语音会话已达到 64 帧上限");
+      if (!supportsVideoFrames) throw new Error("当前 Worker 会话不支持实时视频轨道");
+      if (videoFrameCount >= MAX_VIDEO_FRAMES) throw new Error("本次语音会话已达到 300 帧上限");
       if (videoPending) throw new Error("上一张摄像头画面尚未得到 Worker 确认，请稍后重试");
       if (cameraStream) return;
       if (cameraStartingGeneration !== null) throw new Error("摄像头权限请求正在进行，请稍后重试");
@@ -613,9 +614,9 @@
           if (videoElement?.srcObject === requestedCameraStream) videoElement.srcObject = null;
           throw new Error("摄像头启动已取消");
         }
-        cameraTimer = timers.setInterval(() => { void captureAndSendFrame(); },1000);
+        cameraTimer = timers.setInterval(() => { void captureAndSendFrame(); },VIDEO_FRAME_INTERVAL_MS);
         void captureAndSendFrame();
-        state("camera_ready","摄像头已开启（每秒最多发送一张快照）");
+        state("camera_ready","摄像头已开启（实时视频，最高 5 FPS，最多约 60 秒）");
       } catch (error) {
         if (generation === cameraGeneration) stopCamera();
         throw error;
