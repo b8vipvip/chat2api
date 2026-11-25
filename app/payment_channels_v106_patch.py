@@ -492,7 +492,7 @@ def install_payment_channels_v106_patch(app: FastAPI) -> FastAPI:
             "type": "alipay" if channel == "alipay" else "wxpay",
             "out_trade_no": str(order.get("merchant_trade_no") or ""),
             "notify_url": f"{origin_for(request)}/api/user/payments/v106/zpay/notify",
-            "return_url": f"{origin_for(request)}/console#billing",
+            "return_url": f"{origin_for(request)}/settings#billing",
             "name": "chat2api 账户充值",
             "money": f"{int(order.get('amount_cents') or 0) / 100:.2f}",
             "param": str(order.get("order_id") or ""),
@@ -526,7 +526,7 @@ def install_payment_channels_v106_patch(app: FastAPI) -> FastAPI:
             "purchase_units": [{"reference_id": order_id, "description": "chat2api account recharge", "amount": {"currency_code": "USD", "value": f"{usd_value:.2f}"}}],
             "application_context": {
                 "return_url": f"{origin_for(request)}/api/user/payments/v106/paypal/return?local_order_id={order_id}",
-                "cancel_url": f"{origin_for(request)}/console#billing",
+                "cancel_url": f"{origin_for(request)}/settings#billing",
                 "user_action": "PAY_NOW",
             },
         }
@@ -640,19 +640,19 @@ def install_payment_channels_v106_patch(app: FastAPI) -> FastAPI:
             raw = billing.orders.get(local_order_id)
             order = dict(raw) if raw else None
         if not order or order.get("channel") != "paypal" or str(order.get("provider_order_id") or "") != token:
-            return RedirectResponse("/console#billing", status_code=303)
+            return RedirectResponse("/settings#billing", status_code=303)
         if order.get("status") == "paid":
-            return RedirectResponse("/console#billing", status_code=303)
+            return RedirectResponse("/settings#billing", status_code=303)
         # Do not capture a provider order after its local recharge order has
         # been rejected, cancelled, expired or otherwise made terminal.
         if order.get("status") != "pending":
-            return RedirectResponse("/console#billing&payment=failed", status_code=303)
+            return RedirectResponse("/settings#billing&payment=failed", status_code=303)
         base, access_token = await paypal_token()
         try:
             async with httpx.AsyncClient(timeout=20.0) as client:
                 response = await client.post(f"{base}/v2/checkout/orders/{token}/capture", headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json", "PayPal-Request-Id": f"capture-{local_order_id}"}, json={})
         except httpx.HTTPError:
-            return RedirectResponse("/console#billing&payment=failed", status_code=303)
+            return RedirectResponse("/settings#billing&payment=failed", status_code=303)
         data = _parse_json_maybe_wrapped(response.text) or {}
         captures = (((data.get("purchase_units") or [{}])[0].get("payments") or {}).get("captures") or []) if isinstance(data, dict) else []
         capture = captures[0] if captures and isinstance(captures[0], dict) else {}
@@ -660,8 +660,8 @@ def install_payment_channels_v106_patch(app: FastAPI) -> FastAPI:
         valid_amount = str(amount.get("currency_code") or "") == str(order.get("provider_currency") or "") and str(amount.get("value") or "") == str(order.get("provider_amount") or "")
         if response.status_code < 400 and str(data.get("status") or "") == "COMPLETED" and valid_amount:
             billing.settle_order(local_order_id, str(capture.get("id") or token))
-            return RedirectResponse("/console#billing&payment=success", status_code=303)
-        return RedirectResponse("/console#billing&payment=failed", status_code=303)
+            return RedirectResponse("/settings#billing&payment=success", status_code=303)
+        return RedirectResponse("/settings#billing&payment=failed", status_code=303)
 
     @app.get("/api/admin/payment-channels-v106")
     async def admin_get_channels(request: Request) -> dict[str, Any]:
@@ -757,7 +757,7 @@ def install_payment_channels_v106_patch(app: FastAPI) -> FastAPI:
     @app.middleware("http")
     async def payment_assets_v106(request: Request, call_next):
         response = await call_next(request)
-        if request.url.path not in {"/console", "/admin"} or "text/html" not in response.headers.get("content-type", ""):
+        if request.url.path not in {"/settings", "/console", "/admin"} or "text/html" not in response.headers.get("content-type", ""):
             return response
         raw = await _response_bytes(response)
         text = raw.decode("utf-8", errors="replace")

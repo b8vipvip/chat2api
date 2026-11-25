@@ -17,7 +17,7 @@ def test_payment_safety_keeps_v106_cipher_stable_until_data_keyring_migration() 
     assert "_persist_payment_channels_secret(data_dir, data_secret)" in legacy
     assert "禁止重复入账" in source
     assert 'item.get("status") == "paid"' in source
-    assert "/console?payment=success#billing" in source
+    assert "/settings?payment=success#billing" in source
     assert "install_payment_channels_v107_safety_patch(app)" in entry
     assert entry.index("install_payment_channels_v106_patch(app)") < entry.index("install_payment_channels_v107_safety_patch(app)")
     assert entry.rstrip().endswith("install_request_history_v94_patch(app)")
