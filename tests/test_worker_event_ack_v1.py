@@ -24,6 +24,15 @@ def test_worker_nonterminal_ack_requires_mode1_journal_commit(tmp_path):
     state.mode1_web_chat = True
     state.mode1_owner_key_id = "key_owner_123"
     app.state.broker.requests[request_id] = state
+    recovered_request_id = "req_worker_event_recovered_789"
+    asyncio.run(app.state.telemetry.upsert({
+        "request_id": recovered_request_id,
+        "response_id": "resp_recovered_789",
+        "client_id": client_id,
+        "api_key_id": "key_owner_recovered",
+        "web_chat_mode": True,
+        "status": "recovering",
+    }))
 
     with TestClient(app) as client:
         with client.websocket_connect(
@@ -50,6 +59,25 @@ def test_worker_nonterminal_ack_requires_mode1_journal_commit(tmp_path):
             ))
             assert events["events"][0]["type"] == "worker.delta"
             assert events["events"][0]["data"]["delta"] == "durable token"
+
+            # After a process restart there is no Broker lease, but the
+            # recovering telemetry row and event journal still bind this
+            # request to the same Worker and user owner.
+            socket.send_json({
+                "type": "chat.delta",
+                "request_id": recovered_request_id,
+                "worker_event_id": f"{recovered_request_id}:1",
+                "delta": "recovered token",
+            })
+            recovered_ack = socket.receive_json()
+            assert recovered_ack["type"] == "chat.event.ack"
+            assert recovered_ack["accepted"] is True
+            assert recovered_ack["durable"] is True
+            assert recovered_ack["discarded"] is False
+            recovered_events = asyncio.run(app.state.web_chat_event_journal.events_after(
+                recovered_request_id, "key_owner_recovered", 0,
+            ))
+            assert recovered_events["events"][0]["data"]["delta"] == "recovered token"
 
             # A successful Broker queue publication is not enough for Mode 1:
             # the Worker must retain and retry the event until the durable
