@@ -15,6 +15,7 @@ from app.config import Settings
 from app.main import create_app, web_chat_delivery_text
 from app.telemetry import TelemetryStore
 from app.user_console_v104_patch import install_user_console_v104_patch
+import app.web_chat_event_journal_v1 as event_journal_module
 from app.web_chat_event_journal_v1 import WebChatEventJournal
 
 
@@ -603,6 +604,50 @@ def test_worker_event_journal_deduplicates_replayed_deltas_by_source_id(tmp_path
         assert [item["id"] for item in page["events"]] == [first_id, second_id]
         assert [item["data"]["delta"] for item in page["events"]] == ["first ", "second"]
         assert [item["data"]["offset"] for item in page["events"]] == [0, 6]
+
+    asyncio.run(scenario())
+
+
+def test_worker_event_dedupe_and_citations_survive_event_window_pruning(tmp_path, monkeypatch):
+    async def scenario():
+        monkeypatch.setattr(event_journal_module, "_MAX_EVENTS_PER_REQUEST", 1)
+        journal = WebChatEventJournal(tmp_path)
+        await journal.open()
+        request_id = "req_pruned_worker_dedupe"
+        owner = "key-pruned-worker-dedupe"
+        reference_event = {
+            "type": "chat.references",
+            "worker_event_id": f"{request_id}:references:1",
+            "message_id": "assistant-1",
+            "references": [{
+                "url": "https://docs.python.org/3/library/",
+                "title": "Python docs",
+                "snippet": "Official docs",
+            }],
+        }
+        first_id = await journal.append_worker_event(request_id, owner, reference_event)
+        second_id = await journal.append_worker_event(
+            request_id, owner,
+            {
+                "type": "chat.delta",
+                "worker_event_id": f"{request_id}:2",
+                "delta": "later",
+            },
+        )
+        assert second_id == first_id + 1
+        page = await journal.events_after(request_id, owner, 0, limit=8)
+        assert [item["id"] for item in page["events"]] == [second_id]
+
+        # The original reference event is outside the bounded replay window,
+        # but its card metadata and source identity remain durable for replay
+        # deduplication and terminal snapshots.
+        snapshot = await journal.snapshot(request_id, owner)
+        assert snapshot["references"][0]["url"] == "https://docs.python.org/3/library/"
+        duplicate_id = await journal.append_worker_event(request_id, owner, reference_event)
+        assert duplicate_id == first_id
+        after_duplicate = await journal.snapshot(request_id, owner)
+        assert after_duplicate["last_event_id"] == second_id
+        assert after_duplicate["references"] == snapshot["references"]
 
     asyncio.run(scenario())
 
