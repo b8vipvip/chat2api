@@ -10,6 +10,7 @@ from fastapi import Response
 from fastapi.testclient import TestClient
 
 from app.user_commerce import USER_SESSION_COOKIE
+import app.web_chat_event_journal_v1 as event_journal_module
 
 from app.config import Settings
 from app.main import create_app
@@ -221,6 +222,44 @@ def test_running_sse_replay_resumes_durable_worker_deltas_from_cursor(tmp_path):
         assert f"id: {second_id}\nevent: recovery.delta" in body
         assert "already received" not in body
         assert '"partial_text_unverified":true' in body
+
+
+def test_replay_cursor_gap_restores_latest_unverified_worker_snapshot(tmp_path, monkeypatch):
+    monkeypatch.setattr(event_journal_module, "_MAX_EVENTS_PER_REQUEST", 1)
+    app = make_app(tmp_path)
+    request_id = "req_replay_cursor_gap_123"
+    with TestClient(app) as client:
+        user_id = register(client, "cursor-gap@example.org")
+        key_id = "key_cursor_gap"
+        app.state.user_accounts.attach_key(user_id, key_id)
+        remember(
+            app, request_id, key_id, status="running",
+            web_chat_mode=True, response_text="", response_text_available=False,
+        )
+        first_id = asyncio.run(app.state.web_chat_event_journal.append_worker_event(
+            request_id, key_id,
+            {"type": "chat.delta", "worker_event_id": f"{request_id}:1", "delta": "first "},
+        ))
+        second_id = asyncio.run(app.state.web_chat_event_journal.append_worker_event(
+            request_id, key_id,
+            {"type": "chat.delta", "worker_event_id": f"{request_id}:2", "delta": "latest"},
+        ))
+        page = asyncio.run(app.state.web_chat_event_journal.events_after(
+            request_id, key_id, 0, limit=8,
+        ))
+        assert page["first_event_id"] == second_id
+        assert page["last_event_id"] == second_id
+
+        replay = client.get(
+            f"/api/user/chat/requests/{request_id}/events",
+            headers={"Last-Event-ID": "0"},
+        )
+        assert replay.status_code == 200, replay.text
+        assert "event: replay.reset" in replay.text
+        assert '"status":"running"' in replay.text
+        assert '"partial_text":"first latest"' in replay.text
+        assert '"partial_text_unverified":true' in replay.text
+        assert f"id: {second_id}\nevent: recovery.delta" in replay.text
 
 
 def test_completed_sse_replay_repairs_missing_delivery_terminal_after_crash(tmp_path):
