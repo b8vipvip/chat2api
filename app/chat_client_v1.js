@@ -2552,8 +2552,11 @@
         && event.partial_text_unverified === true
         && typeof event.partial_text === "string"
       ) {
-        assistant.content = limitAssistantText(event.partial_text);
-        assistant.provisionalRecoveryText = true;
+        const candidate = limitAssistantText(event.partial_text);
+        if (candidate.length >= String(assistant.content || "").length) {
+          assistant.content = candidate;
+          assistant.provisionalRecoveryText = true;
+        }
       }
       return false;
     }
