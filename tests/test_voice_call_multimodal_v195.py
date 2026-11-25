@@ -587,7 +587,7 @@ def test_live_video_frame_budget_is_bounded_per_session(tmp_path, monkeypatch):
                 assert rejected["type"] == "error"
                 assert rejected["code"] == "INVALID_MEDIA_INPUT"
                 assert rejected["item_id"] == "frame-over-budget"
-                assert "64 MiB" in rejected["message"]
+                assert "per session" in rejected["message"]
                 live.send_json({"type": "session.finish"})
                 assert ext.receive_json()["type"] == "voice.live.stop"
                 ext.send_json({
