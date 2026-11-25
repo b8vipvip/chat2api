@@ -100,6 +100,15 @@ senderEvents = [
 const reattachedSession = {requestId:"voice-test",videoTrackReady:true};
 assert.equal(await ensureLiveVideoTrack(reattachedSession),true,
   "a newer verified sender attachment supersedes an older detached observation");
+const reattachedAfterFallback = {
+  requestId:"voice-test",videoTrackReady:false,videoTrackUnavailable:true,
+  videoTrackMode:"snapshot_fallback",videoTrackError:"sender-replaced",
+};
+assert.equal(await ensureLiveVideoTrack(reattachedAfterFallback),true,
+  "a new attached event must recover a session already marked for snapshot fallback");
+assert.equal(reattachedAfterFallback.videoTrackUnavailable,false);
+assert.equal(reattachedAfterFallback.videoTrackMode,"web_rtc");
+assert.equal(reattachedAfterFallback.videoTrackError,"");
 
 assert.ok(liveRouting.includes("videoFrame: message.video_frame || null"), "the Broker must forward frame timestamps to the Worker tab");
 assert.ok(liveText.includes("refusing to overwrite it"), "draft conflicts must fail closed");
