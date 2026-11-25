@@ -354,13 +354,13 @@ assert.ok(events.some(value=>value.type==="input_video.frame.queued"));
 client.stopCamera();
 assert.equal(client.isCameraActive(),false);
 await client.startCamera(video);
-// Reopening the camera immediately must not exceed the one-frame-per-second cap.
+// Reopening the camera immediately must not exceed the five-frame-per-second cap.
 await new Promise(resolve=>setTimeout(resolve,10));
 let frames = socket.sent.map(value=>typeof value==="string" ? JSON.parse(value) : null)
   .filter(value=>value?.type==="input_video.frame");
 assert.equal(frames.length,1);
-clock = 2000;
-const cameraTimer = [...intervalCallbacks.entries()].find(([,value])=>value.ms===1000);
+clock = 1200;
+const cameraTimer = [...intervalCallbacks.entries()].find(([,value])=>value.ms===200);
 assert.ok(cameraTimer);
 cameraTimer[1].fn();
 await new Promise(resolve=>setTimeout(resolve,10));
@@ -369,7 +369,7 @@ frames = socket.sent.map(value=>typeof value==="string" ? JSON.parse(value) : nu
   .filter(value=>value?.type==="input_video.frame");
 assert.equal(frames.length,2);
 assert.equal(frames[1].sequence,1,"camera restart must not reset server-owned sequence");
-assert.equal(frames[1].timestamp_ms,1000,"camera restart must preserve monotonic session timestamps and one-second pacing");
+assert.equal(frames[1].timestamp_ms,200,"camera restart must preserve monotonic session timestamps and 200ms pacing");
 
 await client.stop();
 assert.equal(client.isActive(),false);
@@ -700,7 +700,7 @@ assert.equal(noAckFrames.length,1);
 noAckSocket.onmessage({data:JSON.stringify({
   type:"error",code:"LIVE_VIDEO_FRAME_ACK_TIMEOUT",item_id:noAckFrames[0].item_id,
 })});
-clock += 1000;
+clock += 200;
 const noAckCameraTimer = [...intervalCallbacks.values()].find(value=>value.ms===1000);
 assert.ok(noAckCameraTimer);
 noAckCameraTimer.fn();
