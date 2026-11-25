@@ -761,7 +761,7 @@ def install_payment_channels_v106_patch(app: FastAPI) -> FastAPI:
             return response
         raw = await _response_bytes(response)
         text = raw.decode("utf-8", errors="replace")
-        asset = USER_ASSET if request.url.path == "/console" else ADMIN_ASSET
+        asset = USER_ASSET if request.url.path in {"/settings", "/console"} else ADMIN_ASSET
         marker = f'<script src="{asset}"></script>'
         if marker not in text:
             text = text.replace("</body>", marker + "</body>")
