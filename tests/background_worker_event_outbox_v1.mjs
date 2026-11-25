@@ -42,6 +42,10 @@ async function drainTimers() {
 
 await new Promise(resolve => setImmediate(resolve));
 await drainTimers();
+await context.handleServerMessage({
+  type:"server.hello",
+  capabilities:["worker_event_ack_v1"],
+});
 
 const requestA = "req_worker_events_a";
 const requestB = "req_worker_events_b";
