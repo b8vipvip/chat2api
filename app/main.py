@@ -4449,13 +4449,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 if message_type == "chat.tool.call":
                                     call_id = str(message.get("call_id") or message.get("id") or "")
                                     if call_id:
-                                        message["worker_event_id"] = f"{request_id}:tool-call:{call_id[:48]}"
+                                        message["worker_event_id"] = f"{str(request_id)[:64]}:tool-call:{call_id[:48]}"
                                 elif message_type == "chat.tool.result":
                                     result_id = str(message.get("result_id") or message.get("call_id") or "")
                                     if result_id:
-                                        message["worker_event_id"] = f"{request_id}:tool-result:{result_id[:48]}"
+                                        message["worker_event_id"] = f"{str(request_id)[:64]}:tool-result:{result_id[:48]}"
                                 elif message_type.startswith("image."):
-                                    message["worker_event_id"] = f"{request_id}:{message_type}"
+                                    message["worker_event_id"] = f"{str(request_id)[:96]}:{message_type}"
                             journal_event_id = await event_journal.append_worker_event(
                                 request_id, active_state.mode1_owner_key_id, message,
                             )
