@@ -129,6 +129,8 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         assert "当前账户或服务端统一 API Key 没有可用模型" in script.text
         assert "/api/user/chat/files" in script.text
         assert "/api/user/chat/voice-session" in script.text
+        assert "userKeyId:state.webChatKeyId" in script.text
+        assert "userKeyId:voiceConversation.apiKeyId" not in script.text
         assert "X-Chat2API-User-Key-ID" in script.text
         assert "prompt_mode" not in script.text
         assert 'await apiJson("/api/user/me")' in script.text
