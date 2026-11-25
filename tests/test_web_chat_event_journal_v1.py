@@ -525,6 +525,58 @@ def test_worker_terminal_outbox_replays_across_two_server_instances(tmp_path):
         assert "/api/generated-files/pending/" in snapshot["delivered_text"]
 
 
+def test_delivery_journal_resume_is_idempotent_and_appends_only_missing_suffix(tmp_path):
+    async def scenario():
+        journal = WebChatEventJournal(tmp_path)
+        await journal.open()
+        request_id = "req_delivery_resume_idempotent"
+        owner = "key-delivery-resume"
+        prefix = "The answer was partly persisted. "
+        final_text = prefix + "This suffix must appear exactly once."
+
+        first = await journal.append_delivery(request_id, owner, prefix)
+        second = await journal.append_delivery(request_id, owner, final_text)
+        repeated = await journal.append_delivery(request_id, owner, final_text)
+        assert first["chunk_event_ids"]
+        assert second["chunk_event_ids"]
+        assert repeated["chunk_event_ids"] == []
+        assert repeated["text_chars"] == len(final_text)
+
+        snapshot = await journal.snapshot(request_id, owner)
+        assert snapshot["delivered_text"] == final_text
+        assert snapshot["delivered_text_truncated"] is False
+
+        page = await journal.events_after(request_id, owner, 0, limit=512)
+        replayed = "".join(
+            item["data"]["delta"] for item in page["events"]
+            if item["type"] == "delivery.delta"
+        )
+        assert replayed == final_text
+        terminal = await journal.append_delivery_terminal(
+            request_id, owner, len(final_text),
+        )
+        assert terminal > 0
+        assert await journal.append_delivery(request_id, owner, final_text) == {
+            "chunk_event_ids": [], "terminal_event_id": 0, "text_chars": len(final_text),
+        }
+        completed = await journal.snapshot(request_id, owner)
+        assert completed["terminal_status"] == "completed"
+        assert completed["delivered_text"] == final_text
+
+    asyncio.run(scenario())
+
+
+def test_delivery_journal_rejects_a_non_prefix_resume(tmp_path):
+    async def scenario():
+        journal = WebChatEventJournal(tmp_path)
+        await journal.open()
+        await journal.append_delivery("req_delivery_prefix_conflict", "key-prefix", "first version")
+        with pytest.raises(ValueError, match="conflicts with its durable prefix"):
+            await journal.append_delivery("req_delivery_prefix_conflict", "key-prefix", "different version")
+
+    asyncio.run(scenario())
+
+
 def test_final_message_citation_metadata_is_durable_in_worker_and_terminal_records(tmp_path):
     async def scenario():
         journal = WebChatEventJournal(tmp_path)
