@@ -144,8 +144,23 @@ test("does not advance the durable SSE cursor on malformed or empty unknown fram
   assert.equal(parser("id: 9\nevent: cursor\n\n",assistant),false);
   assert.equal(assistant.lastEventId,9,
     "explicit cursor-only heartbeats can safely advance after validation");
-  assert.equal(parser("id: 10\ndata: [DONE]\n\n",assistant),true);
+  assert.equal(parser(
+    "id: 10\nevent: recovery.delta\ndata: " +
+      JSON.stringify({delta:" resumed",partial_text_unverified:true}) + "\n\n",
+    assistant,
+  ),false);
+  assert.equal(assistant.content,"hello resumed");
   assert.equal(assistant.lastEventId,10);
+  assert.equal(parser(
+    "id: 10\nevent: recovery.delta\ndata: " +
+      JSON.stringify({delta:" resumed",partial_text_unverified:true}) + "\n\n",
+    assistant,
+  ),false);
+  assert.equal(assistant.content,"hello resumed",
+    "duplicate replay cursors must not append the same Worker delta twice");
+  assert.equal(assistant.lastEventId,10);
+  assert.equal(parser("id: 11\ndata: [DONE]\n\n",assistant),true);
+  assert.equal(assistant.lastEventId,11);
 });
 
 test("preserves request-scoped tool calls and results as safe presentation state", () => {
