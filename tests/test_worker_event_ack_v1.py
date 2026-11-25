@@ -60,6 +60,26 @@ def test_worker_nonterminal_ack_requires_mode1_journal_commit(tmp_path):
             assert events["events"][0]["type"] == "worker.delta"
             assert events["events"][0]["data"]["delta"] == "durable token"
 
+            # A late nonterminal Worker event after terminal receipt is
+            # discarded before journal mutation and cannot pollute the final
+            # snapshot with stale text or citations.
+            state.terminal_event_type = "chat.completed"
+            state.completed_mono = 1.0
+            socket.send_json({
+                "type": "chat.delta",
+                "request_id": request_id,
+                "worker_event_id": f"{request_id}:late",
+                "delta": "late stale text",
+            })
+            late_ack = socket.receive_json()
+            assert late_ack["type"] == "chat.event.ack"
+            assert late_ack["accepted"] is False
+            assert late_ack["discarded"] is True
+            after_late = asyncio.run(app.state.web_chat_event_journal.snapshot(
+                request_id, "key_owner_123",
+            ))
+            assert after_late["worker_partial_text"] == "durable token"
+
             # After a process restart there is no Broker lease, but the
             # recovering telemetry row and event journal still bind this
             # request to the same Worker and user owner.
