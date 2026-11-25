@@ -456,6 +456,8 @@
         requested_model: active.requestedModel,
         context_injected: active.contextInjected === true,
         instructions_applied: active.instructionsApplied === true,
+        instructions_delivery_mode: active.instructionsApplied ? "user_setup_turn" : "none",
+        system_instructions_applied: false,
         setup_response_text: active.setupResponseText || "",
         context_mode: active.contextInjected
           ? "request_scoped_chatgpt_setup_turn"

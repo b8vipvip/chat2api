@@ -19,13 +19,13 @@ def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_formal_release_v02296_versions_and_worker_entry_are_aligned() -> None:
+def test_formal_release_v022302_versions_and_worker_entry_are_aligned() -> None:
     manifest = json.loads(read("chrome_extension/manifest.json"))
     entry = read("chrome_extension/background_entry.js")
 
-    assert SERVER_RUNTIME_VERSION == "0.22.301"
-    assert CHROME_BRIDGE_VERSION == "0.22.301"
-    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.22.301"
+    assert SERVER_RUNTIME_VERSION == "0.22.302"
+    assert CHROME_BRIDGE_VERSION == "0.22.302"
+    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.22.302"
     assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION
     assert '"background_route_close_terminal_v91.js"' in entry
     assert '"conversation_routing.js"' in entry
@@ -51,12 +51,12 @@ def test_formal_release_v02296_versions_and_worker_entry_are_aligned() -> None:
         assert f'"{retired}"' not in entry
 
 
-def test_v02296_runtime_contract_advertises_only_active_authorities() -> None:
+def test_v022302_runtime_contract_advertises_only_active_authorities() -> None:
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
     features = payload["features"]
     bridge = payload["chrome_bridge"]
 
-    assert bridge["bundle_version"] == "0.22.301"
+    assert bridge["bundle_version"] == "0.22.302"
     assert bridge["route_window_authority_revision"] == 30
     assert bridge["window_observer_revision"] == 90
     assert bridge["route_close_terminal_revision"] == 91
@@ -72,6 +72,9 @@ def test_v02296_runtime_contract_advertises_only_active_authorities() -> None:
     assert features["same_api_parallel_requests"] is True
     assert features["browser_side_same_api_queue"] is False
     assert features["speculative_worker_windows"] is False
+    assert features["web_chat_live_video_track_v1"] is True
+    assert features["web_chat_live_video_frame_budget_v1"] is True
+    assert features["web_chat_live_video_av_sync_v1"] is False
 
     # Historical v57/v27/v28/v29/v88 owners remain code history only.
     assert features["worker_key_capacity_fifo_queue"] is False
@@ -92,11 +95,12 @@ def test_v02296_runtime_contract_advertises_only_active_authorities() -> None:
         "route-close-terminal-v91",
         "release-v02275",
         "linux-device-worker-console-v122",
+        "webchat-live-video-track-v1",
     ):
         assert marker in revision
 
 
-def test_v02296_bundle_markers_contracts_and_preflight_match_manifest() -> None:
+def test_v022302_bundle_markers_contracts_and_preflight_match_manifest() -> None:
     for path in (
         "chrome_extension/content_bundle_marker_v48.js",
         "chrome_extension/content_bundle_marker_v71.js",
@@ -104,7 +108,7 @@ def test_v02296_bundle_markers_contracts_and_preflight_match_manifest() -> None:
         "chrome_extension/content_runtime_contract_v71.js",
         "chrome_extension/background_runtime_preflight_v48.js",
     ):
-        assert "0.22.301" in read(path), path
+        assert "0.22.302" in read(path), path
         assert "0.8.29" not in read(path), path
 
 

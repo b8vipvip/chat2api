@@ -207,9 +207,9 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
                 assert duplicate_media_ack["type"] == "input_media.sent"
                 assert duplicate_media_ack["attachment_count"] == 0
 
-                # A video track is sampled by the client into timestamped,
-                # owner-scoped JPEG/PNG/WebP uploads. Each frame travels as an
-                # image turn in this same Voice session, never as a fake MP4.
+                # The client sends timestamped, owner-scoped image frames;
+                # the Worker converts them into a synthetic camera MediaStreamTrack
+                # instead of creating a separate ChatGPT composer turn.
                 live.send_json({
                     "type": "input_video.frame",
                     "item_id": "video-frame-000",
@@ -221,6 +221,7 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
                 video_dispatch = ext.receive_json()
                 assert video_dispatch["type"] == "voice.live.multimodal"
                 assert video_dispatch["attachments"][0]["file_id"] == video_frame_file
+                assert video_dispatch["video_frame"] == {"sequence": 0, "timestamp_ms": 1000}
                 assert "视频帧 0 · 1.000s" in video_dispatch["text"]
                 video_queued = live.receive_json()
                 assert video_queued["type"] == "input_video.frame.queued"
@@ -245,6 +246,8 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
                     "type": "image.progress", "kind": "voice-live",
                     "request_id": request_id, "live_event": "input.media.sent",
                     "item_id": "video-frame-000", "attachment_count": 999,
+                    "video_track": True, "video_track_mode": "web_rtc",
+                    "sequence": 0, "timestamp_ms": 1000,
                     "text": video_dispatch["text"],
                 })
                 video_sent = live.receive_json()
@@ -252,6 +255,8 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
                 assert video_sent["sequence"] == 0
                 assert video_sent["timestamp_ms"] == 1000
                 assert video_sent["attachment_count"] == 1
+                assert video_sent["video_track"] is True
+                assert video_sent["video_track_mode"] == "web_rtc"
 
                 # Duplicate/out-of-order video frame metadata is rejected
                 # before a Worker dispatch.
@@ -536,3 +541,70 @@ def test_live_video_frame_ack_timeout_releases_slot_and_unconfirmed_grant(tmp_pa
         assert row["input_file_ids"] == [frame_id]
         assert row["diagnostics"]["attachments_confirmed"] == 1
 
+
+
+def test_live_video_frame_budget_is_bounded_per_session(tmp_path, monkeypatch):
+    assert live_voice_patch_module.MAX_LIVE_VIDEO_FRAMES == 300
+    assert live_voice_patch_module.MAX_LIVE_VIDEO_TOTAL_BYTES == 64 * 1024 * 1024
+    assert live_voice_patch_module.MIN_LIVE_VIDEO_FRAME_INTERVAL_SECONDS == 0.2
+    assert live_voice_patch_module._live_session_media_file_limit(0, False) == 64
+    assert live_voice_patch_module._live_session_media_file_limit(0, True) == 65
+    assert live_voice_patch_module._live_session_media_file_limit(299, True) == 364
+    assert live_voice_patch_module._live_session_media_file_limit(300, False) == 364
+    monkeypatch.setattr(live_voice_patch_module, "MAX_LIVE_VIDEO_TOTAL_BYTES", 1)
+
+    with TestClient(app_live(tmp_path)) as client:
+        token = issue_key(client, "video-budget-caller")
+        ext_id, secret = pair(client)
+        frame_id = client.post(
+            "/v1/files",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "filename": "budget-frame.png",
+                "mime_type": "image/png",
+                "purpose": "vision",
+                "data_base64": base64.b64encode(_tiny_png()).decode(),
+            },
+        ).json()["id"]
+        request_id = "voicereq_videobudget"
+        with client.websocket_connect(f"/ws/extensions/{ext_id}?token={secret}") as ext:
+            assert ext.receive_json()["type"] == "server.hello"
+            with client.websocket_connect(
+                f"/v1/audio/realtime?client_id={ext_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            ) as live:
+                live.send_json({"type": "session.start", "model": "gpt-live", "request_id": request_id})
+                assert ext.receive_json()["request_id"] == request_id
+                ext.send_json({
+                    "type": "image.progress",
+                    "kind": "voice-live",
+                    "request_id": request_id,
+                    "live_event": "session.ready",
+                })
+                assert live.receive_json()["type"] == "session.ready"
+
+                live.send_json({
+                    "type": "input_video.frame",
+                    "item_id": "frame-over-budget",
+                    "sequence": 0,
+                    "timestamp_ms": 1000,
+                    "file_id": frame_id,
+                    "text": "观察实时画面",
+                })
+                rejected = live.receive_json()
+                assert rejected["type"] == "error"
+                assert rejected["code"] == "INVALID_MEDIA_INPUT"
+                assert rejected["item_id"] == "frame-over-budget"
+                assert "per session" in rejected["message"]
+                live.send_json({"type": "session.finish"})
+                assert ext.receive_json()["type"] == "voice.live.stop"
+                ext.send_json({
+                    "type": "image.progress",
+                    "kind": "voice-live",
+                    "request_id": request_id,
+                    "live_event": "session.closed",
+                    "status": "cancelled",
+                })
+                closed = live.receive_json()
+                assert closed["type"] == "session.closed"
+                assert closed["status"] == "cancelled"

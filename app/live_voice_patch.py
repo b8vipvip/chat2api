@@ -62,9 +62,18 @@ MAX_LIVE_PCM_FRAME_BYTES = 64 * 1024
 MAX_LIVE_ATTACHMENTS_PER_INPUT = 4
 MAX_LIVE_PENDING_INPUTS = 128
 MAX_LIVE_CONTROL_CHARS = 64 * 1024
-MAX_LIVE_VIDEO_FRAMES = 64
+# The current upstream ChatGPT Web Voice bridge submits camera images as
+# serialized input frames are relayed into the Worker-side synthetic camera
+# MediaStreamTrack; frame count and total bytes remain bounded per session.
+MAX_LIVE_VIDEO_FRAMES = 300
 MAX_LIVE_VIDEO_FRAME_BYTES = 2 * 1024 * 1024
+MAX_LIVE_VIDEO_TOTAL_BYTES = 64 * 1024 * 1024
+MAX_LIVE_NON_VIDEO_FILES = 64
 MAX_LIVE_VIDEO_DURATION_MS = 6 * 60 * 60 * 1000
+
+def _live_session_media_file_limit(video_frame_count: int, includes_video_frame: bool) -> int:
+    accepted_video_frames = min(MAX_LIVE_VIDEO_FRAMES, max(0, int(video_frame_count)))
+    return MAX_LIVE_NON_VIDEO_FILES + accepted_video_frames + int(bool(includes_video_frame))
 MIN_LIVE_VIDEO_FRAME_INTERVAL_SECONDS = 0.2
 LIVE_VIDEO_FRAME_ACK_TIMEOUT_SECONDS = 15.0
 LIVE_VIDEO_FRAME_MONITOR_INTERVAL_SECONDS = 0.5
@@ -481,11 +490,12 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
         observed_completion_parts: list[str] = []
         pending_input_text: dict[str, str] = {}
         pending_input_media_ids: dict[str, list[str]] = {}
-        pending_video_frames: dict[str, tuple[int, int, float]] = {}
+        pending_video_frames: dict[str, tuple[int, int, float, int]] = {}
         last_video_sequence = -1
         last_video_timestamp_ms = -1
         last_video_dispatch_mono = 0.0
         video_frame_count = 0
+        video_frame_bytes = 0
         confirmed_media_ids: set[str] = set()
         confirmed_media_item_ids: set[str] = set()
         confirmed_input_ids: set[str] = set()
@@ -508,7 +518,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 await websocket.send_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
 
         async def relay_extension_events() -> None:
-            nonlocal finished, observed_audio_bytes, observed_response_count, observed_media_count, input_confirmed, session_ready, setup_prompt_accounted, error_message, observed_media_ids, observed_speech_activity, observed_user_transcript
+            nonlocal finished, observed_audio_bytes, observed_response_count, observed_media_count, input_confirmed, session_ready, setup_prompt_accounted, error_message, observed_media_ids, observed_speech_activity, observed_user_transcript, video_frame_count, video_frame_bytes
             assert state is not None
             text_by_response: dict[str, str] = {}
 
@@ -556,6 +566,8 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     for item_id, frame in expired_frames:
                         pending_video_frames.pop(item_id, None)
                         pending_input_text.pop(item_id, None)
+                        video_frame_count = max(0, video_frame_count - 1)
+                        video_frame_bytes = max(0, video_frame_bytes - frame[3])
                         await rollback_unconfirmed_media(item_id)
                         await send_json({
                             "type": "error",
@@ -697,6 +709,23 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     }
                     if video_frame:
                         ack["sequence"], ack["timestamp_ms"] = video_frame[:2]
+                        # Surface whether the Worker attached the frame to the
+                        # upstream WebRTC sender or had to use the composer
+                        # snapshot fallback. Missing/contradictory evidence is
+                        # deliberately reported as fallback, never as success.
+                        video_track_mode = str(event.get("video_track_mode") or "")
+                        video_track_attached = (
+                            event.get("video_track") is True
+                            and video_track_mode == "web_rtc"
+                        )
+                        ack["video_track"] = video_track_attached
+                        ack["video_track_mode"] = (
+                            "web_rtc" if video_track_attached else "snapshot_fallback"
+                        )
+                        if not video_track_attached:
+                            video_track_error = str(event.get("video_track_error") or "").strip()
+                            if video_track_error:
+                                ack["video_track_error"] = video_track_error[:240]
                     await send_json(ack)
                 elif event_type == "input.error":
                     failed_item_id = str(event.get("item_id") or "")
@@ -705,6 +734,9 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     # Worker failure so the client can retry with the next
                     # monotonically increasing sequence number.
                     failed_video_frame = pending_video_frames.pop(failed_item_id, None)
+                    if failed_video_frame:
+                        video_frame_count = max(0, video_frame_count - 1)
+                        video_frame_bytes = max(0, video_frame_bytes - failed_video_frame[3])
                     await rollback_unconfirmed_media(failed_item_id)
                     failure: dict[str, object] = {
                         "type": "error", "code": "VOICE_CALL_INPUT_FAILED",
@@ -1085,7 +1117,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                             if sequence <= last_video_sequence or timestamp_ms <= last_video_timestamp_ms:
                                 raise ValueError("video frame sequence and timestamp_ms must increase monotonically")
                             if video_frame_count >= MAX_LIVE_VIDEO_FRAMES:
-                                raise ValueError("Live session reached the 64-frame video limit")
+                                raise ValueError(f"Live session reached the {MAX_LIVE_VIDEO_FRAMES}-frame video limit")
                             if (
                                 last_video_dispatch_mono
                                 and time.monotonic() - last_video_dispatch_mono < MIN_LIVE_VIDEO_FRAME_INTERVAL_SECONDS
@@ -1128,6 +1160,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                             "retryable": True,
                         })
                         continue
+                    video_frame_size = 0
                     try:
                         file_ids = _media_ids_from_control(control)
                         attachments = attachment_specs(file_store, file_ids, principal)
@@ -1139,15 +1172,6 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                             raise ValueError("Each video frame must contain exactly one uploaded image")
                         for spec in attachments:
                             mime = str(spec.get("mime_type") or "").lower()
-                            if (
-                                control_type == "input_video.frame"
-                                and int(spec.get("size") or 0) > MAX_LIVE_VIDEO_FRAME_BYTES
-                            ):
-                                raise ValueError("Video frames are limited to 2 MiB each")
-                            if control_type == "input_video.frame" and mime not in {
-                                "image/jpeg", "image/png", "image/webp",
-                            }:
-                                raise ValueError("Video frames must be JPEG, PNG or WebP images")
                             allowed = (
                                 mime in {"image/png", "image/jpeg", "image/webp", "image/gif",
                                          "application/pdf", "text/plain", "text/csv",
@@ -1157,6 +1181,14 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                             )
                             if not allowed:
                                 raise ValueError("Live image/file MIME is not supported; send PCM as binary microphone frames")
+                            if control_type == "input_video.frame":
+                                if int(spec.get("size") or 0) > MAX_LIVE_VIDEO_FRAME_BYTES:
+                                    raise ValueError("Video frames are limited to 2 MiB each")
+                                if mime not in {"image/jpeg", "image/png", "image/webp"}:
+                                    raise ValueError("Video frames must be JPEG, PNG or WebP images")
+                                video_frame_size += int(spec.get("size") or 0)
+                        if video_frame and video_frame_bytes + video_frame_size > MAX_LIVE_VIDEO_TOTAL_BYTES:
+                            raise ValueError("Live video is limited to 64 MiB per session")
                         if control_type == "input_video.frame":
                             # MIME labels are not proof of raster content. Require
                             # a real, API-Key-owned vision image before relaying it
@@ -1175,8 +1207,14 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                             *observed_media_ids,
                             *(str(spec.get("file_id") or "") for spec in attachments),
                         ]))
-                        if len(next_media_ids) > 64:
-                            raise ValueError("A Live session may attach at most 64 unique files")
+                        max_session_media_files = _live_session_media_file_limit(
+                            video_frame_count, bool(video_frame),
+                        )
+                        if len(next_media_ids) > max_session_media_files:
+                            raise ValueError(
+                                f"A Live session may attach at most {max_session_media_files} unique files "
+                                "at its current video frame count"
+                            )
                     except HTTPException as error:
                         await send_json({
                             "type": "error", "code": "MEDIA_ACCESS_DENIED",
@@ -1220,8 +1258,15 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     pending_input_text[item_id] = input_text
                     if video_frame:
                         pending_video_frames[item_id] = (
-                            video_frame[0], video_frame[1], time.monotonic(),
+                            video_frame[0], video_frame[1], time.monotonic(), video_frame_size,
                         )
+                        video_frame_bytes += video_frame_size
+                        # Reserve sequence, pacing and budget before yielding
+                        # to the Worker; it may ACK or reject the frame immediately.
+                        video_frame_count += 1
+                        last_video_sequence = video_frame[0]
+                        last_video_timestamp_ms = video_frame[1]
+                        last_video_dispatch_mono = time.monotonic()
                     try:
                         await registry.send(selected_client, {
                             "type": "voice.live.multimodal" if attachments else "voice.live.text",
@@ -1230,17 +1275,17 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                             "item_id": item_id,
                             "text": input_text,
                             "attachments": attachments,
+                            **({"video_frame": {"sequence": video_frame[0], "timestamp_ms": video_frame[1]}} if video_frame else {}),
                         })
                     except Exception:
                         pending_input_text.pop(item_id, None)
                         pending_input_media_ids.pop(item_id, None)
-                        pending_video_frames.pop(item_id, None)
+                        failed_video_frame = pending_video_frames.pop(item_id, None)
+                        if failed_video_frame:
+                            video_frame_count = max(0, video_frame_count - 1)
+                            video_frame_bytes = max(0, video_frame_bytes - failed_video_frame[3])
                         raise
                     if video_frame:
-                        last_video_sequence = video_frame[0]
-                        last_video_timestamp_ms = video_frame[1]
-                        last_video_dispatch_mono = time.monotonic()
-                        video_frame_count += 1
                         await send_json({
                             "type": "input_video.frame.queued",
                             "item_id": item_id,

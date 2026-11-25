@@ -5,7 +5,9 @@
   const INPUT_RATE = 16000;
   const OUTPUT_RATE = 24000;
   const MAX_VIDEO_FRAME_BYTES = 2 * 1024 * 1024;
-  const MAX_VIDEO_FRAMES = 64;
+  const MAX_VIDEO_TOTAL_BYTES = 64 * 1024 * 1024;
+  const MAX_VIDEO_FRAMES = 300;
+  const VIDEO_FRAME_INTERVAL_MS = 200;
   // The Broker allows up to 5 seconds for the Worker to drain its final
   // interruption snapshot. Leave network/terminal-delivery margin before the
   // browser gives up and closes the public WebSocket.
@@ -144,8 +146,13 @@
     let closeResolve = null;
     let videoPending = false;
     let pendingVideoItemId = "";
+    let pendingVideoSequence = -1;
+    let pendingVideoTimestampMs = -1;
+    let pendingVideoBytes = 0;
     let videoSequence = 0;
     let videoFrameCount = 0;
+    let videoFrameBytes = 0;
+    let videoModeNoticeSent = false;
     let sessionStartedAt = 0;
     let lastVideoTimestampMs = -1;
     let lastVideoCaptureAt = -Infinity;
@@ -260,7 +267,7 @@
         try { videoElement.pause(); } catch {}
         videoElement.srcObject = null;
       }
-      state(ready ? "ready" : "idle", "摄像头抽帧已停止");
+      state(ready ? "ready" : "idle", "实时视频已停止");
     }
     async function cleanup() {
       if (cleanupPromise) return cleanupPromise;
@@ -319,14 +326,40 @@
         void cleanup();
         return;
       } else if (payload.type === "input_video.frame.sent") {
-        if (!payload.item_id || payload.item_id === pendingVideoItemId) {
-          videoPending = false;
-          pendingVideoItemId = "";
+        if (payload.item_id === pendingVideoItemId &&
+            Number(payload.sequence) === pendingVideoSequence &&
+            Number(payload.timestamp_ms) === pendingVideoTimestampMs) {
+          videoFrameBytes += pendingVideoBytes;
+          clearPendingVideoFrame();
+          if (payload.video_track === true && payload.video_track_mode === "web_rtc") {
+            state(
+              cameraStream ? "camera_ready" : "ready",
+              cameraStream
+                ? "WebRTC 实时视频轨道已连接（最高 5 FPS，最多 300 帧 / 64 MiB）"
+                : "实时视频已停止",
+            );
+          } else {
+            const detail = "当前上游未建立 WebRTC 摄像头轨道，已降级为图片帧输入；处理速度取决于上游";
+            state(cameraStream ? "camera_ready" : "ready",cameraStream ? detail : "实时视频已停止");
+            if (!videoModeNoticeSent) {
+              videoModeNoticeSent = true;
+              event({
+                type:"client.notice",
+                message:detail,
+                video_track_mode:"snapshot_fallback",
+                video_track_error:String(payload.video_track_error || ""),
+              });
+            }
+          }
         }
       } else if (payload.type === "error") {
         if (payload.item_id && payload.item_id === pendingVideoItemId) {
-          videoPending = false;
-          pendingVideoItemId = "";
+          // The server releases the corresponding frame slot on every
+          // item-scoped error. Keep the browser's frame budget in sync so a
+          // retryable Worker timeout does not consume the whole session cap.
+          videoFrameCount = Math.max(0,videoFrameCount - 1);
+          clearPendingVideoFrame();
+          if (payload.retryable !== true) stopCamera();
         }
         event(payload);
       }
@@ -472,10 +505,16 @@
       const buffer = await blob.arrayBuffer();
       return arrayBufferToBase64(buffer, value => window.btoa(value));
     }
-    function releaseUnsentVideoFrame(itemId) {
-      if (pendingVideoItemId !== itemId) return;
+    function clearPendingVideoFrame() {
       videoPending = false;
       pendingVideoItemId = "";
+      pendingVideoSequence = -1;
+      pendingVideoTimestampMs = -1;
+      pendingVideoBytes = 0;
+    }
+    function releaseUnsentVideoFrame(itemId) {
+      if (pendingVideoItemId !== itemId) return;
+      clearPendingVideoFrame();
     }
     function cameraCaptureIsCurrent(generation,itemId) {
       return generation === cameraGeneration &&
@@ -485,7 +524,7 @@
       if (!ready || stopping || !cameraStream || videoPending || videoFrameCount >= MAX_VIDEO_FRAMES) return;
       const captureGeneration = cameraGeneration;
       const captureAt = monotonicNow();
-      if (captureAt - lastVideoCaptureAt < 1000) return;
+      if (captureAt - lastVideoCaptureAt < VIDEO_FRAME_INTERVAL_MS) return;
       const width = Number(videoElement?.videoWidth || 0);
       const height = Number(videoElement?.videoHeight || 0);
       if (!width || !height) return;
@@ -494,6 +533,7 @@
       const sequence = videoSequence++;
       const itemId = "webchat-video-" + sequence;
       pendingVideoItemId = itemId;
+      pendingVideoSequence = sequence;
       try {
         const scale = Math.min(1,1280 / width,720 / height);
         const targetWidth = Math.max(1,Math.round(width * scale));
@@ -517,6 +557,19 @@
           }
         }
         if (!blob || blob.size > MAX_VIDEO_FRAME_BYTES) throw new Error("摄像头画面超过 2 MiB 限制");
+        if (videoFrameBytes + blob.size > MAX_VIDEO_TOTAL_BYTES) {
+          releaseUnsentVideoFrame(itemId);
+          event({type:"client.notice",message:"已达到本次实时视频总数据量上限，实时视频已停止"});
+          stopCamera();
+          return;
+        }
+        pendingVideoBytes = blob.size;
+        const timestampMs = Math.max(
+          lastVideoTimestampMs + 1,
+          Math.floor(captureAt - sessionStartedAt),
+        );
+        lastVideoTimestampMs = timestampMs;
+        pendingVideoTimestampMs = timestampMs;
         const dataBase64 = await blobBase64(blob);
         if (!cameraCaptureIsCurrent(captureGeneration,itemId)) {
           releaseUnsentVideoFrame(itemId);
@@ -557,10 +610,7 @@
           type:"input_video.frame",
           item_id:itemId,
           sequence,
-          timestamp_ms:(lastVideoTimestampMs = Math.max(
-            lastVideoTimestampMs + 1,
-            Math.floor(captureAt - sessionStartedAt),
-          )),
+          timestamp_ms:timestampMs,
           file_id:fileId,
           text:"摄像头画面",
         })) throw new Error("实时语音连接已断开");
@@ -568,7 +618,7 @@
         event({type:"input_video.frame.queued",sequence});
         if (videoFrameCount >= MAX_VIDEO_FRAMES) {
           stopCamera();
-          event({type:"client.notice",message:"已达到本次语音会话 64 帧上限，摄像头抽帧已停止"});
+          event({type:"client.notice",message:"已达到本次语音会话 300 帧上限，实时视频已停止"});
         }
       } catch (error) {
         const stillCurrent = cameraCaptureIsCurrent(captureGeneration,itemId);
@@ -580,8 +630,8 @@
     }
     async function startCamera(targetVideo) {
       if (!ready || stopping || cleaned) throw new Error("请先连接 GPT-Live 语音");
-      if (!supportsVideoFrames) throw new Error("当前 Worker 会话不支持摄像头抽帧");
-      if (videoFrameCount >= MAX_VIDEO_FRAMES) throw new Error("本次语音会话已达到 64 帧上限");
+      if (!supportsVideoFrames) throw new Error("当前 Worker 会话不支持实时视频轨道");
+      if (videoFrameCount >= MAX_VIDEO_FRAMES) throw new Error("本次语音会话已达到 300 帧上限");
       if (videoPending) throw new Error("上一张摄像头画面尚未得到 Worker 确认，请稍后重试");
       if (cameraStream) return;
       if (cameraStartingGeneration !== null) throw new Error("摄像头权限请求正在进行，请稍后重试");
@@ -613,9 +663,9 @@
           if (videoElement?.srcObject === requestedCameraStream) videoElement.srcObject = null;
           throw new Error("摄像头启动已取消");
         }
-        cameraTimer = timers.setInterval(() => { void captureAndSendFrame(); },1000);
+        cameraTimer = timers.setInterval(() => { void captureAndSendFrame(); },VIDEO_FRAME_INTERVAL_MS);
         void captureAndSendFrame();
-        state("camera_ready","摄像头已开启（每秒最多发送一张快照）");
+        state("camera_ready","摄像头已开启（最高 5 FPS，最多 300 帧 / 64 MiB）");
       } catch (error) {
         if (generation === cameraGeneration) stopCamera();
         throw error;

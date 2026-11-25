@@ -214,7 +214,198 @@
     await emitLive(active, "input.text.sent", { item_id: itemId || "", text });
   }
 
-  async function sendLiveMedia(active, itemId, text, attachments) {
+  function postMain(type, active, data = {}) {
+    window.postMessage({
+      source: "chat2api-isolated",
+      type,
+      request_id: active.requestId,
+      session_id: active.sessionId,
+      ...data,
+    }, "*");
+  }
+
+  function liveMainEvents(active) {
+    const current = globalThis.__CHAT2API_VOICE_LIVE_CONTENT_V2__;
+    return current?.active === active && Array.isArray(current.mainEvents)
+      ? current.mainEvents : [];
+  }
+
+  function latestVideoSenderState(active) {
+    const senderEvents = liveMainEvents(active).filter(item =>
+      item.type === "voice.live.video.sender.attached" ||
+      item.type === "voice.live.video.sender.detached" ||
+      item.type === "voice.live.video.track.ended");
+    return senderEvents[senderEvents.length - 1] || null;
+  }
+
+  function videoSenderUnavailable(active) {
+    const latest = latestVideoSenderState(active);
+    return Boolean(latest && (
+      latest.type === "voice.live.video.sender.detached" ||
+      latest.type === "voice.live.video.track.ended"
+    ));
+  }
+
+  function markVideoSenderUnavailable(active) {
+    const latest = latestVideoSenderState(active);
+    active.videoTrackReady = false;
+    active.videoTrackUnavailable = true;
+    active.videoTrackMode = "snapshot_fallback";
+    active.videoTrackError = String(
+      latest?.reason || "ChatGPT WebRTC camera sender stopped",
+    ).slice(0, 240);
+  }
+
+  function liveCameraButton() {
+    const buttons = [...document.querySelectorAll("button")]
+      .filter(button => visible(button) && !button.disabled);
+    const enabled = buttons.find(button => {
+      const label = labelOf(button);
+      return /(turn on camera|start camera|share camera|share video|open camera|enable camera|打开摄像头|开启摄像头|开始视频|打开视频|开启视频)/i.test(label);
+    });
+    if (enabled) return enabled;
+    return buttons.find(button => {
+      const label = labelOf(button);
+      return /(camera|video|摄像头|视频)/i.test(label) &&
+        !/(turn off|stop|close|disable|关闭|停止|结束)/i.test(label);
+    }) || null;
+  }
+
+  async function ensureLiveVideoTrack(active) {
+    assertLiveTurnOwner(active);
+    const events = () => liveMainEvents(active);
+    if (videoSenderUnavailable(active)) markVideoSenderUnavailable(active);
+    if (active.videoTrackReady === true) return true;
+    if (active.videoTrackUnavailable === true) return false;
+    try {
+      postMain("voice.live.video.prepare", active);
+      const prepared = await waitFor(() => events().find(item =>
+        item.type === "voice.live.video.prepared"), 1200, 50);
+      const prepareError = events().find(item => item.type === "voice.live.video.error");
+      if (!prepared) throw new Error(prepareError?.error || "Synthetic WebRTC video track could not be prepared");
+
+      const alreadyAttached = events().find(item => item.type === "voice.live.video.sender.attached");
+      if (!alreadyAttached) {
+        const alreadyOn = [...document.querySelectorAll("button")]
+          .filter(visible).some(button => /(turn off camera|turn off video|stop camera|stop video|关闭摄像头|关闭视频|停止视频|停止摄像头)/i.test(labelOf(button)));
+        if (!alreadyOn) {
+          const camera = await waitFor(liveCameraButton, 2000, 100);
+          if (!camera) throw new Error("ChatGPT Voice camera control is unavailable");
+          assertLiveTurnOwner(active);
+          camera.click();
+        }
+      }
+      const senderReady = await waitFor(() => {
+        const provided = events().find(item => item.type === "voice.live.video.track.provided");
+        const attached = events().find(item => item.type === "voice.live.video.sender.attached");
+        return provided && attached ? { provided, attached } : null;
+      }, 5500, 50);
+      const videoError = events().find(item => item.type === "voice.live.video.error");
+      if (!senderReady) {
+        throw new Error(videoError?.error || "ChatGPT did not attach the synthetic WebRTC camera track");
+      }
+      assertLiveTurnOwner(active);
+      active.videoTrackReady = true;
+      active.videoTrackMode = "web_rtc";
+      return true;
+    } catch (error) {
+      active.videoTrackUnavailable = true;
+      active.videoTrackMode = "snapshot_fallback";
+      active.videoTrackError = String(error?.message || error).slice(0, 240);
+      return false;
+    }
+  }
+
+  async function sendLiveVideoFrame(active, itemId, attachments, videoFrame) {
+    assertLiveTurnOwner(active);
+    if (!Array.isArray(attachments) || attachments.length !== 1) return false;
+    if (!await ensureLiveVideoTrack(active)) return false;
+    const fileId = String(attachments[0]?.file_id || "");
+    if (!/^file_[A-Za-z0-9]{8,64}$/.test(fileId)) return false;
+    const fetched = await chrome.runtime.sendMessage({
+      type: "chat2api.attachment.fetch",
+      fileId,
+      requestId: active.requestId,
+    });
+    if (!fetched?.ok || !fetched.data?.base64) {
+      throw new Error(fetched?.error || "Worker could not fetch the authorized live video frame");
+    }
+    assertLiveTurnOwner(active);
+    const data = fetched.data;
+    const mime = String(data.mime_type || "").toLowerCase();
+    if (!["image/jpeg", "image/png", "image/webp"].includes(mime) ||
+        Number(data.size || 0) <= 0 || Number(data.size || 0) > 2 * 1024 * 1024) {
+      throw new Error("Live video frame failed the Worker image validation");
+    }
+    // The sender can disappear while the extension fetches the uploaded frame.
+    // Before handing bytes to MAIN world, re-check the latest correlated sender
+    // event so a detached track falls back without falsely ACKing WebRTC delivery.
+    if (videoSenderUnavailable(active)) {
+      markVideoSenderUnavailable(active);
+      return false;
+    }
+    // Once a frame has been handed to MAIN world it may already have reached
+    // the WebRTC sender, even if a later acknowledgement is lost. Never send
+    // that same frame again through the composer fallback.
+    let submittedToMain = false;
+    try {
+      postMain("voice.live.video.frame", active, {
+        base64: data.base64,
+        mime_type: mime,
+        sequence: Number(videoFrame.sequence),
+        timestamp_ms: Number(videoFrame.timestamp_ms),
+      });
+      submittedToMain = true;
+      const events = () => liveMainEvents(active);
+      const received = await waitFor(() => events().find(item =>
+        item.type === "voice.live.video.frame.received" &&
+        Number(item.sequence) === Number(videoFrame.sequence)), 2000, 40);
+      const frameError = events().find(item =>
+        item.type === "voice.live.video.error" &&
+        Number(item.sequence) === Number(videoFrame.sequence));
+      if (!received) throw new Error(frameError?.error || "Synthetic WebRTC video track did not accept the frame");
+      assertLiveTurnOwner(active);
+      // A sender may be removed after the frame is drawn but before its ACK
+      // crosses the extension bridge. Do not report this frame as delivered
+      // over WebRTC; it may already have been observed, so never duplicate it
+      // through the snapshot composer fallback.
+      if (videoSenderUnavailable(active)) {
+        markVideoSenderUnavailable(active);
+        const error = new Error("ChatGPT WebRTC camera sender was removed while the frame was in flight");
+        error.videoFrameMayHaveBeenRendered = true;
+        throw error;
+      }
+      await emitLive(active, "input.media.sent", {
+        item_id: itemId || "",
+        attachment_count: 1,
+        video_track: true,
+        video_track_mode: "web_rtc",
+        sequence: Number(videoFrame.sequence),
+        timestamp_ms: Number(videoFrame.timestamp_ms),
+      });
+      return true;
+    } catch (error) {
+      if (submittedToMain) error.videoFrameMayHaveBeenRendered = true;
+      throw error;
+    }
+  }
+
+  async function sendLiveMedia(active, itemId, text, attachments, videoFrame = null) {
+    assertLiveTurnOwner(active);
+    if (videoFrame) {
+      try {
+        if (await sendLiveVideoFrame(active, itemId, attachments, videoFrame)) return;
+      } catch (error) {
+        // A frame submitted to MAIN world may already be visible to the remote
+        // WebRTC peer. Retrying it as a composer turn could duplicate the same
+        // camera frame after a lost ACK, so only pre-submit failures may fall
+        // back to the legacy still-image path.
+        if (error?.videoFrameMayHaveBeenRendered) throw error;
+        active.videoTrackUnavailable = true;
+        active.videoTrackMode = "snapshot_fallback";
+        active.videoTrackError = String(error?.message || error).slice(0, 240);
+      }
+    }
     assertLiveTurnOwner(active);
     if (!Array.isArray(attachments) || !attachments.length || attachments.length > 4)
       throw new Error("Live media message requires 1-4 uploaded attachments");
@@ -235,6 +426,13 @@
     await emitLive(active, "input.media.sent", {
       item_id: itemId || "",
       attachment_count: attachments.length,
+      ...(videoFrame ? {
+        video_track: false,
+        video_track_mode: "snapshot_fallback",
+        video_track_error: String(active.videoTrackError || "ChatGPT Web Voice camera sender is unavailable").slice(0, 240),
+        sequence: Number(videoFrame.sequence),
+        timestamp_ms: Number(videoFrame.timestamp_ms),
+      } : {}),
     });
   }
 
@@ -336,7 +534,7 @@
         return false;
       }
       queueTurn(() => sendLiveMedia(active, String(message.itemId || ""),
-        String(message.text || ""), message.attachments || []))
+        String(message.text || ""), message.attachments || [], message.videoFrame || null))
         .then(() => sendResponse({ ok: true, controller: "voice-live-multimodal-v195" }))
         .catch(error => sendResponse({ ok: false, error: String(error?.message || error), controller: "voice-live-multimodal-v195" }));
       return true;

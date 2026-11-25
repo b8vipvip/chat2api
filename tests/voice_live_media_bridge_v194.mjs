@@ -5,7 +5,9 @@ import vm from "node:vm";
 const liveMain = readFileSync("chrome_extension/voice_live_main.js", "utf8");
 const liveContent = readFileSync("chrome_extension/content_voice_live.js", "utf8");
 const liveText = readFileSync("chrome_extension/content_voice_live_text_v24.js", "utf8");
-for (const src of [liveMain, liveContent, liveText]) new vm.Script(src);
+const voiceMain = readFileSync("chrome_extension/voice_main.js", "utf8");
+const liveRouting = readFileSync("chrome_extension/audio_routing_live.js", "utf8");
+for (const src of [liveMain, liveContent, liveText, voiceMain, liveRouting]) new vm.Script(src);
 assert.ok(liveMain.includes("state.remoteTrack"), "stream from actual WebRTC track");
 assert.ok(!liveMain.includes("state?.recorder?.stream"), "never wait on an unarmed MediaRecorder");
 assert.ok(!liveMain.includes("recorderChunks.splice"), "live stream cannot mutate batch recording");
@@ -14,6 +16,92 @@ assert.ok(liveContent.includes('voice.mic.synthetic'), "ready only after microph
 assert.ok(!liveContent.includes("ready when you are"), "generic body text is not Voice UI readiness");
 assert.ok(liveText.includes("baselineUsers"), "text receipt needs a real new ChatGPT user turn");
 assert.ok(liveText.includes("assertComposerDraftSafe"), "live input must not overwrite a user-owned composer draft");
+assert.ok(liveText.includes("sendLiveVideoFrame"), "timestamped camera frames must use the dedicated video-track bridge");
+assert.ok(liveText.includes('type: "chat2api.attachment.fetch"'), "the Worker must fetch the owner-scoped frame bytes");
+assert.ok(liveText.includes('postMain("voice.live.video.frame"'), "the frame must be delivered into the MAIN-world camera track");
+assert.ok(liveText.includes("video_track: true"), "the Broker must acknowledge the frame as track delivery");
+assert.ok(liveText.includes('video_track_mode: "web_rtc"'), "the Worker must identify successful WebRTC sender attachment");
+assert.ok(liveText.includes('video_track_mode: "snapshot_fallback"'), "unsupported camera controls must be explicitly reported as snapshot fallback");
+assert.ok(liveText.includes("active.videoTrackMode = \"snapshot_fallback\""), "unsupported upstream camera controls must retain the safe snapshot fallback");
+assert.ok(voiceMain.includes("LIVE_VIDEO_FRAME_RATE = 5"), "the synthetic camera must use a bounded 5 FPS capture rate");
+assert.ok(voiceMain.includes("canvas.captureStream(LIVE_VIDEO_FRAME_RATE)"), "ChatGPT must receive a continuous synthetic camera MediaStreamTrack");
+assert.ok(voiceMain.includes('voice.live.video.sender.attached'), "the bridge must verify that the upstream PeerConnection attached the video track");
+assert.ok(voiceMain.includes('voice.live.video.sender.detached'), "replacing the synthetic sender must be observable");
+assert.ok(voiceMain.includes('voice.live.video.track.ended'), "an ended synthetic track must be observable");
+assert.ok(liveText.includes('item.type === "voice.live.video.sender.detached"'), "a replaced sender must trigger explicit snapshot fallback");
+assert.ok(liveText.includes('item.type === "voice.live.video.track.ended"'), "an ended sender must trigger explicit snapshot fallback");
+assert.ok(voiceMain.includes("voice.live.video.frame.received"), "the exact frame sequence must be acknowledged after rendering");
+assert.ok(liveText.includes("videoSenderUnavailable(active)"),
+  "sender removal during frame upload or rendering must be rechecked before a positive WebRTC ACK");
+assert.ok(liveText.includes("videoFrameMayHaveBeenRendered = true"),
+  "a sender-loss race after MAIN-world submission must not duplicate the frame through snapshot fallback");
+const senderStateStart = liveText.indexOf("  function latestVideoSenderState(active) {");
+const senderStateEnd = liveText.indexOf("  function liveCameraButton()",senderStateStart);
+assert.ok(senderStateStart >= 0 && senderStateEnd > senderStateStart);
+let senderStateEvents = [{type:"voice.live.video.sender.attached"}];
+const senderStateHelpers = vm.runInNewContext(
+  liveText.slice(senderStateStart,senderStateEnd)
+    + "\n({latestVideoSenderState,videoSenderUnavailable,markVideoSenderUnavailable})",
+  {liveMainEvents(){return senderStateEvents;},String,Boolean},
+);
+const attachedVideoSession = {videoTrackReady:true};
+assert.equal(senderStateHelpers.videoSenderUnavailable(attachedVideoSession),false);
+senderStateEvents = [
+  {type:"voice.live.video.sender.attached"},
+  {type:"voice.live.video.sender.detached",reason:"sender-replaced"},
+];
+assert.equal(senderStateHelpers.videoSenderUnavailable(attachedVideoSession),true,
+  "a detach event arriving while the browser uploads a frame must invalidate the sender");
+senderStateHelpers.markVideoSenderUnavailable(attachedVideoSession);
+assert.equal(attachedVideoSession.videoTrackUnavailable,true);
+assert.equal(attachedVideoSession.videoTrackMode,"snapshot_fallback");
+assert.equal(attachedVideoSession.videoTrackError,"sender-replaced");
+senderStateEvents = [
+  {type:"voice.live.video.sender.detached"},
+  {type:"voice.live.video.sender.attached"},
+];
+assert.equal(senderStateHelpers.videoSenderUnavailable(attachedVideoSession),false,
+  "a newer verified attachment supersedes an older detach event");
+const ensureStart = liveText.indexOf("  async function ensureLiveVideoTrack(active) {");
+const ensureEnd = liveText.indexOf("  async function sendLiveVideoFrame(",ensureStart);
+const ensureHelpersStart = liveText.indexOf("  function latestVideoSenderState(active) {");
+const ensureHelpersEnd = liveText.indexOf("  function liveCameraButton()",ensureHelpersStart);
+assert.ok(ensureStart >= 0 && ensureEnd > ensureStart);
+assert.ok(ensureHelpersStart >= 0 && ensureHelpersEnd > ensureHelpersStart);
+let senderEvents = [
+  {type:"voice.live.video.sender.attached"},
+  {type:"voice.live.video.sender.detached",reason:"sender-replaced"},
+];
+const ensureLiveVideoTrack = vm.runInNewContext(
+  liveText.slice(ensureHelpersStart,ensureHelpersEnd)
+    + "\n" + liveText.slice(ensureStart,ensureEnd)
+    + "\nensureLiveVideoTrack",
+  {
+    assertLiveTurnOwner(){},
+    liveMainEvents(){return senderEvents;},
+  },
+);
+const replacedSenderSession = {requestId:"voice-test",videoTrackReady:true};
+assert.equal(await ensureLiveVideoTrack(replacedSenderSession),false);
+assert.equal(replacedSenderSession.videoTrackUnavailable,true);
+assert.equal(replacedSenderSession.videoTrackMode,"snapshot_fallback");
+assert.equal(replacedSenderSession.videoTrackError,"sender-replaced");
+senderEvents = [
+  {type:"voice.live.video.sender.attached"},
+  {type:"voice.live.video.track.ended"},
+];
+const endedTrackSession = {requestId:"voice-test",videoTrackReady:true};
+assert.equal(await ensureLiveVideoTrack(endedTrackSession),false);
+assert.equal(endedTrackSession.videoTrackUnavailable,true);
+senderEvents = [
+  {type:"voice.live.video.sender.detached"},
+  {type:"voice.live.video.sender.attached"},
+];
+const reattachedSession = {requestId:"voice-test",videoTrackReady:true};
+assert.equal(await ensureLiveVideoTrack(reattachedSession),true,
+  "a newer verified sender attachment supersedes an older detached observation");
+
+assert.ok(liveRouting.includes("videoFrame: message.video_frame || null"), "the Broker must forward frame timestamps to the Worker tab");
 assert.ok(liveText.includes("refusing to overwrite it"), "draft conflicts must fail closed");
 assert.ok(liveText.includes("const hasNewUserTurn = () =>"), "composer lag must be checked against the new user turn");
 assert.ok(liveText.includes("if (!sent && !hasNewUserTurn() && !dispatchedEnter)"),

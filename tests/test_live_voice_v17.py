@@ -4,6 +4,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
+
+import app.live_voice_patch as live_voice_module
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
@@ -441,7 +443,10 @@ def test_web_chat_live_voice_uses_account_session_and_shared_server_key(tmp_path
                 assert live.receive_json()["type"] == "session.ready"
                 live.send_json({"type": "session.finish"})
                 events = acknowledge_live_stop(live, extension, request_id)
+                # No audio, image or video input was submitted. This is an
+                # idle user cancellation, not a failed generation.
                 assert events[-1]["status"] == "cancelled"
+                assert events[-1]["error"] is None
 
     row = app.state.telemetry.get(request_id)
     assert row["status"] == "cancelled"
@@ -1101,3 +1106,135 @@ def test_web_chat_realtime_session_limit_is_shared_across_accounts(tmp_path: Pat
         )
         assert overflow.status_code == 429, overflow.text
         assert overflow.json()["detail"]["code"] == "realtime_session_limit"
+
+def test_live_video_frame_relays_owned_image_and_correlated_ack(monkeypatch, tmp_path: Path) -> None:
+    file_id = "file_abcdefgh"
+    monkeypatch.setattr(
+        live_voice_module,
+        "attachment_specs",
+        lambda *_args: [{
+            "file_id": file_id,
+            "filename": "camera.jpg",
+            "mime_type": "image/jpeg",
+            "size": 128,
+        }],
+    )
+    monkeypatch.setattr(live_voice_module, "validate_image_file", lambda *_args: None)
+
+    with TestClient(app_live(tmp_path)) as client:
+        managed_key = create_managed_key(client)
+        client_id, extension_token = pair_extension(client)
+        with client.websocket_connect(f"/ws/extensions/{client_id}?token={extension_token}") as extension:
+            assert extension.receive_json()["type"] == "server.hello"
+            with client.websocket_connect(
+                f"/v1/audio/realtime?client_id={client_id}",
+                headers={"Authorization": f"Bearer {managed_key}"},
+            ) as live:
+                live.send_json({"type": "session.start", "model": "gpt-live"})
+                started = extension.receive_json()
+                request_id = started["request_id"]
+                extension.send_json({
+                    "type": "image.progress",
+                    "kind": "voice-live",
+                    "request_id": request_id,
+                    "live_event": "session.ready",
+                    "instructions_applied": True,
+                })
+                assert live.receive_json()["type"] == "session.ready"
+
+                live.send_json({
+                    "type": "input_video.frame",
+                    "item_id": "camera-frame-0",
+                    "sequence": 0,
+                    "timestamp_ms": 250,
+                    "file_id": file_id,
+                    "text": "摄像头画面",
+                })
+                worker_input = extension.receive_json()
+                assert worker_input["type"] == "voice.live.multimodal"
+                assert worker_input["request_id"] == request_id
+                assert worker_input["item_id"] == "camera-frame-0"
+                assert worker_input["video_frame"] == {"sequence": 0, "timestamp_ms": 250}
+                assert worker_input["attachments"][0]["file_id"] == file_id
+
+                queued = live.receive_json()
+                assert queued["type"] == "input_video.frame.queued"
+                assert queued["sequence"] == 0
+                assert queued["timestamp_ms"] == 250
+
+                extension.send_json({
+                    "type": "image.progress",
+                    "kind": "voice-live",
+                    "request_id": request_id,
+                    "live_event": "input.media.sent",
+                    "item_id": "camera-frame-0",
+                    "attachment_count": 1,
+                })
+                acknowledged = live.receive_json()
+                assert acknowledged == {
+                    "type": "input_video.frame.sent",
+                    "item_id": "camera-frame-0",
+                    "attachment_count": 1,
+                    "sequence": 0,
+                    "timestamp_ms": 250,
+                    "video_track": False,
+                    "video_track_mode": "snapshot_fallback",
+                }
+
+                live.send_json({"type": "session.finish"})
+                events = acknowledge_live_stop(live, extension, request_id)
+                # A confirmed camera frame is user input. Ending before a
+                # completed assistant response must not be mislabeled idle.
+                assert events[-1]["status"] == "error"
+                assert events[-1]["error"] == "GPT-Live session ended without a completed response"
+
+
+def test_live_voice_rejects_unapproved_attachment_mime(monkeypatch, tmp_path: Path) -> None:
+    file_id = "file_abcdefgh"
+    monkeypatch.setattr(
+        live_voice_module,
+        "attachment_specs",
+        lambda *_args: [{
+            "file_id": file_id,
+            "filename": "payload.bin",
+            "mime_type": "application/octet-stream",
+            "size": 128,
+        }],
+    )
+
+    with TestClient(app_live(tmp_path)) as client:
+        managed_key = create_managed_key(client)
+        client_id, extension_token = pair_extension(client)
+        with client.websocket_connect(f"/ws/extensions/{client_id}?token={extension_token}") as extension:
+            assert extension.receive_json()["type"] == "server.hello"
+            with client.websocket_connect(
+                f"/v1/audio/realtime?client_id={client_id}",
+                headers={"Authorization": f"Bearer {managed_key}"},
+            ) as live:
+                live.send_json({"type": "session.start", "model": "gpt-live"})
+                started = extension.receive_json()
+                request_id = started["request_id"]
+                extension.send_json({
+                    "type": "image.progress",
+                    "kind": "voice-live",
+                    "request_id": request_id,
+                    "live_event": "session.ready",
+                    "instructions_applied": True,
+                })
+                assert live.receive_json()["type"] == "session.ready"
+
+                live.send_json({
+                    "type": "input_media",
+                    "item_id": "unsupported-file",
+                    "text": "请查看这个文件",
+                    "attachments": [{"type": "input_file", "file_id": file_id}],
+                })
+                error = live.receive_json()
+                assert error["type"] == "error"
+                assert error["code"] == "INVALID_MEDIA_INPUT"
+                assert "MIME is not supported" in error["message"]
+
+                live.send_json({"type": "session.finish"})
+                events = acknowledge_live_stop(live, extension, request_id)
+                assert events[-1]["status"] == "cancelled"
+
