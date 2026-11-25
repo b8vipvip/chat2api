@@ -175,6 +175,17 @@ test("does not advance the durable SSE cursor on malformed or empty unknown fram
   assert.equal(assistant.content,"authoritative final answer",
     "the canonical final delivery must replace unverified recovery text");
   assert.equal(assistant.provisionalRecoveryText,false);
+  const resetAssistant = {content:"",lastEventId:0};
+  assert.equal(parser(
+    "id: 13\nevent: replay.reset\ndata: " +
+      JSON.stringify({
+        status:"running",partial_text:"recovered prefix",
+        partial_text_unverified:true,
+      }) + "\n\n",
+    resetAssistant,
+  ),false);
+  assert.equal(resetAssistant.content,"recovered prefix");
+  assert.equal(resetAssistant.provisionalRecoveryText,true);
   assert.equal(parser("id: 12\ndata: [DONE]\n\n",assistant),true);
   assert.equal(assistant.lastEventId,12);
 });
