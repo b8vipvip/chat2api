@@ -21,9 +21,11 @@ class Registry:
             "ext_free": SimpleNamespace(name="Free", metadata={}),
         }
         self.sent = []
+        self.online = ["ext_paid", "ext_free"]
+        self.fail_next_send = set()
 
     def online_client_ids(self):
-        return ["ext_paid", "ext_free"]
+        return list(self.online)
 
     def chatgpt_routing_ready(self, client_id):
         return client_id == "ext_paid"
@@ -42,6 +44,9 @@ class Registry:
         return True
 
     async def send(self, client_id, payload):
+        if client_id in self.fail_next_send:
+            self.fail_next_send.remove(client_id)
+            raise RuntimeError("transient socket send failure")
         self.sent.append((client_id, payload))
 
 
@@ -172,4 +177,37 @@ def test_sync_endpoint_all_online_and_duplicate_guard(tmp_path):
     assert response.status_code == 200
     assert response.json()["kind"] == "sync"
     assert set(response.json()["workers"]) == {"ext_paid", "ext_free"}
+    assert client.post("/api/admin/text-model-tasks/sync", headers=auth).status_code == 409
+    assert client.post("/api/admin/text-models/gpt-5.6-sol/validate", headers=auth).status_code == 409
+
+
+def test_scheduler_retries_when_no_workers_online_and_expires_tasks_when_disabled(tmp_path):
+    from datetime import datetime, timezone
+    import time
+    app, registry, client = setup(tmp_path)
+    auth = {"Authorization": "Bearer admin-token"}
+    endpoint = "/api/admin/text-model-sync-schedule"
+    assert client.patch(endpoint, headers=auth, json={"enabled": True, "time": "08:30", "utc_offset_minutes": 480}).status_code == 200
+    registry.online = []
+    due = datetime(2026, 11, 25, 0, 30, tzinfo=timezone.utc)
+    asyncio.run(app.state.model_sync_schedule_tick(due))
+    assert client.get(endpoint, headers=auth).json()["last_scheduled_day"] == ""
+    assert registry.sent == []
+    registry.online = ["ext_paid"]
+    registry.fail_next_send = {"ext_paid"}
+    asyncio.run(app.state.model_sync_schedule_tick(due))
+    assert len(registry.sent) == 1, "transient dispatch failure should be retried"
+    assert client.get(endpoint, headers=auth).json()["last_scheduled_day"] == "2026-11-25"
+    app.state.model_sync_tasks[0]["started_epoch"] = time.time() - 151
+    assert client.patch(endpoint, headers=auth, json={"enabled": False, "time": "08:30", "utc_offset_minutes": 480}).status_code == 200
+    asyncio.run(app.state.model_sync_schedule_tick(due))
+    refreshed = client.get("/api/admin/text-model-tasks", headers=auth).json()["data"][0]
+    assert refreshed["workers"]["ext_paid"]["state"] == "timed_out"
+
+
+def test_model_task_single_flight_is_symmetric(tmp_path):
+    app, registry, client = setup(tmp_path)
+    auth = {"Authorization": "Bearer admin-token"}
+    validation = client.post("/api/admin/text-models/gpt-5.6-sol/validate", headers=auth)
+    assert validation.status_code == 200
     assert client.post("/api/admin/text-model-tasks/sync", headers=auth).status_code == 409
