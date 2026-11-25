@@ -642,7 +642,7 @@ class RequestBroker:
             call_id = re.sub(r"[^A-Za-z0-9_.:-]", "",
                              str(event.get("call_id") or event.get("id") or event.get("tool_call_id") or ""))[:128]
             result_id = re.sub(r"[^A-Za-z0-9_.:-]", "",
-                               str(event.get("result_id") or event.get("call_id") or event.get("id") or ""))[:128]
+                               str(event.get("result_id") or ""))[:128]
             raw_status = str(event.get("status") or "").lower()
             status = {
                 "in_progress": "running", "pending": "running", "running": "running",
