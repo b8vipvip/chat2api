@@ -106,12 +106,14 @@
   async function flush() {
     if (state.restoring || state.flushing || !state.outbox.size || !socketReady()) return false;
     const workerEvents = globalThis.__CHAT2API_BACKGROUND_WORKER_EVENT_OUTBOX_V1__?.events;
-    // Preserve request event order: the Worker terminal cannot overtake
-    // nonterminal deltas/references that are still awaiting server ACK.
-    if (workerEvents && workerEvents.size) return false;
     state.flushing = true;
     try {
       for (const [key, item] of [...state.outbox.entries()]) {
+        const requestId = String(item.payload?.request_id || "");
+        const hasEarlierWorkerEvents = workerEvents && [...workerEvents.values()].some(
+          event => String(event.payload?.request_id || "") === requestId,
+        );
+        if (hasEarlierWorkerEvents) continue;
         if (Date.now() - Number(item.queued_at_ms || 0) > RETENTION_MS) {
           state.outbox.delete(key);
           continue;
