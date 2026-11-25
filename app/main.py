@@ -2000,7 +2000,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     delivery_journal_ready = bool(
                         delivery_snapshot.get("delivered_text") == journal_text
                         and delivery_snapshot.get("delivered_text_truncated") is not True
-                        and not delivery_snapshot.get("terminal_status")
+                        and delivery_snapshot.get("terminal_status") in {"", "completed"}
                     )
                     if not delivery_journal_ready:
                         raise RuntimeError("Durable Web Chat delivery does not match the final projection")
@@ -2057,12 +2057,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             try:
                 if status_value == "completed":
                     journal_text = final_text if delivery_text is None else delivery_text
-                    terminal_id = (
-                        await event_journal.append_delivery_terminal(
+                    terminal_id = None
+                    if delivery_journal_ready:
+                        terminal_id = await event_journal.append_delivery_terminal(
                             state.request_id, state.mode1_owner_key_id, len(journal_text),
                         )
-                        if delivery_journal_ready else None
-                    )
+                        if not terminal_id:
+                            terminal_snapshot = await event_journal.snapshot(
+                                state.request_id, state.mode1_owner_key_id,
+                            )
+                            if (
+                                terminal_snapshot.get("terminal_status") == "completed"
+                                and terminal_snapshot.get("delivered_text") == journal_text
+                                and terminal_snapshot.get("delivered_text_truncated") is not True
+                            ):
+                                terminal_id = int(terminal_snapshot.get("last_event_id") or 0)
                 elif status_value in {"error", "cancelled", "stalled"}:
                     terminal_id = await event_journal.append_terminal(
                         state.request_id, state.mode1_owner_key_id,
