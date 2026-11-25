@@ -1174,6 +1174,8 @@ def test_live_video_frame_relays_owned_image_and_correlated_ack(monkeypatch, tmp
                     "attachment_count": 1,
                     "sequence": 0,
                     "timestamp_ms": 250,
+                    "video_track": False,
+                    "video_track_mode": "snapshot_fallback",
                 }
 
                 live.send_json({"type": "session.finish"})
