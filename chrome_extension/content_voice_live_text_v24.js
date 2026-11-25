@@ -253,16 +253,16 @@
     try {
       postMain("voice.live.video.prepare", active);
       const prepared = await waitFor(() => events().find(item =>
-        item.type === "voice.live.video.prepared"), 1800, 50);
+        item.type === "voice.live.video.prepared"), 1200, 50);
       const prepareError = events().find(item => item.type === "voice.live.video.error");
       if (!prepared) throw new Error(prepareError?.error || "Synthetic WebRTC video track could not be prepared");
 
       const alreadyAttached = events().find(item => item.type === "voice.live.video.sender.attached");
       if (!alreadyAttached) {
         const alreadyOn = [...document.querySelectorAll("button")]
-          .filter(visible).some(button => /(turn off camera|stop camera|关闭摄像头|停止视频)/i.test(labelOf(button)));
+          .filter(visible).some(button => /(turn off camera|turn off video|stop camera|stop video|关闭摄像头|关闭视频|停止视频|停止摄像头)/i.test(labelOf(button)));
         if (!alreadyOn) {
-          const camera = await waitFor(liveCameraButton, 2500, 100);
+          const camera = await waitFor(liveCameraButton, 2000, 100);
           if (!camera) throw new Error("ChatGPT Voice camera control is unavailable");
           assertLiveTurnOwner(active);
           camera.click();
@@ -272,7 +272,7 @@
         const provided = events().find(item => item.type === "voice.live.video.track.provided");
         const attached = events().find(item => item.type === "voice.live.video.sender.attached");
         return provided && attached ? { provided, attached } : null;
-      }, 6500, 50);
+      }, 5500, 50);
       const videoError = events().find(item => item.type === "voice.live.video.error");
       if (!senderReady) {
         throw new Error(videoError?.error || "ChatGPT did not attach the synthetic WebRTC camera track");
@@ -318,7 +318,7 @@
     const events = () => liveMainEvents(active);
     const received = await waitFor(() => events().find(item =>
       item.type === "voice.live.video.frame.received" &&
-      Number(item.sequence) === Number(videoFrame.sequence)), 2500, 40);
+      Number(item.sequence) === Number(videoFrame.sequence)), 2000, 40);
     const frameError = events().find(item =>
       item.type === "voice.live.video.error" &&
       Number(item.sequence) === Number(videoFrame.sequence));
