@@ -129,7 +129,7 @@ await context.handleServerMessage({
 assert.equal(context.__CHAT2API_BACKGROUND_WORKER_EVENT_OUTBOX_V1__.events.size,0);
 
 await context.handleServerMessage({type:"heartbeat.ack"});
-assert.equal(handled.length,1);
-assert.equal(handled[0].type,"heartbeat.ack");
+assert.equal(handled.some(message => message.type === "server.hello"),true);
+assert.equal(handled.filter(message => message.type === "heartbeat.ack").length,1);
 
 console.log("Worker nonterminal events persist, replay in request order, and gate only their own terminal");
