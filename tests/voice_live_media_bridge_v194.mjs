@@ -64,13 +64,18 @@ assert.equal(senderStateHelpers.videoSenderUnavailable(attachedVideoSession),fal
   "a newer verified attachment supersedes an older detach event");
 const ensureStart = liveText.indexOf("  async function ensureLiveVideoTrack(active) {");
 const ensureEnd = liveText.indexOf("  async function sendLiveVideoFrame(",ensureStart);
+const ensureHelpersStart = liveText.indexOf("  function latestVideoSenderState(active) {");
+const ensureHelpersEnd = liveText.indexOf("  function liveCameraButton()",ensureHelpersStart);
 assert.ok(ensureStart >= 0 && ensureEnd > ensureStart);
+assert.ok(ensureHelpersStart >= 0 && ensureHelpersEnd > ensureHelpersStart);
 let senderEvents = [
   {type:"voice.live.video.sender.attached"},
   {type:"voice.live.video.sender.detached",reason:"sender-replaced"},
 ];
 const ensureLiveVideoTrack = vm.runInNewContext(
-  liveText.slice(ensureStart,ensureEnd) + "\nensureLiveVideoTrack",
+  liveText.slice(ensureHelpersStart,ensureHelpersEnd)
+    + "\n" + liveText.slice(ensureStart,ensureEnd)
+    + "\nensureLiveVideoTrack",
   {
     assertLiveTurnOwner(){},
     liveMainEvents(){return senderEvents;},
