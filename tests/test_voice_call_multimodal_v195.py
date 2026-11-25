@@ -207,9 +207,9 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
                 assert duplicate_media_ack["type"] == "input_media.sent"
                 assert duplicate_media_ack["attachment_count"] == 0
 
-                # A video track is sampled by the client into timestamped,
-                # owner-scoped JPEG/PNG/WebP uploads. Each frame travels as an
-                # image turn in this same Voice session, never as a fake MP4.
+                # The client sends timestamped, owner-scoped image frames;
+                # the Worker converts them into a synthetic camera MediaStreamTrack
+                # instead of creating a separate ChatGPT composer turn.
                 live.send_json({
                     "type": "input_video.frame",
                     "item_id": "video-frame-000",
@@ -221,6 +221,7 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
                 video_dispatch = ext.receive_json()
                 assert video_dispatch["type"] == "voice.live.multimodal"
                 assert video_dispatch["attachments"][0]["file_id"] == video_frame_file
+                assert video_dispatch["video_frame"] == {"sequence": 0, "timestamp_ms": 1000}
                 assert "视频帧 0 · 1.000s" in video_dispatch["text"]
                 video_queued = live.receive_json()
                 assert video_queued["type"] == "input_video.frame.queued"
