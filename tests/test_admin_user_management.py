@@ -10,6 +10,8 @@ from app.config import Settings
 from app.main import create_app
 from app.user_commerce import USER_SESSION_COOKIE
 from app.user_console_v104_patch import install_user_console_v104_patch
+from app.model_entitlement_v1_patch import install_model_entitlements
+from app.tenant_membership import TenantMembershipStore
 from app.v17_patch import install_v17_patch
 
 
@@ -266,6 +268,8 @@ def test_admin_can_update_quota_disable_and_permanently_revoke_only_owned_api_ke
 
 def test_admin_can_change_user_role_and_password_with_session_revocation(tmp_path: Path) -> None:
     app = _production_admin_app(tmp_path)
+    app.state.tenant_memberships = TenantMembershipStore(tmp_path)
+    install_model_entitlements(app)
     with TestClient(app) as client:
         _admin_login(client)
         accounts = app.state.user_accounts
@@ -298,8 +302,8 @@ def test_admin_can_change_user_role_and_password_with_session_revocation(tmp_pat
         audit = client.get("/api/admin/audit?limit=30")
         assert audit.status_code == 200
         actions = [row["action"] for row in audit.json()["data"]]
-        assert "user.role_change_requested" in actions
-        assert "user.role_change_completed" in actions
+        assert "user.system_role_update_requested" in actions
+        assert "user.system_role_update_completed" in actions
         assert "user.password_reset_requested" in actions
         assert "user.password_reset_completed" in actions
         assert "new-user-password-long" not in audit.text

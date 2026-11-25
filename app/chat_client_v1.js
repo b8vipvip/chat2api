@@ -434,6 +434,7 @@
         $("composerArea").classList.add("hidden");
         showOnly("authRequired");
         setConnection("登录已失效","error");
+        openLoginDialog();
         throw new Error("用户登录状态已失效，请重新登录后再使用实时语音");
       },
       onState:(status,detail) => setVoiceUi(status,detail),
@@ -452,6 +453,7 @@
         } catch {}
         state.user = null;
         showOnly("authRequired");
+        openLoginDialog();
         $("composerArea").classList.add("hidden");
         $("voiceTranscript").replaceChildren();
         state.voicePanelVisible = false;
@@ -2840,6 +2842,7 @@
         state.user = null;
         showOnly("authRequired");
         setConnection("登录已失效", "error");
+        openLoginDialog();
         throw new Error("用户登录状态已失效，请重新登录后再继续聊天");
       }
 
@@ -2914,6 +2917,7 @@
           state.user = null;
           showOnly("authRequired");
           setConnection("登录已失效", "error");
+          openLoginDialog();
         } else if (response.status === 403 || response.status === 503) {
           showOnly("serviceUnavailable");
           setConnection("服务端统一 API Key 不可用", "error");

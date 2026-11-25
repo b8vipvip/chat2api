@@ -65,7 +65,6 @@
   let sessionRefreshGeneration = 0;
   let invitationDisplayGeneration = 0;
   let roleCatalogue = {};
-  let selectedTenantId = "";
 
   function messageOf(value) {
     if (typeof value === "string") return value;
@@ -570,110 +569,6 @@
       setStatus("cInviteStatus", "邀请代码已复制");
     } catch (_) { setStatus("cInviteStatus", "复制失败，请手动复制代码", true); }
   });
-
-  function selectedTenant() {
-    if (!selectedTenantId) throw new Error("请先选择工作区");
-    return encodeURIComponent(selectedTenantId);
-  }
-  async function loadTenants() {
-    try {
-      const result = await sessionApi("/api/admin/tenants");
-      const body = $("cTenantRows");
-      body.replaceChildren();
-      (result.data || []).forEach((tenant) => {
-        const row = document.createElement("tr");
-        cell(row, tenant.display_name + " (" + tenant.slug + ")");
-        cell(row, tenant.tenant_id);
-        const actions = document.createElement("td");
-        actions.appendChild(button("选择", "action", async () => {
-          selectedTenantId = tenant.tenant_id;
-          $("cTenantSelected").textContent = "当前工作区：" + tenant.display_name + " · " + tenant.tenant_id;
-          await loadTenantMembers();
-          await loadTenantKeys();
-        }));
-        row.appendChild(actions);
-        body.appendChild(row);
-      });
-      setStatus("cTenantSelected", selectedTenantId ? "当前工作区：" + selectedTenantId : "请选择工作区");
-    } catch (error) { setStatus("cTenantSelected", error.message, true); }
-  }
-  async function loadTenantMembers() {
-    try {
-      const result = await sessionApi("/api/admin/tenants/" + selectedTenant() + "/members");
-      const body = $("cTenantMemberRows");
-      body.replaceChildren();
-      (result.data || []).forEach((member) => {
-        const row = document.createElement("tr");
-        cell(row, member.user_id);
-        cell(row, member.role);
-        const actions = document.createElement("td");
-        actions.appendChild(button("移除", "action danger", async () => {
-          if (!confirm("确认移除该成员？其已绑定 API Key 必须先解绑。")) return;
-          try {
-            await sessionApi("/api/admin/tenants/" + selectedTenant() + "/members/" + encodeURIComponent(member.user_id), { method: "DELETE" });
-            await loadTenantMembers();
-          } catch (error) { setStatus("cTenantSelected", error.message, true); }
-        }));
-        row.appendChild(actions);
-        body.appendChild(row);
-      });
-    } catch (error) { setStatus("cTenantSelected", error.message, true); }
-  }
-  async function loadTenantKeys() {
-    try {
-      const result = await sessionApi("/api/admin/tenants/" + selectedTenant() + "/keys");
-      const body = $("cTenantKeyRows");
-      body.replaceChildren();
-      (result.data || []).forEach((binding) => {
-        const row = document.createElement("tr");
-        cell(row, binding.key_id);
-        cell(row, binding.user_id);
-        cell(row, binding.created_at);
-        const actions = document.createElement("td");
-        actions.appendChild(button("解绑", "action danger", async () => {
-          if (!confirm("确认解除此 API Key 的工作区绑定？")) return;
-          try {
-            await sessionApi("/api/admin/tenants/" + selectedTenant() + "/keys/" + encodeURIComponent(binding.key_id), { method: "DELETE" });
-            await loadTenantKeys();
-          } catch (error) { setStatus("cTenantSelected", error.message, true); }
-        }));
-        row.appendChild(actions);
-        body.appendChild(row);
-      });
-    } catch (error) { setStatus("cTenantSelected", error.message, true); }
-  }
-  $("cTenantCreate")?.addEventListener("click", async () => {
-    try {
-      const result = await sessionApi("/api/admin/tenants", {
-        method: "POST",
-        body: { slug: $("cTenantSlug").value.trim(), display_name: $("cTenantName").value.trim() }
-      });
-      selectedTenantId = result.tenant.tenant_id;
-      await loadTenants();
-      await loadTenantMembers();
-      await loadTenantKeys();
-    } catch (error) { setStatus("cTenantSelected", error.message, true); }
-  });
-  $("cTenantReload")?.addEventListener("click", loadTenants);
-  $("cTenantAddMember")?.addEventListener("click", async () => {
-    try {
-      await sessionApi("/api/admin/tenants/" + selectedTenant() + "/members", {
-        method: "PUT",
-        body: { user_id: $("cTenantUserId").value.trim(), role: $("cTenantMemberRole").value }
-      });
-      await loadTenantMembers();
-    } catch (error) { setStatus("cTenantSelected", error.message, true); }
-  });
-  $("cTenantBindKey")?.addEventListener("click", async () => {
-    try {
-      await sessionApi("/api/admin/tenants/" + selectedTenant() + "/keys/" + encodeURIComponent($("cTenantKeyId").value.trim()), {
-        method: "PUT",
-        body: { user_id: $("cTenantKeyUser").value.trim() }
-      });
-      await loadTenantKeys();
-    } catch (error) { setStatus("cTenantSelected", error.message, true); }
-  });
-  $("cTenantReloadKeys")?.addEventListener("click", loadTenantKeys);
 
   async function loadEntitlements() {
     try {

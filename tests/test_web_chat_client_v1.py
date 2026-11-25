@@ -347,3 +347,10 @@ def test_guest_web_chat_is_policy_gated_and_uses_account_scoped_identity(tmp_pat
         blocked = client.get("/api/user/chat/session")
         assert blocked.status_code == 403
         assert "游客使用已关闭" in blocked.text
+
+
+def test_every_web_chat_session_expiry_path_opens_inline_login_dialog() -> None:
+    source = (Path(__file__).resolve().parents[1] / "app" / "chat_client_v1.js").read_text(encoding="utf-8")
+    assert 'if (response.status === 401) {\n          state.user = null;\n          showOnly("authRequired");\n          setConnection("登录已失效", "error");\n          openLoginDialog();' in source
+    assert 'state.user = null;\n        showOnly("authRequired");\n        setConnection("登录已失效", "error");\n        openLoginDialog();\n        throw new Error("用户登录状态已失效，请重新登录后再继续聊天")' in source
+    assert 'state.user = null;\n        showOnly("authRequired");\n        openLoginDialog();\n        $("composerArea").classList.add("hidden");' in source

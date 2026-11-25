@@ -193,6 +193,9 @@ def test_web_user_navigation_is_grouped_and_duplicate_api_key_entry_is_removed()
         assert f'"{view}"' in source
     assert '"tenants"' not in source
     assert '"user-roles"' not in source
+    assert "selectedTenantId" not in source
+    assert "loadTenants" not in source
+    assert "/api/admin/tenants" not in source
     assert 'webGroup.hidden = visibleItems.length === 0' in source
     assert 'loginButton.hidden = authenticated' in source
     assert 'logoutButton.hidden = !authenticated' in source
