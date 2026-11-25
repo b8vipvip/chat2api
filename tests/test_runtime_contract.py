@@ -810,3 +810,5 @@ def test_windows_platform_os_normalization_is_advertised():
 def test_v0_22_301_model_sync_release_runtime_revision_is_advertised():
     assert SERVER_RUNTIME_VERSION == RELEASE_VERSION == "0.22.301"
     assert "web-chat-shared-api-key-v1" in RUNTIME_FEATURE_REVISION
+    assert "worker-model-sync-daily-v1" in RUNTIME_FEATURE_REVISION
+    assert "free-default-mapping-v1" in RUNTIME_FEATURE_REVISION
