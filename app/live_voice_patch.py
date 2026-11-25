@@ -513,7 +513,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 await websocket.send_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
 
         async def relay_extension_events() -> None:
-            nonlocal finished, observed_audio_bytes, observed_response_count, observed_media_count, input_confirmed, session_ready, setup_prompt_accounted, error_message, observed_media_ids, observed_speech_activity, observed_user_transcript
+            nonlocal finished, observed_audio_bytes, observed_response_count, observed_media_count, input_confirmed, session_ready, setup_prompt_accounted, error_message, observed_media_ids, observed_speech_activity, observed_user_transcript, video_frame_count, video_frame_bytes
             assert state is not None
             text_by_response: dict[str, str] = {}
 
