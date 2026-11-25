@@ -68,7 +68,12 @@ MAX_LIVE_CONTROL_CHARS = 64 * 1024
 MAX_LIVE_VIDEO_FRAMES = 300
 MAX_LIVE_VIDEO_FRAME_BYTES = 2 * 1024 * 1024
 MAX_LIVE_VIDEO_TOTAL_BYTES = 64 * 1024 * 1024
+MAX_LIVE_NON_VIDEO_FILES = 64
 MAX_LIVE_VIDEO_DURATION_MS = 6 * 60 * 60 * 1000
+
+def _live_session_media_file_limit(video_frame_count: int, includes_video_frame: bool) -> int:
+    accepted_video_frames = min(MAX_LIVE_VIDEO_FRAMES, max(0, int(video_frame_count)))
+    return MAX_LIVE_NON_VIDEO_FILES + accepted_video_frames + int(bool(includes_video_frame))
 MIN_LIVE_VIDEO_FRAME_INTERVAL_SECONDS = 0.2
 LIVE_VIDEO_FRAME_ACK_TIMEOUT_SECONDS = 15.0
 LIVE_VIDEO_FRAME_MONITOR_INTERVAL_SECONDS = 0.5
@@ -1202,8 +1207,14 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                             *observed_media_ids,
                             *(str(spec.get("file_id") or "") for spec in attachments),
                         ]))
-                        if len(next_media_ids) > MAX_LIVE_VIDEO_FRAMES + 64:
-                            raise ValueError(f"A Live session may attach at most {MAX_LIVE_VIDEO_FRAMES + 64} unique files")
+                        max_session_media_files = _live_session_media_file_limit(
+                            video_frame_count, bool(video_frame),
+                        )
+                        if len(next_media_ids) > max_session_media_files:
+                            raise ValueError(
+                                f"A Live session may attach at most {max_session_media_files} unique files "
+                                "at its current video frame count"
+                            )
                     except HTTPException as error:
                         await send_json({
                             "type": "error", "code": "MEDIA_ACCESS_DENIED",
