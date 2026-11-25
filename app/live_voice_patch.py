@@ -62,11 +62,14 @@ MAX_LIVE_PCM_FRAME_BYTES = 64 * 1024
 MAX_LIVE_ATTACHMENTS_PER_INPUT = 4
 MAX_LIVE_PENDING_INPUTS = 128
 MAX_LIVE_CONTROL_CHARS = 64 * 1024
-MAX_LIVE_VIDEO_FRAMES = 300
+# The current upstream ChatGPT Web Voice bridge submits camera images as
+# serialized composer turns. Keep this as bounded sampled-frame input; it is
+# not a negotiated continuous WebRTC video track.
+MAX_LIVE_VIDEO_FRAMES = 64
 MAX_LIVE_VIDEO_FRAME_BYTES = 2 * 1024 * 1024
 MAX_LIVE_VIDEO_TOTAL_BYTES = 64 * 1024 * 1024
 MAX_LIVE_VIDEO_DURATION_MS = 6 * 60 * 60 * 1000
-MIN_LIVE_VIDEO_FRAME_INTERVAL_SECONDS = 0.2
+MIN_LIVE_VIDEO_FRAME_INTERVAL_SECONDS = 1.0
 LIVE_VIDEO_FRAME_ACK_TIMEOUT_SECONDS = 15.0
 LIVE_VIDEO_FRAME_MONITOR_INTERVAL_SECONDS = 0.5
 LIVE_SESSION_STOP_TIMEOUT_SECONDS = 5.0
@@ -1147,19 +1150,6 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                             raise ValueError("Each video frame must contain exactly one uploaded image")
                         for spec in attachments:
                             mime = str(spec.get("mime_type") or "").lower()
-                            if (
-                                control_type == "input_video.frame"
-                                and int(spec.get("size") or 0) > MAX_LIVE_VIDEO_FRAME_BYTES
-                            ):
-                                raise ValueError("Video frames are limited to 2 MiB each")
-                            if control_type == "input_video.frame" and mime not in {
-                                "image/jpeg", "image/png", "image/webp",
-                            }:
-                                raise ValueError("Video frames must be JPEG, PNG or WebP images")
-                            if control_type == "input_video.frame":
-                                video_frame_size += int(spec.get("size") or 0)
-                        if video_frame and video_frame_bytes + video_frame_size > MAX_LIVE_VIDEO_TOTAL_BYTES:
-                            raise ValueError("Live video is limited to 64 MiB per session")
                             allowed = (
                                 mime in {"image/png", "image/jpeg", "image/webp", "image/gif",
                                          "application/pdf", "text/plain", "text/csv",
@@ -1169,6 +1159,14 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                             )
                             if not allowed:
                                 raise ValueError("Live image/file MIME is not supported; send PCM as binary microphone frames")
+                            if control_type == "input_video.frame":
+                                if int(spec.get("size") or 0) > MAX_LIVE_VIDEO_FRAME_BYTES:
+                                    raise ValueError("Video frames are limited to 2 MiB each")
+                                if mime not in {"image/jpeg", "image/png", "image/webp"}:
+                                    raise ValueError("Video frames must be JPEG, PNG or WebP images")
+                                video_frame_size += int(spec.get("size") or 0)
+                        if video_frame and video_frame_bytes + video_frame_size > MAX_LIVE_VIDEO_TOTAL_BYTES:
+                            raise ValueError("Live video is limited to 64 MiB per session")
                         if control_type == "input_video.frame":
                             # MIME labels are not proof of raster content. Require
                             # a real, API-Key-owned vision image before relaying it
