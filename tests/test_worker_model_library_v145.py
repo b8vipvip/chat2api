@@ -131,6 +131,7 @@ def test_free_default_mini_route_requires_ready_composer_and_reliable_plan() -> 
     details = {
         "account_type": "free",
         "account_detection_confidence": "high",
+        "account_plan_confirmed": True,
         "account_model_control_present": False,
         "chatgpt_login_state": "ready",
         "chatgpt_login_composer_ready": True,
@@ -142,6 +143,8 @@ def test_free_default_mini_route_requires_ready_composer_and_reliable_plan() -> 
     assert not _free_default_composer_eligible(r(details, False), "ext_test")
     assert not _free_default_composer_eligible(r({**details, "account_type": "paid"}), "ext_test")
     assert not _free_default_composer_eligible(r({**details, "account_detection_confidence": "low"}), "ext_test")
+    assert not _free_default_composer_eligible(r({**details, "account_plan_confirmed": False}), "ext_test")
+    assert not _free_default_composer_eligible(r({k:v for k,v in details.items() if k != "account_plan_confirmed"}), "ext_test")
     assert not _free_default_composer_eligible(r({**details, "account_model_control_present": True}), "ext_test")
     assert _validated_model_rows(r(details), "ext_test") == []
 
