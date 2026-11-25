@@ -349,15 +349,18 @@
 
   function cleanupLiveVideo() {
     const stream = state.liveVideoStream;
+    // Clear ownership before stop(): stop() fires "ended" synchronously in
+    // some browsers, and an intentional teardown must not look like a sender
+    // failure that forces a still-image fallback in the next Voice session.
+    state.liveVideoTrack = null;
+    state.liveVideoCanvas = null;
+    state.liveVideoContext = null;
+    state.liveVideoStream = null;
     if (stream?.getTracks) {
       for (const track of stream.getTracks()) {
         try { track.stop(); } catch (_) {}
       }
     }
-    state.liveVideoCanvas = null;
-    state.liveVideoContext = null;
-    state.liveVideoStream = null;
-    state.liveVideoTrack = null;
     state.liveVideoLastTimestamp = -1;
     state.liveVideoLastSequence = -1;
     state.liveVideoFrameCount = 0;
@@ -386,6 +389,14 @@
       throw new Error("Synthetic live video track did not become active");
     }
     try { track.contentHint = "motion"; } catch (_) {}
+    try {
+      track.addEventListener?.("ended", () => {
+        if (state.requestId !== ownerRequestId || state.liveVideoTrack !== track) return;
+        post("voice.live.video.track.ended", {
+          track_state: String(track.readyState || "ended"),
+        }, ownerRequestId);
+      }, { once: true });
+    } catch (_) {}
     state.liveVideoCanvas = canvas;
     state.liveVideoContext = context;
     state.liveVideoStream = stream;
@@ -453,19 +464,26 @@
     try {
       NativeRtpSender.prototype.replaceTrack = function chat2apiReplaceTrack(track) {
         const ownerRequestId = state.requestId;
+        const previousTrack = this.track;
         const result = nativeReplaceTrack.call(this, track);
-        const reportAttached = () => {
-          if (ownerRequestId && state.requestId === ownerRequestId &&
-              track?.kind === "video" && track === state.liveVideoTrack) {
+        const reportReplacement = () => {
+          if (!ownerRequestId || state.requestId !== ownerRequestId) return;
+          if (previousTrack === state.liveVideoTrack && track !== state.liveVideoTrack) {
+            post("voice.live.video.sender.detached", {
+              reason: "sender-replaced",
+              replacement_track_kind: String(track?.kind || "none"),
+            }, ownerRequestId);
+          }
+          if (track?.kind === "video" && track === state.liveVideoTrack) {
             post("voice.live.video.sender.attached", {
               track_state: String(track.readyState || "unknown"),
             }, ownerRequestId);
           }
         };
         if (result && typeof result.then === "function") {
-          return result.then(value => { reportAttached(); return value; });
+          return result.then(value => { reportReplacement(); return value; });
         }
-        reportAttached();
+        reportReplacement();
         return result;
       };
     } catch (_) {}
