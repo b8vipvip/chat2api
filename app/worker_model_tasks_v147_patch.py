@@ -5,14 +5,16 @@ import json
 import os
 import time
 import uuid
-from datetime import datetime, timezone
+from contextlib import asynccontextmanager, suppress
+from datetime import datetime, timezone, timedelta
+import logging
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import PlainTextResponse, Response
 from fastapi.routing import APIRoute
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import model_capability_routing_patch as routing
 from .model_catalog import normalize_concrete_model_id
@@ -26,6 +28,12 @@ TASK_TIMEOUT_S = 150
 SPECIAL = {"gpt-image", "gpt-live", "gpt-live-mini"}
 TERMINAL = {"completed", "failed", "offline", "timed_out"}
 MAX_TASKS = 100
+
+
+class ModelSyncSchedule(BaseModel):
+    enabled: bool = False
+    time: str = Field(default="03:00", pattern=r"^(?:[01][0-9]|2[0-3]):[0-5][0-9]$")
+    utc_offset_minutes: int = Field(default=480, ge=-720, le=840)
 
 
 class ModelTaskError(Exception):
@@ -68,11 +76,18 @@ def install_manual_worker_text_model_tasks_v147_patch(app: FastAPI) -> FastAPI:
     registry = app.state.registry
     snapshot = app.state.worker_text_model_management_v146_snapshot
     path = Path(app.state.settings.data_dir) / "worker_text_model_tasks_v147.json"
+    saved = {}
     try:
         saved = json.loads(path.read_text(encoding="utf-8"))
         tasks: list[dict[str, Any]] = list(saved.get("tasks") or [])[-MAX_TASKS:]
     except (OSError, ValueError, TypeError, AttributeError):
         tasks = []
+    try:
+        schedule = ModelSyncSchedule.model_validate(saved.get("schedule") or {}).model_dump()
+        last_scheduled_day = str(saved.get("last_scheduled_day") or "")
+    except (ValueError, TypeError, AttributeError):
+        schedule = ModelSyncSchedule().model_dump()
+        last_scheduled_day = ""
     lock = asyncio.Lock()
     base_touch = registry.touch
     base_supports = registry.supports_model
@@ -83,7 +98,7 @@ def install_manual_worker_text_model_tasks_v147_patch(app: FastAPI) -> FastAPI:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
         try:
-            tmp.write_text(json.dumps({"tasks": tasks[-MAX_TASKS:]}, ensure_ascii=False), encoding="utf-8")
+            tmp.write_text(json.dumps({"tasks": tasks[-MAX_TASKS:], "schedule": schedule, "last_scheduled_day": last_scheduled_day}, ensure_ascii=False), encoding="utf-8")
             os.replace(tmp, path)
         finally:
             tmp.unlink(missing_ok=True)
@@ -241,7 +256,8 @@ def install_manual_worker_text_model_tasks_v147_patch(app: FastAPI) -> FastAPI:
         raise RuntimeError("Administrator route authentication is required")
     auth = list(overview.dependencies or [])
 
-    async def launch(kind: str, model: str | None = None) -> dict[str, Any]:
+    async def launch(kind: str, model: str | None = None, *, scheduled_day: str | None = None) -> dict[str, Any]:
+        nonlocal last_scheduled_day
         online = list(registry.online_client_ids())
         if kind == "validate":
             online = [cid for cid in online
@@ -252,6 +268,7 @@ def install_manual_worker_text_model_tasks_v147_patch(app: FastAPI) -> FastAPI:
         started = datetime.now(timezone.utc).isoformat()
         task: dict[str, Any] = {
             "id": task_id, "kind": kind, "model": model,
+            "trigger": "scheduled" if scheduled_day else "manual",
             "created_at": started, "updated_at": started, "started_epoch": time.time(),
             "workers": {cid: {
                 "state": "queued", "progress": 0, "error": "", "models": [],
@@ -259,23 +276,102 @@ def install_manual_worker_text_model_tasks_v147_patch(app: FastAPI) -> FastAPI:
             } for cid in online},
         }
         async with lock:
+            expired = expire_tasks()
+            if expired:
+                await save()
+            if scheduled_day and (not schedule["enabled"] or last_scheduled_day >= scheduled_day):
+                raise HTTPException(409, "Daily model synchronization already claimed or disabled")
+            if kind == "sync" and any(
+                w["state"] not in TERMINAL for t in tasks if t["kind"] in {"sync", "discover"}
+                for w in t["workers"].values()
+            ):
+                raise HTTPException(409, "A model synchronization task is already running")
+            old_day, old_tasks = last_scheduled_day, list(tasks)
             tasks.append(task)
             del tasks[:-MAX_TASKS]
-            await save()
-        for cid in online:
+            if scheduled_day:
+                last_scheduled_day = scheduled_day
             try:
-                await registry.send(cid, {"type": "model.task.v147", "task_id": task_id, "action": kind, "model": model})
+                await save()
+            except Exception:
+                tasks[:] = old_tasks
+                last_scheduled_day = old_day
+                raise
+
+        async def dispatch(cid: str) -> None:
+            try:
+                await asyncio.wait_for(registry.send(cid, {"type": "model.task.v147", "task_id": task_id, "action": kind, "model": model}), timeout=15)
             except Exception as error:
-                worker = task["workers"][cid]
-                worker.update(state="failed", progress=100, error=f"Dispatch failed: {str(error)[:300]}")
-                worker["logs"].append(worker["error"])
+                async with lock:
+                    worker = task["workers"][cid]
+                    if worker["state"] not in TERMINAL:
+                        worker.update(state="failed", progress=100, error=f"Dispatch failed: {str(error)[:300]}")
+                        worker["logs"].append(worker["error"])
+        await asyncio.gather(*(dispatch(cid) for cid in online))
         async with lock:
             await save()
         return task
 
+    @app.post("/api/admin/text-model-tasks/sync", dependencies=auth)
     @app.post("/api/admin/text-model-tasks/discover", dependencies=auth)
     async def start_discover_task():
-        return await launch("discover")
+        return await launch("sync")
+
+    @app.get("/api/admin/text-model-sync-schedule", dependencies=auth)
+    async def get_sync_schedule():
+        return {**schedule, "last_scheduled_day": last_scheduled_day}
+
+    @app.patch("/api/admin/text-model-sync-schedule", dependencies=auth)
+    async def set_sync_schedule(body: ModelSyncSchedule):
+        async with lock:
+            previous = dict(schedule)
+            schedule.update(body.model_dump())
+            try:
+                await save()
+            except Exception:
+                schedule.update(previous)
+                raise
+        return {**schedule, "last_scheduled_day": last_scheduled_day}
+
+    async def sync_schedule_tick(now: datetime | None = None):
+        if not schedule["enabled"]:
+            return
+        local = (now or datetime.now(timezone.utc)).astimezone(
+            timezone(timedelta(minutes=schedule["utc_offset_minutes"]))
+        )
+        day = local.date().isoformat()
+        if local.strftime("%H:%M") < schedule["time"] or day <= last_scheduled_day:
+            return
+        try:
+            await launch("sync", scheduled_day=day)
+        except HTTPException as exc:
+            if exc.status_code != 409:
+                raise
+            # Offline or busy: retry on the next tick that day.
+
+    async def schedule_loop():
+        while True:
+            try:
+                await sync_schedule_tick()
+            except Exception:
+                logging.getLogger(__name__).exception("Daily model synchronization failed")
+            await asyncio.sleep(30)
+
+    previous_lifespan = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def model_sync_lifespan(inner_app: FastAPI):
+        async with previous_lifespan(inner_app) as state:
+            job = asyncio.create_task(schedule_loop())
+            try:
+                yield state
+            finally:
+                job.cancel()
+                with suppress(asyncio.CancelledError):
+                    await job
+
+    app.router.lifespan_context = model_sync_lifespan
+    app.state.model_sync_schedule_tick = sync_schedule_tick
 
     @app.post("/api/admin/text-models/{model_id}/validate", dependencies=auth)
     async def start_validation_task(model_id: str):
@@ -292,6 +388,7 @@ def install_manual_worker_text_model_tasks_v147_patch(app: FastAPI) -> FastAPI:
             return {
                 "data": list(reversed(tasks[-MAX_TASKS:])),
                 "revision": 147,
+                "schedule": {**schedule, "last_scheduled_day": last_scheduled_day},
                 # A read-only projection of the same final registry catalog:
                 # the administrator can inspect current capability evidence
                 # without a second model list owner or a duplicate API route.
