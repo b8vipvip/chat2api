@@ -348,6 +348,7 @@
         active.videoTrackError = String(error?.message || error).slice(0, 240);
       }
     }
+    assertLiveTurnOwner(active);
     if (!Array.isArray(attachments) || !attachments.length || attachments.length > 4)
       throw new Error("Live media message requires 1-4 uploaded attachments");
     if (!globalThis.__CHAT2API_MULTIMODAL_V4__?.attach)
