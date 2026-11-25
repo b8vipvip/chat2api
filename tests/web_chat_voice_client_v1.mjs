@@ -21,6 +21,8 @@ const liveContentSource = readFileSync("chrome_extension/content_voice_live.js",
 const liveTextSource = readFileSync("chrome_extension/content_voice_live_text_v24.js","utf8");
 assert.ok(liveTextSource.includes("sliceCodePoints(responseText,0,1200)"));
 assert.ok(liveContentSource.includes("sliceCodePoints(String(setupResult.responseText || \"\"),0,1200)"));
+assert.ok(liveContentSource.includes('instructions_delivery_mode: active.instructionsApplied ? "user_setup_turn" : "none"'));
+assert.ok(liveContentSource.includes("system_instructions_applied: false"));
 new vm.Script(liveContentSource);
 new vm.Script(liveTextSource);
 new vm.Script(source);
