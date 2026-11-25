@@ -13,7 +13,7 @@ def test_bridge_0831_busts_mv3_script_cache_without_touching_login_state():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     launcher = (ROOT / "scripts" / "linux_worker_chrome_launcher.sh").read_text(encoding="utf-8")
 
-    assert manifest["version"] == "0.22.301"
+    assert manifest["version"] == "0.22.302"
     assert 'Default/Service Worker/ScriptCache' in launcher
     assert 'Default/Code Cache/js' in launcher
     assert '--disable-extensions-except="$EXTENSION_DIR"' in launcher
@@ -39,8 +39,8 @@ def test_capacity_controller_vm_contracts_cover_native_and_reporter_paths():
 
 
 def test_runtime_contract_publishes_single_authority_v02275():
-    assert SERVER_RUNTIME_VERSION == "0.22.301"
-    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.22.301"
+    assert SERVER_RUNTIME_VERSION == "0.22.302"
+    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.22.302"
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
     assert payload["chrome_bridge"]["version"] == "0.22.301"
     assert payload["chrome_bridge"]["bundle_version"] == "0.22.301"
