@@ -347,8 +347,6 @@
             modelValidationState: "failed", modelValidationRevision: REVISION,
             modelValidationError: String(error?.message || error).slice(0,600),
             modelValidationTrigger: trigger, modelValidationUpdatedAt: new Date().toISOString(),
-            models: [], modelObservedChoices: [], currentModel:null, currentReasoning:null,
-            modelValidationCandidateCount:0, modelValidationValidatedCount:0,
           });
           await publishStatus(false).catch(()=>{});
         }
