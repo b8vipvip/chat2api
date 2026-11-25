@@ -246,6 +246,8 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
                     "type": "image.progress", "kind": "voice-live",
                     "request_id": request_id, "live_event": "input.media.sent",
                     "item_id": "video-frame-000", "attachment_count": 999,
+                    "video_track": True, "video_track_mode": "web_rtc",
+                    "sequence": 0, "timestamp_ms": 1000,
                     "text": video_dispatch["text"],
                 })
                 video_sent = live.receive_json()
@@ -253,6 +255,8 @@ def test_live_call_multimodal_uses_existing_voice_session_and_key_ownership(tmp_
                 assert video_sent["sequence"] == 0
                 assert video_sent["timestamp_ms"] == 1000
                 assert video_sent["attachment_count"] == 1
+                assert video_sent["video_track"] is True
+                assert video_sent["video_track_mode"] == "web_rtc"
 
                 # Duplicate/out-of-order video frame metadata is rejected
                 # before a Worker dispatch.
