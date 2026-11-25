@@ -44,7 +44,7 @@ def test_v0836_bundle_requires_new_worker_installation_epoch() -> None:
         "chrome_extension/content_runtime_contract_v48.js",
         "chrome_extension/content_runtime_contract_v71.js",
     ):
-        assert "0.22.301" in read(path), path
+        assert "0.22.302" in read(path), path
 
     entry = read("chrome_extension/background_entry.js")
     assert '"conversation_persistent_pool_v132.js"' in entry
