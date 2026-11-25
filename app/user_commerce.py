@@ -336,6 +336,41 @@ class UserAccountStore:
                 raise
             return token
 
+    def create_guest_session(self, ttl_seconds: int = 12 * 3600) -> tuple[dict[str, Any], str, int]:
+        """Create an isolated, short-lived account identity for public Web Chat."""
+        ttl = max(300, min(24 * 3600, int(ttl_seconds)))
+        with self.lock:
+            user_id = "gst_" + secrets.token_hex(12)
+            email = "guest-" + secrets.token_hex(12) + "@guest.invalid"
+            salt, password_hash = _password_record(secrets.token_urlsafe(48))
+            now = _now()
+            expires_at = time.time() + ttl
+            row = {
+                "user_id": user_id,
+                "email": email,
+                "display_name": "游客",
+                "password_salt": salt,
+                "password_hash": password_hash,
+                "enabled": True,
+                "system_role": DEFAULT_USER_SYSTEM_ROLE,
+                "key_ids": [],
+                "created_at": now,
+                "updated_at": now,
+                "is_guest": True,
+                "guest_expires_at": expires_at,
+            }
+            token = secrets.token_urlsafe(40)
+            digest = _token_hash(token)
+            self.users[user_id] = row
+            self.sessions[digest] = {"user_id": user_id, "expires_at": expires_at}
+            try:
+                self._save()
+            except Exception:
+                self.users.pop(user_id, None)
+                self.sessions.pop(digest, None)
+                raise
+            return self.public(row), token, ttl
+
     def authenticate(self, token: str | None) -> dict[str, Any] | None:
         if not token:
             return None
@@ -380,6 +415,7 @@ class UserAccountStore:
             "display_name": str(row.get("display_name") or ""),
             "enabled": bool(row.get("enabled", True)),
             "system_role": str(row.get("system_role") or DEFAULT_USER_SYSTEM_ROLE),
+            "is_guest": bool(row.get("is_guest", False)),
             "created_at": row.get("created_at"),
             "updated_at": row.get("updated_at"),
         }
@@ -422,6 +458,33 @@ class UserAccountStore:
                     row["updated_at"] = previous_updated_at
                 raise
             return self.public(row)
+
+    def set_password(self, user_id: str, password: str) -> tuple[dict[str, Any], int]:
+        value = str(password or "")
+        if len(value) < 8 or len(value) > 256:
+            raise ValueError("密码长度需要为 8-256 个字符")
+        with self.lock:
+            row = self.users.get(str(user_id or ""))
+            if row is None:
+                raise KeyError("用户不存在")
+            previous_row = dict(row)
+            previous_sessions = copy.deepcopy(self.sessions)
+            salt, password_hash = _password_record(value)
+            row["password_salt"] = salt
+            row["password_hash"] = password_hash
+            row["updated_at"] = _now()
+            revoked = 0
+            for digest, session in list(self.sessions.items()):
+                if str(session.get("user_id") or "") == str(user_id):
+                    self.sessions.pop(digest, None)
+                    revoked += 1
+            try:
+                self._save()
+            except Exception:
+                self.users[user_id] = previous_row
+                self.sessions = previous_sessions
+                raise
+            return self.public(row), revoked
 
     def update_profile(self, user_id: str, *, display_name: str) -> dict[str, Any]:
         name = str(display_name or "").strip()
