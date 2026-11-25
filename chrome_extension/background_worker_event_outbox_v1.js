@@ -257,10 +257,12 @@
     ) {
       const result = await queueWorkerEvent(payload);
       if (result === "queued") return true;
-      if (result === "conflict") return false;
-      // Keep live delivery available if local storage is unavailable or the
-      // bounded outbox is full; it is explicitly best-effort in that case.
-      return baseTrySendSocket(payload).catch(() => false);
+      // Never bypass an earlier queued event: a direct send here could
+      // overtake the request's in-flight delta and corrupt text offsets.
+      // If the bounded durable queue is unavailable/full, fail this auxiliary
+      // event closed; the authoritative terminal still travels via its own
+      // durable outbox.
+      return false;
     }
     return baseTrySendSocket(payload).catch(() => false);
   };
