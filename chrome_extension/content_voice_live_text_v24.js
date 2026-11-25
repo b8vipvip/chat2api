@@ -274,6 +274,21 @@
   async function ensureLiveVideoTrack(active) {
     assertLiveTurnOwner(active);
     const events = () => liveMainEvents(active);
+    const latestSender = latestVideoSenderState(active);
+    if (
+      latestSender?.type === "voice.live.video.sender.attached"
+      && String(latestSender.track_state || "unknown") !== "ended"
+    ) {
+      // A fresh addTrack/replaceTrack event is stronger than a sticky
+      // snapshot-fallback flag from an earlier sender removal. Recover the
+      // WebRTC path without preparing a second canvas track or duplicating
+      // the frame that may already be in flight.
+      active.videoTrackReady = true;
+      active.videoTrackUnavailable = false;
+      active.videoTrackMode = "web_rtc";
+      active.videoTrackError = "";
+      return true;
+    }
     if (videoSenderUnavailable(active)) markVideoSenderUnavailable(active);
     if (active.videoTrackReady === true) return true;
     if (active.videoTrackUnavailable === true) return false;
