@@ -814,3 +814,11 @@ def test_v0_22_301_model_sync_release_runtime_revision_is_advertised():
     assert "web-chat-shared-api-key-v1" in RUNTIME_FEATURE_REVISION
     assert "worker-model-sync-daily-v1" in RUNTIME_FEATURE_REVISION
     assert "free-default-mapping-v1" in RUNTIME_FEATURE_REVISION
+
+
+def test_runtime_contract_advertises_web_chat_and_user_admin_features():
+    payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
+    assert payload["features"]["worker_available_model_catalog_v1"] is True
+    assert payload["features"]["web_chat_guest_sessions_v1"] is True
+    assert payload["features"]["web_chat_inline_login_v1"] is True
+    assert payload["features"]["admin_user_password_reset_v1"] is True

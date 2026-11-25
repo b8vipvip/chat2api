@@ -185,7 +185,7 @@
     <section class="view" id="view-admin-users">
       <div class="panel">
         <h2>用户管理</h2>
-        <p class="muted">查看注册用户、账户状态、名下 API Key 和在线会话。停用用户会撤销其全部用户控制台会话，并阻止其名下 API Key 继续调用；重新启用不会恢复已撤销的会话。</p>
+        <p class="muted">查看注册用户、账户状态、名下 API Key 和在线会话。停用用户会撤销其全部用户账户会话，并阻止其名下 API Key 继续调用；重新启用不会恢复已撤销的会话。</p>
         <div class="toolbar" style="margin-top:14px">
           <input id="adminUserSearch" placeholder="搜索邮箱、昵称或用户 ID" style="min-width:260px">
           <button class="action" id="adminUserSearchButton">搜索</button>
@@ -196,7 +196,7 @@
           <span id="adminUserStatus" class="muted"></span>
         </div>
         <div class="scroll"><table>
-          <thead><tr><th>邮箱</th><th>昵称</th><th>用户 ID</th><th>类型</th><th>状态</th><th>system_role</th><th>注册时间</th><th>API Key</th><th>会话</th><th>余额</th><th>操作</th></tr></thead>
+          <thead><tr><th>邮箱</th><th>昵称</th><th>用户 ID</th><th>类型</th><th>状态</th><th>系统角色</th><th>注册时间</th><th>API Key</th><th>会话</th><th>余额</th><th>操作</th></tr></thead>
           <tbody id="adminUsersBody"><tr><td colspan="11" class="muted">打开用户管理后加载</td></tr></tbody>
         </table></div>
       </div>
@@ -540,7 +540,7 @@
         const enabled = button.dataset.enabled === "true";
         const prompt = enabled
           ? "确定重新启用该用户？已撤销的会话不会恢复。"
-          : "确定停用该用户？其所有控制台会话将被撤销，名下 API Key 将立即无法调用。";
+          : "确定停用该用户？其所有账户会话将被撤销，名下 API Key 将立即无法调用。";
         if (!window.confirm(prompt)) return;
         const result = await adminApi("/api/admin/users/" + encodeURIComponent(userId), {
           method: "PATCH",
@@ -549,7 +549,7 @@
         status.textContent = enabled ? "用户已启用" : "用户已停用；撤销会话 " + Number(result.revoked_sessions || 0) + " 个";
         await loadUsers();
       } else if (action === "revoke") {
-        if (!window.confirm("确定撤销该用户的全部控制台会话？")) return;
+        if (!window.confirm("确定撤销该用户的全部账户会话？")) return;
         const result = await adminApi("/api/admin/users/" + encodeURIComponent(userId) + "/sessions/revoke", {
           method: "POST",
           body: "{}",
