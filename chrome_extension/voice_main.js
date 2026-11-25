@@ -250,6 +250,24 @@
           };
         } catch (_) {}
       }
+      const nativeRemoveTrack = typeof pc.removeTrack === "function"
+        ? pc.removeTrack.bind(pc) : null;
+      if (nativeRemoveTrack) {
+        try {
+          pc.removeTrack = function chat2apiRemoveTrack(sender) {
+            const removedTrack = sender?.track;
+            const removeRequestId = state.requestId;
+            const result = nativeRemoveTrack(sender);
+            if (removeRequestId && state.requestId === removeRequestId &&
+                removedTrack === state.liveVideoTrack) {
+              post("voice.live.video.sender.detached", {
+                reason: "sender-removed",
+              }, removeRequestId);
+            }
+            return result;
+          };
+        } catch (_) {}
+      }
       const nativeAddTransceiver = typeof pc.addTransceiver === "function"
         ? pc.addTransceiver.bind(pc) : null;
       if (nativeAddTransceiver) {
