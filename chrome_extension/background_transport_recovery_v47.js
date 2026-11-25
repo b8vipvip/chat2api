@@ -105,6 +105,10 @@
 
   async function flush() {
     if (state.restoring || state.flushing || !state.outbox.size || !socketReady()) return false;
+    const workerEvents = globalThis.__CHAT2API_BACKGROUND_WORKER_EVENT_OUTBOX_V1__?.events;
+    // Preserve request event order: the Worker terminal cannot overtake
+    // nonterminal deltas/references that are still awaiting server ACK.
+    if (workerEvents && workerEvents.size) return false;
     state.flushing = true;
     try {
       for (const [key, item] of [...state.outbox.entries()]) {
@@ -146,6 +150,7 @@
     clearTimeout(state.flushTimer);
     state.flushTimer = setTimeout(() => flush().catch(() => {}), Math.max(0, Number(delay || 0)));
   }
+  state.scheduleFlush = scheduleFlush;
 
   // All current background modules call this shared global helper. A terminal
   // event produced while the WebSocket is briefly down is acknowledged locally
