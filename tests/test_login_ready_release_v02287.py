@@ -19,5 +19,5 @@ def test_v02287_login_ready_release_contract() -> None:
 
 def test_v02287_is_server_only_and_keeps_worker_bundle_0837() -> None:
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
-    assert payload["chrome_bridge"]["bundle_version"] == "0.22.301"
+    assert payload["chrome_bridge"]["bundle_version"] == "0.22.302"
     assert "release-v0837" in payload["chrome_bridge"]["build_revision"]
