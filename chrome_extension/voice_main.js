@@ -35,6 +35,12 @@
     iceConnectionState: "unknown",
     peerConnectionState: "unknown",
     iceCandidateErrors: 0,
+    liveVideoCanvas: null,
+    liveVideoContext: null,
+    liveVideoStream: null,
+    liveVideoTrack: null,
+    liveVideoLastTimestamp: -1,
+    liveVideoFrameCount: 0,
   };
   globalThis[KEY] = state;
 
@@ -225,6 +231,37 @@
         if (!ownerRequestId || state.requestId !== ownerRequestId) return;
         attachRemoteTrack(event.track);
       });
+      const nativeAddTrack = typeof pc.addTrack === "function" ? pc.addTrack.bind(pc) : null;
+      if (nativeAddTrack) {
+        try {
+          pc.addTrack = function chat2apiAddTrack(track, ...streams) {
+            const sender = nativeAddTrack(track, ...streams);
+            if (ownerRequestId && state.requestId === ownerRequestId &&
+                track?.kind === "video" && track === state.liveVideoTrack) {
+              post("voice.live.video.sender.attached", {
+                track_state: String(track.readyState || "unknown"),
+              }, ownerRequestId);
+            }
+            return sender;
+          };
+        } catch (_) {}
+      }
+      const nativeAddTransceiver = typeof pc.addTransceiver === "function"
+        ? pc.addTransceiver.bind(pc) : null;
+      if (nativeAddTransceiver) {
+        try {
+          pc.addTransceiver = function chat2apiAddTransceiver(trackOrKind, init) {
+            const transceiver = nativeAddTransceiver(trackOrKind, init);
+            if (ownerRequestId && state.requestId === ownerRequestId &&
+                trackOrKind?.kind === "video" && trackOrKind === state.liveVideoTrack) {
+              post("voice.live.video.sender.attached", {
+                track_state: String(trackOrKind.readyState || "unknown"),
+              }, ownerRequestId);
+            }
+            return transceiver;
+          };
+        } catch (_) {}
+      }
       if (state.requestId) post("voice.transport.peer-created", {
         peer_connections_created: state.peerConnectionsCreated,
       });
@@ -306,10 +343,128 @@
     return destination.stream;
   }
 
+  function cleanupLiveVideo() {
+    const stream = state.liveVideoStream;
+    if (stream?.getTracks) {
+      for (const track of stream.getTracks()) {
+        try { track.stop(); } catch (_) {}
+      }
+    }
+    state.liveVideoCanvas = null;
+    state.liveVideoContext = null;
+    state.liveVideoStream = null;
+    state.liveVideoTrack = null;
+    state.liveVideoLastTimestamp = -1;
+    state.liveVideoFrameCount = 0;
+  }
+
+  function prepareLiveVideo(ownerRequestId) {
+    if (!ownerRequestId || state.requestId !== ownerRequestId || state.mode !== "live") {
+      throw new Error("Live video preparation does not own the active Voice request");
+    }
+    cleanupLiveVideo();
+    const canvas = document.createElement("canvas");
+    canvas.width = 1280;
+    canvas.height = 720;
+    const context = canvas.getContext("2d", { alpha: false });
+    if (!context || typeof canvas.captureStream !== "function") {
+      throw new Error("This ChatGPT browser cannot create a synthetic live video track");
+    }
+    context.fillStyle = "#000";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    const stream = canvas.captureStream(5);
+    const track = stream?.getVideoTracks?.()[0];
+    if (!track || track.readyState === "ended") {
+      for (const item of stream?.getTracks?.() || []) {
+        try { item.stop(); } catch (_) {}
+      }
+      throw new Error("Synthetic live video track did not become active");
+    }
+    try { track.contentHint = "motion"; } catch (_) {}
+    state.liveVideoCanvas = canvas;
+    state.liveVideoContext = context;
+    state.liveVideoStream = stream;
+    state.liveVideoTrack = track;
+    state.liveVideoLastTimestamp = -1;
+    state.liveVideoFrameCount = 0;
+    return track;
+  }
+
+  async function drawLiveVideoFrame(message) {
+    const ownerRequestId = String(message.request_id || "");
+    if (!ownerRequestId || state.requestId !== ownerRequestId ||
+        state.mode !== "live" || !state.liveVideoTrack ||
+        state.liveVideoTrack.readyState === "ended") {
+      throw new Error("Synthetic live video track is not active for this request");
+    }
+    const sequence = Number(message.sequence);
+    const timestampMs = Number(message.timestamp_ms);
+    const mime = String(message.mime_type || "image/jpeg").toLowerCase();
+    if (!Number.isSafeInteger(sequence) || sequence < 0 ||
+        !Number.isSafeInteger(timestampMs) || timestampMs < 0 ||
+        sequence <= state.liveVideoFrameCount - 1 ||
+        timestampMs <= state.liveVideoLastTimestamp) {
+      throw new Error("Live video frame sequence and timestamp must increase monotonically");
+    }
+    if (!["image/jpeg", "image/png", "image/webp"].includes(mime)) {
+      throw new Error("Live video frames must be JPEG, PNG or WebP images");
+    }
+    const bytes = decodeBase64(message.base64 || "");
+    if (!bytes.byteLength || bytes.byteLength > 2 * 1024 * 1024) {
+      throw new Error("Live video frame must be between 1 byte and 2 MiB");
+    }
+    const bitmap = await createImageBitmap(new Blob([bytes], { type: mime }));
+    try {
+      if (state.requestId !== ownerRequestId || !state.liveVideoContext ||
+          !state.liveVideoTrack || state.liveVideoTrack.readyState === "ended") {
+        throw new Error("Live video session ended before the frame could be rendered");
+      }
+      const context = state.liveVideoContext;
+      const canvas = state.liveVideoCanvas;
+      const scale = Math.min(canvas.width / bitmap.width, canvas.height / bitmap.height);
+      const width = Math.max(1, Math.round(bitmap.width * scale));
+      const height = Math.max(1, Math.round(bitmap.height * scale));
+      const left = Math.floor((canvas.width - width) / 2);
+      const top = Math.floor((canvas.height - height) / 2);
+      context.fillStyle = "#000";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(bitmap, left, top, width, height);
+      state.liveVideoLastTimestamp = timestampMs;
+      state.liveVideoFrameCount += 1;
+      post("voice.live.video.frame.received", {
+        sequence, timestamp_ms: timestampMs, frame_count: state.liveVideoFrameCount,
+      }, ownerRequestId);
+    } finally {
+      try { bitmap.close?.(); } catch (_) {}
+    }
+  }
+
   const mediaDevices = navigator.mediaDevices;
   const nativeGetUserMedia = mediaDevices?.getUserMedia?.bind(mediaDevices);
   if (mediaDevices && nativeGetUserMedia) {
     const intercepted = async function chat2apiGetUserMedia(constraints) {
+      if (state.requestId && state.mode === "live" && constraints?.video) {
+        if (!state.liveVideoTrack || state.liveVideoTrack.readyState === "ended") {
+          throw new Error("Chat2API live video track was not prepared before ChatGPT requested its camera");
+        }
+        const tracks = [];
+        if (constraints?.audio) {
+          state.micRequestsSeen += 1;
+          post("voice.mic.requested", { mode: state.mode, mic_requests_seen: state.micRequestsSeen });
+          const synthetic = await ensureSyntheticMic();
+          const audioTracks = [...synthetic.getAudioTracks()];
+          if (!audioTracks.length || audioTracks.some(track => track.readyState === "ended")) {
+            throw new Error("ChatGPT Voice synthetic microphone returned no live audio track");
+          }
+          tracks.push(...audioTracks);
+          post("voice.mic.synthetic", { track_count: audioTracks.length, mode: state.mode });
+        }
+        tracks.push(state.liveVideoTrack);
+        post("voice.live.video.track.provided", {
+          track_state: String(state.liveVideoTrack.readyState || "unknown"),
+        });
+        return new MediaStream(tracks);
+      }
       if (state.requestId && constraints?.audio) {
         state.micRequestsSeen += 1;
         post("voice.mic.requested", { mode: state.mode, mic_requests_seen: state.micRequestsSeen });
@@ -395,6 +550,7 @@
     if (event.source !== window || event.data?.source !== "chat2api-isolated") return;
     const message = event.data;
     if (message.type === "voice.prepare") {
+      cleanupLiveVideo();
       // A previous recorder may still be finalizing asynchronously.
       // Detach it before starting this request; its callbacks carry its own ID.
       if (state.recorderCapture) state.recorderCapture.discarded = true;
@@ -429,6 +585,22 @@
         mic_requests_seen: state.micRequestsSeen,
         transport_error: state.lastTransportError,
       });
+    } else if (message.type === "voice.live.video.prepare" && message.request_id === state.requestId) {
+      try {
+        const track = prepareLiveVideo(state.requestId);
+        post("voice.live.video.prepared", {
+          track_state: String(track.readyState || "unknown"),
+          frame_rate: 5,
+        });
+      } catch (error) {
+        post("voice.live.video.error", { error: String(error?.message || error) });
+      }
+    } else if (message.type === "voice.live.video.frame" && message.request_id === state.requestId) {
+      drawLiveVideoFrame(message).catch(error => post("voice.live.video.error", {
+        sequence: Number(message.sequence),
+        timestamp_ms: Number(message.timestamp_ms),
+        error: String(error?.message || error),
+      }, state.requestId));
     } else if (message.type === "voice.transport.snapshot" && message.request_id === state.requestId) {
       post("voice.transport.snapshot", {
         peer_connections_in_request: Math.max(0, state.peerConnectionsCreated - state.sessionPeerCreatedBaseline),
@@ -457,6 +629,7 @@
       if (state.recorder && state.recorder.state !== "inactive") state.recorder.stop();
       else post("voice.record.error", { error: "Remote voice audio track was not captured" });
     } else if (message.type === "voice.reset" && message.request_id === state.requestId) {
+      cleanupLiveVideo();
       if (state.recorderCapture) state.recorderCapture.discarded = true;
       if (state.recorder && state.recorder.state !== "inactive") {
         try { state.recorder.stop(); } catch (_) {}
