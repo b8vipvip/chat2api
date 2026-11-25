@@ -112,12 +112,14 @@ def install_manual_worker_text_model_tasks_v147_patch(app: FastAPI) -> FastAPI:
         for task in tasks:
             if now - task.get("started_epoch", now) <= TASK_TIMEOUT_S:
                 continue
+            task_changed = False
             for worker in task["workers"].values():
                 if worker["state"] not in TERMINAL:
                     worker.update(state="timed_out", progress=100, error="Worker did not finish the task within 150 seconds")
                     worker["logs"].append("Server timeout: no terminal Worker task report received")
+                    task_changed = True
                     changed = True
-            if changed:
+            if task_changed:
                 task["updated_at"] = datetime.now(timezone.utc).isoformat()
         return changed
 
@@ -281,11 +283,11 @@ def install_manual_worker_text_model_tasks_v147_patch(app: FastAPI) -> FastAPI:
                 await save()
             if scheduled_day and (not schedule["enabled"] or last_scheduled_day >= scheduled_day):
                 raise HTTPException(409, "Daily model synchronization already claimed or disabled")
-            if kind == "sync" and any(
-                w["state"] not in TERMINAL for t in tasks if t["kind"] in {"sync", "discover"}
+            if kind in {"sync", "discover", "validate"} and any(
+                w["state"] not in TERMINAL for t in tasks if t["kind"] in {"sync", "discover", "validate"}
                 for w in t["workers"].values()
             ):
-                raise HTTPException(409, "A model synchronization task is already running")
+                raise HTTPException(409, "A Worker model task is already running")
             old_day, old_tasks = last_scheduled_day, list(tasks)
             tasks.append(task)
             del tasks[:-MAX_TASKS]
@@ -299,14 +301,27 @@ def install_manual_worker_text_model_tasks_v147_patch(app: FastAPI) -> FastAPI:
                 raise
 
         async def dispatch(cid: str) -> None:
-            try:
-                await asyncio.wait_for(registry.send(cid, {"type": "model.task.v147", "task_id": task_id, "action": kind, "model": model}), timeout=15)
-            except Exception as error:
-                async with lock:
-                    worker = task["workers"][cid]
-                    if worker["state"] not in TERMINAL:
-                        worker.update(state="failed", progress=100, error=f"Dispatch failed: {str(error)[:300]}")
-                        worker["logs"].append(worker["error"])
+            payload = {"type": "model.task.v147", "task_id": task_id, "action": kind, "model": model}
+            last_error = "unknown dispatch error"
+            for attempt in range(1, 4):
+                try:
+                    await asyncio.wait_for(registry.send(cid, payload), timeout=15)
+                    return
+                except Exception as error:
+                    last_error = str(error)[:240]
+                    async with lock:
+                        worker = task["workers"][cid]
+                        if worker["state"] not in TERMINAL:
+                            worker["logs"].append(f"Dispatch attempt {attempt}/3 failed: {last_error}")
+                            worker["logs"] = worker["logs"][-80:]
+                    if attempt < 3:
+                        await asyncio.sleep(0.4 * attempt)
+            async with lock:
+                worker = task["workers"][cid]
+                if worker["state"] not in TERMINAL:
+                    worker.update(state="failed", progress=100, error=f"Dispatch failed after 3 attempts: {last_error}")
+                    worker["logs"].append(worker["error"])
+                    worker["logs"] = worker["logs"][-80:]
         await asyncio.gather(*(dispatch(cid) for cid in online))
         async with lock:
             await save()
@@ -334,13 +349,21 @@ def install_manual_worker_text_model_tasks_v147_patch(app: FastAPI) -> FastAPI:
         return {**schedule, "last_scheduled_day": last_scheduled_day}
 
     async def sync_schedule_tick(now: datetime | None = None):
-        if not schedule["enabled"]:
+        # Task timeouts must converge even when daily scheduling is disabled.
+        async with lock:
+            if expire_tasks():
+                await save()
+            enabled = schedule["enabled"]
+            scheduled_time = schedule["time"]
+            offset_minutes = schedule["utc_offset_minutes"]
+            previous_day = last_scheduled_day
+        if not enabled:
             return
         local = (now or datetime.now(timezone.utc)).astimezone(
-            timezone(timedelta(minutes=schedule["utc_offset_minutes"]))
+            timezone(timedelta(minutes=offset_minutes))
         )
         day = local.date().isoformat()
-        if local.strftime("%H:%M") < schedule["time"] or day <= last_scheduled_day:
+        if local.strftime("%H:%M") < scheduled_time or day <= previous_day:
             return
         try:
             await launch("sync", scheduled_day=day)
@@ -372,6 +395,7 @@ def install_manual_worker_text_model_tasks_v147_patch(app: FastAPI) -> FastAPI:
 
     app.router.lifespan_context = model_sync_lifespan
     app.state.model_sync_schedule_tick = sync_schedule_tick
+    app.state.model_sync_tasks = tasks
 
     @app.post("/api/admin/text-models/{model_id}/validate", dependencies=auth)
     async def start_validation_task(model_id: str):
