@@ -382,7 +382,9 @@
     }
     async function start() {
       if (started || starting) return;
-      if (!token) throw new Error("请先选择一个 API Key");
+      if (!token && !(sessionEndpoint && userKeyId)) {
+        throw new Error("请先登录 Chat2API 账户或选择一个 API Key");
+      }
       if (!mediaDevices || typeof mediaDevices.getUserMedia !== "function") {
         throw new Error("当前浏览器无法访问麦克风");
       }
