@@ -4513,12 +4513,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     # A Broker/HTTP disconnect must not erase deltas that the
                     # server has already accepted from the assigned Worker.
                     journal_event_id: int | None = None
-                    if active_state.mode1_web_chat and message_type in {
+                    worker_event_ack_types = {
                         "chat.delta", "chat.snapshot", "chat.references",
-                        "chat.tool.call", "chat.tool.result", "chat.completed",
-                        "chat.error", "chat.cancelled", "image.completed",
-                        "image.error", "image.cancelled",
-                    }:
+                        "chat.tool.call", "chat.tool.result",
+                    }
+                    if (
+                        active_state.mode1_web_chat
+                        and message_type in {
+                            *worker_event_ack_types,
+                            "chat.completed", "chat.error", "chat.cancelled",
+                            "image.completed", "image.error", "image.cancelled",
+                        }
+                        and (
+                            message_type not in worker_event_ack_types
+                            or (
+                                active_state.terminal_event_type is None
+                                and active_state.completed_mono is None
+                            )
+                        )
+                    ):
                         try:
                             if not message.get("worker_event_id"):
                                 if message_type == "chat.tool.call":
@@ -4557,10 +4570,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         websocket=websocket,
                         current_socket=registry.sockets.get(client_id),
                     )
-                    worker_event_ack_types = {
-                        "chat.delta", "chat.snapshot", "chat.references",
-                        "chat.tool.call", "chat.tool.result",
-                    }
                     worker_event_id = str(message.get("worker_event_id") or "").strip()
                     if message_type in worker_event_ack_types and worker_event_id:
                         # The Worker keeps each nonterminal event in its
