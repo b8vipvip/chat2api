@@ -46,11 +46,11 @@
     }
   }
 
-  async function detectAccountProfileV20(force = false) {
+  async function detectAccountProfileV20(force = false, inspectedTab = null) {
     const cached = await cachedProfile();
     if (!force && cached?.checked_at_ms && Date.now() - Number(cached.checked_at_ms) < CACHE_MS) return cached;
 
-    const tab = await accountTab();
+    const tab = inspectedTab || await accountTab();
     if (!tab?.id) {
       return cached || {
         account_type: "unknown",

@@ -231,7 +231,7 @@
     return state.running;
   }
 
-  async function syncObservedChoices(trigger = "automatic-picker-sync") {
+  async function syncObservedChoices(trigger = "automatic-picker-sync", force = false) {
     if (state.discoveryRunning) return state.discoveryRunning;
     if (state.running) return { ok: false, deferred: true };
     const before = await settingsSnapshot();
@@ -242,13 +242,13 @@
       String(before.modelValidationClientId || "") === String(before.clientId || "") &&
       String(before.modelValidationSocketUpdatedAt || "") === String(before.socketUpdatedAt || "");
     if (
-      observedBefore.length &&
+      !force && (observedBefore.length || before.modelValidationState === "default-only") &&
       sameConnection &&
-      ["discovered", "validated"].includes(String(before.modelValidationState || "")) &&
+      ["discovered", "validated", "default-only"].includes(String(before.modelValidationState || "")) &&
       Number.isFinite(updatedAt) &&
       Date.now() - updatedAt < 4 * 60 * 1000
     ) return { ok: true, skipped: true };
-    if (state.lastDiscoveryAt && Date.now() - state.lastDiscoveryAt < 60 * 1000) {
+    if (!force && state.lastDiscoveryAt && Date.now() - state.lastDiscoveryAt < 60 * 1000) {
       return { ok: true, skipped: true };
     }
     state.lastDiscoveryAt = Date.now();
@@ -256,6 +256,32 @@
       try {
         const tab = await targetTab();
         const response = await ensureValidator(tab.id, { automatic: true });
+        const noPicker = !response?.ok && (
+          response?.code === "model_menu_no_concrete_choices" ||
+          String(response?.error || "") === "ChatGPT model picker was not found"
+        );
+        if (noPicker) {
+          const profile = await globalThis.chat2apiDetectAccountProfileV20?.(true, tab);
+          if (profile?.account_type === "free" &&
+              ["medium", "high"].includes(profile.confidence) &&
+              profile.model_control_present === false && profile.composer_ready === true &&
+              profile.tab_id === tab.id) {
+            const latest = await settingsSnapshot();
+            await chrome.storage.local.set({
+              modelObservedChoices: [], models: [], currentModel: null, currentReasoning: null,
+              modelsUpdatedAt: 0, modelValidationState: "default-only",
+              modelValidationRevision: REVISION, modelValidationTrigger: trigger,
+              modelValidationError: "", modelValidationCandidateCount: 0,
+              modelValidationValidatedCount: 0, modelValidationRuntimeNonce: runtimeNonce,
+              modelValidationBoundTabId: tab.id,
+              modelValidationSocketUpdatedAt: latest.socketUpdatedAt || "",
+              modelValidationClientId: latest.clientId || "",
+              modelValidationUpdatedAt: new Date().toISOString(),
+            });
+            await publishStatus(false);
+            return {ok: true, default_only: true, observed_models: []};
+          }
+        }
         if (!response?.ok) {
           if (String(response?.code || "") === "model_validation_busy") {
             state.lastDiscoveryAt = 0;
@@ -278,7 +304,7 @@
           .filter(item => /^[a-z0-9._:-]{1,128}$/i.test(item.id));
         if (!observed.length) {
           state.lastDiscoveryAt = 0;
-          return { ok: false, empty: true };
+          return { ok: false, empty: true, error: "No selectable concrete model choices" };
         }
         const latest = await settingsSnapshot();
         const observedIds = new Set(observed.map(item => item.id));
@@ -409,7 +435,7 @@
     }
     activeTask = taskId;
     const logs = [];
-    const kind = message.action === "validate" ? "validate" : "discover";
+    const kind = message.action === "validate" ? "validate" : "sync";
     const log = detail => {
       const line = new Date().toISOString()+" "+String(detail).slice(0,300);
       logs.push(line);
@@ -424,28 +450,24 @@
     try {
       log("Worker accepted server-authorized task "+kind);
       await report("running", 10);
-      const tab = await targetTab();
-      log("Resolved ChatGPT tab "+tab.id+" url="+(tab.url||"").split("?")[0].slice(0,120));
-      await report("running", 30);
-      if (kind === "discover") {
-        const result = await ensureValidator(tab.id);
-        if (!result?.ok) throw new Error(result?.error || "ChatGPT picker discovery failed");
-        const observed = (Array.isArray(result.data?.observed_models) ? result.data.observed_models : [])
-          .filter(row=>row && typeof row.id==="string")
-          .map((row,index)=>({id:row.id,label:String(row.label||row.id).slice(0,130),source:"chatgpt-picker-manual-v148",validated:false,selectable:row.enabled===true,picker_order:index,observed_at:new Date().toISOString()}));
-        log("Picker discovery completed: observed="+observed.length+"; selectable="+observed.filter(row=>row.selectable).length);
-        for(const choice of observed)log("Picker choice id="+choice.id+" selectable="+choice.selectable+" label="+choice.label);
-        await chrome.storage.local.set({
-          modelObservedChoices:observed,models:[],currentModel:null,
-          modelValidationState:"discovered",modelValidationRevision:REVISION,
-          modelValidationError:"",modelValidationTrigger:"admin-manual-discovery",
-          modelValidationCandidateCount:observed.length,
-          modelValidationValidatedCount:0,modelValidationUpdatedAt:new Date().toISOString(),
-          modelValidationRuntimeNonce:runtimeNonce,modelValidationBoundTabId:tab.id,
-        });
-        await publishStatus(false);
-        await report("completed",100,"",observed.map(row=>row.id));
+      if (kind === "sync") {
+        await report("running", 30);
+        let result;
+        const deadline = Date.now() + 100000;
+        do {
+          result = await syncObservedChoices("admin-model-sync", true);
+          if (!result?.deferred) break;
+          log("ChatGPT busy; waiting for safe model synchronization");
+          await delay(3000);
+        } while (Date.now() < deadline);
+        if (!result?.ok || result.skipped) throw new Error(result?.error || "Model synchronization could not obtain fresh picker evidence");
+        const ids = (result.observed_models || []).map(row=>row.id);
+        log(result.default_only ? "Free account: default model (actual model name unavailable)" : "Synced selectable picker choices: "+ids.join(", "));
+        await report("completed",100,"",result.default_only ? ["default"] : ids);
       } else {
+        const tab = await targetTab();
+        log("Resolved ChatGPT tab "+tab.id);
+        await report("running", 30);
         const requested = String(message.model||"").trim().toLowerCase();
         if(!/^[a-z0-9._:-]{1,128}$/.test(requested))throw new Error("Invalid model identifier");
         log("Requested explicit model validation: "+requested);
@@ -489,13 +511,8 @@
     } catch (error) {
       const failure = String(error?.message||error);
       log("FAILED: "+failure);
-      await chrome.storage.local.set({
-        modelValidationState:kind==="discover"?"failed":(await settingsSnapshot()).modelValidationState,
-        modelValidationError:failure,
-        modelValidationTrigger:"admin-manual-"+kind,
-        modelValidationUpdatedAt:new Date().toISOString(),
-        ...(kind==="discover"?{modelObservedChoices:[],models:[],currentModel:null,
-          modelValidationCandidateCount:0,modelValidationValidatedCount:0}:{}),
+      if (kind === "validate") await chrome.storage.local.set({
+        modelValidationError:failure, modelValidationTrigger:"admin-manual-"+kind,
       });
       await publishStatus(false).catch(()=>{});
       await report("failed",100,failure);
