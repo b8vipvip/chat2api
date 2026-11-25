@@ -62,8 +62,9 @@ MAX_LIVE_PCM_FRAME_BYTES = 64 * 1024
 MAX_LIVE_ATTACHMENTS_PER_INPUT = 4
 MAX_LIVE_PENDING_INPUTS = 128
 MAX_LIVE_CONTROL_CHARS = 64 * 1024
-MAX_LIVE_VIDEO_FRAMES = 64
+MAX_LIVE_VIDEO_FRAMES = 300
 MAX_LIVE_VIDEO_FRAME_BYTES = 2 * 1024 * 1024
+MAX_LIVE_VIDEO_TOTAL_BYTES = 64 * 1024 * 1024
 MAX_LIVE_VIDEO_DURATION_MS = 6 * 60 * 60 * 1000
 MIN_LIVE_VIDEO_FRAME_INTERVAL_SECONDS = 0.2
 LIVE_VIDEO_FRAME_ACK_TIMEOUT_SECONDS = 15.0
@@ -481,11 +482,12 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
         observed_completion_parts: list[str] = []
         pending_input_text: dict[str, str] = {}
         pending_input_media_ids: dict[str, list[str]] = {}
-        pending_video_frames: dict[str, tuple[int, int, float]] = {}
+        pending_video_frames: dict[str, tuple[int, int, float, int]] = {}
         last_video_sequence = -1
         last_video_timestamp_ms = -1
         last_video_dispatch_mono = 0.0
         video_frame_count = 0
+        video_frame_bytes = 0
         confirmed_media_ids: set[str] = set()
         confirmed_media_item_ids: set[str] = set()
         confirmed_input_ids: set[str] = set()
@@ -556,6 +558,8 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     for item_id, frame in expired_frames:
                         pending_video_frames.pop(item_id, None)
                         pending_input_text.pop(item_id, None)
+                        video_frame_count = max(0, video_frame_count - 1)
+                        video_frame_bytes = max(0, video_frame_bytes - frame[3])
                         await rollback_unconfirmed_media(item_id)
                         await send_json({
                             "type": "error",
@@ -705,6 +709,9 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     # Worker failure so the client can retry with the next
                     # monotonically increasing sequence number.
                     failed_video_frame = pending_video_frames.pop(failed_item_id, None)
+                    if failed_video_frame:
+                        video_frame_count = max(0, video_frame_count - 1)
+                        video_frame_bytes = max(0, video_frame_bytes - failed_video_frame[3])
                     await rollback_unconfirmed_media(failed_item_id)
                     failure: dict[str, object] = {
                         "type": "error", "code": "VOICE_CALL_INPUT_FAILED",
@@ -1085,7 +1092,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                             if sequence <= last_video_sequence or timestamp_ms <= last_video_timestamp_ms:
                                 raise ValueError("video frame sequence and timestamp_ms must increase monotonically")
                             if video_frame_count >= MAX_LIVE_VIDEO_FRAMES:
-                                raise ValueError("Live session reached the 64-frame video limit")
+                                raise ValueError(f"Live session reached the {MAX_LIVE_VIDEO_FRAMES}-frame video limit")
                             if (
                                 last_video_dispatch_mono
                                 and time.monotonic() - last_video_dispatch_mono < MIN_LIVE_VIDEO_FRAME_INTERVAL_SECONDS
@@ -1128,6 +1135,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                             "retryable": True,
                         })
                         continue
+                    video_frame_size = 0
                     try:
                         file_ids = _media_ids_from_control(control)
                         attachments = attachment_specs(file_store, file_ids, principal)
@@ -1148,6 +1156,10 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                                 "image/jpeg", "image/png", "image/webp",
                             }:
                                 raise ValueError("Video frames must be JPEG, PNG or WebP images")
+                            if control_type == "input_video.frame":
+                                video_frame_size += int(spec.get("size") or 0)
+                        if video_frame and video_frame_bytes + video_frame_size > MAX_LIVE_VIDEO_TOTAL_BYTES:
+                            raise ValueError("Live video is limited to 64 MiB per session")
                             allowed = (
                                 mime in {"image/png", "image/jpeg", "image/webp", "image/gif",
                                          "application/pdf", "text/plain", "text/csv",
@@ -1175,8 +1187,8 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                             *observed_media_ids,
                             *(str(spec.get("file_id") or "") for spec in attachments),
                         ]))
-                        if len(next_media_ids) > 64:
-                            raise ValueError("A Live session may attach at most 64 unique files")
+                        if len(next_media_ids) > MAX_LIVE_VIDEO_FRAMES + 64:
+                            raise ValueError(f"A Live session may attach at most {MAX_LIVE_VIDEO_FRAMES + 64} unique files")
                     except HTTPException as error:
                         await send_json({
                             "type": "error", "code": "MEDIA_ACCESS_DENIED",
@@ -1220,8 +1232,9 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     pending_input_text[item_id] = input_text
                     if video_frame:
                         pending_video_frames[item_id] = (
-                            video_frame[0], video_frame[1], time.monotonic(),
+                            video_frame[0], video_frame[1], time.monotonic(), video_frame_size,
                         )
+                        video_frame_bytes += video_frame_size
                     try:
                         await registry.send(selected_client, {
                             "type": "voice.live.multimodal" if attachments else "voice.live.text",
@@ -1230,11 +1243,14 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                             "item_id": item_id,
                             "text": input_text,
                             "attachments": attachments,
+                            **({"video_frame": {"sequence": video_frame[0], "timestamp_ms": video_frame[1]}} if video_frame else {}),
                         })
                     except Exception:
                         pending_input_text.pop(item_id, None)
                         pending_input_media_ids.pop(item_id, None)
-                        pending_video_frames.pop(item_id, None)
+                        failed_video_frame = pending_video_frames.pop(item_id, None)
+                        if failed_video_frame:
+                            video_frame_bytes = max(0, video_frame_bytes - failed_video_frame[3])
                         raise
                     if video_frame:
                         last_video_sequence = video_frame[0]
