@@ -25,7 +25,7 @@
       /[\"'](?:subscription_tier|subscriptionTier|account_tier|accountTier)[\"']\s*[:=]\s*[\"']free[\"']/i,
     ];
     if (freePatterns.some(pattern => pattern.test(raw))) {
-      return { account_type: "free", confidence: "high", strategy: "client-bootstrap-free" };
+      return { account_type: "free", confidence: "high", strategy: "client-bootstrap-free", plan_confirmed: true };
     }
     const paidPatterns = [
       /[\"'](?:plan|plan_type|planType|account_plan|subscription_plan|subscriptionPlan)[\"']\s*[:=]\s*[\"'](?:plus|pro|team|business|enterprise|edu)[\"']/i,
@@ -33,10 +33,10 @@
       /[\"'](?:is_paid|isPaid|paid)[\"']\s*[:=]\s*true/i,
     ];
     if (paidPatterns.some(pattern => pattern.test(raw))) {
-      return { account_type: "paid", confidence: "high", strategy: "client-bootstrap-paid" };
+      return { account_type: "paid", confidence: "high", strategy: "client-bootstrap-paid", plan_confirmed: true };
     }
     if (/\bchatgpt\s+(plus|pro|team|business|enterprise|edu)\b/i.test(lower)) {
-      return { account_type: "paid", confidence: "high", strategy: "client-bootstrap-plan-name" };
+      return { account_type: "paid", confidence: "high", strategy: "client-bootstrap-plan-name", plan_confirmed: true };
     }
     return null;
   }
@@ -55,10 +55,10 @@
       const text = normalize(scope.innerText || scope.textContent || "");
       if (!text || text.length > 4000) continue;
       if (/(^|\s)(ChatGPT\s+)?Free($|\s)|免费版|免费计划/i.test(text)) {
-        return { account_type: "free", confidence: "high", strategy: "account-ui-free" };
+        return { account_type: "free", confidence: "high", strategy: "account-ui-free", plan_confirmed: true };
       }
       if (/(^|\s)ChatGPT\s+(Plus|Pro|Team|Business|Enterprise|Edu)($|\s)|企业版|团队版/i.test(text)) {
-        return { account_type: "paid", confidence: "high", strategy: "account-ui-paid" };
+        return { account_type: "paid", confidence: "high", strategy: "account-ui-paid", plan_confirmed: true };
       }
     }
     return null;
@@ -122,6 +122,7 @@
         account_type: "paid",
         confidence: "medium",
         strategy: modelControl.strategy,
+        plan_confirmed: false,
         detector: "account-v20",
         model_control_present: true,
         composer_ready: composerReady(),
@@ -134,6 +135,7 @@
         account_type: "free",
         confidence: "medium",
         strategy: "ready-composer-without-model-selector",
+        plan_confirmed: false,
         detector: "account-v20",
         model_control_present: false,
         composer_ready: true,
@@ -144,6 +146,7 @@
       account_type: "unknown",
       confidence: "low",
       strategy: "insufficient-passive-evidence",
+      plan_confirmed: false,
       detector: "account-v20",
       model_control_present: false,
       composer_ready: ready,
