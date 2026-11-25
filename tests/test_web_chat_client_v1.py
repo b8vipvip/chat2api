@@ -40,6 +40,7 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         assert "客户端诊断日志不会记录你的消息或模型回复内容" in page.text
         assert "ChatGPT" in page.text
         assert 'id="webChatLoginDialog"' in page.text
+        assert 'id="guestLoginButton"' in page.text
         assert 'id="webChatOpenLoginButton"' in page.text
         assert 'href="/console"' not in page.text
         assert 'id="pluginsButton"' in page.text

@@ -837,5 +837,5 @@ def test_guest_policy_is_admin_configurable_and_publicly_exposed(tmp_path: Path)
         assert client.put(
             "/api/admin/control/client",
             headers=ORIGIN,
-            json={"guest_enabled": "true"},
+            json={"guest_enabled": "maybe"},
         ).status_code == 422

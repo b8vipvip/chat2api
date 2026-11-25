@@ -3251,6 +3251,7 @@
     state.user = payload.user;
     recordClientDiagnostic("webchat.session.authenticated", {phase: "bootstrap", guest: Boolean(state.user?.is_guest)});
     $("accountName").textContent = state.user.display_name || state.user.email || "Chat2API 用户";
+    $("guestLoginButton")?.classList.toggle("hidden", !state.user.is_guest);
     $("accountAvatar").textContent = String(state.user.display_name || state.user.email || "U").trim().slice(0,1).toUpperCase();
     state.storageKey = historyKey(state.user.user_id);
     state.conversations = loadHistory();
@@ -3424,6 +3425,7 @@
   }
 
   $("webChatOpenLoginButton")?.addEventListener("click", () => openLoginDialog());
+  $("guestLoginButton")?.addEventListener("click", () => openLoginDialog());
   $("webChatLoginClose")?.addEventListener("click", closeLoginDialog);
   $("webChatLoginCancel")?.addEventListener("click", closeLoginDialog);
   $("webChatLoginForm")?.addEventListener("submit", async (event) => {
