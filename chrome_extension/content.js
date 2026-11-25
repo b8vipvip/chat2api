@@ -518,13 +518,24 @@
     }
   }
 
+  function nextWorkerEventId(active) {
+    active.workerEventSequence = (Number(active.workerEventSequence) || 0) + 1;
+    return `${String(active.requestId || "request").slice(0, 96)}:${active.workerEventSequence}`;
+  }
+
   async function updateCapturedText(active, text, lastText) {
     if (!text || text === lastText) return lastText;
     if (text.startsWith(lastText)) {
       const delta = text.slice(lastText.length);
-      if (delta) await emit({ type: "chat.delta", request_id: active.requestId, delta });
+      if (delta) await emit({
+        type: "chat.delta", request_id: active.requestId,
+        worker_event_id: nextWorkerEventId(active), delta,
+      });
     } else {
-      await emit({ type: "chat.snapshot", request_id: active.requestId, text });
+      await emit({
+        type: "chat.snapshot", request_id: active.requestId,
+        worker_event_id: nextWorkerEventId(active), text,
+      });
     }
     return text;
   }
@@ -578,7 +589,10 @@
           const finalText = nodeText(finalNode);
           if (!isGenerating() && finalText && !isTransientText(finalRaw)) {
             lastText = await updateCapturedText(active, finalText, lastText);
-            await emit({ type: "chat.completed", request_id: active.requestId, text: lastText });
+            await emit({
+              type: "chat.completed", request_id: active.requestId,
+              worker_event_id: nextWorkerEventId(active), text: lastText,
+            });
             return;
           }
           stableSince = Date.now();
@@ -588,9 +602,15 @@
     }
 
     if (active.cancelled) {
-      await emit({ type: "chat.cancelled", request_id: active.requestId, reason: "Cancelled by API client" });
+      await emit({
+        type: "chat.cancelled", request_id: active.requestId,
+        worker_event_id: nextWorkerEventId(active), reason: "Cancelled by API client",
+      });
     } else {
-      await emit({ type: "chat.error", request_id: active.requestId, error: "Timed out waiting for ChatGPT response" });
+      await emit({
+        type: "chat.error", request_id: active.requestId,
+        worker_event_id: nextWorkerEventId(active), error: "Timed out waiting for ChatGPT response",
+      });
     }
   }
 
@@ -612,6 +632,7 @@
       baselineCount: before.length,
       baselineIdentity: nodeIdentity(before[before.length - 1]),
       cancelled: false,
+      workerEventSequence: 0,
     };
     state.active = active;
     try {
@@ -658,6 +679,7 @@
       runRequest(message).catch(error => emit({
         type: "chat.error",
         request_id: message.requestId,
+        worker_event_id: `${String(message.requestId || "request").slice(0, 96)}:dispatch-error`,
         error: String(error?.message || error),
       }));
       sendResponse({ ok: true });
