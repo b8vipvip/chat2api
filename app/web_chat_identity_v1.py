@@ -58,7 +58,12 @@ async def resolve_web_chat_principal(
     # The shared Mode 1 service key must be server-managed, not a key created
     # under any end-user account. This check also protects installations whose
     # client policy predates the stricter configuration validation.
-    if accounts.owner_for_key(configured_key_id):
+    shared_record = getattr(api_keys, "keys", {}).get(configured_key_id)
+    if (
+        shared_record is None
+        or shared_record.internal_owner_user_id
+        or accounts.owner_for_key(configured_key_id)
+    ):
         raise _private_error(
             503,
             "Web Chat 统一 API Key 必须是未绑定用户账户的服务端托管 Key；用户创建的 API Key 仅用于 Mode 2",
