@@ -250,8 +250,11 @@ class WebChatEventJournal:
                     ):
                         connection.rollback()
                         return []
+                    # Preserve the journal's first-terminal-wins contract. A
+                    # conflicting or non-completed terminal blocks later text;
+                    # callers verify the snapshot before publishing completion.
                     connection.rollback()
-                    raise ValueError("Web Chat delivery already has a conflicting terminal")
+                    return []
                 if delivered_truncated:
                     connection.rollback()
                     raise ValueError("Existing Web Chat delivery is truncated and cannot be resumed safely")
