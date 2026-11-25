@@ -303,6 +303,7 @@
     if (!fetched?.ok || !fetched.data?.base64) {
       throw new Error(fetched?.error || "Worker could not fetch the authorized live video frame");
     }
+    assertLiveTurnOwner(active);
     const data = fetched.data;
     const mime = String(data.mime_type || "").toLowerCase();
     if (!["image/jpeg", "image/png", "image/webp"].includes(mime) ||
