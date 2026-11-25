@@ -4012,7 +4012,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         window_target_synced = False
         socket_runtime_epoch = ""  # bound to this socket, not shared metadata
         try:
-            await websocket.send_json({"type": "server.hello", "client_id": client_id, "version": APP_VERSION})
+            await websocket.send_json({
+                "type": "server.hello",
+                "client_id": client_id,
+                "version": APP_VERSION,
+                "capabilities": ["worker_event_ack_v1"],
+            })
             while True:
                 message = await websocket.receive_json()
                 message_type = message.get("type")
