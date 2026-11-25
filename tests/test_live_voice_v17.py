@@ -1183,7 +1183,10 @@ def test_live_video_frame_relays_owned_image_and_correlated_ack(monkeypatch, tmp
 
                 live.send_json({"type": "session.finish"})
                 events = acknowledge_live_stop(live, extension, request_id)
-                assert events[-1]["status"] == "cancelled"
+                # A confirmed camera frame is user input. Ending before a
+                # completed assistant response must not be mislabeled idle.
+                assert events[-1]["status"] == "error"
+                assert events[-1]["error"] == "GPT-Live session ended without a completed response"
 
 
 def test_live_voice_rejects_unapproved_attachment_mime(monkeypatch, tmp_path: Path) -> None:
