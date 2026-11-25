@@ -332,6 +332,10 @@ def test_guest_web_chat_is_policy_gated_and_uses_account_scoped_identity(tmp_pat
         assert guest["display_name"] == "游客"
         assert "password_hash" not in created.text
         assert client.get("/api/user/me").json()["user"]["is_guest"] is True
+        assert client.get("/api/user/keys").status_code == 403
+        guest_settings = client.get("/settings", follow_redirects=False)
+        assert guest_settings.status_code == 303
+        assert guest_settings.headers["location"] == "/chat"
 
         session = client.get("/api/user/chat/session")
         assert session.status_code == 200, session.text

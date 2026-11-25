@@ -239,6 +239,8 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
         user = accounts.authenticate(request.cookies.get(USER_SESSION_COOKIE))
         if not user:
             raise HTTPException(status_code=401, detail="请先登录账户")
+        if user.get("is_guest") and request.url.path != "/api/user/me":
+            raise HTTPException(status_code=403, detail="游客账户仅支持 Web Chat")
         return user
 
     def public_key(item: dict[str, Any]) -> dict[str, Any]:
