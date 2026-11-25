@@ -71,7 +71,13 @@ const fakeCanvas = {
       readyState:"live",
       id:"chat2api-synthetic-video-track",
       contentHint:"",
-      stop(){this.readyState="ended";},
+      endedListeners:new Set(),
+      addEventListener(type,callback){if(type==="ended")this.endedListeners.add(callback);},
+      stop(){
+        if(this.readyState==="ended")return;
+        this.readyState="ended";
+        for(const callback of this.endedListeners)callback();
+      },
     };
     return new FakeMediaStream([generatedVideoTrack]);
   },
@@ -144,6 +150,13 @@ assert.equal(sender.track,generatedVideoTrack);
 assert.equal(posted.filter(message=>message.type==="voice.live.video.sender.attached").length,
   attachedBeforeReplace + 1,
   "WebRTC sender replacement after renegotiation must be observed as a real track attachment");
+const replacementVideoTrack = {kind:"video",readyState:"live",id:"replacement-video-track"};
+sender.track = generatedVideoTrack;
+await sender.replaceTrack(replacementVideoTrack);
+assert.ok(posted.some(message=>message.type==="voice.live.video.sender.detached"
+  && message.reason==="sender-replaced"),
+  "replacing the synthetic sender with another track must be observable");
+await sender.replaceTrack(generatedVideoTrack);
 
 dispatch("voice.live.video.frame",{
   base64:"AA==",
@@ -169,7 +182,11 @@ assert.equal(drawCalls,1,"duplicate frame sequence must never overwrite a newer 
 assert.ok(posted.some(message=>
   message.type==="voice.live.video.error" && message.sequence===0),
 "duplicate sequence must return a bounded frame-level error");
+generatedVideoTrack.stop();
+assert.ok(posted.some(message=>message.type==="voice.live.video.track.ended"),
+  "an upstream-ended synthetic video track must be reported so the bridge can fall back");
 
+const endedEventsBeforeCleanup = posted.filter(message=>message.type==="voice.live.video.track.ended").length;
 const audioOnly = await mediaDevices.getUserMedia({audio:true,video:false});
 assert.deepEqual(audioOnly.getAudioTracks(),[audioTrack]);
 assert.deepEqual(audioOnly.getVideoTracks(),[],
@@ -179,6 +196,8 @@ assert.equal(nativeCalls.length,0);
 dispatch("voice.reset");
 assert.equal(generatedVideoTrack.readyState,"ended",
   "stopping the Voice session must release the synthetic video track");
+assert.equal(posted.filter(message=>message.type==="voice.live.video.track.ended").length,endedEventsBeforeCleanup,
+  "intentional session cleanup must not be reported as an unexpected upstream track end");
 
 // Non-Live Voice keeps the existing native-camera passthrough behavior.
 dispatch("voice.prepare",{request_id:"speech-camera-request",mode:"speech"});
