@@ -2877,6 +2877,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             chunk_payload(response_id, model, chunk_delta),
                             ensure_ascii=False,
                         ) + "\n\n"
+                    if (
+                        state.mode1_web_chat
+                        and isinstance(state.delivery_terminal_event_id, int)
+                        and state.delivery_terminal_event_id > 0
+                    ):
+                        # Advance the browser's durable cursor only after all
+                        # final content chunks have been sent. This also covers
+                        # idempotent replay where append_delivery returns no
+                        # new chunk IDs because the exact final projection was
+                        # already durable before the reconnect.
+                        yield "data: " + json.dumps(
+                            chunk_payload(response_id, model, {
+                                "chat2api_event_id": state.delivery_terminal_event_id,
+                            }),
+                            ensure_ascii=False,
+                        ) + "\n\n"
                     meta = chat2api_meta(state, token_meta, principal)
                     if native_content.get(state.request_id, principal.key_id) and (
                         native_snapshot_finality(
