@@ -84,7 +84,8 @@
       confidence: String(latest?.confidence || "low"),
       strategy: String(latest?.strategy || "detector-no-result"),
       detector: "account-v20",
-      model_control_present: Boolean(latest?.model_control_present),
+      plan_confirmed: latest?.plan_confirmed === true,
+      model_control_present: typeof latest?.model_control_present === "boolean" ? latest.model_control_present : null,
       composer_ready: Boolean(latest?.composer_ready),
       checked_at_ms: Date.now(),
       tab_id: tab.id,
@@ -104,7 +105,8 @@
       account_detection_version: "v20",
       account_detection_strategy: String(profile?.strategy || "unknown").slice(0, 120),
       account_detection_confidence: String(profile?.confidence || "low").slice(0, 20),
-      account_model_control_present: Boolean(profile?.model_control_present),
+      account_plan_confirmed: profile?.plan_confirmed === true,
+      account_model_control_present: typeof profile?.model_control_present === "boolean" ? profile.model_control_present : null,
       account_checked_at_ms: Number(profile?.checked_at_ms || Date.now()),
     };
   }
