@@ -95,7 +95,7 @@ def test_v02296_runtime_contract_advertises_only_active_authorities() -> None:
         "route-close-terminal-v91",
         "release-v02275",
         "linux-device-worker-console-v122",
-        "web-chat-live-video-track-v1",
+        "webchat-live-video-track-v1",
     ):
         assert marker in revision
 
