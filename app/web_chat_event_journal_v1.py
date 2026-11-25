@@ -368,7 +368,6 @@ class WebChatEventJournal:
         if not records:
             return []
         now = time.time()
-        encoded = [(kind, _json_payload(payload)) for kind, payload in records]
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             state = connection.execute(
@@ -421,7 +420,14 @@ class WebChatEventJournal:
                 terminal_message = str(state["terminal_message"] or "")
 
             sequences: list[int] = []
-            for (event_type, payload_json), (_, payload) in zip(encoded, records):
+            for event_type, payload in records:
+                stored_payload = dict(payload)
+                if event_type == "worker.delta":
+                    # JavaScript string offsets are UTF-16 code units; persist
+                    # the matching offset so replay can deduplicate even when a
+                    # browser's last-event cursor was not saved before reload.
+                    stored_payload["offset"] = len(worker_text.encode("utf-16-le")) // 2
+                payload_json = _json_payload(stored_payload)
                 last_sequence += 1
                 sequences.append(last_sequence)
                 connection.execute(
