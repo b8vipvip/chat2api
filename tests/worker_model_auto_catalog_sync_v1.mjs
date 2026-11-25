@@ -145,3 +145,4 @@ const unconfirmedFree = await authority.syncObservedChoices("heuristic-free-no-p
 assert.equal(unconfirmedFree.ok, false);
 assert.equal(unconfirmedFree.default_only, undefined);
 assert.equal(stored.modelValidationState, "failed");
+assert.match(stored.modelValidationError, /plan_confirmed=false/);
