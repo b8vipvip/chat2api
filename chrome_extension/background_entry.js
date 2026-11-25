@@ -59,6 +59,9 @@ importScripts(
   "background_runtime_preflight_v48.js",
   "background_request_hygiene_v42.js",
   "background_transport_recovery_v47.js",
+  // Durable ordered ACK/replay for nonterminal Worker events. Loaded after
+  // terminal recovery so terminal delivery waits for earlier event ACKs.
+  "background_worker_event_outbox_v1.js",
   "audio_routing_live.js",
   "background_capacity_control_v35.js",
   "background_capacity_control_v36.js",
