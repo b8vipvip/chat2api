@@ -16,8 +16,8 @@ from app.registry import ClientRegistry
 def _registry(tmp_path):
     registry = ClientRegistry(tmp_path)
     registry.clients = {
-        "win-free": SimpleNamespace(connection_enabled=True, metadata={"account_type": "free"}),
-        "linux": SimpleNamespace(connection_enabled=True, metadata={"account_type": "free"}),
+        "win-free": SimpleNamespace(connection_enabled=True, metadata={"account_type": "free", "account_plan_confirmed": True}),
+        "linux": SimpleNamespace(connection_enabled=True, metadata={"account_type": "free", "account_plan_confirmed": True}),
     }
     registry.sockets = {"win-free": object(), "linux": object()}
     registry.chatgpt_routing_ready = lambda _: True
