@@ -369,6 +369,36 @@ def test_api_key_and_owner_policies_filter_catalog_and_gate_dispatch(tmp_path: P
         reset_model_context(tokens)
 
 
+def test_mode1_web_chat_completions_receives_requested_model_context(tmp_path: Path):
+    app, _ = build_app(tmp_path)
+
+    @app.post("/api/user/chat/completions")
+    async def mode1_completions(request: Request):
+        target = model_routing._MODEL_CONTEXT.get()
+        historical = v13_patch._target_context.get()
+        return {
+            "model": str((target or {}).get("model") or ""),
+            "needs_multimodal": bool((target or {}).get("needs_multimodal")),
+            "historical_model": str((historical or {}).get("model") or ""),
+        }
+
+    install_model_capability_routing_patch(app)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/user/chat/completions",
+            json={
+                "model": "gpt-5.6-sol",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "model": "gpt-5.6-sol",
+        "needs_multimodal": False,
+        "historical_model": "gpt-5.6-sol",
+    }
+
+
 def test_web_chat_model_policy_intersects_user_and_shared_service_key(tmp_path: Path):
     app, _ = build_app(tmp_path)
     store = app.state.model_entitlements
