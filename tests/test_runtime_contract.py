@@ -94,6 +94,8 @@ def test_runtime_contract_payload_names_each_version_surface():
     assert payload["object"] == "chat2api.version"
     assert payload["server"]["package_version"] == PACKAGE_VERSION
     assert payload["server"]["runtime_version"] == SERVER_RUNTIME_VERSION
+    assert payload["features"]["worker_model_sync_daily_v1"] is True
+    assert payload["features"]["free_default_model_mapping_v1"] is True
     assert payload["server"]["runtime_aligned"] is True
     assert payload["server"]["entrypoint"] == PRODUCTION_ENTRYPOINT
     assert payload["chrome_bridge"]["version"] == CHROME_BRIDGE_VERSION
