@@ -23,6 +23,13 @@ def test_free_account_detector_is_passive_and_loaded() -> None:
     assert 'account_type: "unknown",\n        confidence: "low",\n        strategy: "ready-composer-without-model-selector-unconfirmed-plan"' in source
     assert "plan_confirmed: true" in source
     assert "plan_confirmed: false" in source
+    ui_start = source.index("function explicitUiPlan()")
+    ui_end = source.index("function composerRoot()", ui_start)
+    ui_plan = source[ui_start:ui_end]
+    assert 'document.querySelector("nav")' not in ui_plan
+    assert 'document.querySelector("aside")' not in ui_plan
+    assert "allowStandaloneFree" in ui_plan
+    assert "ChatGPT\\\\s+Free" in ui_plan
     assert "account_plan_confirmed" in background
     assert "selectable-model-control" in source
     assert ".click()" not in source

@@ -42,22 +42,41 @@
   }
 
   function explicitUiPlan() {
-    const scopes = [
-      document.querySelector("nav"),
-      document.querySelector("aside"),
-      document.querySelector("header"),
-      ...document.querySelectorAll("[data-testid*='account'],[data-testid*='profile'],[data-testid*='plan'],[aria-label*='account' i],[aria-label*='profile' i]"),
-    ].filter(Boolean);
+    // Do not infer a plan from the whole sidebar: conversation titles can
+    // contain words such as "Free". Short plan labels are trusted only inside
+    // account/profile/plan-specific UI elements.
+    const candidates = [];
+    const header = document.querySelector("header");
+    if (header) candidates.push({ node: header, allowStandaloneFree: false });
+    const accountScopes = document.querySelectorAll(
+      "[data-testid*='account'],[data-testid*='profile'],[data-testid*='plan'],[aria-label*='account' i],[aria-label*='profile' i],[aria-label*='plan' i]"
+    );
+    for (const node of accountScopes) {
+      const descriptor = normalize(
+        `${node.getAttribute("aria-label") || ""} ${node.getAttribute("data-testid") || ""}`
+      );
+      candidates.push({
+        node,
+        allowStandaloneFree: /account|profile|plan/i.test(descriptor),
+      });
+    }
     const seen = new Set();
-    for (const scope of scopes) {
-      if (seen.has(scope)) continue;
+    for (const candidate of candidates) {
+      const scope = candidate.node;
+      if (!scope || seen.has(scope)) continue;
       seen.add(scope);
       const text = normalize(scope.innerText || scope.textContent || "");
       if (!text || text.length > 4000) continue;
-      if (/(^|\s)(ChatGPT\s+)?Free($|\s)|免费版|免费计划/i.test(text)) {
+      const freePattern = candidate.allowStandaloneFree
+        ? /(^|\\s)(ChatGPT\\s+)?Free($|\\s)|Free\\s+plan|免费版|免费计划/i
+        : /\\bChatGPT\\s+Free\\b|\\bFree\\s+plan\\b|免费版|免费计划/i;
+      if (freePattern.test(text)) {
         return { account_type: "free", confidence: "high", strategy: "account-ui-free", plan_confirmed: true };
       }
-      if (/(^|\s)ChatGPT\s+(Plus|Pro|Team|Business|Enterprise|Edu)($|\s)|企业版|团队版/i.test(text)) {
+      const paidPattern = candidate.allowStandaloneFree
+        ? /(^|\\s)(ChatGPT\\s+)?(Plus|Pro|Team|Business|Enterprise|Edu)($|\\s)|企业版|团队版/i
+        : /\\bChatGPT\\s+(Plus|Pro|Team|Business|Enterprise|Edu)\\b|企业版|团队版/i;
+      if (paidPattern.test(text)) {
         return { account_type: "paid", confidence: "high", strategy: "account-ui-paid", plan_confirmed: true };
       }
     }
