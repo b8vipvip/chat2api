@@ -4454,6 +4454,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     # Persist Mode 1 Worker observations before Broker publication.
                     # A Broker/HTTP disconnect must not erase deltas that the
                     # server has already accepted from the assigned Worker.
+                    journal_event_id: int | None = None
                     if active_state.mode1_web_chat and message_type in {
                         "chat.delta", "chat.snapshot", "chat.references",
                         "chat.tool.call", "chat.tool.result", "chat.completed",
@@ -4498,6 +4499,41 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         websocket=websocket,
                         current_socket=registry.sockets.get(client_id),
                     )
+                    worker_event_ack_types = {
+                        "chat.delta", "chat.snapshot", "chat.references",
+                        "chat.tool.call", "chat.tool.result",
+                    }
+                    worker_event_id = str(message.get("worker_event_id") or "").strip()
+                    if message_type in worker_event_ack_types and worker_event_id:
+                        # The Worker keeps each nonterminal event in its
+                        # persistent outbox until this correlated ACK arrives.
+                        # For Mode 1, ACK only after the owner-scoped journal
+                        # commit; for Mode 2, Broker acceptance is sufficient.
+                        mode1_durable = (
+                            not active_state.mode1_web_chat
+                            or bool(journal_event_id)
+                        )
+                        discarded = bool(
+                            not accepted
+                            and (
+                                active_state.terminal_event_type is not None
+                                or active_state.completed_mono is not None
+                            )
+                        )
+                        await websocket.send_json({
+                            "type": "chat.event.ack",
+                            "request_id": request_id,
+                            "worker_event_id": worker_event_id[:180],
+                            "event_id": int(journal_event_id or 0),
+                            "accepted": bool(accepted and mode1_durable),
+                            "durable": bool(active_state.mode1_web_chat and journal_event_id),
+                            "discarded": discarded,
+                            "reason": (
+                                "request-terminal-closed" if discarded
+                                else "journal-not-durable" if active_state.mode1_web_chat and not journal_event_id
+                                else "" if accepted else "broker-rejected-event"
+                            ),
+                        })
                     if voice_event_ack_id:
                         await websocket.send_json({
                             "type": "voice.event.ack",
