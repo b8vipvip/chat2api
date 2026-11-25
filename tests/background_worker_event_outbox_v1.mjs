@@ -21,6 +21,7 @@ const context = {
       },
     },
   },
+  TextEncoder,
   setTimeout: callback => {
     const id = ++timerId;
     timers.set(id, callback);
