@@ -2009,8 +2009,8 @@
         },
         {
           name:"github.get_pull_request_files",provider:"github",toolName:"get_pull_request_files",
-          description:"Read up to five changed files and bounded unified diff patches for one pull request. Use a PR number supplied by the user or returned by github.list_pull_requests. Each result reports has_more; use the next page (1-20) only when true.",
-          parameters:{type:"object",additionalProperties:false,properties:{repository:repositorySchema,pull_number:{type:"integer",minimum:1,maximum:2147483647},page:{type:"integer",minimum:1,maximum:20}},required:["repository","pull_number"]},
+          description:"Read up to five changed files and bounded unified diff patches for one pull request. Use a PR number supplied by the user or returned by github.list_pull_requests. Each result reports has_more; use the next page (1-100) only when true.",
+          parameters:{type:"object",additionalProperties:false,properties:{repository:repositorySchema,pull_number:{type:"integer",minimum:1,maximum:2147483647},page:{type:"integer",minimum:1,maximum:100}},required:["repository","pull_number"]},
         },
         {
           name:"github.list_commits",provider:"github",toolName:"list_commits",
@@ -2147,8 +2147,8 @@
       const repository = repositoryValue();
       const pull_number = positiveNumber(args.pull_number);
       const page = args.page === undefined ? 1 : args.page;
-      if (typeof page !== "number" || !Number.isSafeInteger(page) || page < 1 || page > 20) {
-        throw new Error("GitHub PR 文件页码必须为 1-20 的整数");
+      if (typeof page !== "number" || !Number.isSafeInteger(page) || page < 1 || page > 100) {
+        throw new Error("GitHub PR 文件页码必须为 1-100 的整数");
       }
       return {repository,pull_number,page};
     }
