@@ -25,12 +25,14 @@ def test_web_chat_model_list_uses_available_models_and_labels_default_mapping(tm
             "available_models": [
                 {"id": "default", "label": "默认模型（实际型号不可见）", "is_default_only": True},
                 {"id": "gpt-5.5", "label": "gpt-5.5"},
+                {"id": "gpt-5.4", "label": "gpt-5.4"},
                 {"id": "gpt-image", "label": "ChatGPT Images browser route"},
             ],
             "available_models_default_mapping": "gpt-5.6-sol",
         }
 
     app.state.worker_model_tasks_v147_snapshot = available_models
+    app.state.worker_text_model_management_v146_snapshot = lambda: {"disabled": ["gpt-5.4"]}
     with TestClient(app) as client:
         registered = client.post("/api/user/register", json={
             "email": "model-catalog@example.com",
