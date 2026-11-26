@@ -2538,7 +2538,7 @@
           ? String(plugin.reauthorization_reason || "GitHub 授权范围需要更新")
           : plugin.connected ? "已连接账户：" + String(plugin.account_label || "已授权账户") : "尚未连接账户";
       card.append(title, description, status);
-      if (plugin.connected && plugin.enabled && plugin.configured) {
+      if (plugin.connected && plugin.enabled && plugin.configured && !needsReauthorization) {
         const useLabel = document.createElement("label");
         useLabel.className = "plugin-chat-toggle";
         const useCheckbox = document.createElement("input");
