@@ -170,6 +170,13 @@ a{color:inherit}
 .native-rich-root table{max-width:100%;border-collapse:collapse;overflow-x:auto}
 .native-rich-root th,.native-rich-root td{border:1px solid var(--line)}
 .native-rich-root pre{max-width:100%;overflow:auto;white-space:pre-wrap}
+.native-rich-root details{margin:8px 0;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel)}
+.native-rich-root details>summary{cursor:pointer;font-weight:600;user-select:none}
+.native-rich-root input[type=checkbox],.native-rich-root input[type=radio]{accent-color:var(--accent);vertical-align:middle}
+.native-rich-root input[type=range]{max-width:min(100%,360px);accent-color:var(--accent);vertical-align:middle}
+.native-rich-root select{max-width:100%;padding:6px 9px;border:1px solid var(--line);border-radius:7px;background:var(--panel);color:var(--text)}
+.native-rich-root .native-copy-control{margin:4px 0;padding:5px 9px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--text);font:inherit;font-size:12px;cursor:pointer}
+.native-rich-root .native-copy-control:hover{border-color:var(--accent)}
 .native-generated-files{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
 .native-generated-file{padding:8px 11px;border:1px solid var(--line);border-radius:9px;background:var(--panel);font-size:12px}
 .native-generated-file a{color:var(--accent);text-decoration:underline;text-underline-offset:2px}
