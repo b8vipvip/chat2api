@@ -434,7 +434,8 @@
           if (String(session.user?.user_id || "") === String(state.user?.user_id || "")) return;
         } catch {}
         state.user = null;
-        $("sidebarAccount").hidden = true;        state.voicePanelVisible = false;
+        $("sidebarAccount").hidden = true;
+        state.voicePanelVisible = false;
         $("voiceTranscript").replaceChildren();
         $("voicePanel").classList.add("hidden");
         $("composerArea").classList.add("hidden");
@@ -458,7 +459,8 @@
           if (String(current.user?.user_id || "") === String(state.user?.user_id || "")) return;
         } catch {}
         state.user = null;
-        $("sidebarAccount").hidden = true;        showOnly("authRequired");
+        $("sidebarAccount").hidden = true;
+        showOnly("authRequired");
         openLoginDialog();
         $("composerArea").classList.add("hidden");
         $("voiceTranscript").replaceChildren();
@@ -543,7 +545,8 @@
         openLoginDialog();
       } else if (guestLoginRequired(response.status, payload)) {
         state.user = null;
-        $("sidebarAccount").hidden = true;        showOnly("authRequired");
+        $("sidebarAccount").hidden = true;
+        showOnly("authRequired");
         setConnection("游客访问已关闭", "error");
         openLoginDialog(String(payload.detail || "游客使用已关闭，请登录账户"));
       }
@@ -3086,7 +3089,8 @@
         }
       } catch {
         state.user = null;
-        $("sidebarAccount").hidden = true;        showOnly("authRequired");
+        $("sidebarAccount").hidden = true;
+        showOnly("authRequired");
         setConnection("登录已失效", "error");
         openLoginDialog();
         throw new Error("用户登录状态已失效，请重新登录后再继续聊天");
@@ -3162,12 +3166,14 @@
         const guestAccessClosed = guestLoginRequired(response.status, payload);
         if (response.status === 401) {
           state.user = null;
-          $("sidebarAccount").hidden = true;          showOnly("authRequired");
+          $("sidebarAccount").hidden = true;
+          showOnly("authRequired");
           setConnection("登录已失效", "error");
           openLoginDialog();
         } else if (guestAccessClosed) {
           state.user = null;
-          $("sidebarAccount").hidden = true;          showOnly("authRequired");
+          $("sidebarAccount").hidden = true;
+          showOnly("authRequired");
           setConnection("游客访问已关闭", "error");
           openLoginDialog(String(payload.detail || "游客使用已关闭，请登录账户"));
         } else if (response.status === 403 || response.status === 503) {
@@ -3515,7 +3521,8 @@
     } catch (error) {
       if (error.status === 403 && state.user?.is_guest) {
         state.user = null;
-        $("sidebarAccount").hidden = true;        showOnly("authRequired");
+        $("sidebarAccount").hidden = true;
+        showOnly("authRequired");
         setConnection("游客访问已关闭", "error");
         openLoginDialog("游客使用已关闭，请登录账户");
         return;
@@ -3703,7 +3710,8 @@
       $("webChatLoginPassword").value = "";
       closeLoginDialog();
       state.user = null;
-      $("sidebarAccount").hidden = true;      await bootstrap();
+      $("sidebarAccount").hidden = true;
+      await bootstrap();
     } catch (error) {
       errorBox.textContent = String(error?.message || error);
     } finally {
