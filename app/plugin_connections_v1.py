@@ -991,6 +991,7 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                             "sha": str(row.get("sha") or "")[:40],
                             "previous_filename": str(row.get("previous_filename") or "")[:500],
                             "url": row.get("blob_url") or row.get("html_url"),
+                            "patch_available": isinstance(row.get("patch"), str),
                             "patch": str(row.get("patch") or "")[:6000],
                             "patch_truncated": len(str(row.get("patch") or "")) > 6000,
                         } for row in response.json()[:20] if isinstance(row, dict)]
