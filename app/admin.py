@@ -134,7 +134,7 @@ ADMIN_HTML = r'''<!doctype html>
           <label>OAuth Client ID<input id="cPluginGithubClientId" maxlength="256" placeholder="GitHub OAuth App Client ID"></label>
           <label>OAuth Client Secret<input id="cPluginGithubClientSecret" type="password" maxlength="2048" autocomplete="new-password" placeholder="留空则保留已保存的 Secret"></label>
           <label><span>插件状态</span><span><input id="cPluginGithubEnabled" type="checkbox"> 启用 GitHub</span></label>
-          <label><span>仓库权限</span><span><input id="cPluginGithubPrivateRepos" type="checkbox"> 允许访问私有仓库（GitHub repo scope）</span></label>
+          <label><span>仓库权限</span><span><input id="cPluginGithubPrivateRepos" type="checkbox"> 允许访问私有仓库（GitHub repo scope 授权范围较宽；本应用当前只调用读取接口）</span></label>
           <button class="action good" id="cPluginGithubSave" type="button">保存 GitHub 配置</button>
         </div>
         <div id="cPluginGithubRedirect" class="c-note">回调地址：等待加载</div>
