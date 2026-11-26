@@ -196,7 +196,7 @@
     if (!selectedKeyHasScope("files")) camera.title = "服务端统一 API Key 缺少 files 权限";
     else camera.title = "在同一 Voice 会话中发送实时视频；若上游不支持 WebRTC 将降级为图片帧";
     $("modelSelect").disabled = state.streaming || state.voiceActive;
-    updatePluginPickerButton();
+    if (typeof updatePluginPickerButton === "function") updatePluginPickerButton();
     $("newChatButton").disabled = state.streaming || state.voiceActive;
     $("attachButton").disabled = state.streaming || state.voiceActive || !state.webChatKeyId || !selectedKeyHasScope("files");
     $("fileButton").disabled = state.streaming || state.voiceActive || !state.webChatKeyId || !selectedKeyHasScope("files");
@@ -2234,7 +2234,7 @@
   }
 
   function renderAll() {
-    updatePluginPickerButton();
+    if (typeof updatePluginPickerButton === "function") updatePluginPickerButton();
     renderSidebar();
     syncSidebarNav();
     if (state.sidebarPage === "plugins") {
@@ -3390,7 +3390,8 @@
       const messages = conversation.messages
         .filter((message) => message.id !== assistant.id)
         .map((message) => ({role:message.role,content:message.content}));
-      const pluginContexts = clean ? await runSelectedPluginsForPrompt(clean, assistant) : [];
+      const pluginContexts = clean && typeof runSelectedPluginsForPrompt === "function"
+        ? await runSelectedPluginsForPrompt(clean, assistant) : [];
       if (pluginContexts.length) {
         const lastUserIndex = messages.map(message => message.role).lastIndexOf("user");
         if (lastUserIndex >= 0) {
@@ -3803,7 +3804,7 @@
       if (!conversation.apiKeyId) conversation.apiKeyId = state.webChatKeyId;
     });
     state.forceScrollToBottom = true;
-    if (ready && !state.user?.is_guest) void loadPluginCatalog(true);
+    if (ready && !state.user?.is_guest && typeof loadPluginCatalog === "function") void loadPluginCatalog(true);
     recordClientDiagnostic("webchat.session.ready", {phase: "bootstrap", model_count: state.models.length});
     renderAll();
     resumePendingMessages();
