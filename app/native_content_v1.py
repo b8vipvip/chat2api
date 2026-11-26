@@ -77,7 +77,7 @@ MATH_TAGS = {"math", "semantics", "mrow", "mi", "mo", "mn", "msub", "mfrac",
              "menclose", "mpadded", "merror", "ms", "mfenced", "mprescripts", "none",
              "mstack", "mlongdiv", "msgroup", "msrow", "mscarries", "mscarry", "msline"}
 SVG_TAGS = {"svg", "g", "path", "line", "rect", "circle", "ellipse",
-            "polyline", "polygon", "text", "tspan", "defs", "clippath"}
+            "polyline", "polygon", "text", "tspan", "title", "desc", "defs", "clippath"}
 SVG_ATTRS = {"viewBox", "width", "height", "preserveAspectRatio", "x", "y",
              "dx", "dy", "x1", "x2", "y1", "y2", "cx", "cy", "r", "rx", "ry",
              "d", "points", "transform", "fill", "stroke", "stroke-width",
