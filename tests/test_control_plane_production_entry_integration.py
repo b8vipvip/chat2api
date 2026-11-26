@@ -184,6 +184,7 @@ with TestClient(app) as client:
     assert client.get("/api/client/plugins").json() == {
         "data": [], "execution_enabled": False,
     }
+    assert client.get("/api/user/plugins").status_code == 401
     for path in (
         "/api/admin/control/admins",
         "/api/admin/control/invitations",
