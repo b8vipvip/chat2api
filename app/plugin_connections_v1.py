@@ -766,7 +766,7 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
         if not expires_at or int(expires_at) > int(time.time()) + 60:
             return str(connection["access_token"])
         if not connection.get("refresh_token"):
-            raise HTTPException(401, "插件授权已过期，请重新连接账户", headers=_PRIVATE_HEADERS)
+            raise HTTPException(409, "插件授权已过期，请重新连接账户", headers=_PRIVATE_HEADERS)
         config = store.provider(provider_id)
         if not config or not config.get("enabled"):
             raise HTTPException(403, "插件已由管理员停用", headers=_PRIVATE_HEADERS)
@@ -779,11 +779,22 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                 },
                 headers={"Accept": "application/json"},
             )
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                try:
+                    refresh_error = response.json().get("error")
+                except (ValueError, AttributeError):
+                    refresh_error = None
+                if refresh_error in {"invalid_grant", "invalid_token"}:
+                    raise HTTPException(
+                        409, "插件授权已失效，请重新连接账户", headers=_PRIVATE_HEADERS,
+                    ) from exc
+                raise
             payload = response.json()
         token = str(payload.get("access_token") or "")
         if not token:
-            raise HTTPException(401, "插件授权已失效，请重新连接账户", headers=_PRIVATE_HEADERS)
+            raise HTTPException(409, "插件授权已失效，请重新连接账户", headers=_PRIVATE_HEADERS)
         new_expiry = int(time.time()) + max(60, int(payload.get("expires_in") or 3600))
         store.update_access_token(
             user_id, provider_id, token, payload.get("refresh_token"), new_expiry,
@@ -1091,7 +1102,9 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
             if provider_id == "github":
                 status = exc.response.status_code
                 if status == 401:
-                    raise HTTPException(401, "GitHub 授权已失效，请重新连接账户", headers=_PRIVATE_HEADERS) from exc
+                    # Plugin credential failures must not be confused with the
+                    # Web Chat account-session 401 handled by the browser shell.
+                    raise HTTPException(409, "GitHub 授权已失效，请重新连接账户", headers=_PRIVATE_HEADERS) from exc
                 if status == 404:
                     raise HTTPException(404, "GitHub 未找到该资源，或当前账户无权访问", headers=_PRIVATE_HEADERS) from exc
                 if status == 403 and exc.response.headers.get("X-RateLimit-Remaining") == "0":
