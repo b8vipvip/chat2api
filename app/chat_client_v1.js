@@ -2237,7 +2237,7 @@
       }
       if (definition.name === "github.get_issue") {
         const key = args.repository + "#" + args.issue_number;
-        const explicit = userPromptText.includes("#" + args.issue_number)
+        const explicit = new RegExp("(?:^|[^0-9])#" + args.issue_number + "(?:$|[^0-9])").test(userPromptText)
           || new RegExp("\\bissue\\s*(?:number\\s*)?#?" + args.issue_number + "\\b","i").test(userPromptText);
         if (!knownGithubIssueRefs.has(key) && !explicit) {
           throw new Error("必须先列出本轮 Issue，或使用用户消息中明确提供的 Issue 编号。");
@@ -2245,7 +2245,7 @@
       }
       if (definition.name === "github.get_pull_request") {
         const key = args.repository + "#" + args.pull_number;
-        const explicit = userPromptText.includes("#" + args.pull_number)
+        const explicit = new RegExp("(?:^|[^0-9])#" + args.pull_number + "(?:$|[^0-9])").test(userPromptText)
           || new RegExp("\\b(?:pull request|pr)\\s*(?:number\\s*)?#?" + args.pull_number + "\\b","i").test(userPromptText);
         if (!knownGithubPrRefs.has(key) && !explicit) {
           throw new Error("必须先列出本轮 Pull Request，或使用用户消息中明确提供的 PR 编号。");
