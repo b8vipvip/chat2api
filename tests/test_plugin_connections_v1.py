@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+
+import httpx
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -617,3 +619,68 @@ def test_github_matching_oauth_scope_does_not_require_reauthorization(
         github = next(row for row in catalog.json()["data"] if row["id"] == "github")
         assert github["reauthorization_required"] is False
         assert github["reauthorization_mode"] == ""
+
+
+def test_github_invalid_oauth_token_does_not_expire_web_chat_login(tmp_path: Path, monkeypatch):
+    app = make_app(tmp_path)
+    store: PluginOAuthStore = app.state.plugin_oauth_store
+    store.save_provider(
+        "github", enabled=True, client_id="gh-client",
+        client_secret="gh-secret", private_repos=False,
+    )
+    with TestClient(app) as client:
+        user = register(client, "github-invalid-token@example.com")
+        store.save_connection(
+            user["user_id"], "github", "42", "octocat",
+            "revoked-github-token", "", ["read:user"], None,
+        )
+
+        class UnauthorizedResponse:
+            status_code = 401
+            headers = {}
+
+            def __init__(self, url: str):
+                self.url = url
+
+            def raise_for_status(self):
+                request = httpx.Request("GET", self.url)
+                response = httpx.Response(401, request=request)
+                raise httpx.HTTPStatusError(
+                    "GitHub token revoked", request=request, response=response,
+                )
+
+            def json(self):
+                return {"message": "Bad credentials"}
+
+        class FakeAsyncClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def get(self, url, **kwargs):
+                return UnauthorizedResponse(url)
+
+        monkeypatch.setattr("app.plugin_connections_v1.httpx.AsyncClient", FakeAsyncClient)
+        login = client.post(
+            "/api/user/login",
+            json={"email": "github-invalid-token@example.com", "password": PASSWORD},
+            headers=ORIGIN,
+        )
+        assert login.status_code == 200
+
+        failed_tool = client.post(
+            "/api/user/plugins/github/tools/search_repositories",
+            headers=ORIGIN, json={"query": "chat2api"},
+        )
+        assert failed_tool.status_code == 409
+        assert "GitHub 授权已失效" in failed_tool.json()["detail"]
+
+        # A provider-token failure must not clear the separate Web Chat account session.
+        session = client.get("/api/user/me")
+        assert session.status_code == 200
+        assert session.json()["user"]["user_id"] == user["user_id"]
