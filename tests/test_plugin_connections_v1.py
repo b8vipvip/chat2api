@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+
+import httpx
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -536,3 +538,245 @@ def test_github_repository_issue_pull_request_commit_and_file_read_tools(tmp_pat
         assert len(fake_clients) == 9
         assert fake_clients[7].calls == []
         assert fake_clients[8].calls == []
+
+
+@pytest.mark.parametrize(
+    ("private_repos", "granted_scopes", "expected_mode"),
+    [
+        (True, ["read:user"], "upgrade"),
+        (False, ["read:user", "repo"], "downgrade"),
+    ],
+)
+def test_github_scope_change_requires_reauthorization_and_blocks_tools(
+    tmp_path: Path, private_repos: bool, granted_scopes: list[str], expected_mode: str,
+):
+    app = make_app(tmp_path)
+    store: PluginOAuthStore = app.state.plugin_oauth_store
+    store.save_provider(
+        "github", enabled=True, client_id="gh-client",
+        client_secret="gh-secret", private_repos=private_repos,
+    )
+    with TestClient(app) as client:
+        user = register(client, "github-scope@example.com")
+        store.save_connection(
+            user["user_id"], "github", "42", "octocat",
+            "github-scope-token", "", granted_scopes, None,
+        )
+        login = client.post(
+            "/api/user/login",
+            json={"email": "github-scope@example.com", "password": PASSWORD},
+            headers=ORIGIN,
+        )
+        assert login.status_code == 200
+
+        catalog = client.get("/api/user/plugins")
+        assert catalog.status_code == 200
+        github = next(row for row in catalog.json()["data"] if row["id"] == "github")
+        assert github["reauthorization_required"] is True
+        assert github["reauthorization_mode"] == expected_mode
+        assert github["scopes"] == granted_scopes
+
+        denied = client.post(
+            "/api/user/plugins/github/tools/search_repositories",
+            headers=ORIGIN, json={"query": "chat2api"},
+        )
+        assert denied.status_code == 409
+        if expected_mode == "upgrade":
+            assert "授予 repo 权限" in denied.json()["detail"]
+        else:
+            assert "撤销旧 repo 权限" in denied.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    ("private_repos", "granted_scopes"),
+    [
+        (False, ["read:user"]),
+        (True, ["read:user", "repo"]),
+    ],
+)
+def test_github_matching_oauth_scope_does_not_require_reauthorization(
+    tmp_path: Path, private_repos: bool, granted_scopes: list[str],
+):
+    app = make_app(tmp_path)
+    store: PluginOAuthStore = app.state.plugin_oauth_store
+    store.save_provider(
+        "github", enabled=True, client_id="gh-client",
+        client_secret="gh-secret", private_repos=private_repos,
+    )
+    with TestClient(app) as client:
+        user = register(client, "github-scope-match@example.com")
+        store.save_connection(
+            user["user_id"], "github", "42", "octocat",
+            "github-scope-token", "", granted_scopes, None,
+        )
+        login = client.post(
+            "/api/user/login",
+            json={"email": "github-scope-match@example.com", "password": PASSWORD},
+            headers=ORIGIN,
+        )
+        assert login.status_code == 200
+        catalog = client.get("/api/user/plugins")
+        github = next(row for row in catalog.json()["data"] if row["id"] == "github")
+        assert github["reauthorization_required"] is False
+        assert github["reauthorization_mode"] == ""
+
+
+def test_github_invalid_oauth_token_does_not_expire_web_chat_login(tmp_path: Path, monkeypatch):
+    app = make_app(tmp_path)
+    store: PluginOAuthStore = app.state.plugin_oauth_store
+    store.save_provider(
+        "github", enabled=True, client_id="gh-client",
+        client_secret="gh-secret", private_repos=False,
+    )
+    with TestClient(app) as client:
+        user = register(client, "github-invalid-token@example.com")
+        store.save_connection(
+            user["user_id"], "github", "42", "octocat",
+            "revoked-github-token", "", ["read:user"], None,
+        )
+
+        class UnauthorizedResponse:
+            status_code = 401
+            headers = {}
+
+            def __init__(self, url: str):
+                self.url = url
+
+            def raise_for_status(self):
+                request = httpx.Request("GET", self.url)
+                response = httpx.Response(401, request=request)
+                raise httpx.HTTPStatusError(
+                    "GitHub token revoked", request=request, response=response,
+                )
+
+            def json(self):
+                return {"message": "Bad credentials"}
+
+        class FakeAsyncClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def get(self, url, **kwargs):
+                return UnauthorizedResponse(url)
+
+        monkeypatch.setattr("app.plugin_connections_v1.httpx.AsyncClient", FakeAsyncClient)
+        login = client.post(
+            "/api/user/login",
+            json={"email": "github-invalid-token@example.com", "password": PASSWORD},
+            headers=ORIGIN,
+        )
+        assert login.status_code == 200
+
+        failed_tool = client.post(
+            "/api/user/plugins/github/tools/search_repositories",
+            headers=ORIGIN, json={"query": "chat2api"},
+        )
+        assert failed_tool.status_code == 409
+        assert "GitHub 授权已失效" in failed_tool.json()["detail"]
+        assert store.connection(user["user_id"], "github") is None
+        refreshed_catalog = client.get("/api/user/plugins")
+        github = next(row for row in refreshed_catalog.json()["data"] if row["id"] == "github")
+        assert github["connected"] is False
+
+        # A provider-token failure must not clear the separate Web Chat account session.
+        session = client.get("/api/user/me")
+        assert session.status_code == 200
+        assert session.json()["user"]["user_id"] == user["user_id"]
+
+
+def test_expired_github_token_without_refresh_is_cleared_for_reconnect(tmp_path: Path):
+    app = make_app(tmp_path)
+    store: PluginOAuthStore = app.state.plugin_oauth_store
+    store.save_provider(
+        "github", enabled=True, client_id="gh-client",
+        client_secret="gh-secret", private_repos=False,
+    )
+    with TestClient(app) as client:
+        user = register(client, "github-expired-token@example.com")
+        store.save_connection(
+            user["user_id"], "github", "42", "octocat",
+            "expired-github-token", "", ["read:user"], 1,
+        )
+        login = client.post(
+            "/api/user/login",
+            json={"email": "github-expired-token@example.com", "password": PASSWORD},
+            headers=ORIGIN,
+        )
+        assert login.status_code == 200
+
+        failed_tool = client.post(
+            "/api/user/plugins/github/tools/search_repositories",
+            headers=ORIGIN, json={"query": "chat2api"},
+        )
+        assert failed_tool.status_code == 409
+        assert "插件授权已过期" in failed_tool.json()["detail"]
+        assert store.connection(user["user_id"], "github") is None
+        assert client.get("/api/user/me").status_code == 200
+
+
+def test_gmail_invalid_oauth_token_does_not_expire_web_chat_login(tmp_path: Path, monkeypatch):
+    app = make_app(tmp_path)
+    store: PluginOAuthStore = app.state.plugin_oauth_store
+    store.save_provider(
+        "gmail", enabled=True, client_id="google-client",
+        client_secret="google-secret",
+    )
+    with TestClient(app) as client:
+        user = register(client, "gmail-invalid-token@example.com")
+        store.save_connection(
+            user["user_id"], "gmail", "google-subject", "user@example.com",
+            "revoked-gmail-token", "refresh-token", ["gmail.readonly"], None,
+        )
+
+        class UnauthorizedResponse:
+            status_code = 401
+            headers = {}
+
+            def __init__(self, url: str):
+                self.url = url
+
+            def raise_for_status(self):
+                request = httpx.Request("GET", self.url)
+                response = httpx.Response(401, request=request)
+                raise httpx.HTTPStatusError(
+                    "Gmail token revoked", request=request, response=response,
+                )
+
+            def json(self):
+                return {"error": {"message": "Invalid Credentials"}}
+
+        class FakeAsyncClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def get(self, url, **kwargs):
+                return UnauthorizedResponse(url)
+
+        monkeypatch.setattr("app.plugin_connections_v1.httpx.AsyncClient", FakeAsyncClient)
+        login = client.post(
+            "/api/user/login",
+            json={"email": "gmail-invalid-token@example.com", "password": PASSWORD},
+            headers=ORIGIN,
+        )
+        assert login.status_code == 200
+
+        failed_tool = client.post(
+            "/api/user/plugins/gmail/tools/search_messages",
+            headers=ORIGIN, json={"query": "from:example.com"},
+        )
+        assert failed_tool.status_code == 409
+        assert "Gmail 授权已失效" in failed_tool.json()["detail"]
+        assert store.connection(user["user_id"], "gmail") is None
+        assert client.get("/api/user/me").status_code == 200

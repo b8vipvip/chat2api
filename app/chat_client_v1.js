@@ -1811,7 +1811,7 @@
       if (Array.isArray(parsed)) saved = parsed.filter(value => typeof value === "string");
     } catch {}
     const allowed = new Set(state.pluginCatalog
-      .filter(plugin => plugin && plugin.enabled && plugin.configured && plugin.connected)
+      .filter(plugin => plugin && plugin.enabled && plugin.configured && plugin.connected && !plugin.reauthorization_required)
       .map(plugin => String(plugin.id || "")));
     state.selectedPlugins = [...new Set(saved.filter(value => allowed.has(value)))].slice(0,3);
     persistPluginSelection();
@@ -1825,7 +1825,8 @@
       return;
     }
     const available = state.pluginCatalog.some(plugin =>
-      plugin && plugin.id === providerId && plugin.enabled && plugin.configured && plugin.connected
+      plugin && plugin.id === providerId && plugin.enabled && plugin.configured
+        && plugin.connected && !plugin.reauthorization_required
     );
     if (checked && !available) {
       toast("请先连接并启用此插件账户。");
@@ -1949,7 +1950,7 @@
   function selectedPluginToolDefinitions() {
     const selected = new Set((state.selectedPlugins || []).slice(0,3));
     const connected = new Set((state.pluginCatalog || [])
-      .filter(plugin => plugin && plugin.enabled && plugin.configured && plugin.connected)
+      .filter(plugin => plugin && plugin.enabled && plugin.configured && plugin.connected && !plugin.reauthorization_required)
       .map(plugin => String(plugin.id || "")));
     const definitions = [];
     if (selected.has("github") && connected.has("github")) {
@@ -2293,6 +2294,22 @@
       event.status = "failed";
       event.resultId = callId + "_result";
       event.output = String(error?.message || "插件调用失败").slice(0,500);
+      if (error?.status === 409 && definition?.provider) {
+        const providerId = definition.provider;
+        if (/授权已失效|授权已过期/.test(String(error?.message || ""))) {
+          const providerName = providerId === "github" ? "GitHub" : "Gmail";
+          state.pluginCatalog = state.pluginCatalog.map(plugin => plugin?.id === providerId
+            ? {...plugin,reauthorization_required:true,reauthorization_mode:"reconnect",
+              reauthorization_reason:providerName + " 授权已失效，请重新连接账户"}
+            : plugin);
+          state.selectedPlugins = state.selectedPlugins.filter(value => value !== providerId);
+          persistPluginSelection();
+          updatePluginPickerButton();
+          renderPluginCatalog();
+        } else {
+          try { await loadPluginCatalog(true); } catch {}
+        }
+      }
       if (error?.status === 401 || !state.user) throw error;
       result = {
         ok:false,tool:rawName,
@@ -2516,11 +2533,14 @@
       description.textContent = plugin.description || "";
       const status = document.createElement("p");
       status.className = "utility-meta";
+      const needsReauthorization = plugin.reauthorization_required === true;
       status.textContent = !plugin.enabled || !plugin.configured
         ? "管理员尚未配置或启用此插件"
-        : plugin.connected ? "已连接账户：" + String(plugin.account_label || "已授权账户") : "尚未连接账户";
+        : needsReauthorization
+          ? String(plugin.reauthorization_reason || "GitHub 授权范围需要更新")
+          : plugin.connected ? "已连接账户：" + String(plugin.account_label || "已授权账户") : "尚未连接账户";
       card.append(title, description, status);
-      if (plugin.connected && plugin.enabled && plugin.configured) {
+      if (plugin.connected && plugin.enabled && plugin.configured && !needsReauthorization) {
         const useLabel = document.createElement("label");
         useLabel.className = "plugin-chat-toggle";
         const useCheckbox = document.createElement("input");
@@ -2535,13 +2555,23 @@
         useLabel.append(useCheckbox, useText);
         card.appendChild(useLabel);
       }
-      if (plugin.enabled && plugin.configured && !plugin.connected) {
+      if (plugin.enabled && plugin.configured && (!plugin.connected || needsReauthorization)) {
         const connect = document.createElement("button");
         connect.type = "button";
         connect.className = "primary-link";
-        connect.textContent = "连接 " + String(plugin.name || plugin.id) + " 账户";
-        connect.addEventListener("click", () => {
-          window.location.assign("/api/user/plugins/oauth/" + encodeURIComponent(plugin.id) + "/start");
+        connect.textContent = needsReauthorization
+          ? "重新授权并更新权限" : "连接 " + String(plugin.name || plugin.id) + " 账户";
+        connect.addEventListener("click", async () => {
+          connect.disabled = true;
+          try {
+            if (needsReauthorization && plugin.connected) {
+              await apiJson("/api/user/plugins/" + encodeURIComponent(plugin.id) + "/disconnect", {method:"POST"});
+            }
+            window.location.assign("/api/user/plugins/oauth/" + encodeURIComponent(plugin.id) + "/start");
+          } catch (error) {
+            toast("更新插件授权失败：" + String(error.message || error));
+            connect.disabled = false;
+          }
         });
         card.appendChild(connect);
       }
@@ -2562,7 +2592,7 @@
           }
         });
         card.appendChild(disconnect);
-        if (plugin.enabled && plugin.configured) {
+        if (plugin.enabled && plugin.configured && !needsReauthorization) {
         const toolBox = document.createElement("div");
         toolBox.className = "plugin-toolbox";
         const query = document.createElement("input");

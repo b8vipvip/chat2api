@@ -107,6 +107,16 @@ def _scope_list(value: Any) -> list[str]:
     return sorted({item.strip() for item in values if item and len(item) <= 256})
 
 
+def _github_scope_mismatch(private_repos: bool, granted_scopes: Any) -> str:
+    """Return the required OAuth scope transition, if the saved grant is stale."""
+    has_private_repo_scope = "repo" in set(_scope_list(granted_scopes))
+    if private_repos and not has_private_repo_scope:
+        return "upgrade"
+    if not private_repos and has_private_repo_scope:
+        return "downgrade"
+    return ""
+
+
 class PluginOAuthStore:
     """Private SQLite store for provider config, one-time OAuth state and user tokens."""
 
@@ -558,6 +568,18 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
             public["account_label"] = connection.get("account_label") if connection else ""
             public["scopes"] = connection.get("scopes") if connection else public["scopes"]
             public["connected_at"] = connection.get("created_at") if connection else None
+            scope_transition = (
+                _github_scope_mismatch(bool(public.get("private_repos")), connection.get("scopes"))
+                if provider_id == "github" and connection else ""
+            )
+            public["reauthorization_required"] = bool(scope_transition)
+            public["reauthorization_mode"] = scope_transition
+            public["reauthorization_reason"] = (
+                "管理员已启用私有仓库访问，需要重新授权 GitHub repo 权限"
+                if scope_transition == "upgrade" else
+                "管理员已关闭私有仓库访问，需要撤销旧授权并重新连接"
+                if scope_transition == "downgrade" else ""
+            )
             rows.append(public)
         return JSONResponse({"data": rows}, headers=_PRIVATE_HEADERS)
 
@@ -744,7 +766,8 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
         if not expires_at or int(expires_at) > int(time.time()) + 60:
             return str(connection["access_token"])
         if not connection.get("refresh_token"):
-            raise HTTPException(401, "插件授权已过期，请重新连接账户", headers=_PRIVATE_HEADERS)
+            store.disconnect(user_id, provider_id)
+            raise HTTPException(409, "插件授权已过期，请重新连接账户", headers=_PRIVATE_HEADERS)
         config = store.provider(provider_id)
         if not config or not config.get("enabled"):
             raise HTTPException(403, "插件已由管理员停用", headers=_PRIVATE_HEADERS)
@@ -757,11 +780,24 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                 },
                 headers={"Accept": "application/json"},
             )
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                try:
+                    refresh_error = response.json().get("error")
+                except (ValueError, AttributeError):
+                    refresh_error = None
+                if refresh_error in {"invalid_grant", "invalid_token"}:
+                    store.disconnect(user_id, provider_id)
+                    raise HTTPException(
+                        409, "插件授权已失效，请重新连接账户", headers=_PRIVATE_HEADERS,
+                    ) from exc
+                raise
             payload = response.json()
         token = str(payload.get("access_token") or "")
         if not token:
-            raise HTTPException(401, "插件授权已失效，请重新连接账户", headers=_PRIVATE_HEADERS)
+            store.disconnect(user_id, provider_id)
+            raise HTTPException(409, "插件授权已失效，请重新连接账户", headers=_PRIVATE_HEADERS)
         new_expiry = int(time.time()) + max(60, int(payload.get("expires_in") or 3600))
         store.update_access_token(
             user_id, provider_id, token, payload.get("refresh_token"), new_expiry,
@@ -786,8 +822,24 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
             payload = {}
         if not isinstance(payload, dict):
             raise HTTPException(422, "Invalid plugin tool input", headers=_PRIVATE_HEADERS)
+        user_id = str(user["user_id"])
+        connection = store.connection(user_id, provider_id)
+        if provider_id == "github" and connection:
+            scope_transition = _github_scope_mismatch(
+                bool(config.get("private_repos")), connection.get("scopes"),
+            )
+            if scope_transition == "upgrade":
+                raise HTTPException(
+                    409, "管理员已启用私有仓库访问；请重新授权 GitHub 账户以授予 repo 权限",
+                    headers=_PRIVATE_HEADERS,
+                )
+            if scope_transition == "downgrade":
+                raise HTTPException(
+                    409, "管理员已关闭私有仓库访问；请先断开并重新连接 GitHub，以撤销旧 repo 权限",
+                    headers=_PRIVATE_HEADERS,
+                )
         try:
-            token = await access_token_for(str(user["user_id"]), provider_id)
+            token = await access_token_for(user_id, provider_id)
         except httpx.HTTPError as exc:
             raise HTTPException(502, "插件授权刷新暂时失败，请稍后重试", headers=_PRIVATE_HEADERS) from exc
         timeout = httpx.Timeout(15.0, connect=5.0)
@@ -1053,13 +1105,21 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
             if provider_id == "github":
                 status = exc.response.status_code
                 if status == 401:
-                    raise HTTPException(401, "GitHub 授权已失效，请重新连接账户", headers=_PRIVATE_HEADERS) from exc
+                    # Provider credential failures must not be confused with the
+                    # Web Chat account-session 401 handled by the browser shell.
+                    # Remove the rejected credential so a page reload also offers
+                    # the reconnect action instead of showing a stale connection.
+                    store.disconnect(str(user["user_id"]), provider_id)
+                    raise HTTPException(409, "GitHub 授权已失效，请重新连接账户", headers=_PRIVATE_HEADERS) from exc
                 if status == 404:
                     raise HTTPException(404, "GitHub 未找到该资源，或当前账户无权访问", headers=_PRIVATE_HEADERS) from exc
                 if status == 403 and exc.response.headers.get("X-RateLimit-Remaining") == "0":
                     raise HTTPException(429, "GitHub API 请求额度已用完，请稍后重试", headers=_PRIVATE_HEADERS) from exc
                 if status == 403:
                     raise HTTPException(403, "GitHub 拒绝了此操作，请检查账户权限或 OAuth 授权范围", headers=_PRIVATE_HEADERS) from exc
+            elif provider_id == "gmail" and exc.response.status_code == 401:
+                store.disconnect(str(user["user_id"]), provider_id)
+                raise HTTPException(409, "Gmail 授权已失效，请重新连接账户", headers=_PRIVATE_HEADERS) from exc
             raise HTTPException(502, "插件服务暂时不可用，请稍后重试", headers=_PRIVATE_HEADERS) from exc
         except (httpx.HTTPError, ValueError, TypeError, AttributeError) as exc:
             raise HTTPException(502, "插件服务暂时不可用，请稍后重试", headers=_PRIVATE_HEADERS) from exc

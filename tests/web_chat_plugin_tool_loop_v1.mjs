@@ -29,6 +29,10 @@ function makeHarness({selectedPlugins = ["github"], catalog = null, planner = []
     saveHistory(){},
     renderAll(){},
     renderMessages(){},
+    renderPluginCatalog(){},
+    persistPluginSelection(){},
+    updatePluginPickerButton(){},
+    loadPluginCatalog:async () => {},
     setConnection(){},
     recordClientDiagnostic(){},
     id:() => "call-" + (++nextId),
@@ -67,7 +71,7 @@ function makeHarness({selectedPlugins = ["github"], catalog = null, planner = []
   const api = vm.runInNewContext(
     "(() => { " + helperSource + "\nreturn {" +
       "selectedPluginToolDefinitions,parsePluginToolPlan,validatePluginToolArguments," +
-      "runAutonomousPluginToolLoop}; })()",
+      "executePluginToolCall,runAutonomousPluginToolLoop}; })()",
     context,
   );
   return {
@@ -364,4 +368,61 @@ test("model chains GitHub Pull Request listing into a detail read using returned
   assert.equal(result.toolCalls,2);
   assert.deepEqual(h.calls.map(row => row[1]),["list_pull_requests","get_pull_request"]);
   assert.ok(messages.some(item => item.role === "tool" && item.content.includes("changed_files")));
+});
+
+
+test("GitHub tools stay unavailable until the connected account matches admin OAuth scopes", () => {
+  const h = makeHarness({
+    selectedPlugins:["github"],
+    catalog:[{
+      id:"github",enabled:true,configured:true,connected:true,
+      reauthorization_required:true,reauthorization_mode:"upgrade",
+    }],
+  });
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(h.api.selectedPluginToolDefinitions())),
+    [],
+  );
+});
+
+
+test("revoked GitHub OAuth token asks for reconnect without clearing the Web Chat user", async () => {
+  const revoked = new Error("GitHub 授权已失效，请重新连接账户");
+  revoked.status = 409;
+  const h = makeHarness({
+    selectedPlugins:["github"],
+    toolHandler:async () => { throw revoked; },
+  });
+  const definitions = h.api.selectedPluginToolDefinitions();
+  const result = await h.api.executePluginToolCall(
+    {name:"github.search_repositories",arguments:{query:"chat2api"}},
+    definitions,h.assistant,
+  );
+  assert.equal(result.result.ok,false);
+  assert.match(result.result.error,/GitHub 授权已失效/);
+  assert.equal(h.state.user.user_id,"test-user-1");
+  assert.equal(h.state.pluginCatalog[0].reauthorization_required,true);
+  assert.equal(h.state.pluginCatalog[0].reauthorization_mode,"reconnect");
+  assert.deepEqual(h.state.selectedPlugins,[]);
+  assert.equal(h.assistant.toolEvents[0].status,"failed");
+});
+
+
+test("revoked Gmail OAuth token also asks for reconnect without clearing the Web Chat user", async () => {
+  const revoked = new Error("Gmail 授权已失效，请重新连接账户");
+  revoked.status = 409;
+  const h = makeHarness({
+    selectedPlugins:["gmail"],
+    toolHandler:async () => { throw revoked; },
+  });
+  const definitions = h.api.selectedPluginToolDefinitions();
+  const result = await h.api.executePluginToolCall(
+    {name:"gmail.search_messages",arguments:{query:"from:example.com"}},
+    definitions,h.assistant,
+  );
+  assert.equal(result.result.ok,false);
+  assert.equal(h.state.user.user_id,"test-user-1");
+  assert.equal(h.state.pluginCatalog[1].reauthorization_required,true);
+  assert.equal(h.state.pluginCatalog[1].reauthorization_mode,"reconnect");
+  assert.deepEqual(h.state.selectedPlugins,[]);
 });
