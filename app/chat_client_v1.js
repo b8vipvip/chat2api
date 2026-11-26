@@ -1955,7 +1955,7 @@
     if (selected.has("github") && connected.has("github")) {
       const repositorySchema = {
         type:"string",
-        pattern:"^(?!\\\\.{1,2}/)[A-Za-z0-9_.-]{1,100}/(?!\\\\.{1,2}$)[A-Za-z0-9_.-]{1,100}$",
+        pattern:"^(?!\\.{1,2}/)[A-Za-z0-9_.-]{1,100}/(?!\\.{1,2}$)[A-Za-z0-9_.-]{1,100}$",
         description:"Exact owner/repository",
       };
       const stateSchema = {type:"string",enum:["open","closed","all"]};
@@ -2076,20 +2076,72 @@
     if (Object.keys(args).some(key => !allowed.has(key))) {
       throw new Error("工具参数包含未允许的字段");
     }
+    const repositoryValue = () => {
+      const repository = typeof args.repository === "string" ? args.repository.trim() : "";
+      if (!/^(?!\.{1,2}\/)[A-Za-z0-9_.-]{1,100}\/(?!\.{1,2}$)[A-Za-z0-9_.-]{1,100}$/.test(repository)) {
+        throw new Error("GitHub 仓库必须为明确的 owner/repository");
+      }
+      return repository;
+    };
+    const stateValue = () => {
+      const value = args.state === undefined ? "open" :
+        (typeof args.state === "string" ? args.state : "");
+      if (!["open","closed","all"].includes(value)) throw new Error("GitHub state 参数无效");
+      return value;
+    };
+    const positiveNumber = value => {
+      if (typeof value !== "number" || !Number.isSafeInteger(value)
+          || value < 1 || value > 2147483647) {
+        throw new Error("GitHub 编号必须是有效的正整数");
+      }
+      return value;
+    };
+    const refValue = () => {
+      if (args.ref === undefined) return undefined;
+      if (typeof args.ref !== "string" || !args.ref.trim() || args.ref.length > 255
+          || /[\u0000-\u001f\u007f]/.test(args.ref)) {
+        throw new Error("GitHub ref 参数无效");
+      }
+      return args.ref.trim();
+    };
     if (definition.name === "github.search_repositories") {
       const query = typeof args.query === "string" ? args.query.trim() : "";
       if (!query || query.length > 200) throw new Error("GitHub 搜索词必须为 1-200 个字符");
       return {query};
     }
-    if (definition.name === "github.list_issues") {
-      const repository = typeof args.repository === "string" ? args.repository.trim() : "";
-      if (!/^(?!\.{1,2}\/)[A-Za-z0-9_.-]{1,100}\/(?!\.{1,2}$)[A-Za-z0-9_.-]{1,100}$/.test(repository)) {
-        throw new Error("GitHub 仓库必须为明确的 owner/repository");
+    if (definition.name === "github.get_repository") {
+      return {repository:repositoryValue()};
+    }
+    if (definition.name === "github.list_issues" || definition.name === "github.list_pull_requests") {
+      return {repository:repositoryValue(),state:stateValue()};
+    }
+    if (definition.name === "github.get_issue") {
+      return {repository:repositoryValue(),issue_number:positiveNumber(args.issue_number)};
+    }
+    if (definition.name === "github.get_pull_request") {
+      return {repository:repositoryValue(),pull_number:positiveNumber(args.pull_number)};
+    }
+    if (definition.name === "github.list_commits") {
+      const repository = repositoryValue();
+      const ref = refValue();
+      return ref ? {repository,ref} : {repository};
+    }
+    if (definition.name === "github.search_code") {
+      const query = typeof args.query === "string" ? args.query.trim() : "";
+      if (!query || query.length > 256) throw new Error("GitHub 代码搜索词必须为 1-256 个字符");
+      return {query};
+    }
+    if (definition.name === "github.get_file_contents") {
+      const repository = repositoryValue();
+      const path = typeof args.path === "string" ? args.path.trim() : "";
+      const parts = path.split("/");
+      if (!path || path.length > 500 || path.startsWith("/")
+          || parts.some(part => !part || part === "." || part === "..")
+          || path.includes("\\") || /[\u0000-\u001f\u007f]/.test(path)) {
+        throw new Error("GitHub 文件路径必须是安全的相对路径");
       }
-      const stateValue = args.state === undefined ? "open" :
-        (typeof args.state === "string" ? args.state : "");
-      if (!["open","closed","all"].includes(stateValue)) throw new Error("Issue 状态参数无效");
-      return {repository,state:stateValue};
+      const ref = refValue();
+      return ref ? {repository,path,ref} : {repository,path};
     }
     if (definition.name === "gmail.search_messages") {
       const query = typeof args.query === "string" ? args.query.trim() : "";
