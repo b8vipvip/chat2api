@@ -5,9 +5,9 @@ chat2api 同时包含服务端 Python 包、分层运行时/控制台、Chrome B
 ## 当前版本面
 
 - Python package：`0.7.3`
-- Server runtime / console：`0.22.303`
-- Chrome Bridge：`0.22.303`
-- Chrome Bundle / manifest：`0.22.303`
+- Server runtime / console：`0.22.302`
+- Chrome Bridge：`0.22.302`
+- Chrome Bundle / manifest：`0.22.302`
 - Realtime Voice protocol：`chat2api-live-v1`
 - 生产入口：`app.entry:app`
 
@@ -39,14 +39,14 @@ GET /version
   "contract_version": 1,
   "server": {
     "package_version": "0.7.3",
-    "runtime_version": "0.22.303",
-    "expected_runtime_version": "0.22.303",
+    "runtime_version": "0.22.302",
+    "expected_runtime_version": "0.22.302",
     "entrypoint": "app.entry:app",
     "runtime_aligned": true
   },
   "chrome_bridge": {
-    "version": "0.22.303",
-    "bundle_version": "0.22.303",
+    "version": "0.22.302",
+    "bundle_version": "0.22.302",
     "multimodal_revision": 85
   },
   "protocols": {
@@ -71,12 +71,12 @@ GET /version
 8. Worker 内容运行时升级时，bundle marker、content runtime contract、programmatic bootstrap 和 background runtime preflight 必须在同一次发布中对齐；如果采用兼容热修复并保持 manifest 版本不变，服务端 Worker 自动同步必须依据 `chrome_extension/` 路径变化强制刷新 Worker payload。涉及页面 MAIN-world 能力时还必须把 MAIN-world marker 纳入 runtime contract。
 9. 自动处理 ChatGPT 页面弹窗只能执行无副作用的关闭/跳过动作；涉及授权、连接健康数据、付款、登录、验证、删除账号等动作必须保持人工确认，且 runtime preflight 必须把当前 UI hygiene revision 纳入完整性检查。
 
-## v0.22.303
+## v0.22.302 compatibility hotfix
 
 - Native Web Chat controls: typed, bounded checkbox/radio/range/select/disclosure and code-copy delivery, with legacy snapshot normalization and strict server/browser validation.
 - Preserve individually SHA-256-verified image slots when other image identities in the same reply are incomplete; unverified slots remain placeholders.
 - Align Worker and server text-budget accounting for interactive control labels.
-- Server runtime, Chrome Bridge, Worker Bundle / manifest advance together to `0.22.303`; Python package remains `0.7.3`.
+- Keep the existing `0.22.302` Server/Bridge/manifest contract; the deployment Worker sync guard detects changed `chrome_extension/` paths and forces a Worker refresh without changing the wire protocol or manifest version.
 
 ## v0.22.300
 
