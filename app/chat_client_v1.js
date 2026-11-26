@@ -2598,16 +2598,20 @@
           try {
             if (needsReauthorization && plugin.connected) {
               const requireRevocation = plugin.id === "github" && plugin.reauthorization_mode === "downgrade";
-              const disconnected = await apiJson(
-                "/api/user/plugins/" + encodeURIComponent(plugin.id) + "/disconnect",
-                {
-                  method:"POST",
-                  headers:{"Content-Type":"application/json"},
-                  body:JSON.stringify({require_provider_revocation:requireRevocation}),
-                },
-              );
-              if (requireRevocation && !["revoked","already_revoked"].includes(disconnected.provider_revocation)) {
-                throw new Error("未能确认撤销 GitHub 旧 repo 权限，已保留原连接。请先在 GitHub 授权设置中撤销此应用后重试。");
+              if (requireRevocation) {
+                const disconnected = await apiJson(
+                  "/api/user/plugins/" + encodeURIComponent(plugin.id) + "/disconnect",
+                  {
+                    method:"POST",
+                    headers:{"Content-Type":"application/json"},
+                    body:JSON.stringify({require_provider_revocation:requireRevocation}),
+                  },
+                );
+                if (!["revoked","already_revoked"].includes(disconnected.provider_revocation)) {
+                  throw new Error("未能确认撤销 GitHub 旧 repo 权限，已保留原连接。请先在 GitHub 授权设置中撤销此应用后重试。");
+                }
+              } else {
+                await apiJson("/api/user/plugins/" + encodeURIComponent(plugin.id) + "/disconnect", {method:"POST"});
               }
             }
             window.location.assign("/api/user/plugins/oauth/" + encodeURIComponent(plugin.id) + "/start");
