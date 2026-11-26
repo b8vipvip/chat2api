@@ -1994,26 +1994,27 @@
       throw new Error("工具参数包含未允许的字段");
     }
     if (definition.name === "github.search_repositories") {
-      const query = String(args.query || "").trim();
+      const query = typeof args.query === "string" ? args.query.trim() : "";
       if (!query || query.length > 200) throw new Error("GitHub 搜索词必须为 1-200 个字符");
       return {query};
     }
     if (definition.name === "github.list_issues") {
-      const repository = String(args.repository || "").trim();
+      const repository = typeof args.repository === "string" ? args.repository.trim() : "";
       if (!/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(repository)) {
         throw new Error("GitHub 仓库必须为明确的 owner/repository");
       }
-      const stateValue = args.state === undefined ? "open" : String(args.state);
+      const stateValue = args.state === undefined ? "open" :
+        (typeof args.state === "string" ? args.state : "");
       if (!["open","closed","all"].includes(stateValue)) throw new Error("Issue 状态参数无效");
       return {repository,state:stateValue};
     }
     if (definition.name === "gmail.search_messages") {
-      const query = String(args.query || "").trim();
+      const query = typeof args.query === "string" ? args.query.trim() : "";
       if (!query || query.length > 500) throw new Error("Gmail 搜索词必须为 1-500 个字符");
       return {query};
     }
     if (definition.name === "gmail.get_message") {
-      const messageId = String(args.message_id || "").trim();
+      const messageId = typeof args.message_id === "string" ? args.message_id.trim() : "";
       if (!/^[A-Za-z0-9_-]{1,256}$/.test(messageId)) {
         throw new Error("Gmail message_id 无效；必须使用搜索结果中的 ID");
       }
