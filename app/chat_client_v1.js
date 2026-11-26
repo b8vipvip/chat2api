@@ -1798,7 +1798,7 @@
     button.textContent = count ? "插件 · " + count : "插件";
     button.setAttribute("aria-pressed", count ? "true" : "false");
     button.title = count
-      ? "已启用 " + count + " 个插件；发送消息时会自动查询并提供只读结果"
+      ? "已启用 " + count + " 个插件；问题相关时自动查询并提供只读结果"
       : "选择要在聊天中自动使用的插件";
     button.disabled = state.streaming || state.voiceActive;
   }
@@ -1885,11 +1885,11 @@
   function shouldQueryPlugin(providerId, prompt) {
     const text = String(prompt || "").toLowerCase();
     if (providerId === "github") {
-      return /github|git hub|仓库|repo|issue|问题|缺陷|代码库|开源项目|pull request|\bpr\b|commit|branch/.test(text)
+      return /github|git hub|仓库|repo|issue|缺陷|代码库|开源项目|pull request|\bpr\b|commit|branch|bug/.test(text)
         || /[a-z0-9_.-]{1,100}\/[a-z0-9_.-]{1,100}/i.test(text);
     }
     if (providerId === "gmail") {
-      return /gmail|邮件|邮箱|收件箱|发件人|邮件主题|email|e-mail|invoice|receipt|from:|subject:/.test(text);
+      return /gmail|邮件|邮箱|收件箱|发件人|邮件主题|email|e-mail|mail|invoice|receipt|from:|subject:/.test(text);
     }
     return false;
   }
