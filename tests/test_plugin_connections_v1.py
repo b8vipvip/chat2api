@@ -375,3 +375,162 @@ def test_oauth_callback_persists_the_authenticated_users_provider_connection(
         row = next(item for item in catalog.json()["data"] if item["id"] == provider_id)
         assert row["connected"] is True
         assert access_token not in catalog.text
+
+
+def test_github_repository_issue_pull_request_commit_and_file_read_tools(tmp_path: Path, monkeypatch):
+    app = make_app(tmp_path)
+    store: PluginOAuthStore = app.state.plugin_oauth_store
+    store.save_provider(
+        "github", enabled=True, client_id="gh-client",
+        client_secret="gh-secret", private_repos=False,
+    )
+    with TestClient(app) as client:
+        user = register(client, "github-read-tools@example.com")
+        store.save_connection(
+            user["user_id"], "github", "42", "octocat",
+            "github-read-token", "", ["read:user"], None,
+        )
+
+        class FakeResponse:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self.payload
+
+        class FakeAsyncClient:
+            def __init__(self, *args, **kwargs):
+                self.calls = []
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def get(self, url, **kwargs):
+                self.calls.append((url, kwargs))
+                assert kwargs["headers"]["Authorization"] == "Bearer github-read-token"
+                if url == "https://api.github.com/repos/acme/project":
+                    return FakeResponse({
+                        "full_name": "acme/project", "description": "Demo repo",
+                        "html_url": "https://github.com/acme/project", "private": False,
+                        "default_branch": "main", "language": "Python",
+                        "stargazers_count": 12, "forks_count": 3, "open_issues_count": 4,
+                        "updated_at": "2026-11-26T00:00:00Z",
+                    })
+                if url == "https://api.github.com/repos/acme/project/issues/7":
+                    return FakeResponse({
+                        "number": 7, "title": "Fix parser", "state": "open",
+                        "html_url": "https://github.com/acme/project/issues/7",
+                        "body": "Issue body", "labels": [{"name": "bug"}],
+                        "created_at": "2026-11-20T00:00:00Z",
+                        "updated_at": "2026-11-25T00:00:00Z", "closed_at": None,
+                    })
+                if url == "https://api.github.com/repos/acme/project/pulls":
+                    assert kwargs["params"]["per_page"] == 20
+                    return FakeResponse([{
+                        "number": 8, "title": "Add parser", "state": "open",
+                        "html_url": "https://github.com/acme/project/pull/8",
+                        "body": "PR body", "draft": True,
+                        "head": {"ref": "feature/parser"}, "base": {"ref": "main"},
+                        "updated_at": "2026-11-25T00:00:00Z",
+                    }])
+                if url == "https://api.github.com/repos/acme/project/pulls/8":
+                    return FakeResponse({
+                        "number": 8, "title": "Add parser", "state": "open",
+                        "html_url": "https://github.com/acme/project/pull/8",
+                        "body": "Full PR body", "draft": False, "merged": False,
+                        "mergeable": True, "head": {"ref": "feature/parser"},
+                        "base": {"ref": "main"}, "changed_files": 2,
+                        "additions": 20, "deletions": 3, "commits": 1,
+                        "created_at": "2026-11-20T00:00:00Z",
+                        "updated_at": "2026-11-25T00:00:00Z",
+                    })
+                if url == "https://api.github.com/repos/acme/project/commits":
+                    assert kwargs["params"]["sha"] == "main"
+                    return FakeResponse([{
+                        "sha": "a" * 40,
+                        "commit": {"message": "Improve parser", "author": {
+                            "name": "Developer", "date": "2026-11-25T00:00:00Z",
+                        }},
+                        "html_url": "https://github.com/acme/project/commit/" + "a" * 40,
+                    }])
+                if url == "https://api.github.com/search/code":
+                    assert kwargs["params"]["q"] == "repo:acme/project parser"
+                    return FakeResponse({"items": [{
+                        "repository": {"full_name": "acme/project"},
+                        "path": "docs/hello world.md",
+                        "html_url": "https://github.com/acme/project/blob/main/docs/hello%20world.md",
+                        "sha": "b" * 40,
+                    }]})
+                if url == "https://api.github.com/repos/acme/project/contents/docs/hello%20world.md":
+                    assert kwargs["params"] == {"ref": "main"}
+                    raw = b"print('hello')\\n"
+                    return FakeResponse({
+                        "type": "file", "size": len(raw),
+                        "content": base64.b64encode(raw).decode("ascii"),
+                        "encoding": "base64", "sha": "c" * 40,
+                        "html_url": "https://github.com/acme/project/blob/main/docs/hello%20world.md",
+                    })
+                raise AssertionError("unexpected GitHub URL: " + url)
+
+        fake_clients = []
+        original = FakeAsyncClient
+        class TrackingAsyncClient(original):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                fake_clients.append(self)
+
+        monkeypatch.setattr("app.plugin_connections_v1.httpx.AsyncClient", TrackingAsyncClient)
+        login = client.post(
+            "/api/user/login",
+            json={"email": "github-read-tools@example.com", "password": PASSWORD},
+            headers=ORIGIN,
+        )
+        assert login.status_code == 200
+
+        requests = [
+            ("get_repository", {"repository": "acme/project"}),
+            ("get_issue", {"repository": "acme/project", "issue_number": 7}),
+            ("list_pull_requests", {"repository": "acme/project", "state": "open"}),
+            ("get_pull_request", {"repository": "acme/project", "pull_number": 8}),
+            ("list_commits", {"repository": "acme/project", "ref": "main"}),
+            ("search_code", {"query": "repo:acme/project parser"}),
+            ("get_file_contents", {"repository": "acme/project", "path": "docs/hello world.md", "ref": "main"}),
+        ]
+        responses = []
+        for tool_name, payload in requests:
+            response = client.post(
+                "/api/user/plugins/github/tools/" + tool_name,
+                headers=ORIGIN, json=payload,
+            )
+            assert response.status_code == 200, (tool_name, response.text)
+            responses.append(response.json()["data"])
+
+        assert responses[0][0]["default_branch"] == "main"
+        assert responses[1][0]["number"] == 7
+        assert responses[1][0]["labels"] == ["bug"]
+        assert responses[2][0]["draft"] is True
+        assert responses[3][0]["mergeable"] is True
+        assert responses[4][0]["sha"] == "a" * 40
+        assert responses[5][0]["path"] == "docs/hello world.md"
+        assert responses[6][0]["content"] == "print('hello')\\n"
+        assert len(fake_clients) == 7
+
+        invalid_path = client.post(
+            "/api/user/plugins/github/tools/get_file_contents",
+            headers=ORIGIN,
+            json={"repository": "acme/project", "path": "../secrets.txt"},
+        )
+        assert invalid_path.status_code == 422
+        invalid_number = client.post(
+            "/api/user/plugins/github/tools/get_issue",
+            headers=ORIGIN,
+            json={"repository": "acme/project", "issue_number": True},
+        )
+        assert invalid_number.status_code == 422
+        assert len(fake_clients) == 7
