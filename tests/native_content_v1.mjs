@@ -13,7 +13,7 @@ class Element {
   getAttribute(name){return Object.prototype.hasOwnProperty.call(this.attributes,name)?this.attributes[name]:null;}
   getBoundingClientRect(){return {width:100,height:100};}
   matches(s){return false;}
-  closest(s){return null;}
+  closest(s){if(String(s).includes("form")){for(let node=this;node;node=node.parentElement)if(node.tagName==="FORM")return node;}return null;}
   querySelectorAll(selector){
     const out=[];
     const walk=node=>{
@@ -1065,8 +1065,12 @@ select.options=[
   {value:"line",label:"折线图",selected:false,disabled:false},
 ];
 const copyButton=new Element("BUTTON");copyButton.attributes["aria-label"]="Copy code";
+const runButton=new Element("BUTTON");runButton.attributes["aria-label"]="Run";
+const textInput=new Element("INPUT");textInput.type="text";textInput.attributes["aria-label"]="自由文本";
+const formCheckbox=new Element("INPUT");formCheckbox.type="checkbox";formCheckbox.attributes["aria-label"]="表单内选项";
+const form=new Element("FORM",[formCheckbox]);
 const pre=new Element("PRE");pre.textContent="print('hello')\n";
-const interactiveRoot=new Element("DIV",[details,checkbox,radio,range,select,copyButton,pre]);
+const interactiveRoot=new Element("DIV",[details,checkbox,radio,range,select,runButton,textInput,form,copyButton,pre]);
 const interactiveActive={requestId:"req_interactive12345",submitStartedAt:Date.now(),
   lastCandidateNode:interactiveRoot};
 const interactiveCapture=interactiveCtx.__CHAT2API_NATIVE_CONTENT_V1__;
