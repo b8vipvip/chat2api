@@ -469,7 +469,7 @@ def test_github_repository_issue_pull_request_commit_and_file_read_tools(tmp_pat
                     }]})
                 if url == "https://api.github.com/repos/acme/project/contents/docs/hello%20world.md":
                     assert kwargs["params"] == {"ref": "main"}
-                    raw = b"print('hello')\\n"
+                    raw = b"print('hello')\n"
                     return FakeResponse({
                         "type": "file", "size": len(raw),
                         "content": base64.b64encode(raw).decode("ascii"),
@@ -518,7 +518,7 @@ def test_github_repository_issue_pull_request_commit_and_file_read_tools(tmp_pat
         assert responses[3][0]["mergeable"] is True
         assert responses[4][0]["sha"] == "a" * 40
         assert responses[5][0]["path"] == "docs/hello world.md"
-        assert responses[6][0]["content"] == "print('hello')\\n"
+        assert responses[6][0]["content"] == "print('hello')\n"
         assert len(fake_clients) == 7
 
         invalid_path = client.post(
@@ -533,4 +533,6 @@ def test_github_repository_issue_pull_request_commit_and_file_read_tools(tmp_pat
             json={"repository": "acme/project", "issue_number": True},
         )
         assert invalid_number.status_code == 422
-        assert len(fake_clients) == 7
+        assert len(fake_clients) == 9
+        assert fake_clients[7].calls == []
+        assert fake_clients[8].calls == []
