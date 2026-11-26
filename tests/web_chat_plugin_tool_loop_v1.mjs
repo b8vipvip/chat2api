@@ -366,7 +366,10 @@ test("model chains GitHub Pull Request listing into a detail read using returned
     messages,h.assistant,"key-1",h.recoveryApi,"req-planner-1",
   );
   assert.equal(result.toolCalls,2);
-  assert.deepEqual(h.calls.map(row => row[1]),["list_pull_requests","get_pull_request"]);
+  assert.deepEqual(
+    h.calls.map(row => row[1]),["list_pull_requests","get_pull_request"],
+    "PR detail tool was not dispatched: " + JSON.stringify(h.assistant.toolEvents),
+  );
   assert.ok(messages.some(item => item.role === "tool" && item.content.includes("changed_files")));
 });
 
