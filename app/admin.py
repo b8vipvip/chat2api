@@ -126,11 +126,34 @@ ADMIN_HTML = r'''<!doctype html>
   </div>
 </section>
 <section class="view" id="view-plugins">
-  <div class="panel"><h2>产品插件目录</h2><p class="c-note">当前只允许登记经过字段校验的 Manifest 元数据。所有插件仍然 untrusted，执行能力固定关闭；SHA-256 仅是完整性指纹，不是签名或信任证明。</p>
-    <label>Manifest JSON<textarea id="cPluginManifest" spellcheck="false" style="width:100%;min-height:260px;font-family:ui-monospace,monospace" placeholder='{"id":"sample_tool","name":"Sample Tool","description":"...","publisher":"...","version":"1.0.0","tools":[...]}'></textarea></label>
-    <div class="c-form"><button class="action good" id="cPluginRegister">登记 Manifest</button><button class="action" id="cPluginReload">刷新目录</button><span id="cPluginStatus" class="muted"></span></div>
-    <div class="scroll"><table class="c-table"><thead><tr><th>插件</th><th>版本</th><th>SHA-256</th><th>信任</th><th>执行</th><th>操作</th></tr></thead><tbody id="cPluginRows"></tbody></table></div>
-    <pre id="cPluginDetail" class="codebox" style="margin-top:12px;white-space:pre-wrap"></pre>
+  <div class="panel"><h2>插件管理</h2><p class="c-note">配置 OAuth 应用后，Web Chat 用户可以连接自己的 GitHub / Gmail 账户。Client Secret 使用服务端数据密钥加密保存；页面不会回显密钥。用户授权凭据按用户隔离，仅开放下方列出的只读工具。</p>
+    <div class="c-grid">
+      <div class="panel">
+        <h3>GitHub</h3>
+        <div class="c-form">
+          <label>OAuth Client ID<input id="cPluginGithubClientId" maxlength="256" placeholder="GitHub OAuth App Client ID"></label>
+          <label>OAuth Client Secret<input id="cPluginGithubClientSecret" type="password" maxlength="2048" autocomplete="new-password" placeholder="留空则保留已保存的 Secret"></label>
+          <label><span>插件状态</span><span><input id="cPluginGithubEnabled" type="checkbox"> 启用 GitHub</span></label>
+          <label><span>仓库权限</span><span><input id="cPluginGithubPrivateRepos" type="checkbox"> 允许访问私有仓库（GitHub repo scope）</span></label>
+          <button class="action good" id="cPluginGithubSave" type="button">保存 GitHub 配置</button>
+        </div>
+        <div id="cPluginGithubRedirect" class="c-note">回调地址：等待加载</div>
+        <div id="cPluginGithubStatus" class="muted" role="status"></div>
+      </div>
+      <div class="panel">
+        <h3>Gmail</h3>
+        <div class="c-form">
+          <label>Google OAuth Client ID<input id="cPluginGmailClientId" maxlength="256" placeholder="Google OAuth Client ID"></label>
+          <label>Google OAuth Client Secret<input id="cPluginGmailClientSecret" type="password" maxlength="2048" autocomplete="new-password" placeholder="留空则保留已保存的 Secret"></label>
+          <label><span>插件状态</span><span><input id="cPluginGmailEnabled" type="checkbox"> 启用 Gmail</span></label>
+          <button class="action good" id="cPluginGmailSave" type="button">保存 Gmail 配置</button>
+        </div>
+        <div id="cPluginGmailRedirect" class="c-note">回调地址：等待加载</div>
+        <div id="cPluginGmailStatus" class="muted" role="status"></div>
+        <p class="muted">默认申请 Gmail 只读权限（gmail.readonly）；当前不提供发送、删除或修改邮件操作。</p>
+      </div>
+    </div>
+    <div class="c-form"><button class="action" id="cPluginReload" type="button">刷新插件配置</button><span id="cPluginStatus" class="muted"></span></div>
   </div>
 </section>
 <section class="view" id="view-api-keys">
