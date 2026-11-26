@@ -406,3 +406,23 @@ test("revoked GitHub OAuth token asks for reconnect without clearing the Web Cha
   assert.deepEqual(h.state.selectedPlugins,[]);
   assert.equal(h.assistant.toolEvents[0].status,"failed");
 });
+
+
+test("revoked Gmail OAuth token also asks for reconnect without clearing the Web Chat user", async () => {
+  const revoked = new Error("Gmail 授权已失效，请重新连接账户");
+  revoked.status = 409;
+  const h = makeHarness({
+    selectedPlugins:["gmail"],
+    toolHandler:async () => { throw revoked; },
+  });
+  const definitions = h.api.selectedPluginToolDefinitions();
+  const result = await h.api.executePluginToolCall(
+    {name:"gmail.search_messages",arguments:{query:"from:example.com"}},
+    definitions,h.assistant,
+  );
+  assert.equal(result.result.ok,false);
+  assert.equal(h.state.user.user_id,"test-user-1");
+  assert.equal(h.state.pluginCatalog[1].reauthorization_required,true);
+  assert.equal(h.state.pluginCatalog[1].reauthorization_mode,"reconnect");
+  assert.deepEqual(h.state.selectedPlugins,[]);
+});
