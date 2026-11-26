@@ -4,22 +4,18 @@ import vm from "node:vm";
 
 const source = await readFile(new URL("../app/chat_native_renderer_v1.js", import.meta.url), "utf8");
 class FakeElement {
-  constructor(tagName) { this.tagName=tagName; this.childNodes=[]; this.style={}; this.attributes={}; this.listeners={}; }
+  constructor(tagName) { this.tagName=tagName; this.childNodes=[]; this.style={}; this.attributes={}; }
   appendChild(node) { this.childNodes.push(node); return node; }
   replaceChildren(...nodes) { this.childNodes=nodes; }
   setAttribute(name,value) { this.attributes[name]=value; }
-  addEventListener(name,callback) { this.listeners[name]=callback; }
-  click() { return this.listeners.click?.(); }
+  addEventListener(name,callback) { this.events??={}; this.events[name]=callback; }
 }
 const document = {
   createElement:(tag)=>new FakeElement(tag),
   createElementNS:(_namespace,tag)=>new FakeElement(tag),
   createTextNode:(text)=>({nodeType:3,textContent:String(text)}),
 };
-const clipboardWrites = [];
-const window = {location:{origin:"https://chat.example"},navigator:{clipboard:{
-  writeText:async value=>{clipboardWrites.push(value);}
-}}};
+const window = {location:{origin:"https://chat.example"}};
 vm.runInNewContext(source, {window, URL, document});
 const renderer = window.Chat2APINativeRendererV1;
 assert(renderer && renderer.validateSnapshot);
@@ -60,32 +56,6 @@ const good = {
   ]}
 };
 assert.equal(renderer.validateSnapshot(good),true);
-const interactive = structuredClone(good);
-interactive.root.children.push(
-  {tag:"details",open:true,children:[
-    {tag:"summary",text:"展开更多信息"},
-    {tag:"p",text:"折叠内容仍保留在原生快照中"}
-  ]},
-  {tag:"button",text:"复制代码",action:"copy-text",action_value:"print('hello')"}
-);
-assert.equal(renderer.validateSnapshot(interactive),true);
-const missingButtonAction = structuredClone(interactive);
-delete missingButtonAction.root.children.at(-1).action;
-delete missingButtonAction.root.children.at(-1).action_value;
-assert.equal(renderer.validateSnapshot(missingButtonAction),false);
-const unsafeButtonAction = structuredClone(interactive);
-unsafeButtonAction.root.children.at(-1).action = "execute-script";
-assert.equal(renderer.validateSnapshot(unsafeButtonAction),false);
-const actionOnText = structuredClone(interactive);
-actionOnText.root.children[0].action = "copy-text";
-actionOnText.root.children[0].action_value = "x";
-assert.equal(renderer.validateSnapshot(actionOnText),false);
-const summaryOutsideDisclosure = structuredClone(interactive);
-summaryOutsideDisclosure.root.children.push({tag:"summary",text:"不允许游离 summary"});
-assert.equal(renderer.validateSnapshot(summaryOutsideDisclosure),false);
-const invalidDisclosureState = structuredClone(interactive);
-invalidDisclosureState.root.children.at(-2).open = "true";
-assert.equal(renderer.validateSnapshot(invalidDisclosureState),false);
 const validZeroRowSpan = structuredClone(good);
 validZeroRowSpan.root.children.push({tag:"table",children:[{tag:"tbody",children:[{tag:"tr",children:[{tag:"td",row_span:0,text:"span"}]}]}]});
 assert.equal(renderer.validateSnapshot(validZeroRowSpan),true);
@@ -122,7 +92,7 @@ wrongMathAttributeScope.root.children[1].math_attrs = {stretchy:"true"};
 assert.equal(renderer.validateSnapshot(wrongMathAttributeScope),false);
 
 const renderedHost = new FakeElement("host");
-assert.equal(renderer.renderNativeSnapshot(renderedHost,interactive,[
+assert.equal(renderer.renderNativeSnapshot(renderedHost,good,[
   {id:"turn0search0",url:"https://docs.python.org/3/",title:"Python docs",snippet:"Official documentation"},
   {id:"bad<script>",url:"https://evil.example/source",title:"Unsafe ID"},
   {id:"turn0private",url:"https://127.0.0.1/private",title:"Private URL"},
@@ -135,15 +105,6 @@ function findTag(node,tag) {
   }
   return null;
 }
-const renderedDisclosure = findTag(renderedHost,"details");
-const renderedCopyButton = findTag(renderedHost,"button");
-assert.ok(renderedDisclosure);
-assert.equal(renderedDisclosure.open,true);
-assert.ok(renderedCopyButton);
-assert.equal(renderedCopyButton.type,"button");
-await renderedCopyButton.click();
-assert.deepEqual(clipboardWrites,["print('hello')"]);
-assert.equal(renderedCopyButton.textContent,"已复制");
 const renderedMath = findTag(renderedHost,"math");
 const renderedFraction = findTag(renderedHost,"mfrac");
 const renderedOperator = findTag(renderedHost,"mo");
@@ -212,3 +173,109 @@ let current = unsafeDepth.root;
 for(let i=0;i<66;i++){current.children=[{tag:"div"}];current=current.children[0];}
 assert.equal(renderer.validateSnapshot(unsafeDepth),false);
 console.log("native-renderer-validation-passed");
+
+
+const interactive = {
+  version:1,revision:4,finality:"verified-final",assets:[],files:[],
+  root:{tag:"div",children:[
+    {tag:"details",control:{kind:"disclosure",open:true},children:[
+      {tag:"summary",text:"展开步骤"},
+      {tag:"p",text:"安全的本地折叠内容"},
+    ]},
+    {tag:"input",style:{width:"240px"},control:{kind:"checkbox",label:"包含税费",disabled:false,checked:true}},
+    {tag:"input",control:{kind:"radio",label:"按月统计",disabled:false,checked:true,group:"period"}},
+    {tag:"input",control:{kind:"range",label:"透明度",disabled:false,min:0,max:100,step:5,value:45}},
+    {tag:"select",control:{kind:"select",label:"图表类型",disabled:false,selected:"bar"},children:[
+      {tag:"option",text:"柱状图",control:{kind:"option",value:"bar",disabled:false,selected:true}},
+      {tag:"option",text:"折线图",control:{kind:"option",value:"line",disabled:false,selected:false}},
+    ]},
+    {tag:"button",control:{kind:"copy",label:"Copy code",text:"print('hello')\n"}},
+  ]},
+};
+assert.equal(renderer.validateSnapshot(interactive),true);
+const interactiveHost=new FakeElement("host");
+let copied="";
+const interactiveWindow = {};
+const interactiveRendererSource = source;
+const interactiveContext = {
+  window:interactiveWindow,URL,document,
+  navigator:{clipboard:{writeText:async value=>{copied=value;}}},
+};
+vm.runInNewContext(interactiveRendererSource,interactiveContext);
+const interactiveRenderer=interactiveWindow.Chat2APINativeRendererV1;
+assert.equal(interactiveRenderer.renderNativeSnapshot(interactiveHost,interactive),true);
+assert.match(interactiveHost.childNodes[0].textContent,/本地预览/);
+const renderedDetails=findTag(interactiveHost,"details");
+assert.equal(renderedDetails.open,true);
+const renderedInputs=findAll(interactiveHost,node=>node.tagName==="input");
+assert.equal(renderedInputs.length,3);
+assert.equal(renderedInputs[0].type,"checkbox");
+assert.equal(renderedInputs[0].checked,true);
+assert.equal(renderedInputs[0].attributes["aria-label"],"包含税费");
+assert.equal(renderedInputs[1].type,"radio");
+assert.equal(renderedInputs[1].checked,true);
+assert.ok(renderedInputs[1].name.startsWith("native-"));
+assert.equal(renderedInputs[2].type,"range");
+assert.equal(renderedInputs[2].value,"45");
+assert.equal(renderedInputs[2].min,"0");
+assert.equal(renderedInputs[2].max,"100");
+assert.equal(renderedInputs[2].step,"5");
+const renderedSelect=findTag(interactiveHost,"select");
+assert.equal(renderedSelect.value,"bar");
+assert.equal(renderedSelect.childNodes.length,2);
+const copyControl=findTag(interactiveHost,"button");
+assert.equal(copyControl.type,"button");
+assert.equal(copyControl.textContent,"Copy code");
+copyControl.events.click();
+await new Promise(resolve=>setImmediate(resolve));
+assert.equal(copied,"print('hello')\n");
+assert.equal(copyControl.textContent,"已复制");
+
+const unsafeControl=structuredClone(interactive);
+unsafeControl.root.children.push({tag:"button",control:{kind:"run",label:"运行",text:"code"}});
+assert.equal(renderer.validateSnapshot(unsafeControl),false);
+const malformedSelect=structuredClone(interactive);
+malformedSelect.root.children[4].control.selected="missing";
+assert.equal(renderer.validateSnapshot(malformedSelect),false);
+console.log("native-renderer-interactive-controls-passed");
+
+
+const disclosureWithoutSummary = {
+  version:1,revision:6,finality:"verified-final",assets:[],files:[],
+  root:{tag:"details",control:{kind:"disclosure",open:false},children:[
+    {tag:"p",text:"Legacy disclosure content remains renderable"},
+  ]},
+};
+assert.equal(interactiveRenderer.validateSnapshot(disclosureWithoutSummary),true);
+const emptyDisclosure = {
+  version:1,revision:7,finality:"verified-final",assets:[],files:[],
+  root:{tag:"details",control:{kind:"disclosure",open:false},children:[]},
+};
+assert.equal(interactiveRenderer.validateSnapshot(emptyDisclosure),true);
+const tooManyOptions=structuredClone(interactive);
+tooManyOptions.root.children[4].children=Array.from({length:65},(_,index)=>({
+  tag:"option",text:`Option ${index}`,control:{
+    kind:"option",value:`v${index}`,disabled:false,selected:index===0,
+  },
+}));
+tooManyOptions.root.children[4].control.selected="v0";
+assert.equal(interactiveRenderer.validateSnapshot(tooManyOptions),false);
+const duplicateSummary=structuredClone(interactive);
+duplicateSummary.root.children[0].children.splice(1,0,{tag:"summary",text:"第二个摘要"});
+assert.equal(interactiveRenderer.validateSnapshot(duplicateSummary),false);
+assert.equal(renderedInputs[0].style.width,"240px","captured input styles must survive rendering");
+
+const chartSnapshot={
+  version:1,revision:5,finality:"verified-final",assets:[],files:[],
+  root:{tag:"svg",attrs:{viewBox:"0 0 640 320"},children:[
+    {tag:"title",text:"季度收入趋势"},
+    {tag:"desc",text:"按季度展示收入变化"},
+    {tag:"path",attrs:{d:"M0 0 L640 320",stroke:"#123456"}},
+  ]},
+};
+assert.equal(interactiveRenderer.validateSnapshot(chartSnapshot),true);
+const chartHost=new FakeElement("host");
+assert.equal(interactiveRenderer.renderNativeSnapshot(chartHost,chartSnapshot),true);
+assert.equal(findTag(chartHost,"title").childNodes[0].textContent,"季度收入趋势");
+assert.equal(findTag(chartHost,"desc").childNodes[0].textContent,"按季度展示收入变化");
+console.log("native-renderer-svg-chart-tooltip-passed");

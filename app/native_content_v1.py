@@ -3,7 +3,8 @@
 Neither this store nor its SSE subscribers participate in Broker completion.
 The authoritative OpenAI reply remains the existing archived Markdown.
 No raw HTML, CSS text, media URLs, file bytes, tokens or JS are accepted;
-only bounded public HTTPS citation targets may accompany inert text nodes.
+only bounded presentation nodes, typed interaction metadata and public HTTPS
+citation targets cross this protocol.
 """
 from __future__ import annotations
 
@@ -76,7 +77,7 @@ MATH_TAGS = {"math", "semantics", "mrow", "mi", "mo", "mn", "msub", "mfrac",
              "menclose", "mpadded", "merror", "ms", "mfenced", "mprescripts", "none",
              "mstack", "mlongdiv", "msgroup", "msrow", "mscarries", "mscarry", "msline"}
 SVG_TAGS = {"svg", "g", "path", "line", "rect", "circle", "ellipse",
-            "polyline", "polygon", "text", "tspan", "defs", "clippath"}
+            "polyline", "polygon", "text", "tspan", "title", "desc", "defs", "clippath"}
 SVG_ATTRS = {"viewBox", "width", "height", "preserveAspectRatio", "x", "y",
              "dx", "dy", "x1", "x2", "y1", "y2", "cx", "cy", "r", "rx", "ry",
              "d", "points", "transform", "fill", "stroke", "stroke-width",
@@ -297,7 +298,7 @@ def _svg_attribute(key: str, value: object) -> bool:
 SAFE_TAGS = MATH_TAGS | SVG_TAGS | {"div", "p", "span", "strong", "em", "h1", "h2", "h3", "h4",
              "ul", "ol", "li", "blockquote", "pre", "code", "table", "thead",
              "tbody", "tr", "td", "th", "figure", "figcaption", "img", "hr", "br", "a",
-             "details", "summary", "button"}
+             "details", "summary", "input", "select", "option", "button"}
 SAFE_STYLES = {
     "display": {"block", "inline", "inline-block", "flex", "inline-flex", "grid", "block math", "inline math"},
     "flexDirection": {"row", "row-reverse", "column", "column-reverse"},
@@ -337,6 +338,72 @@ BORDER_SPACING = re.compile(
 GRID_COLUMNS = re.compile(r"^(?:\d{1,4}(?:\.\d{1,2})?(?:px|%)|minmax\(\d{1,4}(?:\.\d{1,2})?px,\s*1fr\)|1fr)(?:\s+(?:\d{1,4}(?:\.\d{1,2})?(?:px|%)|minmax\(\d{1,4}(?:\.\d{1,2})?px,\s*1fr\)|1fr)){0,5}$")
 
 
+def _control_text(value: object, limit: int, *, allow_newlines: bool = False) -> bool:
+    if not isinstance(value, str) or len(value) > limit:
+        return False
+    allowed = {"\t", "\n", "\r"} if allow_newlines else set()
+    return not any((ord(char) < 32 and char not in allowed) or ord(char) == 127
+                   for char in value)
+
+
+def _validate_native_control(tag: str, control: object) -> dict:
+    if not isinstance(control, dict) or not isinstance(control.get("kind"), str):
+        raise ValueError("Invalid native control")
+    kind = control["kind"]
+    if tag == "details":
+        if set(control) != {"kind", "open"} or kind != "disclosure" or type(control["open"]) is not bool:
+            raise ValueError("Invalid disclosure control")
+    elif tag == "input":
+        common = {"kind", "label", "disabled"}
+        if kind in {"checkbox", "radio"}:
+            allowed = common | {"checked"} | ({"group"} if kind == "radio" else set())
+            if set(control) != allowed or type(control.get("checked")) is not bool:
+                raise ValueError("Invalid choice control")
+            if kind == "radio" and (not isinstance(control.get("group"), str)
+                    or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", control["group"])):
+                raise ValueError("Invalid radio group")
+        elif kind == "range":
+            if set(control) != common | {"min", "max", "step", "value"}:
+                raise ValueError("Invalid range control")
+            values = [control.get(key) for key in ("min", "max", "step", "value")]
+            if any(type(value) not in (int, float) or not math.isfinite(value)
+                   or abs(value) > 1_000_000 for value in values):
+                raise ValueError("Invalid range bounds")
+            minimum, maximum, step, current = values
+            if minimum >= maximum or step <= 0 or current < minimum or current > maximum:
+                raise ValueError("Invalid range value")
+        else:
+            raise ValueError("Unsupported input type")
+        if not _control_text(control.get("label"), 160) or not control["label"].strip():
+            raise ValueError("Input control requires a bounded label")
+        if type(control.get("disabled")) is not bool:
+            raise ValueError("Invalid input disabled state")
+    elif tag == "select":
+        if set(control) != {"kind", "label", "disabled", "selected"} or kind != "select":
+            raise ValueError("Invalid select control")
+        if (not _control_text(control.get("label"), 160) or not control["label"].strip()
+                or not _control_text(control.get("selected"), 128)
+                or type(control.get("disabled")) is not bool):
+            raise ValueError("Invalid select state")
+    elif tag == "option":
+        if set(control) != {"kind", "value", "disabled", "selected"} or kind != "option":
+            raise ValueError("Invalid option control")
+        if (not _control_text(control.get("value"), 128)
+                or type(control.get("disabled")) is not bool
+                or type(control.get("selected")) is not bool):
+            raise ValueError("Invalid option state")
+    elif tag == "button":
+        if set(control) != {"kind", "label", "text"} or kind != "copy":
+            raise ValueError("Unsupported button action")
+        if (not _control_text(control.get("label"), 80) or not control["label"].strip()
+                or not _control_text(control.get("text"), 150_000, allow_newlines=True)
+                or not control["text"]):
+            raise ValueError("Invalid copy action")
+    else:
+        raise ValueError("Control metadata on unsupported element")
+    return dict(control)
+
+
 def validate_native_snapshot(payload: object) -> dict:
     if not isinstance(payload, dict):
         raise ValueError("Native snapshot must be an object")
@@ -353,46 +420,71 @@ def validate_native_snapshot(payload: object) -> dict:
             raise ValueError("Native tree exceeds limit")
         count += 1
         tag = value.get("tag")
-        if tag not in SAFE_TAGS or not isinstance(tag, str):
+        if not isinstance(tag, str) or tag not in SAFE_TAGS:
             raise ValueError("Unsupported native element")
+        # Rolling-upgrade compatibility: older Worker builds and durable
+        # snapshots used details.open and button.action/action_value. Normalize
+        # those shapes once at the server boundary; every downstream consumer
+        # sees only the typed control contract.
+        legacy_open = "open" in value
+        legacy_action = "action" in value or "action_value" in value
+        if tag == "details" and "control" not in value and not legacy_action:
+            # The earliest disclosure snapshots did not persist an explicit
+            # open flag. Their browser default was closed, so normalize it.
+            value = dict(value)
+            opened = value.pop("open", False)
+            if type(opened) is not bool:
+                raise ValueError("Invalid legacy disclosure state")
+            value["control"] = {"kind": "disclosure", "open": opened}
+            value.setdefault("children", [])
+        elif legacy_open or legacy_action:
+            value = dict(value)
+            if "control" in value:
+                raise ValueError("Mixed legacy and typed native controls")
+            if tag == "details" and legacy_open and not legacy_action:
+                opened = value.pop("open")
+                if type(opened) is not bool:
+                    raise ValueError("Invalid legacy disclosure state")
+                value["control"] = {"kind": "disclosure", "open": opened}
+                value.setdefault("children", [])
+            elif tag == "button" and legacy_action and not legacy_open:
+                action = value.pop("action", None)
+                action_value = value.pop("action_value", None)
+                label = value.pop("text", None)
+                value["control"] = {
+                    "kind": "copy", "label": label, "text": action_value,
+                }
+                if action != "copy-text":
+                    raise ValueError("Unsupported legacy native button action")
+            else:
+                raise ValueError("Legacy interaction metadata on unsupported element")
+        if tag == "details" and "children" not in value:
+            # Empty disclosures are valid HTML; normalize to the array shape
+            # consumed by the browser renderer.
+            value = dict(value)
+            value["children"] = []
         if parent_tag in SVG_TAGS and tag not in SVG_TAGS:
             raise ValueError("Invalid SVG children")
         if tag in SVG_TAGS and parent_tag not in SVG_TAGS and tag != "svg":
             raise ValueError("Unscoped SVG element")
         if set(value) - {"tag", "text", "children", "style", "media_index",
                           "intrinsic_width", "intrinsic_height", "source_sha256", "attrs",
-                          "math_attrs", "col_span", "row_span", "href", "open",
-                          "action", "action_value"}:
+                          "math_attrs", "col_span", "row_span", "href", "control"}:
             raise ValueError("Native element has unsafe attributes")
         result = {"tag": tag}
+        if tag in {"details", "input", "select", "option", "button"} and "control" not in value:
+            raise ValueError("Interactive element is missing safe control metadata")
+        if "control" in value:
+            result["control"] = _validate_native_control(tag, value["control"])
+            control = result["control"]
+            # Copy text duplicates the already-counted adjacent pre/code node.
+            chars += len(control.get("label", ""))
+            if chars > MAX_TEXT:
+                raise ValueError("Native interactive content too large")
         if tag == "summary" and parent_tag != "details":
             raise ValueError("Summary must belong to a disclosure")
-        if tag == "details":
-            if "open" in value:
-                if type(value["open"]) is not bool:
-                    raise ValueError("Invalid disclosure state")
-                result["open"] = value["open"]
-            disclosure_children = value.get("children", [])
-            if not isinstance(disclosure_children, list):
-                raise ValueError("Invalid disclosure children")
-            summaries = [index for index,child in enumerate(disclosure_children)
-                         if isinstance(child, dict) and child.get("tag") == "summary"]
-            if len(summaries) > 1 or (summaries and summaries[0] != 0):
-                raise ValueError("Disclosure summary must be the first child")
-        elif "open" in value:
-            raise ValueError("Disclosure state on non-disclosure element")
-        if tag == "button":
-            action_value = value.get("action_value")
-            label = value.get("text")
-            if (value.get("action") != "copy-text" or not isinstance(action_value, str)
-                    or not 1 <= len(action_value) <= 150000
-                    or not isinstance(label, str) or not label.strip() or len(label) > 64
-                    or "children" in value):
-                raise ValueError("Unsupported native button action")
-            result["action"] = "copy-text"
-            result["action_value"] = action_value
-        elif "action" in value or "action_value" in value:
-            raise ValueError("Native action on unsupported element")
+        if tag == "option" and parent_tag != "select":
+            raise ValueError("Option must belong to a select")
         if "href" in value:
             if tag != "a" or not _safe_external_link(value["href"]):
                 raise ValueError("Unsafe external link")
@@ -453,9 +545,15 @@ def validate_native_snapshot(payload: object) -> dict:
         elif any(k in value for k in ("media_index", "intrinsic_width",
                                        "intrinsic_height", "source_sha256")):
             raise ValueError("Image reference on non-image element")
+        if tag in {"details", "select"} and "children" not in value:
+            raise ValueError("Interactive container requires children")
+        if tag in {"input", "select", "button"} and "text" in value:
+            raise ValueError("Interactive control cannot carry arbitrary text")
+        if tag == "option" and (not isinstance(value.get("text"), str) or not value["text"].strip()):
+            raise ValueError("Option requires a visible label")
         if "text" in value:
             content = value["text"]
-            if tag == "img" or tag in (SVG_TAGS - {"text", "tspan"}) or not isinstance(content, str):
+            if tag == "img" or tag in (SVG_TAGS - {"text", "tspan", "title", "desc"}) or not isinstance(content, str):
                 raise ValueError("Invalid text")
             chars += len(content)
             if chars > MAX_TEXT:
@@ -489,8 +587,15 @@ def validate_native_snapshot(payload: object) -> dict:
                 result["style"] = styles
         if "children" in value:
             children = value["children"]
-            if tag in {"img", "hr", "br"} or not isinstance(children, list) or len(children) > MAX_CHILDREN:
+            if tag in {"img", "hr", "br", "input", "option", "button"} or not isinstance(children, list) or len(children) > MAX_CHILDREN:
                 raise ValueError("Invalid children")
+            if tag == "select" and (len(children) > 64 or any(not isinstance(child, dict) or child.get("tag") != "option" for child in children)):
+                raise ValueError("Select must contain at most 64 option nodes")
+            if tag == "details":
+                summaries = [index for index, child in enumerate(children)
+                             if isinstance(child, dict) and child.get("tag") == "summary"]
+                if len(summaries) > 1 or (summaries and summaries[0] != 0):
+                    raise ValueError("Disclosure may have at most one leading summary")
             # Namespace integrity: no HTML/script/image descendants under
             # MathML. Existing validated HTML content remains unchanged.
             if tag in MATH_TAGS and any(not isinstance(child, dict)
@@ -500,6 +605,12 @@ def validate_native_snapshot(payload: object) -> dict:
                     or child.get("tag") not in SVG_TAGS for child in children):
                 raise ValueError("Invalid SVG children")
             result["children"] = [node(child, depth + 1, tag) for child in children]
+        if tag == "select":
+            option_controls = [child.get("control", {}) for child in result.get("children", [])]
+            selected_options = [item for item in option_controls if item.get("selected") is True]
+            if (len(selected_options) != 1
+                    or selected_options[0].get("value") != result["control"]["selected"]):
+                raise ValueError("Select must have exactly one selected option")
         return result
 
     root = node(payload["root"], 0)
@@ -1062,21 +1173,25 @@ def native_public_v1_tree(root: dict) -> dict:
     """
     result = {key: value for key,value in root.items()
               if key not in ("intrinsic_width", "intrinsic_height", "source_sha256",
-                             "attrs", "math_attrs", "children", "col_span", "row_span")}
+                             "attrs", "math_attrs", "children", "col_span", "row_span", "control")}
     # Older native-v1 clients do not know these newer table layout styles.
     # Keep them only in the authenticated admin native preview.
     if "style" in result:
         result["style"] = {key: item for key, item in result["style"].items()
                            if key not in {"boxSizing", "borderCollapse", "borderSpacing"}}
+    # Older native-v1 consumers do not understand interactive controls. Keep
+    # their projection inert rather than leaking executable UI semantics.
+    if root.get("tag") in {"details", "summary", "input", "select", "option", "button"}:
+        control = root.get("control") or {}
+        result["tag"] = "span"
+        if not result.get("text") and control.get("label"):
+            result["text"] = control["label"]
     # Existing strict v1 consumers accept HTML nodes, not arbitrary MathML.
     # Preserve MathML natively in private admin preview; public v1 gets safe
     # inert HTML spans until the protocol formally negotiates MathML.
-    if root.get("tag") in MATH_TAGS | SVG_TAGS | {"a", "details", "summary", "button"}:
+    if root.get("tag") in MATH_TAGS | SVG_TAGS | {"a"}:
         result["tag"] = "span"
         result.pop("href", None)
-        result.pop("open", None)
-        result.pop("action", None)
-        result.pop("action_value", None)
         if "style" in result:
             result["style"] = {k:v for k,v in result["style"].items() if k!="display"}
     if "children" in root:
