@@ -3756,6 +3756,10 @@
   bootstrap().then(() => {
     const params = new URLSearchParams(window.location.search);
     const provider = params.get("provider") || "";
+    if (params.get("tab") === "plugins") {
+      state.sidebarPage = "plugins";
+      renderAll();
+    }
     if (params.get("plugin") === "connected") {
       toast((provider === "gmail" ? "Gmail" : "GitHub") + " 账户已成功连接");
     } else if (params.get("plugin_error")) {
@@ -3773,6 +3777,7 @@
       params.delete("plugin");
       params.delete("plugin_error");
       params.delete("provider");
+      params.delete("tab");
       const query = params.toString();
       window.history.replaceState({}, "", window.location.pathname + (query ? "?" + query : "") + window.location.hash);
     }
