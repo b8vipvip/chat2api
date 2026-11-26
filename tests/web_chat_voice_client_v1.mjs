@@ -408,6 +408,84 @@ await assert.rejects(delayedMicStart,/cancelled/i);
 assert.equal(delayedMicTrack.stopped,true,"late microphone permission must release its track");
 assert.equal(delayedMicFetchCalls,0,"cancelled microphone startup must not create a server session");
 
+// Closing while waiting for session.ready must settle even when the browser
+// never delivers a close event. An old socket must not close the replacement.
+class SilentCloseWebSocket extends FakeWebSocket {
+  send(value) { this.sent.push(value); }
+  close() { this.readyState = FakeWebSocket.CLOSED; }
+}
+const silentClient = api.create({
+  apiToken:"managed-key",fetcher,WebSocketImpl:SilentCloseWebSocket,
+  AudioContextImpl:FakeAudioContext,mediaDevices,location:window.location,timers,
+});
+const silentStart = silentClient.start();
+const cancelledStart = assert.rejects(silentStart,/cancelled/i);
+await new Promise(resolve=>setTimeout(resolve,10));
+const silentSocket = FakeWebSocket.last;
+assert.ok(silentSocket instanceof SilentCloseWebSocket);
+assert.ok(silentSocket.sent.some(value=>JSON.parse(value).type==="session.start"));
+await silentClient.stop();
+await cancelledStart;
+assert.equal(silentClient.isActive(),false);
+
+// Restarting the same client must reset the camera budget/timestamp and ignore
+// stale callbacks from the old socket, including delayed Blob audio decoding.
+const restartEvents = [];
+const restartClient = api.create({
+  apiToken:"managed-key",fetcher,WebSocketImpl:FakeWebSocket,
+  AudioContextImpl:FakeAudioContext,mediaDevices,location:window.location,timers,
+  now:()=>clock,onEvent:event=>restartEvents.push(event),
+});
+await restartClient.start();
+const oldSocket = FakeWebSocket.last;
+await restartClient.startCamera(video);
+await new Promise(resolve=>setTimeout(resolve,10));
+const oldFrames = oldSocket.sent.filter(value=>typeof value==="string")
+  .map(value=>JSON.parse(value)).filter(value=>value.type==="input_video.frame");
+assert.equal(oldFrames.length,1);
+assert.equal(oldFrames[0].sequence,0);
+let resolveOldAudio;
+class DelayedAudioBlob extends Blob {
+  arrayBuffer() { return new Promise(resolve=>{resolveOldAudio=resolve;}); }
+}
+oldSocket.onmessage({data:new DelayedAudioBlob()});
+assert.equal(typeof resolveOldAudio,"function");
+const stopA = restartClient.stop();
+const stopB = restartClient.stop();
+assert.equal(stopA,stopB,"concurrent stop calls share a single terminal operation");
+await Promise.all([stopA,stopB]);
+assert.equal(oldSocket.sent.filter(value=>typeof value==="string" &&
+  JSON.parse(value).type==="session.finish").length,1);
+clock += 1000;
+await restartClient.start();
+const newSocket = FakeWebSocket.last;
+const playbackBefore = playbackSources.length;
+oldSocket.onclose?.();
+oldSocket.onmessage?.({data:JSON.stringify({type:"session.closed"})});
+resolveOldAudio(new ArrayBuffer(32));
+await new Promise(resolve=>setImmediate(resolve));
+assert.equal(restartClient.isActive(),true,"old socket events cannot stop a new session");
+assert.equal(playbackSources.length,playbackBefore,"old asynchronous audio cannot play into the new session");
+clock += 200;
+newSocket.onmessage({data:JSON.stringify({type:"session.ready",supports:["input_video.frame"]})});
+await restartClient.startCamera(video);
+await new Promise(resolve=>setTimeout(resolve,10));
+const newFrames = newSocket.sent.filter(value=>typeof value==="string")
+  .map(value=>JSON.parse(value)).filter(value=>value.type==="input_video.frame");
+assert.equal(newFrames.length,1);
+assert.equal(newFrames[0].sequence,0,"new call has a fresh frame sequence");
+assert.equal(newFrames[0].timestamp_ms,200,"duplicate readiness cannot reset the session time origin");
+let resolveInterruptedAudio;
+class InterruptedAudioBlob extends Blob {
+  arrayBuffer() { return new Promise(resolve=>{resolveInterruptedAudio=resolve;}); }
+}
+newSocket.onmessage({data:new InterruptedAudioBlob()});
+newSocket.onmessage({data:JSON.stringify({type:"response.interrupted"})});
+resolveInterruptedAudio(new ArrayBuffer(32));
+await new Promise(resolve=>setImmediate(resolve));
+assert.equal(playbackSources.length,playbackBefore,"interrupted delayed audio cannot resurrect playback");
+await restartClient.stop();
+
 // The same cancellation rule applies to a camera permission prompt. Stopping
 // the camera before getUserMedia resolves must not attach a late stream or
 // install a capture timer.
