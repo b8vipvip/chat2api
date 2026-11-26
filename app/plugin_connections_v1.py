@@ -504,7 +504,7 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
         }
         if provider_id == "gmail":
             params.update({"access_type": "offline", "prompt": "consent", "include_granted_scopes": "true"})
-        return RedirectResponse(spec["authorize_url"] + "?" + urlencode(params), status_code=303)
+        return RedirectResponse(spec["authorize_url"] + "?" + urlencode(params), status_code=303, headers=_PRIVATE_HEADERS)
 
     async def exchange_oauth_code(
         provider_id: str, config: dict[str, Any], code: str,
@@ -578,24 +578,24 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
     @app.get("/api/user/plugins/oauth/{provider_id}/callback")
     async def finish_plugin_oauth(provider_id: str, request: Request) -> RedirectResponse:
         if provider_id not in PROVIDERS:
-            return RedirectResponse("/chat?plugin_error=unknown_provider", status_code=303)
+            return RedirectResponse("/chat?tab=plugins&plugin_error=unknown_provider", status_code=303)
         user = getattr(request.app.state, "user_accounts", None)
         authenticated = user.authenticate(request.cookies.get(USER_SESSION_COOKIE)) if user else None
         if not authenticated or authenticated.get("is_guest"):
-            return RedirectResponse("/chat?plugin_error=login_required", status_code=303)
+            return RedirectResponse("/chat?tab=plugins&plugin_error=login_required", status_code=303)
         from .web_chat_identity_v1 import web_chat_session_policy_allows
         if not web_chat_session_policy_allows(request.app, authenticated):
-            return RedirectResponse("/chat?plugin_error=provider_disabled", status_code=303)
+            return RedirectResponse("/chat?tab=plugins&plugin_error=provider_disabled", status_code=303, headers=_PRIVATE_HEADERS)
         state = str(request.query_params.get("state") or "")
         verifier = store.consume_state(state, provider_id, str(authenticated["user_id"]))
         if not verifier:
-            return RedirectResponse("/chat?plugin_error=invalid_state", status_code=303)
+            return RedirectResponse("/chat?tab=plugins&plugin_error=invalid_state", status_code=303, headers=_PRIVATE_HEADERS)
         code = str(request.query_params.get("code") or "")
         if not code or len(code) > 4096 or request.query_params.get("error"):
-            return RedirectResponse("/chat?plugin_error=authorization_denied", status_code=303)
+            return RedirectResponse("/chat?tab=plugins&plugin_error=authorization_denied", status_code=303, headers=_PRIVATE_HEADERS)
         config = store.provider(provider_id)
         if not config or not config.get("enabled"):
-            return RedirectResponse("/chat?plugin_error=provider_disabled", status_code=303)
+            return RedirectResponse("/chat?tab=plugins&plugin_error=provider_disabled", status_code=303)
         try:
             uri = callback_uri(request, provider_id)
             token, profile, scopes = await exchange_oauth_code(provider_id, config, code, uri, verifier)
@@ -607,8 +607,8 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                 scopes, token.get("expires_at"),
             )
         except (httpx.HTTPError, ValueError, KeyError, AttributeError, PluginConnectionError):
-            return RedirectResponse("/chat?plugin_error=token_exchange_failed", status_code=303)
-        return RedirectResponse("/chat?plugin=connected&provider=" + provider_id, status_code=303)
+            return RedirectResponse("/chat?tab=plugins&plugin_error=token_exchange_failed", status_code=303, headers=_PRIVATE_HEADERS)
+        return RedirectResponse("/chat?tab=plugins&plugin=connected&provider=" + provider_id, status_code=303, headers=_PRIVATE_HEADERS)
 
     @app.post("/api/user/plugins/{provider_id}/disconnect")
     async def disconnect_plugin(provider_id: str, request: Request) -> JSONResponse:
