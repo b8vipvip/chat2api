@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -8,7 +9,7 @@ from fastapi.testclient import TestClient
 from app.config import Settings
 from app.control_plane_v1_patch import install_control_plane_v1
 from app.main import create_app
-from app.plugin_connections_v1 import PluginOAuthStore, install_plugin_connections_v1
+from app.plugin_connections_v1 import PluginOAuthStore, _gmail_body_text, install_plugin_connections_v1
 from app.plugin_registry_v1_patch import install_plugin_registry
 from app.user_console_v104_patch import install_user_console_v104_patch
 from app.v17_patch import install_v17_patch
@@ -160,3 +161,21 @@ def test_plugin_connections_are_isolated_per_user_and_tokens_never_leave_the_sto
         assert github_b["connected"] is False
         assert github_b["account_label"] == ""
         assert store.connection(user_b["user_id"], "github") is None
+
+
+def test_gmail_body_decoder_prefers_plain_text_and_ignores_attachments():
+    plain = base64.urlsafe_b64encode("Hello from Gmail\nSecond line".encode()).decode().rstrip("=")
+    html_body = base64.urlsafe_b64encode(b"<html><body><b>HTML fallback</b></body></html>").decode().rstrip("=")
+    attachment = base64.urlsafe_b64encode(b"not message text").decode().rstrip("=")
+    payload = {
+        "mimeType": "multipart/alternative",
+        "parts": [
+            {"mimeType": "text/plain", "body": {"data": plain}},
+            {"mimeType": "text/html", "body": {"data": html_body}},
+            {"mimeType": "application/pdf", "body": {"data": attachment}},
+        ],
+    }
+    assert _gmail_body_text(payload) == "Hello from Gmail\nSecond line"
+
+    html_only = {"mimeType": "text/html", "body": {"data": html_body}}
+    assert _gmail_body_text(html_only) == "HTML fallback"
