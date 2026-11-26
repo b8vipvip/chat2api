@@ -2294,13 +2294,15 @@
       event.status = "failed";
       event.resultId = callId + "_result";
       event.output = String(error?.message || "插件调用失败").slice(0,500);
-      if (error?.status === 409 && definition?.provider === "github") {
+      if (error?.status === 409 && definition?.provider) {
+        const providerId = definition.provider;
         if (/授权已失效|授权已过期/.test(String(error?.message || ""))) {
-          state.pluginCatalog = state.pluginCatalog.map(plugin => plugin?.id === "github"
+          const providerName = providerId === "github" ? "GitHub" : "Gmail";
+          state.pluginCatalog = state.pluginCatalog.map(plugin => plugin?.id === providerId
             ? {...plugin,reauthorization_required:true,reauthorization_mode:"reconnect",
-              reauthorization_reason:"GitHub 授权已失效，请重新连接账户"}
+              reauthorization_reason:providerName + " 授权已失效，请重新连接账户"}
             : plugin);
-          state.selectedPlugins = state.selectedPlugins.filter(value => value !== "github");
+          state.selectedPlugins = state.selectedPlugins.filter(value => value !== providerId);
           persistPluginSelection();
           updatePluginPickerButton();
           renderPluginCatalog();
