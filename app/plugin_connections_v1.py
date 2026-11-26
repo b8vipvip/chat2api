@@ -972,9 +972,12 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                     elif tool_name == "get_pull_request_files":
                         repository = _github_repo_name(payload.get("repository"))
                         pull_number = _github_resource_number(payload.get("pull_number"))
+                        page = payload.get("page", 1)
+                        if type(page) is not int or not 1 <= page <= 20:
+                            raise HTTPException(422, "page must be an integer between 1 and 20", headers=_PRIVATE_HEADERS)
                         response = await client.get(
                             "https://api.github.com/repos/" + repository + "/pulls/" + str(pull_number) + "/files",
-                            params={"per_page": 20},
+                            params={"per_page": 5, "page": page},
                             headers=github_headers,
                         )
                         response.raise_for_status()
