@@ -3756,7 +3756,7 @@
   bootstrap().then(() => {
     const params = new URLSearchParams(window.location.search);
     const provider = params.get("provider") || "";
-    if (params.get("tab") === "plugins") {
+    if (params.get("tab") === "plugins" && state.user) {
       state.sidebarPage = "plugins";
       renderAll();
     }
