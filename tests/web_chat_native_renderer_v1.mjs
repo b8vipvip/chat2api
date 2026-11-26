@@ -8,6 +8,7 @@ class FakeElement {
   appendChild(node) { this.childNodes.push(node); return node; }
   replaceChildren(...nodes) { this.childNodes=nodes; }
   setAttribute(name,value) { this.attributes[name]=value; }
+  addEventListener(name,callback) { this.events??={}; this.events[name]=callback; }
 }
 const document = {
   createElement:(tag)=>new FakeElement(tag),
@@ -172,3 +173,67 @@ let current = unsafeDepth.root;
 for(let i=0;i<66;i++){current.children=[{tag:"div"}];current=current.children[0];}
 assert.equal(renderer.validateSnapshot(unsafeDepth),false);
 console.log("native-renderer-validation-passed");
+
+
+const interactive = {
+  version:1,revision:4,finality:"verified-final",assets:[],files:[],
+  root:{tag:"div",children:[
+    {tag:"details",control:{kind:"disclosure",open:true},children:[
+      {tag:"summary",text:"展开步骤"},
+      {tag:"p",text:"安全的本地折叠内容"},
+    ]},
+    {tag:"input",control:{kind:"checkbox",label:"包含税费",disabled:false,checked:true}},
+    {tag:"input",control:{kind:"radio",label:"按月统计",disabled:false,checked:true,group:"period"}},
+    {tag:"input",control:{kind:"range",label:"透明度",disabled:false,min:0,max:100,step:5,value:45}},
+    {tag:"select",control:{kind:"select",label:"图表类型",disabled:false,selected:"bar"},children:[
+      {tag:"option",text:"柱状图",control:{kind:"option",value:"bar",disabled:false,selected:true}},
+      {tag:"option",text:"折线图",control:{kind:"option",value:"line",disabled:false,selected:false}},
+    ]},
+    {tag:"button",control:{kind:"copy",label:"Copy code",text:"print('hello')\\n"}},
+  ]},
+};
+assert.equal(renderer.validateSnapshot(interactive),true);
+const interactiveHost=new FakeElement("host");
+let copied="";
+const interactiveWindow = window;
+const interactiveRendererSource = source;
+const interactiveContext = {
+  window:interactiveWindow,URL,document,
+  navigator:{clipboard:{writeText:async value=>{copied=value;}}},
+};
+vm.runInNewContext(interactiveRendererSource,interactiveContext);
+const interactiveRenderer=interactiveWindow.Chat2APINativeRendererV1;
+assert.equal(interactiveRenderer.renderNativeSnapshot(interactiveHost,interactive),true);
+const renderedDetails=findTag(interactiveHost,"details");
+assert.equal(renderedDetails.open,true);
+const renderedInputs=findAll(interactiveHost,node=>node.tagName==="input");
+assert.equal(renderedInputs.length,3);
+assert.equal(renderedInputs[0].type,"checkbox");
+assert.equal(renderedInputs[0].checked,true);
+assert.equal(renderedInputs[0].attributes["aria-label"],"包含税费");
+assert.equal(renderedInputs[1].type,"radio");
+assert.equal(renderedInputs[1].checked,true);
+assert.ok(renderedInputs[1].name.startsWith("native-"));
+assert.equal(renderedInputs[2].type,"range");
+assert.equal(renderedInputs[2].value,"45");
+assert.equal(renderedInputs[2].min,"0");
+assert.equal(renderedInputs[2].max,"100");
+assert.equal(renderedInputs[2].step,"5");
+const renderedSelect=findTag(interactiveHost,"select");
+assert.equal(renderedSelect.value,"bar");
+assert.equal(renderedSelect.childNodes.length,2);
+const copyControl=findTag(interactiveHost,"button");
+assert.equal(copyControl.type,"button");
+assert.equal(copyControl.textContent,"Copy code");
+copyControl.events.click();
+await new Promise(resolve=>setImmediate(resolve));
+assert.equal(copied,"print('hello')\\n");
+assert.equal(copyControl.textContent,"已复制");
+
+const unsafeControl=structuredClone(interactive);
+unsafeControl.root.children.push({tag:"button",control:{kind:"run",label:"运行",text:"code"}});
+assert.equal(renderer.validateSnapshot(unsafeControl),false);
+const malformedSelect=structuredClone(interactive);
+malformedSelect.root.children[4].control.selected="missing";
+assert.equal(renderer.validateSnapshot(malformedSelect),false);
+console.log("native-renderer-interactive-controls-passed");
