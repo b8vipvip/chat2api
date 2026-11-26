@@ -95,7 +95,7 @@ test("only selected and connected plugins are exposed to the model", () => {
   assert.deepEqual(names,[
     "github.search_repositories","github.get_repository","github.list_issues",
     "github.get_issue","github.list_pull_requests","github.get_pull_request",
-    "github.list_commits","github.search_code","github.get_file_contents",
+    "github.get_pull_request_files","github.list_commits","github.search_code","github.get_file_contents",
   ]);
 });
 
@@ -425,4 +425,38 @@ test("revoked Gmail OAuth token also asks for reconnect without clearing the Web
   assert.equal(h.state.pluginCatalog[1].reauthorization_required,true);
   assert.equal(h.state.pluginCatalog[1].reauthorization_mode,"reconnect");
   assert.deepEqual(h.state.selectedPlugins,[]);
+});
+
+
+test("model chains GitHub Pull Request listing into changed-file patch retrieval", async () => {
+  const h = makeHarness({
+    selectedPlugins:["github"],
+    planner:[
+      '{"tool_calls":[{"name":"github.list_pull_requests","arguments":{"repository":"acme/project","state":"open"}}]}',
+      '{"tool_calls":[{"name":"github.get_pull_request_files","arguments":{"repository":"acme/project","pull_number":15}}]}',
+      '{"tool_calls":[]}',
+    ],
+    toolHandler:async (provider,tool,args) => {
+      assert.equal(provider,"github");
+      if (tool === "list_pull_requests") {
+        return {data:[{number:15,title:"Improve parser",state:"open",url:"https://github.com/acme/project/pull/15"}]};
+      }
+      assert.equal(tool,"get_pull_request_files");
+      assert.deepEqual(JSON.parse(JSON.stringify(args)),{repository:"acme/project",pull_number:15});
+      return {data:[{
+        number:15,filename:"src/parser.py",status:"modified",
+        additions:3,deletions:1,changes:4,
+        url:"https://github.com/acme/project/blob/main/src/parser.py",
+        patch:"@@ -1,2 +1,3 @@\\n-old\\n+new",
+      }]};
+    },
+  });
+  const messages = [{role:"user",content:"检查 acme/project 的开放 PR，并查看变更内容"}];
+  const result = await h.api.runAutonomousPluginToolLoop(
+    messages,h.assistant,"key-1",h.recoveryApi,"req-planner-1",
+  );
+  assert.equal(result.toolCalls,2);
+  assert.deepEqual(h.calls.map(row => row[1]),["list_pull_requests","get_pull_request_files"]);
+  assert.ok(messages.some(item => item.role === "tool" && item.content.includes("src/parser.py")));
+  assert.ok(messages.some(item => item.role === "tool" && item.content.includes("@@ -1,2 +1,3 @@")));
 });
