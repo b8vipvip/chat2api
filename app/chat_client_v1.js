@@ -3745,7 +3745,30 @@
   renderPendingImages();
   renderPendingFiles();
   resizeComposer();
-  bootstrap().catch((error) => {
+  bootstrap().then(() => {
+    const params = new URLSearchParams(window.location.search);
+    const provider = params.get("provider") || "";
+    if (params.get("plugin") === "connected") {
+      toast((provider === "gmail" ? "Gmail" : "GitHub") + " 账户已成功连接");
+    } else if (params.get("plugin_error")) {
+      const messages = {
+        login_required: "请先登录账户，再连接插件",
+        invalid_state: "插件授权状态已失效，请重新连接",
+        authorization_denied: "你取消了插件授权",
+        provider_disabled: "此插件已由管理员停用",
+        token_exchange_failed: "插件授权失败，请检查 OAuth 配置后重试",
+        unknown_provider: "无法识别此插件"
+      };
+      toast(messages[params.get("plugin_error")] || "插件连接失败");
+    }
+    if (params.has("plugin") || params.has("plugin_error")) {
+      params.delete("plugin");
+      params.delete("plugin_error");
+      params.delete("provider");
+      const query = params.toString();
+      window.history.replaceState({}, "", window.location.pathname + (query ? "?" + query : "") + window.location.hash);
+    }
+  }).catch((error) => {
     setConnection("初始化失败", "error");
     toast("聊天客户端初始化失败：" + error.message);
   });
