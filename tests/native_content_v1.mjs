@@ -1039,3 +1039,55 @@ await unsafeCitationCtx.__CHAT2API_NATIVE_CONTENT_V1__.capture({
 },true);
 assert.equal(unsafeCitationSends.length,1);
 assert.equal(unsafeCitationSends[0].event.snapshot.root.children[0].href,undefined);
+
+
+// Safe declarative controls: disclosure state, bounded choices, local sliders,
+// and code-copy actions are captured without carrying upstream event handlers.
+const interactiveSent=[];
+const interactiveCtx={...ctx,chrome:{runtime:{sendMessage:async message=>{
+  interactiveSent.push(message);return {ok:true,committed:true};
+}}}};
+delete interactiveCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,interactiveCtx);
+const summary=new Element("SUMMARY",[{nodeType:3,nodeValue:"展开计算步骤"}]);
+const detailBody=new Element("P",[{nodeType:3,nodeValue:"第一步：整理数据"}]);
+const details=new Element("DETAILS",[summary,detailBody]);details.open=true;
+const checkbox=new Element("INPUT");checkbox.type="checkbox";checkbox.checked=true;
+checkbox.attributes["aria-label"]="包含税费";
+const radio=new Element("INPUT");radio.type="radio";radio.name="period";
+radio.checked=true;radio.attributes["aria-label"]="按月统计";
+const range=new Element("INPUT");range.type="range";range.min="0";range.max="100";
+range.step="5";range.value="45";range.attributes["aria-label"]="透明度";
+const select=new Element("SELECT");select.value="bar";
+select.attributes["aria-label"]="图表类型";
+select.options=[
+  {value:"bar",label:"柱状图",selected:true,disabled:false},
+  {value:"line",label:"折线图",selected:false,disabled:false},
+];
+const copyButton=new Element("BUTTON");copyButton.attributes["aria-label"]="Copy code";
+const pre=new Element("PRE");pre.textContent="print('hello')\\n";
+const interactiveRoot=new Element("DIV",[details,checkbox,radio,range,select,copyButton,pre]);
+const interactiveActive={requestId:"req_interactive12345",submitStartedAt:Date.now(),
+  lastCandidateNode:interactiveRoot};
+const interactiveCapture=interactiveCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+await interactiveCapture.capture(interactiveActive,true);
+assert.equal(interactiveSent.length,1);
+const interactiveTree=interactiveSent[0].event.snapshot.root;
+const interactiveNodes=interactiveTree.children;
+assert.deepEqual(interactiveNodes.map(node=>node.tag),
+  ["details","input","input","input","select","button","pre"]);
+assert.deepEqual(interactiveNodes[0].control,{kind:"disclosure",open:true});
+assert.equal(interactiveNodes[0].children[0].tag,"summary");
+assert.deepEqual(interactiveNodes[1].control,
+  {kind:"checkbox",label:"包含税费",disabled:false,checked:true});
+assert.deepEqual(interactiveNodes[2].control,
+  {kind:"radio",label:"按月统计",disabled:false,checked:true,group:"period"});
+assert.deepEqual(interactiveNodes[3].control,
+  {kind:"range",label:"透明度",disabled:false,min:0,max:100,step:5,value:45});
+assert.equal(interactiveNodes[4].control.selected,"bar");
+assert.equal(interactiveNodes[4].children.length,2);
+assert.equal(interactiveNodes[4].children[0].control.value,"bar");
+assert.deepEqual(interactiveNodes[5].control,
+  {kind:"copy",label:"Copy code",text:"print('hello')\\n"});
+assert.ok(!JSON.stringify(interactiveSent).includes("onclick"));
+console.log("Native interactive controls: safe disclosure, choice, select, slider and code-copy capture");
