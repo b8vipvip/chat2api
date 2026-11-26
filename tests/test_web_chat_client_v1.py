@@ -537,3 +537,14 @@ def test_github_plugin_ui_prompts_for_oauth_scope_reauthorization() -> None:
     assert 'await apiJson("/api/user/plugins/" + encodeURIComponent(plugin.id) + "/disconnect", {method:"POST"});' in source
     assert 'plugin.connected && !plugin.reauthorization_required' in source
     assert 'if (plugin.connected && plugin.enabled && plugin.configured && !needsReauthorization)' in source
+
+
+def test_web_chat_plugin_and_live_video_copy_matches_supported_capabilities() -> None:
+    html = (
+        Path(__file__).resolve().parents[1] / "app" / "chat_client_v1.html"
+    ).read_text(encoding="utf-8")
+    assert "PR 详情及变更文件/差异分页读取" in html
+    assert "每秒最多 5 帧连续发送" in html
+    assert "不支持或轨道中断时会明确降级为快照" in html
+    assert "不保证音视频帧级同步" in html
+    assert "每秒最多一张快照" not in html
