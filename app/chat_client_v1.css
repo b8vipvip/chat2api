@@ -352,7 +352,7 @@ body.sidebar-collapsed .sidebar{display:none}
 
 /* The account control remains pinned to the bottom of the left rail. */
 .account-subtitle{max-width:172px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#9b9b9b;font-size:10px}
-.sidebar-actions a{padding:6px 8px;border-radius:7px}
+.sidebar-actions a{padding:6px 10px;border:1px solid #3a3a3a;border-radius:8px;background:#252525;color:#ddd}
 .sidebar-actions a:hover{background:#292929;text-decoration:none!important}
 /* Model selection belongs to the composer, not the conversation header. */
 .composer-model-picker{display:flex;align-items:center;min-width:0}
