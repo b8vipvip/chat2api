@@ -40,6 +40,7 @@ for name in (
     "model_entitlements",
     "user_subscriptions",
     "product_plugin_registry",
+    "plugin_oauth_store",
     "quota_reservations",
 ):
     assert getattr(app.state, name, None) is not None, name
@@ -63,6 +64,13 @@ expected = {
     ("DELETE", "/api/admin/users/{user_id}/subscription"),
     ("GET", "/api/admin/plugins"),
     ("POST", "/api/admin/plugins"),
+    ("GET", "/api/admin/plugins/providers"),
+    ("PUT", "/api/admin/plugins/providers/{provider_id}"),
+    ("GET", "/api/user/plugins"),
+    ("GET", "/api/user/plugins/oauth/{provider_id}/start"),
+    ("GET", "/api/user/plugins/oauth/{provider_id}/callback"),
+    ("POST", "/api/user/plugins/{provider_id}/disconnect"),
+    ("POST", "/api/user/plugins/{provider_id}/tools/{tool_name}"),
     ("GET", "/api/admin/quota-reservations"),
     ("GET", "/assets/chat2api-control-plane-admin-v1.js"),
     ("GET", "/api/client/plugins"),
@@ -184,6 +192,7 @@ with TestClient(app) as client:
         "/api/admin/subscription-plans",
         "/api/admin/users/integration-test-user/subscription",
         "/api/admin/plugins",
+        "/api/admin/plugins/providers",
         "/api/admin/quota-reservations",
     ):
         response = client.get(path)
