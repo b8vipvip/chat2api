@@ -548,3 +548,13 @@ def test_web_chat_plugin_and_live_video_copy_matches_supported_capabilities() ->
     assert "不支持或轨道中断时会明确降级为快照" in html
     assert "不保证音视频帧级同步" in html
     assert "每秒最多一张快照" not in html
+
+
+def test_github_scope_downgrade_ui_requires_confirmed_remote_revocation() -> None:
+    source = (
+        Path(__file__).resolve().parents[1] / "app" / "chat_client_v1.js"
+    ).read_text(encoding="utf-8")
+    assert 'plugin.reauthorization_mode === "downgrade"' in source
+    assert 'require_provider_revocation:requireRevocation' in source
+    assert '["revoked","already_revoked"].includes(disconnected.provider_revocation)' in source
+    assert "已保留原连接" in source
