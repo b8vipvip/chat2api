@@ -733,30 +733,71 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
             raise HTTPException(403, "请求来源无效", headers=_PRIVATE_HEADERS)
         if provider_id not in PROVIDERS:
             raise HTTPException(404, "Unknown plugin provider", headers=_PRIVATE_HEADERS)
+        try:
+            payload = await request.json()
+        except ValueError:
+            payload = {}
+        if not isinstance(payload, dict):
+            raise HTTPException(422, "Invalid disconnect request", headers=_PRIVATE_HEADERS)
+        require_provider_revocation = payload.get("require_provider_revocation", False)
+        if type(require_provider_revocation) is not bool:
+            raise HTTPException(422, "require_provider_revocation must be a boolean", headers=_PRIVATE_HEADERS)
+
         user_id = str(user["user_id"])
         connection = store.connection(user_id, provider_id)
         config = store.provider(provider_id)
-        if connection and config:
-            try:
-                async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=3.0), follow_redirects=False) as client:
-                    if provider_id == "gmail":
-                        await client.post(
-                            "https://oauth2.googleapis.com/revoke",
-                            data={"token": connection["access_token"]},
-                        )
-                    else:
-                        await client.delete(
-                            "https://api.github.com/applications/" + config["client_id"] + "/grant",
-                            auth=(config["client_id"], config["client_secret"]),
-                            json={"access_token": connection["access_token"]},
-                            headers={"Accept": "application/vnd.github+json"},
-                        )
-            except httpx.HTTPError:
-                # Local credential removal is authoritative even if the
-                # provider's revocation endpoint is temporarily unavailable.
-                pass
+        revocation_status = "not_connected"
+        if connection:
+            if not config or not config.get("client_id") or not config.get("client_secret"):
+                revocation_status = "unavailable"
+            else:
+                try:
+                    async with httpx.AsyncClient(
+                        timeout=httpx.Timeout(8.0, connect=3.0), follow_redirects=False,
+                    ) as client:
+                        if provider_id == "gmail":
+                            response = await client.post(
+                                "https://oauth2.googleapis.com/revoke",
+                                data={"token": connection["access_token"]},
+                            )
+                        else:
+                            response = await client.delete(
+                                "https://api.github.com/applications/" + config["client_id"] + "/grant",
+                                auth=(config["client_id"], config["client_secret"]),
+                                json={"access_token": connection["access_token"]},
+                                headers={"Accept": "application/vnd.github+json"},
+                            )
+                        try:
+                            response.raise_for_status()
+                            revocation_status = "revoked"
+                        except httpx.HTTPStatusError as exc:
+                            already_revoked = (
+                                provider_id == "github" and exc.response.status_code == 404
+                            )
+                            if provider_id == "gmail" and exc.response.status_code == 400:
+                                try:
+                                    already_revoked = response.json().get("error") == "invalid_token"
+                                except (ValueError, AttributeError):
+                                    already_revoked = False
+                            revocation_status = "already_revoked" if already_revoked else "failed"
+                except httpx.HTTPError:
+                    revocation_status = "failed"
+
+            # A permission downgrade is only safe after the provider confirms
+            # revocation (or reports that the token/grant is already gone).
+            # Keep the old connection intact when remote revocation is uncertain.
+            if require_provider_revocation and revocation_status not in {"revoked", "already_revoked"}:
+                raise HTTPException(
+                    503,
+                    "无法确认撤销旧插件授权。为避免保留过宽权限，已保留当前连接；请稍后重试或先在第三方账户授权设置中撤销此应用。",
+                    headers=_PRIVATE_HEADERS,
+                )
+
         store.disconnect(user_id, provider_id)
-        return JSONResponse({"ok": True}, headers=_PRIVATE_HEADERS)
+        return JSONResponse({
+            "ok": True,
+            "provider_revocation": revocation_status,
+        }, headers=_PRIVATE_HEADERS)
 
     async def access_token_for(user_id: str, provider_id: str) -> str:
         connection = store.connection(user_id, provider_id)
