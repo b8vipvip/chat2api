@@ -802,3 +802,116 @@ def test_gmail_invalid_oauth_token_does_not_expire_web_chat_login(tmp_path: Path
         assert "Gmail 授权已失效" in failed_tool.json()["detail"]
         assert store.connection(user["user_id"], "gmail") is None
         assert client.get("/api/user/me").status_code == 200
+
+
+def test_github_scope_downgrade_keeps_connection_when_remote_revocation_fails(
+    tmp_path: Path, monkeypatch,
+):
+    app = make_app(tmp_path)
+    store: PluginOAuthStore = app.state.plugin_oauth_store
+    store.save_provider(
+        "github", enabled=True, client_id="gh-client",
+        client_secret="gh-secret", private_repos=False,
+    )
+    with TestClient(app) as client:
+        user = register(client, "github-revoke-failure@example.com")
+        store.save_connection(
+            user["user_id"], "github", "42", "octocat",
+            "broad-github-token", "", ["read:user", "repo"], None,
+        )
+        login = client.post(
+            "/api/user/login",
+            json={"email": "github-revoke-failure@example.com", "password": PASSWORD},
+            headers=ORIGIN,
+        )
+        assert login.status_code == 200
+
+        class FailedResponse:
+            status_code = 500
+
+            def __init__(self, url: str):
+                self.url = url
+
+            def raise_for_status(self):
+                request = httpx.Request("DELETE", self.url)
+                response = httpx.Response(500, request=request)
+                raise httpx.HTTPStatusError(
+                    "GitHub revocation unavailable", request=request, response=response,
+                )
+
+        class FakeAsyncClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def delete(self, url, **kwargs):
+                return FailedResponse(url)
+
+        monkeypatch.setattr("app.plugin_connections_v1.httpx.AsyncClient", FakeAsyncClient)
+        response = client.post(
+            "/api/user/plugins/github/disconnect",
+            headers=ORIGIN,
+            json={"require_provider_revocation": True},
+        )
+        assert response.status_code == 503
+        assert "已保留当前连接" in response.json()["detail"]
+        assert store.connection(user["user_id"], "github") is not None
+
+
+def test_github_scope_downgrade_disconnects_only_after_confirmed_remote_revocation(
+    tmp_path: Path, monkeypatch,
+):
+    app = make_app(tmp_path)
+    store: PluginOAuthStore = app.state.plugin_oauth_store
+    store.save_provider(
+        "github", enabled=True, client_id="gh-client",
+        client_secret="gh-secret", private_repos=False,
+    )
+    with TestClient(app) as client:
+        user = register(client, "github-revoke-success@example.com")
+        store.save_connection(
+            user["user_id"], "github", "42", "octocat",
+            "broad-github-token", "", ["read:user", "repo"], None,
+        )
+        login = client.post(
+            "/api/user/login",
+            json={"email": "github-revoke-success@example.com", "password": PASSWORD},
+            headers=ORIGIN,
+        )
+        assert login.status_code == 200
+
+        class SuccessResponse:
+            status_code = 204
+
+            def raise_for_status(self):
+                return None
+
+        class FakeAsyncClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def delete(self, url, **kwargs):
+                assert url == "https://api.github.com/applications/gh-client/grant"
+                assert kwargs["json"] == {"access_token": "broad-github-token"}
+                return SuccessResponse()
+
+        monkeypatch.setattr("app.plugin_connections_v1.httpx.AsyncClient", FakeAsyncClient)
+        response = client.post(
+            "/api/user/plugins/github/disconnect",
+            headers=ORIGIN,
+            json={"require_provider_revocation": True},
+        )
+        assert response.status_code == 200
+        assert response.json()["provider_revocation"] == "revoked"
+        assert store.connection(user["user_id"], "github") is None
