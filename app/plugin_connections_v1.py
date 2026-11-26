@@ -190,8 +190,8 @@ class PluginOAuthStore:
         spec = PROVIDERS[provider_id]
         config = self.provider(provider_id) or {}
         scopes = (
-            ["read:user", "public_repo", "repo"] if config.get("private_repos")
-            else ["read:user", "public_repo"]
+            ["read:user", "repo"] if config.get("private_repos")
+            else ["read:user"]
         ) if provider_id == "github" else [
             "openid", "email", "profile", "https://www.googleapis.com/auth/gmail.readonly"
         ]
@@ -498,8 +498,8 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
         state = store.create_state(provider_id, str(user["user_id"]), verifier)
         spec = PROVIDERS[provider_id]
         scopes = (
-            ["read:user", "public_repo", "repo"] if config.get("private_repos")
-            else ["read:user", "public_repo"]
+            ["read:user", "repo"] if config.get("private_repos")
+            else ["read:user"]
         ) if provider_id == "github" else [
             "openid", "email", "profile", "https://www.googleapis.com/auth/gmail.readonly"
         ]
