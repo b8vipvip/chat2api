@@ -126,6 +126,32 @@ assert.equal(applyNativeSnapshot("native-race",v2WithMedia),true);
 finishFetch({ok:true,status:200,json:async()=>v2});
 assert.equal(await hydration,false,"same-revision archive data must not regress");
 assert.equal(raceState.nativeSnapshots.get("native-race"),v2WithMedia);
+// A late same-revision SSE replay without archived media must not erase the
+// media envelope that arrived first. A conflicting DOM tree cannot reuse a revision.
+assert.equal(applyNativeSnapshot("native-race",v2),false,"same-revision SSE replay cannot remove media");
+assert.equal(raceState.nativeSnapshots.get("native-race").assets[0],"verified-media");
+const conflictingTree = snapshot(2,"live-provisional",["verified-media"]);
+conflictingTree.root.text = "conflicting tree";
+assert.equal(applyNativeSnapshot("native-race",conflictingTree),false,"one DOM revision identifies one immutable tree");
+
+const processingFile = snapshot(2,"live-provisional",["verified-media"]);
+processingFile.files = [{filename:"report.pdf",mime_type:"application/pdf",bytes:12,status:"processing"}];
+assert.equal(applyNativeSnapshot("native-race",processingFile),true);
+const readyFile = snapshot(2,"live-provisional",["verified-media"]);
+readyFile.files = [{filename:"report.pdf",mime_type:"application/pdf",bytes:12,status:"ready",url:"https://chat.example/api/generated-files/abcdef/token_12345678"}];
+assert.equal(applyNativeSnapshot("native-race",readyFile),true);
+assert.equal(raceState.nativeSnapshots.get("native-race").files[0].status,"ready");
+assert.equal(applyNativeSnapshot("native-race",processingFile),false,"late archive-pending event cannot downgrade a ready file");
+assert.equal(raceState.nativeSnapshots.get("native-race").files[0].url,readyFile.files[0].url);
+
+// A same-revision GET that completes after a concurrent SSE update may still
+// contribute a newer archive envelope without replacing the immutable tree.
+hydration = refreshNativeSnapshot("native-race");
+const v2ReadyWithLaterFile = snapshot(2,"live-provisional",["verified-media"]);
+v2ReadyWithLaterFile.files = [{filename:"audio.wav",mime_type:"audio/wav",bytes:42,status:"ready",url:"https://chat.example/api/generated-files/ghijkl/token_abcdefgh"}];
+finishFetch({ok:true,status:200,json:async()=>v2ReadyWithLaterFile});
+assert.equal(await hydration,true);
+assert.equal(raceState.nativeSnapshots.get("native-race").files.length,2);
 
 hydration = refreshNativeSnapshot("native-race");
 const v3 = snapshot(3);

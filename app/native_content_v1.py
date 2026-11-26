@@ -296,7 +296,8 @@ def _svg_attribute(key: str, value: object) -> bool:
 
 SAFE_TAGS = MATH_TAGS | SVG_TAGS | {"div", "p", "span", "strong", "em", "h1", "h2", "h3", "h4",
              "ul", "ol", "li", "blockquote", "pre", "code", "table", "thead",
-             "tbody", "tr", "td", "th", "figure", "figcaption", "img", "hr", "br", "a"}
+             "tbody", "tr", "td", "th", "figure", "figcaption", "img", "hr", "br", "a",
+             "details", "summary", "button"}
 SAFE_STYLES = {
     "display": {"block", "inline", "inline-block", "flex", "inline-flex", "grid", "block math", "inline math"},
     "flexDirection": {"row", "row-reverse", "column", "column-reverse"},
@@ -360,9 +361,41 @@ def validate_native_snapshot(payload: object) -> dict:
             raise ValueError("Unscoped SVG element")
         if set(value) - {"tag", "text", "children", "style", "media_index",
                           "intrinsic_width", "intrinsic_height", "source_sha256", "attrs",
-                          "math_attrs", "col_span", "row_span", "href"}:
+                          "math_attrs", "col_span", "row_span", "href", "open",
+                          "action", "action_value"}:
             raise ValueError("Native element has unsafe attributes")
         result = {"tag": tag}
+        if tag == "summary" and parent_tag != "details":
+            raise ValueError("Summary must belong to a disclosure")
+        if tag == "details":
+            if "open" in value:
+                if type(value["open"]) is not bool:
+                    raise ValueError("Invalid disclosure state")
+                result["open"] = value["open"]
+            disclosure_children = value.get("children", [])
+            if not isinstance(disclosure_children, list):
+                raise ValueError("Invalid disclosure children")
+            summaries = [index for index,child in enumerate(disclosure_children)
+                         if isinstance(child, dict) and child.get("tag") == "summary"]
+            if len(summaries) > 1 or (summaries and summaries[0] != 0):
+                raise ValueError("Disclosure summary must be the first child")
+        elif "open" in value:
+            raise ValueError("Disclosure state on non-disclosure element")
+        if tag == "button":
+            action_value = value.get("action_value")
+            label = value.get("text")
+            if (value.get("action") != "copy-text" or not isinstance(action_value, str)
+                    or not 1 <= len(action_value) <= 150000
+                    or not isinstance(label, str) or not label.strip() or len(label) > 64
+                    or "children" in value):
+                raise ValueError("Unsupported native button action")
+            chars += len(action_value)
+            if chars > MAX_TEXT:
+                raise ValueError("Native content too large")
+            result["action"] = "copy-text"
+            result["action_value"] = action_value
+        elif "action" in value or "action_value" in value:
+            raise ValueError("Native action on unsupported element")
         if "href" in value:
             if tag != "a" or not _safe_external_link(value["href"]):
                 raise ValueError("Unsafe external link")
@@ -1041,9 +1074,12 @@ def native_public_v1_tree(root: dict) -> dict:
     # Existing strict v1 consumers accept HTML nodes, not arbitrary MathML.
     # Preserve MathML natively in private admin preview; public v1 gets safe
     # inert HTML spans until the protocol formally negotiates MathML.
-    if root.get("tag") in MATH_TAGS | SVG_TAGS | {"a"}:
+    if root.get("tag") in MATH_TAGS | SVG_TAGS | {"a", "details", "summary", "button"}:
         result["tag"] = "span"
         result.pop("href", None)
+        result.pop("open", None)
+        result.pop("action", None)
+        result.pop("action_value", None)
         if "style" in result:
             result["style"] = {k:v for k,v in result["style"].items() if k!="display"}
     if "children" in root:

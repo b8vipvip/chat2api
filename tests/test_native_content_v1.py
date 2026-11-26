@@ -826,3 +826,45 @@ def test_mathml_presentation_attributes_reject_unsafe_values_and_scopes(tag, att
             "revision": 1,
             "root": {"tag": tag, "math_attrs": attrs},
         })
+
+
+def test_native_disclosure_and_copy_action_contract_roundtrip(tmp_path):
+    from app.native_content_v1 import native_public_v1_tree
+
+    doc = {"version": 1, "revision": 1, "root": {"tag": "div", "children": [
+        {"tag": "details", "open": True, "children": [
+            {"tag": "summary", "text": "展开说明"},
+            {"tag": "p", "text": "折叠内容"},
+        ]},
+        {"tag": "button", "text": "复制代码", "action": "copy-text",
+         "action_value": "print('hello')"},
+    ]}}
+    value = validate_native_snapshot(doc)
+    assert value["root"]["children"][0]["open"] is True
+    assert value["root"]["children"][1]["action"] == "copy-text"
+    assert value["root"]["children"][1]["action_value"] == "print('hello')"
+    store = NativeContentStore(tmp_path)
+    assert store.publish("req_interaction12345", "owner", doc)
+    assert store.persist("req_interaction12345", "owner")
+    assert NativeContentStore(tmp_path).get("req_interaction12345", "owner") == value
+
+    legacy = native_public_v1_tree(value["root"])
+    assert legacy["children"][0]["tag"] == "span"
+    assert "open" not in legacy["children"][0]
+    assert legacy["children"][1]["tag"] == "span"
+    assert "action" not in legacy["children"][1]
+    assert "action_value" not in legacy["children"][1]
+
+
+@pytest.mark.parametrize("root", [
+    {"tag": "button", "text": "Run"},
+    {"tag": "button", "text": "Copy", "action": "execute-script", "action_value": "alert(1)"},
+    {"tag": "div", "text": "No", "action": "copy-text", "action_value": "safe"},
+    {"tag": "summary", "text": "Detached summary"},
+    {"tag": "details", "open": "true", "children": [{"tag": "summary", "text": "Bad state"}]},
+    {"tag": "details", "children": [{"tag": "p", "text": "before"}, {"tag": "summary", "text": "late"}]},
+    {"tag": "details", "children": [{"tag": "summary", "text": "one"}, {"tag": "summary", "text": "two"}]},
+])
+def test_native_interaction_contract_rejects_unbounded_or_unsupported_controls(root):
+    with pytest.raises(ValueError):
+        validate_native_snapshot({"version": 1, "revision": 1, "root": root})

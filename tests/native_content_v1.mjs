@@ -11,6 +11,7 @@ class Element {
     for(const c of children) if(c instanceof Element)c.parentElement=this;
   }
   getAttribute(name){return Object.prototype.hasOwnProperty.call(this.attributes,name)?this.attributes[name]:null;}
+  get textContent(){return this.childNodes.map(child=>child instanceof Element?child.textContent:String(child?.nodeValue ?? child?.textContent ?? "")).join("");}
   getBoundingClientRect(){return {width:100,height:100};}
   matches(s){return false;}
   closest(s){return null;}
@@ -1039,3 +1040,22 @@ await unsafeCitationCtx.__CHAT2API_NATIVE_CONTENT_V1__.capture({
 },true);
 assert.equal(unsafeCitationSends.length,1);
 assert.equal(unsafeCitationSends[0].event.snapshot.root.children[0].href,undefined);
+
+const copyButton = new Element("BUTTON",[],{"aria-label":"Copy code"});
+const copyCode = new Element("CODE",[{nodeType:3,nodeValue:"print('native copy')"}]);
+const copyPre = new Element("PRE",[copyCode]);
+const summary = new Element("SUMMARY",[{nodeType:3,nodeValue:"展开详情"}]);
+const disclosure = new Element("DETAILS",[summary,new Element("P",[{nodeType:3,nodeValue:"更多内容"}])]);
+disclosure.open = true;
+const interactiveRoot = new Element("DIV",[copyButton,copyPre,disclosure]);
+const interactiveTree = capture.snapshot({...active,lastCandidateNode:interactiveRoot,nativeRevision:0,nativeSentRevision:0});
+assert.ok(interactiveTree);
+const capturedCopy = interactiveTree.root.children.find(item=>item.tag==="button");
+assert.equal(capturedCopy.action,"copy-text");
+assert.equal(capturedCopy.action_value,"print('native copy')");
+const capturedDisclosure = interactiveTree.root.children.find(item=>item.tag==="details");
+assert.equal(capturedDisclosure.open,true);
+assert.equal(capturedDisclosure.children[0].tag,"summary");
+const unsupportedButton = new Element("BUTTON",[{nodeType:3,nodeValue:"Run"}]);
+assert.equal(capture.snapshot({...active,lastCandidateNode:new Element("DIV",[unsupportedButton]),nativeRevision:0,nativeSentRevision:0}),null,
+  "unknown button actions are not serialized as executable controls");

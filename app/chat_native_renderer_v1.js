@@ -1,7 +1,7 @@
 /* Mode 1 native-content renderer. */
 (() => {
   "use strict";
-  const HTML_TAGS = new Set(["div","p","span","strong","em","h1","h2","h3","h4","ul","ol","li","blockquote","pre","code","table","thead","tbody","tr","td","th","figure","figcaption","img","hr","br","a"]);
+  const HTML_TAGS = new Set(["div","p","span","strong","em","h1","h2","h3","h4","ul","ol","li","blockquote","pre","code","table","thead","tbody","tr","td","th","figure","figcaption","img","hr","br","a","details","summary","button"]);
   const MATH_TAGS = new Set(["math","semantics","mrow","mi","mo","mn","msub","mfrac","mtext","annotation","mover","munder","munderover","msup","msubsup","msqrt","mroot","mspace","mstyle","mtable","mtr","mtd","mmultiscripts","mphantom","menclose","mpadded","merror","ms","mfenced","mprescripts","none","mstack","mlongdiv","msgroup","msrow","mscarries","mscarry","msline"]);
   const MATH_GLOBAL_ATTRS = new Set(["mathvariant","mathsize","mathcolor","mathbackground","displaystyle","scriptlevel","dir"]);
   const MATH_ATTRS_BY_TAG = {
@@ -198,9 +198,25 @@
     if (typeof tag !== "string" || !SAFE_TAGS.has(tag)) return false;
     if (SVG_TAGS.has(parentTag) && !SVG_TAGS.has(tag)) return false;
     if (SVG_TAGS.has(tag) && !SVG_TAGS.has(parentTag) && tag !== "svg") return false;
-    const allowed = new Set(["tag","text","children","style","media_index","intrinsic_width","intrinsic_height","source_sha256","attrs","math_attrs","col_span","row_span","href"]);
+    const allowed = new Set(["tag","text","children","style","media_index","intrinsic_width","intrinsic_height","source_sha256","attrs","math_attrs","col_span","row_span","href","open","action","action_value"]);
     if (Object.keys(value).some(key => !allowed.has(key))) return false;
     if (value.href !== undefined && (tag !== "a" || !safeExternalLinkUrl(value.href))) return false;
+    if (tag === "summary" && parentTag !== "details") return false;
+    if (tag === "details") {
+      if (value.open !== undefined && typeof value.open !== "boolean") return false;
+      if (value.children !== undefined && !Array.isArray(value.children)) return false;
+      const summaries = (Array.isArray(value.children) ? value.children : [])
+        .map((child,index)=>child?.tag === "summary" ? index : -1).filter(index=>index >= 0);
+      if (summaries.length > 1 || (summaries.length === 1 && summaries[0] !== 0)) return false;
+    } else if (value.open !== undefined) return false;
+    if (tag === "button") {
+      if (value.action !== "copy-text" || typeof value.action_value !== "string" ||
+          value.action_value.length < 1 || value.action_value.length > 150000 ||
+          typeof value.text !== "string" || !value.text.trim() || value.text.length > 64 ||
+          value.children !== undefined) return false;
+      counts.chars += value.action_value.length;
+      if (counts.chars > MAX_TEXT) return false;
+    } else if (value.action !== undefined || value.action_value !== undefined) return false;
     if (Object.prototype.hasOwnProperty.call(value,"attrs")) {
       if (!SVG_TAGS.has(tag) || !value.attrs || typeof value.attrs !== "object" || Array.isArray(value.attrs) || Object.keys(value.attrs).length > 24) return false;
       if (Object.entries(value.attrs).some(([key,item]) => !validSvgAttribute(key,item))) return false;
@@ -260,12 +276,30 @@
         element.rel = "noopener noreferrer nofollow";
         element.referrerPolicy = "no-referrer";
       }
+    } else if (tag === "button") {
+      element = document.createElement("button");
+      element.type = "button";
+      element.className = "native-copy-button";
+      element.addEventListener("click", async () => {
+        const clipboard = window.navigator?.clipboard;
+        if (!clipboard || typeof clipboard.writeText !== "function") {
+          element.textContent = "复制不可用";
+          return;
+        }
+        try {
+          await clipboard.writeText(value.action_value);
+          element.textContent = "已复制";
+        } catch (_) {
+          element.textContent = "复制失败";
+        }
+      });
     } else element = document.createElement(tag);
     if (value.style) Object.entries(value.style).forEach(([key,item]) => { if (validStyle(key,item,tag)) element.style[key] = item; });
     if (value.attrs) Object.entries(value.attrs).forEach(([key,item]) => { if (validSvgAttribute(key,item)) element.setAttribute(key,item); });
     if (value.math_attrs) Object.entries(value.math_attrs).forEach(([key,item]) => { if (validMathAttribute(tag,key,item)) element.setAttribute(key,item); });
     if (value.col_span !== undefined) element.colSpan = value.col_span;
     if (value.row_span !== undefined) element.rowSpan = value.row_span;
+    if (tag === "details") element.open = value.open === true;
     if (tag === "img") {
       const src = safeMediaUrl(snapshot.assets[value.media_index]);
       if (!src) {
