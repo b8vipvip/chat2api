@@ -54,7 +54,7 @@ from .generated_file_deferred_v247 import DeferredGeneratedFiles, FileStillProce
 from .rich_content_v196 import manifest as rich_content_manifest
 from .native_content_v1 import (NativeContentStore, NativeChunkAssembler, native_delivery_fingerprint,
                                 native_layout_summary, native_unique_dimension_candidates,
-                                native_image_identity_candidates,
+                                native_image_identity_candidates, native_visible_asset_projection,
                                 native_public_v1_tree)
 from .native_dom_evidence_v1 import NativeDomEvidenceStore
 from .native_capture_audit_v281 import capture_comparison
@@ -970,23 +970,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if isinstance(mime_type, str) and mime_type:
                 file_descriptor["mime_type"] = mime_type
             files.append(file_descriptor)
-        # Legacy native v1 clients index assets directly by img.media_index.
-        # A candidate report alone is insufficient: extra archived images
-        # would otherwise make them draw the WRONG picture at each position.
-        # Return a request-owned, presentation-ordered subset only when all
-        # layout images have one unique dimension match. With no safe mapping,
-        # supply zero image URLs and let the consumer fall back to Markdown.
+        # Keep every image slot aligned with img.media_index. Full byte proofs
+        # are safe for every consumer. The authenticated Web Chat renderer can
+        # also show individually byte-proven slots from a partial proof while
+        # rendering empty slots as integrity placeholders; legacy v1 clients
+        # retain their all-or-nothing projection.
         candidates = native_image_identity_candidates(snapshot, asset_metadata)
         if candidates["status"] == "verified-sha256":
-            visible_assets = [assets[index] for index in candidates["indices"]]
-        elif candidates["status"] == "identity-incomplete":
-            # A partial/contradictory byte proof cannot be replaced by a
-            # dimension or ordinal guess, even when counts happen to match.
-            visible_assets = []
+            visible_assets = native_visible_asset_projection(assets, candidates)
+        elif preserve_native_tree and candidates["status"] == "verified-sha256-partial":
+            visible_assets = native_visible_asset_projection(assets, candidates)
         else:
-            # Ordinal/dimension equality cannot prove original image byte
-            # identity. Never inject a potentially wrong asset into the v1
-            # layout; retain canonical Markdown until every raster is proven.
             visible_assets = []
         result = {**snapshot,
                   "root": snapshot["root"] if preserve_native_tree else native_public_v1_tree(snapshot["root"]),

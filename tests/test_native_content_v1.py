@@ -528,6 +528,33 @@ def test_sha256_partial_mapping_preserves_only_proven_image_positions():
         [{"width": 640, "height": 480}])["status"] == "unique-dimensions-unverified"
 
 
+def test_native_visible_asset_projection_keeps_only_byte_verified_partial_slots():
+    from app.native_content_v1 import native_visible_asset_projection
+
+    assets = [
+        "https://media.example/api/media/owner_a/token_aaaaaaaa",
+        "https://media.example/api/media/owner_a/token_bbbbbbbb",
+    ]
+    assert native_visible_asset_projection(assets, {
+        "status": "verified-sha256", "indices": [1, 0],
+    }) == [assets[1], assets[0]]
+    assert native_visible_asset_projection(assets, {
+        "status": "verified-sha256-partial", "indices": [1, None],
+        "matched_count": 1,
+    }) == [assets[1], ""]
+    assert native_visible_asset_projection(assets, {
+        "status": "verified-sha256-partial", "indices": [None],
+        "matched_count": 0,
+    }) == []
+    assert native_visible_asset_projection(assets, {
+        "status": "identity-incomplete", "indices": [],
+    }) == []
+    assert native_visible_asset_projection(assets, {
+        "status": "verified-sha256-partial", "indices": [99, None],
+        "matched_count": 1,
+    }) == []
+
+
 def test_native_image_mapping_detects_duplicate_missing_and_reordered_indices():
     from app.native_content_v1 import native_layout_summary
     def rich(*indices):
