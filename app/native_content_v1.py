@@ -1165,6 +1165,43 @@ def native_image_identity_candidates(snapshot: dict, archived_media: list[dict])
                 "matched_count":matched}
     return {"status":"identity-incomplete","indices":[]}
 
+def native_visible_asset_projection(assets: list[str], candidates: dict) -> list[str]:
+    """Return only byte-proven image URLs in DOM-slot order.
+
+    Partial proofs retain their verified slots and use empty placeholders for
+    unverified slots. The caller must keep the original media_index ordering.
+    """
+    if not isinstance(assets, list) or not isinstance(candidates, dict):
+        return []
+    status = candidates.get("status")
+    if status not in {"verified-sha256", "verified-sha256-partial"}:
+        return []
+    indices = candidates.get("indices")
+    if not isinstance(indices, list) or not 1 <= len(indices) <= 40:
+        return []
+    projected = []
+    matched = 0
+    for index in indices:
+        if type(index) is int and 0 <= index < len(assets):
+            url = assets[index]
+            if not isinstance(url, str) or not url:
+                return []
+            projected.append(url)
+            matched += 1
+        elif status == "verified-sha256-partial" and index is None:
+            projected.append("")
+        else:
+            return []
+    if status == "verified-sha256" and matched != len(indices):
+        return []
+    if status == "verified-sha256-partial":
+        if matched < 1 or type(candidates.get("matched_count")) is not int:
+            return []
+        if candidates["matched_count"] != matched:
+            return []
+    return projected
+
+
 def native_public_v1_tree(root: dict) -> dict:
     """Strip new optional dimension hints for existing strict v1 consumers.
 
