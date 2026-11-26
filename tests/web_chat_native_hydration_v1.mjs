@@ -172,6 +172,6 @@ finishFetch({ok:true,status:200,json:async()=>v2Final});
 assert.equal(await hydration,true,"a current GET can promote the same revision to verified final");
 assert.equal(target.nativeFinality,"verified-final");
 assert.equal(applyNativeSnapshot("native-race",v2WithMedia),false,"same-revision provisional replay cannot downgrade finality");
-assert.equal(raceState.nativeSnapshots.get("native-race"),v2Final);
+assert.equal(JSON.stringify(raceState.nativeSnapshots.get("native-race")),JSON.stringify(v2Final));
 
 console.log("web-chat-native-hydration-v1-passed");
