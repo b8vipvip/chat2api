@@ -1882,6 +1882,18 @@
     }));
   }
 
+  function shouldQueryPlugin(providerId, prompt) {
+    const text = String(prompt || "").toLowerCase();
+    if (providerId === "github") {
+      return /github|git hub|仓库|repo|issue|问题|缺陷|代码库|开源项目|pull request|\bpr\b|commit|branch/.test(text)
+        || /[a-z0-9_.-]{1,100}\/[a-z0-9_.-]{1,100}/i.test(text);
+    }
+    if (providerId === "gmail") {
+      return /gmail|邮件|邮箱|收件箱|发件人|邮件主题|email|e-mail|invoice|receipt|from:|subject:/.test(text);
+    }
+    return false;
+  }
+
   async function runSelectedPluginsForPrompt(prompt, assistant) {
     if (!String(prompt || "").trim() || !assistant || !state.selectedPlugins.length) return [];
     const contexts = [];
@@ -1890,8 +1902,8 @@
       const plugin = state.pluginCatalog.find(row =>
         row && row.id === providerId && row.enabled && row.configured && row.connected
       );
-      if (!plugin) continue;
-      const callId = "plugin_" + providerId + "_" +
+      if (!plugin || !shouldQueryPlugin(providerId, prompt)) continue;
+      const callId = "plugin_" + providerId + "_"+
         id().replace(/[^A-Za-z0-9_.:-]/g, "").slice(0,80);
       const event = {
         toolName: String(plugin.name || providerId) + " · 自动查询",
@@ -1965,7 +1977,12 @@
         if (references.length) event.references = references;
         contexts.push({provider:String(plugin.name || providerId),tool:toolName,results:data});
       } catch (error) {
-        if (error?.name === "AbortError") throw error;
+        if (error?.name === "AbortError") {
+          event.status = "cancelled";
+          event.resultId = callId + "_result";
+          event.output = "用户已取消插件查询。";
+          throw error;
+        }
         event.status = "failed";
         event.resultId = callId + "_result";
         event.output = String(error?.message || "插件查询失败").slice(0,500);
