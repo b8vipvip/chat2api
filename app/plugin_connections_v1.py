@@ -567,6 +567,9 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
         authenticated = user.authenticate(request.cookies.get(USER_SESSION_COOKIE)) if user else None
         if not authenticated or authenticated.get("is_guest"):
             return RedirectResponse("/chat?plugin_error=login_required", status_code=303)
+        from .web_chat_identity_v1 import web_chat_session_policy_allows
+        if not web_chat_session_policy_allows(request.app, authenticated):
+            return RedirectResponse("/chat?plugin_error=provider_disabled", status_code=303)
         state = str(request.query_params.get("state") or "")
         verifier = store.consume_state(state, provider_id, str(authenticated["user_id"]))
         if not verifier:
@@ -587,7 +590,7 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                 profile["label"], token["access_token"], token.get("refresh_token"),
                 scopes, token.get("expires_at"),
             )
-        except (httpx.HTTPError, ValueError, KeyError, PluginConnectionError):
+        except (httpx.HTTPError, ValueError, KeyError, AttributeError, PluginConnectionError):
             return RedirectResponse("/chat?plugin_error=token_exchange_failed", status_code=303)
         return RedirectResponse("/chat?plugin=connected&provider=" + provider_id, status_code=303)
 
@@ -677,80 +680,84 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
         except httpx.HTTPError as exc:
             raise HTTPException(502, "插件授权刷新暂时失败，请稍后重试", headers=_PRIVATE_HEADERS) from exc
         timeout = httpx.Timeout(15.0, connect=5.0)
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
-            if provider_id == "github" and tool_name == "search_repositories":
-                query = str(payload.get("query") or "").strip()
-                if not query or len(query) > 200:
-                    raise HTTPException(422, "query must contain 1-200 characters", headers=_PRIVATE_HEADERS)
-                response = await client.get(
-                    "https://api.github.com/search/repositories",
-                    params={"q": query, "per_page": 10, "sort": "updated", "order": "desc"},
-                    headers={"Authorization": "Bearer " + token, "Accept": "application/vnd.github+json",
-                             "X-GitHub-Api-Version": "2022-11-28"},
-                )
-                response.raise_for_status()
-                raw = response.json()
-                data = [{
-                    "full_name": row.get("full_name"), "description": row.get("description"),
-                    "url": row.get("html_url"), "stars": row.get("stargazers_count"),
-                    "language": row.get("language"),
-                } for row in raw.get("items", [])[:10]]
-            elif provider_id == "github" and tool_name == "list_issues":
-                repository = str(payload.get("repository") or "").strip()
-                if not _GITHUB_REPO.fullmatch(repository):
-                    raise HTTPException(422, "repository must be owner/repo", headers=_PRIVATE_HEADERS)
-                state = str(payload.get("state") or "open")
-                if state not in {"open", "closed", "all"}:
-                    raise HTTPException(422, "state must be open, closed or all", headers=_PRIVATE_HEADERS)
-                response = await client.get(
-                    "https://api.github.com/repos/" + repository + "/issues",
-                    params={"state": state, "per_page": 20},
-                    headers={"Authorization": "Bearer " + token, "Accept": "application/vnd.github+json",
-                             "X-GitHub-Api-Version": "2022-11-28"},
-                )
-                response.raise_for_status()
-                data = [{
-                    "number": row.get("number"), "title": row.get("title"),
-                    "state": row.get("state"), "url": row.get("html_url"),
-                    "body": str(row.get("body") or "")[:2000],
-                } for row in response.json()[:20] if isinstance(row, dict) and not row.get("pull_request")]
-            elif provider_id == "gmail" and tool_name == "search_messages":
-                query = str(payload.get("query") or "").strip()
-                if not query or len(query) > 500:
-                    raise HTTPException(422, "query must contain 1-500 characters", headers=_PRIVATE_HEADERS)
-                response = await client.get(
-                    "https://gmail.googleapis.com/gmail/v1/users/me/messages",
-                    params={"q": query, "maxResults": 10},
-                    headers={"Authorization": "Bearer " + token},
-                )
-                response.raise_for_status()
-                messages = response.json().get("messages") or []
-                data = []
-                for item in messages[:10]:
-                    message_id = str(item.get("id") or "")
-                    if not _GMAIL_ID.fullmatch(message_id):
-                        continue
-                    detail = await client.get(
-                        "https://gmail.googleapis.com/gmail/v1/users/me/messages/" + message_id,
-                        params={"format": "metadata", "metadataHeaders": ["From", "Subject", "Date"]},
+        try:
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+                if provider_id == "github" and tool_name == "search_repositories":
+                    query = str(payload.get("query") or "").strip()
+                    if not query or len(query) > 200:
+                        raise HTTPException(422, "query must contain 1-200 characters", headers=_PRIVATE_HEADERS)
+                    response = await client.get(
+                        "https://api.github.com/search/repositories",
+                        params={"q": query, "per_page": 10, "sort": "updated", "order": "desc"},
+                        headers={"Authorization": "Bearer " + token, "Accept": "application/vnd.github+json",
+                                 "X-GitHub-Api-Version": "2022-11-28"},
+                    )
+                    response.raise_for_status()
+                    raw = response.json()
+                    data = [{
+                        "full_name": row.get("full_name"), "description": row.get("description"),
+                        "url": row.get("html_url"), "stars": row.get("stargazers_count"),
+                        "language": row.get("language"),
+                    } for row in raw.get("items", [])[:10]]
+                elif provider_id == "github" and tool_name == "list_issues":
+                    repository = str(payload.get("repository") or "").strip()
+                    if not _GITHUB_REPO.fullmatch(repository):
+                        raise HTTPException(422, "repository must be owner/repo", headers=_PRIVATE_HEADERS)
+                    state = str(payload.get("state") or "open")
+                    if state not in {"open", "closed", "all"}:
+                        raise HTTPException(422, "state must be open, closed or all", headers=_PRIVATE_HEADERS)
+                    response = await client.get(
+                        "https://api.github.com/repos/" + repository + "/issues",
+                        params={"state": state, "per_page": 20},
+                        headers={"Authorization": "Bearer " + token, "Accept": "application/vnd.github+json",
+                                 "X-GitHub-Api-Version": "2022-11-28"},
+                    )
+                    response.raise_for_status()
+                    data = [{
+                        "number": row.get("number"), "title": row.get("title"),
+                        "state": row.get("state"), "url": row.get("html_url"),
+                        "body": str(row.get("body") or "")[:2000],
+                    } for row in response.json()[:20] if isinstance(row, dict) and not row.get("pull_request")]
+                elif provider_id == "gmail" and tool_name == "search_messages":
+                    query = str(payload.get("query") or "").strip()
+                    if not query or len(query) > 500:
+                        raise HTTPException(422, "query must contain 1-500 characters", headers=_PRIVATE_HEADERS)
+                    response = await client.get(
+                        "https://gmail.googleapis.com/gmail/v1/users/me/messages",
+                        params={"q": query, "maxResults": 10},
                         headers={"Authorization": "Bearer " + token},
                     )
-                    detail.raise_for_status()
-                    message = detail.json()
-                    message_payload = message.get("payload") or {}
-                    message_headers = message_payload.get("headers") or []
-                    headers = {
-                        str(header.get("name") or "").lower(): str(header.get("value") or "")[:500]
-                        for header in message_headers if isinstance(header, dict)
-                    }
-                    data.append({
-                        "id": message_id, "thread_id": message.get("threadId"),
-                        "subject": headers.get("subject", "(无主题)"),
-                        "from": headers.get("from", ""), "date": headers.get("date", ""),
-                        "snippet": str(message.get("snippet") or "")[:1200],
-                    })
-            else:
-                raise HTTPException(404, "Unsupported plugin tool", headers=_PRIVATE_HEADERS)
+                    response.raise_for_status()
+                    messages = response.json().get("messages") or []
+                    data = []
+                    for item in messages[:10]:
+                        message_id = str(item.get("id") or "")
+                        if not _GMAIL_ID.fullmatch(message_id):
+                            continue
+                        detail = await client.get(
+                            "https://gmail.googleapis.com/gmail/v1/users/me/messages/" + message_id,
+                            params={"format": "metadata", "metadataHeaders": ["From", "Subject", "Date"]},
+                            headers={"Authorization": "Bearer " + token},
+                        )
+                        detail.raise_for_status()
+                        message = detail.json()
+                        message_payload = message.get("payload") or {}
+                        message_headers = message_payload.get("headers") or []
+                        headers = {
+                            str(header.get("name") or "").lower(): str(header.get("value") or "")[:500]
+                            for header in message_headers if isinstance(header, dict)
+                        }
+                        data.append({
+                            "id": message_id, "thread_id": message.get("threadId"),
+                            "subject": headers.get("subject", "(无主题)"),
+                            "from": headers.get("from", ""), "date": headers.get("date", ""),
+                            "snippet": str(message.get("snippet") or "")[:1200],
+                        })
+                else:
+                    raise HTTPException(404, "Unsupported plugin tool", headers=_PRIVATE_HEADERS)
+    
+        except (httpx.HTTPError, ValueError, TypeError, AttributeError) as exc:
+            raise HTTPException(502, "插件服务暂时不可用，请稍后重试", headers=_PRIVATE_HEADERS) from exc
         return JSONResponse({
             "provider": provider_id, "tool": tool_name, "data": data,
         }, headers=_PRIVATE_HEADERS)
