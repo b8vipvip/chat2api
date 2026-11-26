@@ -507,5 +507,8 @@ def install_manual_worker_text_model_tasks_v147_patch(app: FastAPI) -> FastAPI:
         headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
         return Response(html, media_type="text/html", status_code=response.status_code, headers=headers)
 
+    # Expose the same locked projection to the authenticated Web Chat model
+    # catalogue; do not create a second source of available-model truth.
+    app.state.worker_model_tasks_v147_snapshot = list_model_tasks
     app.state.manual_worker_text_model_tasks_v147_installed = True
     return app
