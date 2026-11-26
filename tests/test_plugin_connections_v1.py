@@ -460,7 +460,12 @@ def test_github_repository_issue_pull_request_commit_and_file_read_tools(tmp_pat
                         "sha": "d" * 40,
                         "blob_url": "https://github.com/acme/project/blob/main/src/parser.py",
                         "patch": "@@ -1 +1 @@\n-old\n+new",
-                    }])
+                    }, *[{
+                        "filename": f"src/module-{index}.py", "status": "modified",
+                        "additions": 1, "deletions": 0, "changes": 1,
+                        "sha": str(index) * 40,
+                        "blob_url": f"https://github.com/acme/project/blob/main/src/module-{index}.py",
+                    } for index in range(2, 6)]])
                 if url == "https://api.github.com/repos/acme/project/commits":
                     assert kwargs["params"]["sha"] == "main"
                     return FakeResponse([{
