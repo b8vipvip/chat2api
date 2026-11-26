@@ -107,6 +107,16 @@ def _scope_list(value: Any) -> list[str]:
     return sorted({item.strip() for item in values if item and len(item) <= 256})
 
 
+def _github_scope_mismatch(private_repos: bool, granted_scopes: Any) -> str:
+    """Return the required OAuth scope transition, if the saved grant is stale."""
+    has_private_repo_scope = "repo" in set(_scope_list(granted_scopes))
+    if private_repos and not has_private_repo_scope:
+        return "upgrade"
+    if not private_repos and has_private_repo_scope:
+        return "downgrade"
+    return ""
+
+
 class PluginOAuthStore:
     """Private SQLite store for provider config, one-time OAuth state and user tokens."""
 
@@ -558,6 +568,18 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
             public["account_label"] = connection.get("account_label") if connection else ""
             public["scopes"] = connection.get("scopes") if connection else public["scopes"]
             public["connected_at"] = connection.get("created_at") if connection else None
+            scope_transition = (
+                _github_scope_mismatch(bool(public.get("private_repos")), connection.get("scopes"))
+                if provider_id == "github" and connection else ""
+            )
+            public["reauthorization_required"] = bool(scope_transition)
+            public["reauthorization_mode"] = scope_transition
+            public["reauthorization_reason"] = (
+                "管理员已启用私有仓库访问，需要重新授权 GitHub repo 权限"
+                if scope_transition == "upgrade" else
+                "管理员已关闭私有仓库访问，需要撤销旧授权并重新连接"
+                if scope_transition == "downgrade" else ""
+            )
             rows.append(public)
         return JSONResponse({"data": rows}, headers=_PRIVATE_HEADERS)
 
@@ -786,8 +808,24 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
             payload = {}
         if not isinstance(payload, dict):
             raise HTTPException(422, "Invalid plugin tool input", headers=_PRIVATE_HEADERS)
+        user_id = str(user["user_id"])
+        connection = store.connection(user_id, provider_id)
+        if provider_id == "github" and connection:
+            scope_transition = _github_scope_mismatch(
+                bool(config.get("private_repos")), connection.get("scopes"),
+            )
+            if scope_transition == "upgrade":
+                raise HTTPException(
+                    409, "管理员已启用私有仓库访问；请重新授权 GitHub 账户以授予 repo 权限",
+                    headers=_PRIVATE_HEADERS,
+                )
+            if scope_transition == "downgrade":
+                raise HTTPException(
+                    409, "管理员已关闭私有仓库访问；请先断开并重新连接 GitHub，以撤销旧 repo 权限",
+                    headers=_PRIVATE_HEADERS,
+                )
         try:
-            token = await access_token_for(str(user["user_id"]), provider_id)
+            token = await access_token_for(user_id, provider_id)
         except httpx.HTTPError as exc:
             raise HTTPException(502, "插件授权刷新暂时失败，请稍后重试", headers=_PRIVATE_HEADERS) from exc
         timeout = httpx.Timeout(15.0, connect=5.0)
