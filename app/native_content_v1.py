@@ -389,9 +389,6 @@ def validate_native_snapshot(payload: object) -> dict:
                     or not isinstance(label, str) or not label.strip() or len(label) > 64
                     or "children" in value):
                 raise ValueError("Unsupported native button action")
-            chars += len(action_value)
-            if chars > MAX_TEXT:
-                raise ValueError("Native content too large")
             result["action"] = "copy-text"
             result["action_value"] = action_value
         elif "action" in value or "action_value" in value:

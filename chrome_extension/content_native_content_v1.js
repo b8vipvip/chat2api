@@ -361,8 +361,8 @@
           return null;
         const copy = copyCodeForButton(element);
         if (copy) {
-          if (chars + copy.label.length + copy.text.length > textBudget) return null;
-          chars += copy.label.length + copy.text.length;
+          if (chars + copy.label.length > textBudget) return null;
+          // The same source text is already counted when its <code> node is serialized.
           nodes += 1;
           return {tag:"button",style:safeStyle(element),text:copy.label,
             action:"copy-text",action_value:copy.text};

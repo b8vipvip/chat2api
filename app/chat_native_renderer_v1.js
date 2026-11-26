@@ -214,8 +214,6 @@
           value.action_value.length < 1 || value.action_value.length > 150000 ||
           typeof value.text !== "string" || !value.text.trim() || value.text.length > 64 ||
           value.children !== undefined) return false;
-      counts.chars += value.action_value.length;
-      if (counts.chars > MAX_TEXT) return false;
     } else if (value.action !== undefined || value.action_value !== undefined) return false;
     if (Object.prototype.hasOwnProperty.call(value,"attrs")) {
       if (!SVG_TAGS.has(tag) || !value.attrs || typeof value.attrs !== "object" || Array.isArray(value.attrs) || Object.keys(value.attrs).length > 24) return false;

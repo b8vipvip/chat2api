@@ -11,7 +11,8 @@ class Element {
     for(const c of children) if(c instanceof Element)c.parentElement=this;
   }
   getAttribute(name){return Object.prototype.hasOwnProperty.call(this.attributes,name)?this.attributes[name]:null;}
-  get textContent(){return this.childNodes.map(child=>child instanceof Element?child.textContent:String(child?.nodeValue ?? child?.textContent ?? "")).join("");}
+  get textContent(){return this._textContent!==undefined?this._textContent:this.childNodes.map(child=>child instanceof Element?child.textContent:String(child?.nodeValue ?? child?.textContent ?? "")).join("");}
+  set textContent(value){this._textContent=String(value);this.childNodes=[];}
   getBoundingClientRect(){return {width:100,height:100};}
   matches(s){return false;}
   closest(s){return null;}
