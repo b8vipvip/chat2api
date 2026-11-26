@@ -115,6 +115,11 @@ def install_web_chat_features_v1(app: Any) -> Any:
                                     headers=_PRIVATE_HEADERS) from error
             available_rows = available_payload.get("available_models") or []
             default_mapping = str(available_payload.get("available_models_default_mapping") or "").strip()
+            management_snapshot = getattr(request.app.state, "worker_text_model_management_v146_snapshot", None)
+            management_state = management_snapshot() if callable(management_snapshot) else {}
+            disabled_models = {
+                str(model_id) for model_id in (management_state.get("disabled") or [])
+            } if isinstance(management_state, dict) else set()
             catalog = {
                 str(row.get("id") or ""): dict(row)
                 for row in registry.model_catalog(online_only=True)
@@ -124,9 +129,15 @@ def install_web_chat_features_v1(app: Any) -> Any:
                 if not isinstance(available, dict):
                     continue
                 model_id = str(available.get("id") or "").strip()
-                if not model_id or model_id in {"gpt-image", "gpt-live", "gpt-live-mini", "chatgpt-web"}:
+                if (
+                    not model_id
+                    or model_id in {"gpt-image", "gpt-live", "gpt-live-mini", "chatgpt-web"}
+                    or model_id in disabled_models
+                ):
                     continue
                 if model_id == "default":
+                    if default_mapping and default_mapping in disabled_models:
+                        continue
                     models.append({
                         "id": "default",
                         "label": default_mapping or "默认模型",
