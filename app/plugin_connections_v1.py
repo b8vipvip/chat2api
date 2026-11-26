@@ -17,7 +17,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -34,10 +34,47 @@ _PRIVATE_HEADERS = {"Cache-Control": "private, no-store", "Vary": "Cookie"}
 _GITHUB_REPO = re.compile(r"^(?!\.{1,2}/)[A-Za-z0-9_.-]{1,100}/(?!\.{1,2}$)[A-Za-z0-9_.-]{1,100}$")
 _GMAIL_ID = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
 
+
+def _github_repo_name(value: Any) -> str:
+    repository = value.strip() if isinstance(value, str) else ""
+    if not _GITHUB_REPO.fullmatch(repository):
+        raise HTTPException(422, "repository must be an exact owner/repo", headers=_PRIVATE_HEADERS)
+    return repository
+
+
+def _github_resource_number(value: Any) -> int:
+    if type(value) is not int or not 1 <= value <= 2_147_483_647:
+        raise HTTPException(422, "Issue or Pull Request number must be a positive integer", headers=_PRIVATE_HEADERS)
+    return value
+
+
+def _github_file_path(value: Any) -> tuple[str, str]:
+    path = value.strip() if isinstance(value, str) else ""
+    parts = path.split("/")
+    if (
+        not path or len(path) > 500 or path.startswith("/")
+        or any(part in {"", ".", ".."} for part in parts)
+        or any(ord(char) < 32 or ord(char) == 127 for char in path)
+        or "\\" in path
+    ):
+        raise HTTPException(422, "path must be a relative repository file path", headers=_PRIVATE_HEADERS)
+    return path, "/".join(quote(part, safe="") for part in parts)
+
+
+def _github_ref(value: Any) -> str | None:
+    if value is None:
+        return None
+    if (
+        not isinstance(value, str) or not value.strip() or len(value) > 255
+        or any(ord(char) < 32 or ord(char) == 127 for char in value)
+    ):
+        raise HTTPException(422, "ref must be a valid branch, tag or commit reference", headers=_PRIVATE_HEADERS)
+    return value.strip()
+
 PROVIDERS: dict[str, dict[str, Any]] = {
     "github": {
         "name": "GitHub",
-        "description": "搜索仓库、查看仓库信息和 Issues。仅开放读取操作。",
+        "description": "搜索仓库、查看仓库信息、Issues、Pull Requests、提交记录和文件内容。仅开放读取操作。",
         "authorize_url": "https://github.com/login/oauth/authorize",
         "token_url": "https://github.com/login/oauth/access_token",
         "api_base": "https://api.github.com",
@@ -756,42 +793,200 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
         timeout = httpx.Timeout(15.0, connect=5.0)
         try:
             async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
-                if provider_id == "github" and tool_name == "search_repositories":
-                    query = str(payload.get("query") or "").strip()
-                    if not query or len(query) > 200:
-                        raise HTTPException(422, "query must contain 1-200 characters", headers=_PRIVATE_HEADERS)
-                    response = await client.get(
-                        "https://api.github.com/search/repositories",
-                        params={"q": query, "per_page": 10, "sort": "updated", "order": "desc"},
-                        headers={"Authorization": "Bearer " + token, "Accept": "application/vnd.github+json",
-                                 "X-GitHub-Api-Version": "2022-11-28"},
-                    )
-                    response.raise_for_status()
-                    raw = response.json()
-                    data = [{
-                        "full_name": row.get("full_name"), "description": row.get("description"),
-                        "url": row.get("html_url"), "stars": row.get("stargazers_count"),
-                        "language": row.get("language"),
-                    } for row in raw.get("items", [])[:10]]
-                elif provider_id == "github" and tool_name == "list_issues":
-                    repository = str(payload.get("repository") or "").strip()
-                    if not _GITHUB_REPO.fullmatch(repository):
-                        raise HTTPException(422, "repository must be owner/repo", headers=_PRIVATE_HEADERS)
-                    state = str(payload.get("state") or "open")
-                    if state not in {"open", "closed", "all"}:
-                        raise HTTPException(422, "state must be open, closed or all", headers=_PRIVATE_HEADERS)
-                    response = await client.get(
-                        "https://api.github.com/repos/" + repository + "/issues",
-                        params={"state": state, "per_page": 20},
-                        headers={"Authorization": "Bearer " + token, "Accept": "application/vnd.github+json",
-                                 "X-GitHub-Api-Version": "2022-11-28"},
-                    )
-                    response.raise_for_status()
-                    data = [{
-                        "number": row.get("number"), "title": row.get("title"),
-                        "state": row.get("state"), "url": row.get("html_url"),
-                        "body": str(row.get("body") or "")[:2000],
-                    } for row in response.json()[:20] if isinstance(row, dict) and not row.get("pull_request")]
+                if provider_id == "github":
+                    github_headers = {
+                        "Authorization": "Bearer " + token,
+                        "Accept": "application/vnd.github+json",
+                        "X-GitHub-Api-Version": "2022-11-28",
+                    }
+                    if tool_name == "search_repositories":
+                        query = payload.get("query")
+                        query = query.strip() if isinstance(query, str) else ""
+                        if not query or len(query) > 200:
+                            raise HTTPException(422, "query must contain 1-200 characters", headers=_PRIVATE_HEADERS)
+                        response = await client.get(
+                            "https://api.github.com/search/repositories",
+                            params={"q": query, "per_page": 10, "sort": "updated", "order": "desc"},
+                            headers=github_headers,
+                        )
+                        response.raise_for_status()
+                        raw = response.json()
+                        data = [{
+                            "full_name": row.get("full_name"), "description": row.get("description"),
+                            "url": row.get("html_url"), "stars": row.get("stargazers_count"),
+                            "language": row.get("language"), "private": row.get("private"),
+                            "default_branch": row.get("default_branch"),
+                        } for row in raw.get("items", [])[:10] if isinstance(row, dict)]
+                    elif tool_name == "get_repository":
+                        repository = _github_repo_name(payload.get("repository"))
+                        response = await client.get(
+                            "https://api.github.com/repos/" + repository,
+                            headers=github_headers,
+                        )
+                        response.raise_for_status()
+                        row = response.json()
+                        data = [{
+                            "full_name": row.get("full_name"),
+                            "description": row.get("description"),
+                            "url": row.get("html_url"),
+                            "private": row.get("private"),
+                            "default_branch": row.get("default_branch"),
+                            "language": row.get("language"),
+                            "stars": row.get("stargazers_count"),
+                            "forks": row.get("forks_count"),
+                            "open_issues": row.get("open_issues_count"),
+                            "updated_at": row.get("updated_at"),
+                        }]
+                    elif tool_name == "list_issues":
+                        repository = _github_repo_name(payload.get("repository"))
+                        state = payload.get("state", "open")
+                        if not isinstance(state, str) or state not in {"open", "closed", "all"}:
+                            raise HTTPException(422, "state must be open, closed or all", headers=_PRIVATE_HEADERS)
+                        response = await client.get(
+                            "https://api.github.com/repos/" + repository + "/issues",
+                            params={"state": state, "per_page": 20},
+                            headers=github_headers,
+                        )
+                        response.raise_for_status()
+                        data = [{
+                            "number": row.get("number"), "title": row.get("title"),
+                            "state": row.get("state"), "url": row.get("html_url"),
+                            "body": str(row.get("body") or "")[:2000],
+                            "labels": [str(label.get("name") or "") for label in row.get("labels", [])[:10] if isinstance(label, dict)],
+                            "updated_at": row.get("updated_at"),
+                        } for row in response.json()[:20] if isinstance(row, dict) and not row.get("pull_request")]
+                    elif tool_name == "get_issue":
+                        repository = _github_repo_name(payload.get("repository"))
+                        issue_number = _github_resource_number(payload.get("issue_number"))
+                        response = await client.get(
+                            "https://api.github.com/repos/" + repository + "/issues/" + str(issue_number),
+                            headers=github_headers,
+                        )
+                        response.raise_for_status()
+                        row = response.json()
+                        if not isinstance(row, dict) or row.get("pull_request"):
+                            raise HTTPException(404, "GitHub Issue not found", headers=_PRIVATE_HEADERS)
+                        data = [{
+                            "number": row.get("number"), "title": row.get("title"),
+                            "state": row.get("state"), "url": row.get("html_url"),
+                            "body": str(row.get("body") or "")[:12000],
+                            "labels": [str(label.get("name") or "") for label in row.get("labels", [])[:20] if isinstance(label, dict)],
+                            "created_at": row.get("created_at"), "updated_at": row.get("updated_at"),
+                            "closed_at": row.get("closed_at"),
+                        }]
+                    elif tool_name == "list_pull_requests":
+                        repository = _github_repo_name(payload.get("repository"))
+                        state = payload.get("state", "open")
+                        if not isinstance(state, str) or state not in {"open", "closed", "all"}:
+                            raise HTTPException(422, "state must be open, closed or all", headers=_PRIVATE_HEADERS)
+                        response = await client.get(
+                            "https://api.github.com/repos/" + repository + "/pulls",
+                            params={"state": state, "per_page": 20, "sort": "updated", "direction": "desc"},
+                            headers=github_headers,
+                        )
+                        response.raise_for_status()
+                        data = [{
+                            "number": row.get("number"), "title": row.get("title"),
+                            "state": row.get("state"), "url": row.get("html_url"),
+                            "body": str(row.get("body") or "")[:2000],
+                            "draft": bool(row.get("draft")),
+                            "head": str((row.get("head") or {}).get("ref") or "")[:200],
+                            "base": str((row.get("base") or {}).get("ref") or "")[:200],
+                            "updated_at": row.get("updated_at"),
+                        } for row in response.json()[:20] if isinstance(row, dict)]
+                    elif tool_name == "get_pull_request":
+                        repository = _github_repo_name(payload.get("repository"))
+                        issue_number = _github_resource_number(payload.get("pull_number"))
+                        response = await client.get(
+                            "https://api.github.com/repos/" + repository + "/pulls/" + str(issue_number),
+                            headers=github_headers,
+                        )
+                        response.raise_for_status()
+                        row = response.json()
+                        data = [{
+                            "number": row.get("number"), "title": row.get("title"),
+                            "state": row.get("state"), "url": row.get("html_url"),
+                            "body": str(row.get("body") or "")[:12000],
+                            "draft": bool(row.get("draft")),
+                            "merged": bool(row.get("merged")),
+                            "mergeable": row.get("mergeable"),
+                            "head": str((row.get("head") or {}).get("ref") or "")[:200],
+                            "base": str((row.get("base") or {}).get("ref") or "")[:200],
+                            "changed_files": row.get("changed_files"),
+                            "additions": row.get("additions"), "deletions": row.get("deletions"),
+                            "commits": row.get("commits"), "created_at": row.get("created_at"),
+                            "updated_at": row.get("updated_at"),
+                        }]
+                    elif tool_name == "list_commits":
+                        repository = _github_repo_name(payload.get("repository"))
+                        params = {"per_page": 20}
+                        ref = _github_ref(payload.get("ref"))
+                        if ref:
+                            params["sha"] = ref
+                        response = await client.get(
+                            "https://api.github.com/repos/" + repository + "/commits",
+                            params=params,
+                            headers=github_headers,
+                        )
+                        response.raise_for_status()
+                        data = [{
+                            "sha": str(row.get("sha") or "")[:40],
+                            "message": str(((row.get("commit") or {}).get("message")) or "")[:1200],
+                            "author": str((((row.get("commit") or {}).get("author")) or {}).get("name") or "")[:200],
+                            "date": str((((row.get("commit") or {}).get("author")) or {}).get("date") or "")[:80],
+                            "url": row.get("html_url"),
+                        } for row in response.json()[:20] if isinstance(row, dict)]
+                    elif tool_name == "search_code":
+                        query = payload.get("query")
+                        query = query.strip() if isinstance(query, str) else ""
+                        if not query or len(query) > 256:
+                            raise HTTPException(422, "query must contain 1-256 characters", headers=_PRIVATE_HEADERS)
+                        response = await client.get(
+                            "https://api.github.com/search/code",
+                            params={"q": query, "per_page": 10},
+                            headers=github_headers,
+                        )
+                        response.raise_for_status()
+                        raw = response.json()
+                        data = [{
+                            "repository": str(((row.get("repository") or {}).get("full_name")) or "")[:240],
+                            "path": str(row.get("path") or "")[:500],
+                            "url": row.get("html_url"),
+                            "sha": str(row.get("sha") or "")[:40],
+                        } for row in raw.get("items", [])[:10] if isinstance(row, dict)]
+                    elif tool_name == "get_file_contents":
+                        repository = _github_repo_name(payload.get("repository"))
+                        path, encoded_path = _github_file_path(payload.get("path"))
+                        ref = _github_ref(payload.get("ref"))
+                        params = {"ref": ref} if ref else None
+                        response = await client.get(
+                            "https://api.github.com/repos/" + repository + "/contents/" + encoded_path,
+                            params=params,
+                            headers=github_headers,
+                        )
+                        response.raise_for_status()
+                        row = response.json()
+                        if not isinstance(row, dict) or row.get("type") != "file":
+                            raise HTTPException(422, "path must identify one repository file", headers=_PRIVATE_HEADERS)
+                        size = row.get("size")
+                        encoded_content = row.get("content")
+                        if type(size) is not int or size > 1_000_000 or not isinstance(encoded_content, str):
+                            raise HTTPException(413, "GitHub file is too large or cannot be read through the contents API", headers=_PRIVATE_HEADERS)
+                        decoded = base64.b64decode("".join(encoded_content.split()))
+                        try:
+                            text_content = decoded.decode("utf-8")
+                        except UnicodeDecodeError as exc:
+                            raise HTTPException(422, "Only UTF-8 text files can be read by the GitHub plugin", headers=_PRIVATE_HEADERS) from exc
+                        if "\x00" in text_content:
+                            raise HTTPException(422, "Binary files are not supported by the GitHub text reader", headers=_PRIVATE_HEADERS)
+                        data = [{
+                            "repository": repository, "path": path,
+                            "url": row.get("html_url"), "sha": str(row.get("sha") or "")[:40],
+                            "size": size, "content": text_content[:24000],
+                            "truncated": len(text_content) > 24000,
+                        }]
+                    else:
+                        raise HTTPException(404, "Unsupported GitHub tool", headers=_PRIVATE_HEADERS)
                 elif provider_id == "gmail" and tool_name == "search_messages":
                     query = str(payload.get("query") or "").strip()
                     if not query or len(query) > 500:
@@ -854,6 +1049,18 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                 else:
                     raise HTTPException(404, "Unsupported plugin tool", headers=_PRIVATE_HEADERS)
     
+        except httpx.HTTPStatusError as exc:
+            if provider_id == "github":
+                status = exc.response.status_code
+                if status == 401:
+                    raise HTTPException(401, "GitHub 授权已失效，请重新连接账户", headers=_PRIVATE_HEADERS) from exc
+                if status == 404:
+                    raise HTTPException(404, "GitHub 未找到该资源，或当前账户无权访问", headers=_PRIVATE_HEADERS) from exc
+                if status == 403 and exc.response.headers.get("X-RateLimit-Remaining") == "0":
+                    raise HTTPException(429, "GitHub API 请求额度已用完，请稍后重试", headers=_PRIVATE_HEADERS) from exc
+                if status == 403:
+                    raise HTTPException(403, "GitHub 拒绝了此操作，请检查账户权限或 OAuth 授权范围", headers=_PRIVATE_HEADERS) from exc
+            raise HTTPException(502, "插件服务暂时不可用，请稍后重试", headers=_PRIVATE_HEADERS) from exc
         except (httpx.HTTPError, ValueError, TypeError, AttributeError) as exc:
             raise HTTPException(502, "插件服务暂时不可用，请稍后重试", headers=_PRIVATE_HEADERS) from exc
         return JSONResponse({

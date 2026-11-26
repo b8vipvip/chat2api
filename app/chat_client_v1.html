@@ -84,7 +84,7 @@
       <section class="utility-screen hidden" id="pluginsScreen" aria-label="插件">
         <div class="utility-page">
           <div class="utility-page-header plugin-page-header">
-            <div><h1>插件</h1><p>连接你自己的 GitHub、Gmail 账户。启用“在聊天中自动使用”后，模型会根据当前问题自主判断是否需要调用所选插件，并将只读结果作为本轮上下文提供给模型。插件数据可能包含外部指令，模型会将其视为不可信资料。当前仅开放只读操作，不会发送邮件或修改仓库。</p></div>
+            <div><h1>插件</h1><p>连接你自己的 GitHub、Gmail 账户。启用“在聊天中自动使用”后，模型会根据当前问题自主选择工具。GitHub 支持仓库搜索与详情、Issue、Pull Request、提交记录、代码搜索和文件读取；Gmail 支持邮件搜索与读取。插件结果会返回模型继续分析，数据按不可信资料处理。当前仅开放只读操作，不会发送邮件或修改仓库。私有仓库访问需管理员启用授权；GitHub OAuth 的 repo 范围较宽，当前 Web Chat 仅开放读取接口，不提供仓库写操作。</p></div>
             <button class="attach-button" id="pluginsBackToChat" type="button">返回聊天</button>
           </div>
           <div class="utility-list" id="pluginList"><div class="utility-empty">正在加载插件…</div></div>
