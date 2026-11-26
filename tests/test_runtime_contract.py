@@ -62,6 +62,14 @@ def test_v145_worker_model_library_runtime_owners_are_registered():
     # actually activate the Worker catalog and reset it on reconnect.
 
 
+def test_native_content_compatibility_hotfix_features_are_advertised():
+    payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
+    assert payload["features"]["native_interactive_control_label_budget_v1"] is True
+    assert payload["features"]["native_partial_image_slot_projection_v1"] is True
+    assert "native-control-label-budget-v1" in payload["server"]["feature_revision"]
+    assert "native-control-budget-v1" in payload["chrome_bridge"]["build_revision"]
+
+
 def test_realtime_protocol_contract_matches_live_bridge():
     assert LIVE_PROTOCOL_VERSION == "chat2api-live-v1"
 
@@ -811,7 +819,7 @@ def test_windows_platform_os_normalization_is_advertised():
     assert payload["features"]["windows_worker_platform_os_normalization_v1"] is True
 
 
-def test_v0_22_302_live_video_track_release_runtime_revision_is_advertised():
+def test_v0_22_302_release_contract_preserves_live_video_features():
     assert SERVER_RUNTIME_VERSION == RELEASE_VERSION == "0.22.302"
     assert "web-chat-shared-api-key-v1" in RUNTIME_FEATURE_REVISION
     assert "webchat-live-video-track-v1" in RUNTIME_FEATURE_REVISION

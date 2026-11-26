@@ -1095,6 +1095,28 @@ assert.deepEqual(JSON.parse(JSON.stringify(interactiveNodes[5].control)),
   {kind:"copy",label:"Copy code",text:"print('hello')\n"});
 assert.ok(!JSON.stringify(interactiveSent).includes("onclick"));
 
+// Worker/server budget parity: count visible control labels, not a duplicate
+// copy payload whose source code is already counted in the <pre>/<code> node.
+const budgetSent=[];
+const budgetCtx={...ctx,chrome:{runtime:{sendMessage:async message=>{
+  budgetSent.push(message);return {ok:true,committed:true};
+}}}};
+delete budgetCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,budgetCtx);
+const budgetLabel="x".repeat(160);
+const manyInputs=Array.from({length:1876},()=>{
+  const input=new Element("INPUT");
+  input.type="checkbox";
+  input.attributes["aria-label"]=budgetLabel;
+  return input;
+});
+const budgetActive={requestId:"req_nativecontrolbudget01",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",manyInputs)};
+await budgetCtx.__CHAT2API_NATIVE_CONTENT_V1__.capture(budgetActive,true);
+assert.equal(budgetActive.nativeStructuralFailure,"interactive-input-label-budget");
+assert.ok(!budgetSent.some(message=>message.event?.type==="chat.native.snapshot"),
+  "Worker must reject control-label overflow before server-side snapshot validation");
+
 const svgNS="http://www.w3.org/2000/svg";
 const chartTitle=new Element("TITLE",[{nodeType:3,nodeValue:"季度收入趋势"}]);
 chartTitle.textContent="季度收入趋势";chartTitle.namespaceURI=svgNS;
