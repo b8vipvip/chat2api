@@ -245,6 +245,14 @@
     const controlRequired=["details","input","select","option","button"].includes(tag);
     if (controlRequired !== (value.control !== undefined)) return false;
     if (value.control !== undefined && !validControl(tag,value.control)) return false;
+    if (value.control !== undefined) {
+      counts.chars += (value.control.text || "").length + (value.control.label || "").length;
+      if (counts.chars > MAX_TEXT) return false;
+    }
+    if (["details","select"].includes(tag) && !Array.isArray(value.children)) return false;
+    if (["input","select","option","button"].includes(tag) && value.text !== undefined) return false;
+    if (["input","option","button"].includes(tag) && value.children !== undefined) return false;
+    if (tag==="option" && (typeof value.text!=="string" || !value.text.trim())) return false;
     if (tag==="summary" && parentTag!=="details") return false;
     if (tag==="option" && parentTag!=="select") return false;
     if (value.href !== undefined && (tag !== "a" || !safeExternalLinkUrl(value.href))) return false;
@@ -282,7 +290,10 @@
       if (tag==="select" && (!value.children.length || value.children.some(child=>child?.tag!=="option"))) return false;
       if (tag==="details" && (!value.children.length || value.children[0]?.tag!=="summary")) return false;
       for (const child of value.children) if (!validateNode(child,depth+1,tag,counts)) return false;
-      if (tag==="select" && !value.children.some(child=>child.control?.value===value.control.selected)) return false;
+      if (tag==="select") {
+        const selected=value.children.filter(child=>child.control?.selected===true);
+        if (selected.length!==1 || selected[0].control.value!==value.control.selected) return false;
+      }
     }
     return true;
   }
