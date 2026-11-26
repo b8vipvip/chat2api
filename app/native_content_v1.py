@@ -3,7 +3,8 @@
 Neither this store nor its SSE subscribers participate in Broker completion.
 The authoritative OpenAI reply remains the existing archived Markdown.
 No raw HTML, CSS text, media URLs, file bytes, tokens or JS are accepted;
-only bounded public HTTPS citation targets may accompany inert text nodes.
+only bounded presentation nodes, typed interaction metadata and public HTTPS
+citation targets cross this protocol.
 """
 from __future__ import annotations
 
@@ -510,7 +511,7 @@ def validate_native_snapshot(payload: object) -> dict:
             raise ValueError("Option requires a visible label")
         if "text" in value:
             content = value["text"]
-            if tag == "img" or tag in (SVG_TAGS - {"text", "tspan"}) or not isinstance(content, str):
+            if tag == "img" or tag in (SVG_TAGS - {"text", "tspan", "title", "desc"}) or not isinstance(content, str):
                 raise ValueError("Invalid text")
             chars += len(content)
             if chars > MAX_TEXT:
