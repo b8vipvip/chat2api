@@ -374,3 +374,18 @@ body.sidebar-collapsed .sidebar{display:none}
 .plugin-tool-result strong{color:#eee;overflow-wrap:anywhere}
 .plugin-tool-result p{margin:0;color:#aaa;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.55}
 .plugin-tool-result .attach-button{justify-self:start}
+
+
+/* User-selected connectors can be enabled for the current chat workflow. */
+.plugin-page-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
+.plugin-page-header>div{min-width:0;flex:1}
+.plugin-page-header .attach-button{flex:0 0 auto;margin-top:2px}
+.plugin-chat-toggle{display:flex;align-items:center;gap:9px;margin:10px 0;padding:9px 11px;border:1px solid #414141;border-radius:10px;background:#252525;color:#ddd;font-size:12px}
+.plugin-chat-toggle input{width:15px;height:15px;margin:0;accent-color:#10a37f}
+.plugin-chat-toggle span{line-height:1.4}
+#pluginPickerButton[aria-pressed="true"]{border-color:#2d8a70;background:#203b34;color:#d8fff1}
+#pluginPickerButton:disabled{opacity:.55}
+@media(max-width:760px){
+  .plugin-page-header{align-items:stretch;flex-direction:column}
+  .plugin-page-header .attach-button{align-self:flex-start}
+}

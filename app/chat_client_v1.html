@@ -83,7 +83,10 @@
 
       <section class="utility-screen hidden" id="pluginsScreen" aria-label="插件">
         <div class="utility-page">
-          <div class="utility-page-header"><h1>插件</h1><p>连接你自己的 GitHub、Gmail 账户，并在当前聊天中使用授权后的只读工具。只有点击“插入到当前聊天”后，选中的检索结果才会作为消息内容发送给当前 ChatGPT 会话。</p></div>
+          <div class="utility-page-header plugin-page-header">
+            <div><h1>插件</h1><p>连接你自己的 GitHub、Gmail 账户。启用“在聊天中自动使用”后，系统会根据问题判断是否需要查询所选插件，并将只读结果作为本轮上下文提供给模型。插件数据可能包含外部指令，模型会将其视为不可信资料。当前仅开放只读操作，不会发送邮件或修改仓库。</p></div>
+            <button class="attach-button" id="pluginsBackToChat" type="button">返回聊天</button>
+          </div>
           <div class="utility-list" id="pluginList"><div class="utility-empty">正在加载插件…</div></div>
         </div>
       </section>
@@ -142,6 +145,7 @@
                     <option value="">正在同步可用模型…</option>
                   </select>
                 </label>
+                <button class="attach-button" id="pluginPickerButton" type="button" title="选择要在聊天中自动使用的插件" aria-pressed="false">插件</button>
                 <button class="attach-button" id="attachButton" type="button" title="添加图片（PNG、JPEG、WebP、GIF）" aria-label="添加图片">＋ 图片</button>
                 <button class="attach-button" id="fileButton" type="button" title="添加文档（PDF、Office、文本）" aria-label="添加文档">＋ 文件</button>
                 <button class="attach-button voice-start-button" id="voiceStartButton" type="button" title="开始实时语音通话">语音通话</button>

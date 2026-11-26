@@ -53,6 +53,8 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         composer_html = page.text.split('<footer class="composer-area"', 1)[1].split("</footer>", 1)[0]
         assert 'id="modelSelect"' not in topbar_html
         assert 'id="modelSelect"' in composer_html
+        assert 'id="pluginPickerButton"' in composer_html
+        assert 'id="pluginsBackToChat"' in page.text
         sidebar_html = page.text.split('<aside class="sidebar"', 1)[1].split("</aside>", 1)[0]
         assert 'id="newChatButton"' not in sidebar_html
         assert 'id="pluginsButton"' in sidebar_html and 'id="libraryButton"' in sidebar_html
@@ -134,6 +136,14 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         assert "/api/user/chat/models" in script.text
         assert "/api/user/plugins" in script.text
         assert "/api/user/plugins/oauth/" in script.text
+        assert "selectedPlugins" in script.text
+        assert "restorePluginSelection" in script.text
+        assert "runSelectedPluginsForPrompt" in script.text
+        assert "shouldQueryPlugin" in script.text
+        assert "buildPluginContextMessage" in script.text
+        assert "list_issues" in script.text
+        assert 'callPluginTool("gmail", "get_message"' in script.text
+        assert "不可信外部输入" in script.text
         assert '$("sidebarAccount").hidden = false;' in script.text
         assert '$("accountSettingsButton").hidden = false;' in script.text
         assert "mapped_model_id" in script.text
