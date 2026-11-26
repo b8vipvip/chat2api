@@ -420,8 +420,35 @@ def validate_native_snapshot(payload: object) -> dict:
             raise ValueError("Native tree exceeds limit")
         count += 1
         tag = value.get("tag")
-        if tag not in SAFE_TAGS or not isinstance(tag, str):
+        if not isinstance(tag, str) or tag not in SAFE_TAGS:
             raise ValueError("Unsupported native element")
+        # Rolling-upgrade compatibility: older Worker builds and durable
+        # snapshots used details.open and button.action/action_value. Normalize
+        # those shapes once at the server boundary; every downstream consumer
+        # sees only the typed control contract.
+        legacy_open = "open" in value
+        legacy_action = "action" in value or "action_value" in value
+        if legacy_open or legacy_action:
+            value = dict(value)
+            if "control" in value:
+                raise ValueError("Mixed legacy and typed native controls")
+            if tag == "details" and legacy_open and not legacy_action:
+                opened = value.pop("open")
+                if type(opened) is not bool:
+                    raise ValueError("Invalid legacy disclosure state")
+                value["control"] = {"kind": "disclosure", "open": opened}
+                value.setdefault("children", [])
+            elif tag == "button" and legacy_action and not legacy_open:
+                action = value.pop("action", None)
+                action_value = value.pop("action_value", None)
+                label = value.pop("text", None)
+                value["control"] = {
+                    "kind": "copy", "label": label, "text": action_value,
+                }
+                if action != "copy-text":
+                    raise ValueError("Unsupported legacy native button action")
+            else:
+                raise ValueError("Legacy interaction metadata on unsupported element")
         if parent_tag in SVG_TAGS and tag not in SVG_TAGS:
             raise ValueError("Invalid SVG children")
         if tag in SVG_TAGS and parent_tag not in SVG_TAGS and tag != "svg":
@@ -553,8 +580,8 @@ def validate_native_snapshot(payload: object) -> dict:
             if tag == "details":
                 summaries = [index for index, child in enumerate(children)
                              if isinstance(child, dict) and child.get("tag") == "summary"]
-                if summaries != [0]:
-                    raise ValueError("Disclosure must have exactly one leading summary")
+                if len(summaries) > 1 or (summaries and summaries[0] != 0):
+                    raise ValueError("Disclosure may have at most one leading summary")
             # Namespace integrity: no HTML/script/image descendants under
             # MathML. Existing validated HTML content remains unchanged.
             if tag in MATH_TAGS and any(not isinstance(child, dict)

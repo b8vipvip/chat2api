@@ -240,6 +240,13 @@ assert.equal(renderer.validateSnapshot(malformedSelect),false);
 console.log("native-renderer-interactive-controls-passed");
 
 
+const disclosureWithoutSummary = {
+  version:1,revision:6,finality:"verified-final",assets:[],files:[],
+  root:{tag:"details",control:{kind:"disclosure",open:false},children:[
+    {tag:"p",text:"Legacy disclosure content remains renderable"},
+  ]},
+};
+assert.equal(interactiveRenderer.validateSnapshot(disclosureWithoutSummary),true);
 const tooManyOptions=structuredClone(interactive);
 tooManyOptions.root.children[4].children=Array.from({length:65},(_,index)=>({
   tag:"option",text:`Option ${index}`,control:{

@@ -289,7 +289,7 @@
     if (value.children !== undefined) {
       if (["img","hr","br","input","option","button"].includes(tag) || !Array.isArray(value.children) || value.children.length > 8192) return false;
       if (tag==="select" && (!value.children.length || value.children.length>64 || value.children.some(child=>child?.tag!=="option"))) return false;
-      if (tag==="details" && (!value.children.length || value.children[0]?.tag!=="summary" || value.children.filter(child=>child?.tag==="summary").length!==1)) return false;
+      if (tag==="details" && (value.children.filter(child=>child?.tag==="summary").length>1 || (value.children.some(child=>child?.tag==="summary") && value.children[0]?.tag!=="summary"))) return false;
       for (const child of value.children) if (!validateNode(child,depth+1,tag,counts)) return false;
       if (tag==="select") {
         const selected=value.children.filter(child=>child.control?.selected===true);
@@ -317,6 +317,9 @@
       element.type="button";
       element.className="native-copy-control";
       element.textContent=value.control.label;
+      if (value.style) Object.entries(value.style).forEach(([key,item]) => {
+        if (validStyle(key,item,tag)) element.style[key] = item;
+      });
       element.addEventListener?.("click",()=>{
         const clipboard=globalThis.navigator?.clipboard;
         if (!clipboard?.writeText) {

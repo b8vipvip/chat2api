@@ -1,3 +1,4 @@
+import json
 import pytest
 from app.native_content_v1 import NativeContentStore, validate_native_snapshot
 
@@ -893,13 +894,43 @@ def test_native_interactive_controls_validate_and_legacy_projection_is_inert():
         "kind": "option", "value": "a", "disabled": False, "selected": True,
     }},
     {"tag": "summary", "text": "孤立摘要"},
-    {"tag": "details", "control": {"kind": "disclosure", "open": True},
-     "children": [{"tag": "p", "text": "缺少 summary"}]},
     {"tag": "button", "control": {"kind": "copy", "label": "复制", "text": "x"*150001}},
 ])
 def test_native_interactive_controls_reject_unsafe_or_incomplete_shapes(root):
     with pytest.raises(ValueError):
         validate_native_snapshot({"version": 1, "revision": 1, "root": root})
+
+
+def test_legacy_native_controls_are_normalized_when_durable_snapshot_is_read(tmp_path):
+    request_id = "req_legacy123456"
+    old_snapshot = {"version": 1, "revision": 3, "root": {"tag": "div", "children": [
+        {"tag": "details", "open": True, "children": [
+            {"tag": "summary", "text": "展开旧内容"},
+            {"tag": "p", "text": "旧版折叠内容"},
+        ]},
+        {"tag": "details", "children": [
+            {"tag": "p", "text": "旧版没有 summary 的内容"},
+        ]},
+        {"tag": "button", "text": "复制代码", "action": "copy-text",
+         "action_value": "print('legacy')\n"},
+    ]}}
+    store = NativeContentStore(tmp_path)
+    path = store.root / (request_id + ".json")
+    path.write_text(json.dumps({"owner": "legacy-owner", "snapshot": old_snapshot}),
+                    encoding="utf-8")
+
+    loaded = store.get(request_id, "legacy-owner")
+    assert loaded is not None
+    children = loaded["root"]["children"]
+    assert children[0]["control"] == {"kind": "disclosure", "open": True}
+    assert children[0]["children"][0]["tag"] == "summary"
+    assert children[1]["control"] == {"kind": "disclosure", "open": False}
+    assert children[1]["children"][0]["tag"] == "p"
+    assert children[2]["control"] == {
+        "kind": "copy", "label": "复制代码", "text": "print('legacy')\n",
+    }
+    assert "open" not in children[0]
+    assert "action" not in children[2] and "action_value" not in children[2]
 
 
 def test_native_select_enforces_option_cap_and_disclosure_summary_uniqueness():
@@ -917,7 +948,7 @@ def test_native_select_enforces_option_cap_and_disclosure_summary_uniqueness():
             }, "children": options,
         }})
 
-    with pytest.raises(ValueError, match="exactly one leading summary"):
+    with pytest.raises(ValueError, match="at most one leading summary"):
         validate_native_snapshot({"version": 1, "revision": 1, "root": {
             "tag": "details", "control": {"kind": "disclosure", "open": True},
             "children": [
