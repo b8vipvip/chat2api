@@ -15,6 +15,7 @@ from app.web_chat_integration_v1 import install_web_chat_features_v1
 def test_web_chat_model_list_uses_available_models_and_labels_default_mapping(tmp_path: Path):
     app = create_app(Settings(CHAT2API_DATA_DIR=str(tmp_path)))
     install_control_plane_v1(app)
+    app.state.control_plane.update_client({"web_chat_enabled": True})
     install_user_console_v104_patch(app)
     install_web_chat_features_v1(app)
     shared_public, _shared_token = asyncio.run(app.state.api_keys.create("web-chat-shared"))
