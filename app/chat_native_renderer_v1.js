@@ -394,12 +394,23 @@
     if (tag==="select") element.value=value.control.selected;
     return element;
   }
+  function hasLocalOnlyControls(root) {
+    const pending=[root];
+    while(pending.length) {
+      const node=pending.pop();
+      if (!node || typeof node!=="object") continue;
+      if (["input","select"].includes(node.tag)) return true;
+      pending.push(...(node.children || []));
+    }
+    return false;
+  }
   function renderNativeSnapshot(host,snapshot,sourceReferences=[]) {
     if (!host || !validateSnapshot(snapshot)) return false;
     try {
       const state = document.createElement("div");
       state.className = "native-delivery-state";
-      state.textContent = snapshot.finality === "verified-final" ? "ChatGPT 原生内容 · 已验证完成" : "ChatGPT 原生内容 · 实时更新，最终校验中";
+      state.textContent = (snapshot.finality === "verified-final" ? "ChatGPT 原生内容 · 已验证完成" : "ChatGPT 原生内容 · 实时更新，最终校验中") +
+        (hasLocalOnlyControls(snapshot.root) ? " · 表单控件仅在本地预览，不会提交到 ChatGPT" : "");
       const root = document.createElement("div"); root.className = "native-rich-root";
       root.appendChild(createNode(snapshot.root,snapshot,0,{radioGroups:new Map(),prefix:"native-"+(++renderSequence)}));
       const files = document.createElement("div"); files.className = "native-generated-files";
