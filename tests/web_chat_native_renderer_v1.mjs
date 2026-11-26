@@ -195,7 +195,7 @@ const interactive = {
 assert.equal(renderer.validateSnapshot(interactive),true);
 const interactiveHost=new FakeElement("host");
 let copied="";
-const interactiveWindow = window;
+const interactiveWindow = {};
 const interactiveRendererSource = source;
 const interactiveContext = {
   window:interactiveWindow,URL,document,
