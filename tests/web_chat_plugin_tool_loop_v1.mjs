@@ -22,6 +22,7 @@ function makeHarness({selectedPlugins = ["github"], catalog = null, planner = []
     activeRequestRecord:null,
     abortController:null,
     selectedModel:"gpt-6",
+    user:{user_id:"test-user-1"},
   };
   const context = {
     state,
