@@ -500,6 +500,67 @@ def test_web_chat_live_voice_token_is_bound_to_active_account_session(tmp_path: 
     app.state.quota_reservations.close()
 
 
+
+def test_reserved_web_chat_key_cannot_use_mode2_voice(tmp_path: Path) -> None:
+    app = create_app(settings(tmp_path))
+    install_control_plane_v1(app)
+    install_voice_patch(app)
+    install_live_voice_patch(app)
+    with TestClient(app) as client:
+        public, token = asyncio.run(app.state.api_keys.create("reserved-mode1"))
+        headers = {"Authorization": f"Bearer {token}"}
+        # An ordinary managed key may obtain a Mode 2 ticket before reservation.
+        ticket = client.post("/v1/audio/realtime/sessions", headers=headers)
+        assert ticket.status_code == 200, ticket.text
+        app.state.control_plane.update_client({"api_key_id": public["key_id"]})
+        assert client.post("/v1/audio/speech", headers=headers,
+                           json={"input": "hello"}).status_code == 403
+        assert client.post("/v1/audio/conversations", headers=headers,
+                           json={"audio_file_id": "file_missing"}).status_code == 403
+        assert client.post("/v1/audio/realtime/sessions", headers=headers).status_code == 401
+        with pytest.raises(WebSocketDisconnect) as exc:
+            with client.websocket_connect("/v1/audio/realtime", headers=headers) as live:
+                live.receive_json()
+        assert exc.value.code == 4401
+        with pytest.raises(WebSocketDisconnect) as exc:
+            with client.websocket_connect(ticket.json()["websocket_path"]) as live:
+                live.receive_json()
+        assert exc.value.code == 4401
+        # The reservation does not affect other user-managed Mode 2 keys.
+        _, ordinary = asyncio.run(app.state.api_keys.create("ordinary-mode2"))
+        assert client.post("/v1/audio/realtime/sessions",
+                           headers={"Authorization": f"Bearer {ordinary}"}).status_code == 200
+
+
+@pytest.mark.parametrize("policy", ["web_chat_enabled", "guest_enabled"])
+def test_web_chat_voice_ticket_obeys_revoked_client_policy(tmp_path: Path, policy: str) -> None:
+    app = create_app(settings(tmp_path))
+    install_control_plane_v1(app)
+    install_user_console_v104_patch(app)
+    install_voice_patch(app)
+    install_live_voice_patch(app)
+    install_web_chat_features_v1(app)
+    shared, _ = asyncio.run(app.state.api_keys.create("shared-voice-policy"))
+    app.state.control_plane.update_client({"api_key_id": shared["key_id"], "guest_enabled": True})
+    origin = {"Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"}
+    with TestClient(app) as client:
+        if policy == "guest_enabled":
+            response = client.post("/api/user/guest-session", headers=origin)
+            assert response.status_code == 200, response.text
+        else:
+            user = app.state.user_accounts.register(
+                "voice-policy@example.org", "secure-password-123", "Voice Policy"
+            )
+            client.cookies.set(USER_SESSION_COOKIE, app.state.user_accounts.create_session(user["user_id"]))
+        response = client.post("/api/user/chat/voice-session", headers=origin)
+        assert response.status_code == 200, response.text
+        app.state.control_plane.update_client({policy: False})
+        with pytest.raises(WebSocketDisconnect) as exc:
+            with client.websocket_connect(response.json()["websocket_path"]) as live:
+                live.receive_json()
+        assert exc.value.code == 4401
+
+
 def test_live_voice_rejects_legacy_master_key_and_wrong_key(tmp_path: Path) -> None:
     with TestClient(app_live(tmp_path)) as client:
         for token in ("master-key", "wrong-key"):
