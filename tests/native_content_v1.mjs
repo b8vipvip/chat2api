@@ -1098,11 +1098,11 @@ const chartDesc=new Element("DESC",[{nodeType:3,nodeValue:"按季度展示收入
 chartDesc.textContent="按季度展示收入变化";chartDesc.namespaceURI=svgNS;
 const chartPath=new Element("PATH");chartPath.namespaceURI=svgNS;
 chartPath.attributes.d="M0 0 L640 320";chartPath.attributes.stroke="#123456";
-const chart=new Element("SVG",[chartTitle,chartDesc,chartPath]);chart.namespaceURI=svgNS;
-chart.getBoundingClientRect=()=>({width:640,height:320});
+const nativeInteractiveSvg=new Element("SVG",[chartTitle,chartDesc,chartPath]);nativeInteractiveSvg.namespaceURI=svgNS;
+nativeInteractiveSvg.getBoundingClientRect=()=>({width:640,height:320});
 const chartReply=capture.snapshot({
   requestId:"req_nativecharttitle01",submitStartedAt:Date.now(),
-  lastCandidateNode:new Element("DIV",[chart]),
+  lastCandidateNode:new Element("DIV",[nativeInteractiveSvg]),
 });
 assert.equal(chartReply.root.children[0].tag,"svg");
 assert.equal(chartReply.root.children[0].children[0].tag,"title");
