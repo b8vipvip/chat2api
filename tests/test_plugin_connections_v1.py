@@ -524,14 +524,20 @@ def test_github_repository_issue_pull_request_commit_and_file_read_tools(tmp_pat
             ("get_file_contents", {"repository": "acme/project", "path": "docs/hello world.md", "ref": "main"}),
         ]
         responses = []
+        response_payloads = []
         for tool_name, payload in requests:
             response = client.post(
                 "/api/user/plugins/github/tools/" + tool_name,
                 headers=ORIGIN, json=payload,
             )
             assert response.status_code == 200, (tool_name, response.text)
-            responses.append(response.json()["data"])
+            payload_json = response.json()
+            response_payloads.append(payload_json)
+            responses.append(payload_json["data"])
 
+        assert response_payloads[4]["pagination"] == {
+            "page": 2, "per_page": 5, "has_more": True,
+        }
         assert responses[0][0]["default_branch"] == "main"
         assert responses[1][0]["number"] == 7
         assert responses[1][0]["labels"] == ["bug"]
@@ -924,3 +930,129 @@ def test_github_scope_downgrade_disconnects_only_after_confirmed_remote_revocati
         assert response.status_code == 200
         assert response.json()["provider_revocation"] == "revoked"
         assert store.connection(user["user_id"], "github") is None
+
+
+
+def test_github_read_tools_support_bounded_pagination_and_report_has_more(
+    tmp_path: Path, monkeypatch,
+):
+    app = make_app(tmp_path)
+    store: PluginOAuthStore = app.state.plugin_oauth_store
+    store.save_provider(
+        "github", enabled=True, client_id="gh-client",
+        client_secret="gh-secret", private_repos=False,
+    )
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, payload, headers=None):
+            self.payload = payload
+            self.headers = headers or {}
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.payload
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def get(self, url, **kwargs):
+            calls.append((url, kwargs))
+            assert kwargs["params"]["page"] == 2
+            if url == "https://api.github.com/search/repositories":
+                assert kwargs["params"]["per_page"] == 10
+                return FakeResponse({
+                    "total_count": 21, "incomplete_results": False,
+                    "items": [{
+                        "full_name": "acme/project", "html_url": "https://github.com/acme/project",
+                        "description": "Project", "stargazers_count": 12,
+                        "language": "Python", "private": False, "default_branch": "main",
+                    }],
+                }, {"Link": '<https://api.github.com/search/repositories?page=3>; rel="next"'})
+            if url == "https://api.github.com/repos/acme/project/issues":
+                assert kwargs["params"]["per_page"] == 20
+                return FakeResponse([
+                    {"number": 12, "title": "Issue 12", "state": "open", "html_url": "https://github.com/acme/project/issues/12"},
+                    {"number": 13, "title": "PR 13", "pull_request": {"url": "https://api.github.com/repos/acme/project/pulls/13"}},
+                ], {"Link": '<https://api.github.com/repos/acme/project/issues?page=3>; rel="next"'})
+            if url == "https://api.github.com/repos/acme/project/pulls":
+                assert kwargs["params"]["per_page"] == 20
+                return FakeResponse([
+                    {"number": 15, "title": "PR 15", "state": "open", "html_url": "https://github.com/acme/project/pull/15",
+                     "draft": False, "head": {"ref": "feature"}, "base": {"ref": "main"}},
+                ], {"Link": '<https://api.github.com/repos/acme/project/pulls?page=3>; rel="next"'})
+            if url == "https://api.github.com/repos/acme/project/commits":
+                assert kwargs["params"]["per_page"] == 20
+                assert kwargs["params"]["sha"] == "main"
+                return FakeResponse([
+                    {"sha": "a" * 40, "commit": {"message": "Commit page 2", "author": {"name": "Dev", "date": "2026-11-26T00:00:00Z"}},
+                     "html_url": "https://github.com/acme/project/commit/" + "a" * 40},
+                ], {"Link": '<https://api.github.com/repos/acme/project/commits?page=3>; rel="next"'})
+            if url == "https://api.github.com/search/code":
+                assert kwargs["params"]["per_page"] == 10
+                return FakeResponse({
+                    "total_count": 31, "incomplete_results": False,
+                    "items": [{
+                        "repository": {"full_name": "acme/project"}, "path": "src/page_two.py",
+                        "html_url": "https://github.com/acme/project/blob/main/src/page_two.py",
+                        "sha": "b" * 40,
+                    }],
+                }, {"Link": '<https://api.github.com/search/code?page=3>; rel="next"'})
+            raise AssertionError("unexpected GitHub URL: " + url)
+
+    monkeypatch.setattr("app.plugin_connections_v1.httpx.AsyncClient", FakeAsyncClient)
+
+    with TestClient(app) as client:
+        user = register(client, "github-pagination@example.com")
+        store.save_connection(
+            user["user_id"], "github", "42", "octocat",
+            "user-access-token", "", ["read:user"], None,
+        )
+        login = client.post(
+            "/api/user/login",
+            json={"email": "github-pagination@example.com", "password": PASSWORD},
+            headers=ORIGIN,
+        )
+        assert login.status_code == 200
+
+        cases = [
+            ("search_repositories", {"query": "acme project", "page": 2}, 10),
+            ("list_issues", {"repository": "acme/project", "state": "open", "page": 2}, 20),
+            ("list_pull_requests", {"repository": "acme/project", "state": "open", "page": 2}, 20),
+            ("list_commits", {"repository": "acme/project", "ref": "main", "page": 2}, 20),
+            ("search_code", {"query": "repo:acme/project parser", "page": 2}, 10),
+        ]
+        for tool_name, payload, per_page in cases:
+            response = client.post(
+                "/api/user/plugins/github/tools/" + tool_name,
+                headers=ORIGIN,
+                json=payload,
+            )
+            assert response.status_code == 200, response.text
+            result = response.json()
+            assert result["pagination"]["page"] == 2
+            assert result["pagination"]["per_page"] == per_page
+            assert result["pagination"]["has_more"] is True
+            if tool_name in {"search_repositories", "search_code"}:
+                assert result["pagination"]["total_count"] in {21, 31}
+                assert result["pagination"]["incomplete_results"] is False
+            if tool_name == "list_issues":
+                assert [row["number"] for row in result["data"]] == [12]
+        assert len(calls) == 5
+
+        invalid = client.post(
+            "/api/user/plugins/github/tools/list_issues",
+            headers=ORIGIN,
+            json={"repository": "acme/project", "page": True},
+        )
+        assert invalid.status_code == 422
+        assert len(calls) == 5
