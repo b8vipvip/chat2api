@@ -766,6 +766,7 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
         if not expires_at or int(expires_at) > int(time.time()) + 60:
             return str(connection["access_token"])
         if not connection.get("refresh_token"):
+            store.disconnect(user_id, provider_id)
             raise HTTPException(409, "插件授权已过期，请重新连接账户", headers=_PRIVATE_HEADERS)
         config = store.provider(provider_id)
         if not config or not config.get("enabled"):
@@ -787,6 +788,7 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                 except (ValueError, AttributeError):
                     refresh_error = None
                 if refresh_error in {"invalid_grant", "invalid_token"}:
+                    store.disconnect(user_id, provider_id)
                     raise HTTPException(
                         409, "插件授权已失效，请重新连接账户", headers=_PRIVATE_HEADERS,
                     ) from exc
@@ -794,6 +796,7 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
             payload = response.json()
         token = str(payload.get("access_token") or "")
         if not token:
+            store.disconnect(user_id, provider_id)
             raise HTTPException(409, "插件授权已失效，请重新连接账户", headers=_PRIVATE_HEADERS)
         new_expiry = int(time.time()) + max(60, int(payload.get("expires_in") or 3600))
         store.update_access_token(
@@ -1102,8 +1105,11 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
             if provider_id == "github":
                 status = exc.response.status_code
                 if status == 401:
-                    # Plugin credential failures must not be confused with the
+                    # Provider credential failures must not be confused with the
                     # Web Chat account-session 401 handled by the browser shell.
+                    # Remove the rejected credential so a page reload also offers
+                    # the reconnect action instead of showing a stale connection.
+                    store.disconnect(str(user["user_id"]), provider_id)
                     raise HTTPException(409, "GitHub 授权已失效，请重新连接账户", headers=_PRIVATE_HEADERS) from exc
                 if status == 404:
                     raise HTTPException(404, "GitHub 未找到该资源，或当前账户无权访问", headers=_PRIVATE_HEADERS) from exc
