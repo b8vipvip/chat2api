@@ -222,16 +222,37 @@ def test_web_chat_conversations_sync_between_two_browser_profiles(tmp_path: Path
                 assert sorted([concurrent_a["status"], concurrent_b["status"]]) == [200, 409]
                 conflict = concurrent_a if concurrent_a["status"] == 409 else concurrent_b
                 assert conflict["body"]["conversation"]["revision"] == 2
+                saved_update = concurrent_a if concurrent_a["status"] == 200 else concurrent_b
+                assert saved_update["body"]["conversation"]["revision"] == 2
+
+                latest_revision = page_a.evaluate(
+                    """async (conversationId) => {
+                      const response = await fetch("/api/user/chat/conversations", {
+                        credentials: "same-origin"
+                      });
+                      if (!response.ok) throw new Error("conversation list request failed");
+                      const body = await response.json();
+                      const conversation = body.data.find(item => item.id === conversationId);
+                      return conversation?.revision ?? null;
+                    }""",
+                    conversation_id,
+                )
+                assert latest_revision is not None
+                assert latest_revision >= saved_update["body"]["conversation"]["revision"]
 
                 deleted = page_a.evaluate(
-                    """async (conversationId) => {
+                    """async ({conversationId, expectedRevision}) => {
                       const response = await fetch(
-                        "/api/user/chat/conversations/" + conversationId + "?expected_revision=2",
+                        "/api/user/chat/conversations/" + conversationId +
+                          "?expected_revision=" + encodeURIComponent(expectedRevision),
                         {method: "DELETE", credentials: "same-origin"}
                       );
                       return {status: response.status, body: await response.json()};
                     }""",
-                    conversation_id,
+                    {
+                        "conversationId": conversation_id,
+                        "expectedRevision": latest_revision,
+                    },
                 )
                 assert deleted["status"] == 200, deleted
 
