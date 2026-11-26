@@ -71,6 +71,20 @@ def _github_ref(value: Any) -> str | None:
         raise HTTPException(422, "ref must be a valid branch, tag or commit reference", headers=_PRIVATE_HEADERS)
     return value.strip()
 
+
+def _github_page(value: Any) -> int:
+    if value is None:
+        return 1
+    if type(value) is not int or not 1 <= value <= 100:
+        raise HTTPException(422, "page must be an integer between 1 and 100", headers=_PRIVATE_HEADERS)
+    return value
+
+
+def _github_has_more(response: Any) -> bool:
+    link_header = str(getattr(response, "headers", {}).get("Link") or "")
+    return bool(re.search(r'\brel\s*=\s*"?next"?', link_header, re.IGNORECASE))
+
+
 PROVIDERS: dict[str, dict[str, Any]] = {
     "github": {
         "name": "GitHub",
@@ -879,6 +893,7 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                     409, "管理员已关闭私有仓库访问；请先断开并重新连接 GitHub，以撤销旧 repo 权限",
                     headers=_PRIVATE_HEADERS,
                 )
+        pagination: dict[str, Any] | None = None
         try:
             token = await access_token_for(user_id, provider_id)
         except httpx.HTTPError as exc:
@@ -897,9 +912,10 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                         query = query.strip() if isinstance(query, str) else ""
                         if not query or len(query) > 200:
                             raise HTTPException(422, "query must contain 1-200 characters", headers=_PRIVATE_HEADERS)
+                        page = _github_page(payload.get("page"))
                         response = await client.get(
                             "https://api.github.com/search/repositories",
-                            params={"q": query, "per_page": 10, "sort": "updated", "order": "desc"},
+                            params={"q": query, "per_page": 10, "page": page, "sort": "updated", "order": "desc"},
                             headers=github_headers,
                         )
                         response.raise_for_status()
@@ -910,6 +926,11 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                             "language": row.get("language"), "private": row.get("private"),
                             "default_branch": row.get("default_branch"),
                         } for row in raw.get("items", [])[:10] if isinstance(row, dict)]
+                        pagination = {
+                            "page": page, "per_page": 10, "has_more": _github_has_more(response),
+                            "total_count": raw.get("total_count") if type(raw.get("total_count")) is int else None,
+                            "incomplete_results": bool(raw.get("incomplete_results")),
+                        }
                     elif tool_name == "get_repository":
                         repository = _github_repo_name(payload.get("repository"))
                         response = await client.get(
@@ -935,9 +956,10 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                         state = payload.get("state", "open")
                         if not isinstance(state, str) or state not in {"open", "closed", "all"}:
                             raise HTTPException(422, "state must be open, closed or all", headers=_PRIVATE_HEADERS)
+                        page = _github_page(payload.get("page"))
                         response = await client.get(
                             "https://api.github.com/repos/" + repository + "/issues",
-                            params={"state": state, "per_page": 20},
+                            params={"state": state, "per_page": 20, "page": page},
                             headers=github_headers,
                         )
                         response.raise_for_status()
@@ -948,6 +970,7 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                             "labels": [str(label.get("name") or "") for label in row.get("labels", [])[:10] if isinstance(label, dict)],
                             "updated_at": row.get("updated_at"),
                         } for row in response.json()[:20] if isinstance(row, dict) and not row.get("pull_request")]
+                        pagination = {"page": page, "per_page": 20, "has_more": _github_has_more(response)}
                     elif tool_name == "get_issue":
                         repository = _github_repo_name(payload.get("repository"))
                         issue_number = _github_resource_number(payload.get("issue_number"))
@@ -972,9 +995,10 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                         state = payload.get("state", "open")
                         if not isinstance(state, str) or state not in {"open", "closed", "all"}:
                             raise HTTPException(422, "state must be open, closed or all", headers=_PRIVATE_HEADERS)
+                        page = _github_page(payload.get("page"))
                         response = await client.get(
                             "https://api.github.com/repos/" + repository + "/pulls",
-                            params={"state": state, "per_page": 20, "sort": "updated", "direction": "desc"},
+                            params={"state": state, "per_page": 20, "page": page, "sort": "updated", "direction": "desc"},
                             headers=github_headers,
                         )
                         response.raise_for_status()
@@ -987,6 +1011,7 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                             "base": str((row.get("base") or {}).get("ref") or "")[:200],
                             "updated_at": row.get("updated_at"),
                         } for row in response.json()[:20] if isinstance(row, dict)]
+                        pagination = {"page": page, "per_page": 20, "has_more": _github_has_more(response)}
                     elif tool_name == "get_pull_request":
                         repository = _github_repo_name(payload.get("repository"))
                         issue_number = _github_resource_number(payload.get("pull_number"))
@@ -1013,9 +1038,7 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                     elif tool_name == "get_pull_request_files":
                         repository = _github_repo_name(payload.get("repository"))
                         pull_number = _github_resource_number(payload.get("pull_number"))
-                        page = payload.get("page", 1)
-                        if type(page) is not int or not 1 <= page <= 100:
-                            raise HTTPException(422, "page must be an integer between 1 and 100", headers=_PRIVATE_HEADERS)
+                        page = _github_page(payload.get("page"))
                         response = await client.get(
                             "https://api.github.com/repos/" + repository + "/pulls/" + str(pull_number) + "/files",
                             params={"per_page": 5, "page": page},
@@ -1026,7 +1049,8 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                         if not isinstance(payload_rows, list):
                             raise HTTPException(502, "GitHub returned an invalid pull request file list", headers=_PRIVATE_HEADERS)
                         link_header = str(getattr(response, "headers", {}).get("Link") or "")
-                        has_more = 'rel="next"' in link_header
+                        has_more = _github_has_more(response)
+                        pagination = {"page": page, "per_page": 5, "has_more": has_more}
                         data = [{
                             "number": pull_number,
                             "page": page,
@@ -1045,7 +1069,8 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                         } for row in payload_rows[:5] if isinstance(row, dict)]
                     elif tool_name == "list_commits":
                         repository = _github_repo_name(payload.get("repository"))
-                        params = {"per_page": 20}
+                        page = _github_page(payload.get("page"))
+                        params = {"per_page": 20, "page": page}
                         ref = _github_ref(payload.get("ref"))
                         if ref:
                             params["sha"] = ref
@@ -1062,14 +1087,16 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                             "date": str((((row.get("commit") or {}).get("author")) or {}).get("date") or "")[:80],
                             "url": row.get("html_url"),
                         } for row in response.json()[:20] if isinstance(row, dict)]
+                        pagination = {"page": page, "per_page": 20, "has_more": _github_has_more(response)}
                     elif tool_name == "search_code":
                         query = payload.get("query")
                         query = query.strip() if isinstance(query, str) else ""
                         if not query or len(query) > 256:
                             raise HTTPException(422, "query must contain 1-256 characters", headers=_PRIVATE_HEADERS)
+                        page = _github_page(payload.get("page"))
                         response = await client.get(
                             "https://api.github.com/search/code",
-                            params={"q": query, "per_page": 10},
+                            params={"q": query, "per_page": 10, "page": page},
                             headers=github_headers,
                         )
                         response.raise_for_status()
@@ -1080,6 +1107,11 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                             "url": row.get("html_url"),
                             "sha": str(row.get("sha") or "")[:40],
                         } for row in raw.get("items", [])[:10] if isinstance(row, dict)]
+                        pagination = {
+                            "page": page, "per_page": 10, "has_more": _github_has_more(response),
+                            "total_count": raw.get("total_count") if type(raw.get("total_count")) is int else None,
+                            "incomplete_results": bool(raw.get("incomplete_results")),
+                        }
                     elif tool_name == "get_file_contents":
                         repository = _github_repo_name(payload.get("repository"))
                         path, encoded_path = _github_file_path(payload.get("path"))
@@ -1197,9 +1229,10 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
             raise HTTPException(502, "插件服务暂时不可用，请稍后重试", headers=_PRIVATE_HEADERS) from exc
         except (httpx.HTTPError, ValueError, TypeError, AttributeError) as exc:
             raise HTTPException(502, "插件服务暂时不可用，请稍后重试", headers=_PRIVATE_HEADERS) from exc
-        return JSONResponse({
-            "provider": provider_id, "tool": tool_name, "data": data,
-        }, headers=_PRIVATE_HEADERS)
+        response_payload = {"provider": provider_id, "tool": tool_name, "data": data}
+        if pagination is not None:
+            response_payload["pagination"] = pagination
+        return JSONResponse(response_payload, headers=_PRIVATE_HEADERS)
 
     app.state.plugin_connections_v1_installed = True
     app.state.plugin_connections_v1_version = 1
