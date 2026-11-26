@@ -1,4 +1,4 @@
-"""C-05a product Plugin Registry API: metadata only, execution disabled."""
+"""C-05a manifest metadata registry plus the fixed OAuth provider catalogue."""
 from __future__ import annotations
 
 import logging
@@ -90,7 +90,14 @@ def install_plugin_registry(app: FastAPI) -> FastAPI:
 
     @app.get("/api/client/plugins")
     async def client_plugins() -> dict[str, Any]:
-        # No user grant, trust/sandbox or Secret Store approval exists yet.
-        return {"data": [], "execution_enabled": False}
+        # Only fixed providers with an administrator-configured OAuth app are
+        # discoverable. User-specific grants are returned by /api/user/plugins.
+        connections = getattr(app.state, "plugin_oauth_store", None)
+        if connections is None:
+            return {"data": [], "execution_enabled": False}
+        catalog = connections.public_catalog()
+        # This endpoint describes availability only. Arbitrary Manifest
+        # execution remains disabled; fixed provider tools use /api/user/plugins.
+        return {"data": catalog, "execution_enabled": False}
 
     return app

@@ -36,16 +36,16 @@
       <div class="history-label">最近</div>
       <nav class="conversation-list" id="conversationList" aria-label="历史对话"></nav>
       <div class="sidebar-spacer"></div>
-      <div class="sidebar-account" hidden>
+      <div class="sidebar-account" id="sidebarAccount" hidden>
         <div class="account-row">
           <div class="avatar account-avatar" id="accountAvatar">U</div>
           <div class="account-meta">
             <div class="account-name" id="accountName">正在验证登录…</div>
-            <a href="/settings">账户设置</a>
+            <div class="account-subtitle" id="accountEmail"></div>
           </div>
         </div>
         <div class="sidebar-actions">
-          <a href="/settings">账户设置</a>
+          <a id="accountSettingsButton" href="/settings">设置</a>
           <button class="text-button" id="themeToggle" type="button">切换主题</button>
         </div>
       </div>
@@ -58,12 +58,6 @@
           <button class="icon-button mobile-menu" id="openSidebar" type="button" aria-label="打开侧栏">☰</button>
           <div class="mobile-brand">ChatGPT</div>
           <button class="topbar-new-chat" id="newChatButton" type="button" aria-label="新建对话" title="新建对话"><span aria-hidden="true">＋</span><span>新对话</span></button>
-          <label class="model-picker">
-            <span class="sr-only">模型</span>
-            <select id="modelSelect" aria-label="选择 ChatGPT 模型">
-              <option value="">正在同步 ChatGPT 模型…</option>
-            </select>
-          </label>
           <button class="text-button hidden" id="guestLoginButton" type="button">登录账户</button>
           <span class="connection-state" id="connectionState">连接中</span>
         </div>
@@ -89,8 +83,8 @@
 
       <section class="utility-screen hidden" id="pluginsScreen" aria-label="插件">
         <div class="utility-page">
-          <div class="utility-page-header"><h1>插件</h1><p>查看当前账户可用的插件目录。</p></div>
-          <div class="utility-list" id="pluginList"><div class="utility-empty">正在加载插件目录…</div></div>
+          <div class="utility-page-header"><h1>插件</h1><p>连接你自己的 GitHub、Gmail 账户，并在当前聊天中使用授权后的只读工具。只有点击“插入到当前聊天”后，选中的检索结果才会作为消息内容发送给当前 ChatGPT 会话。</p></div>
+          <div class="utility-list" id="pluginList"><div class="utility-empty">正在加载插件…</div></div>
         </div>
       </section>
 
@@ -142,6 +136,12 @@
             <div class="composer-bottom">
               <div class="composer-hint">Enter 发送 · Shift + Enter 换行</div>
               <div class="composer-controls">
+                <label class="model-picker composer-model-picker">
+                  <span class="sr-only">模型</span>
+                  <select id="modelSelect" aria-label="选择 ChatGPT 模型">
+                    <option value="">正在同步可用模型…</option>
+                  </select>
+                </label>
                 <button class="attach-button" id="attachButton" type="button" title="添加图片（PNG、JPEG、WebP、GIF）" aria-label="添加图片">＋ 图片</button>
                 <button class="attach-button" id="fileButton" type="button" title="添加文档（PDF、Office、文本）" aria-label="添加文档">＋ 文件</button>
                 <button class="attach-button voice-start-button" id="voiceStartButton" type="button" title="开始实时语音通话">语音通话</button>

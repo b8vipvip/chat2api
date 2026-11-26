@@ -434,6 +434,7 @@
           if (String(session.user?.user_id || "") === String(state.user?.user_id || "")) return;
         } catch {}
         state.user = null;
+        $("sidebarAccount").hidden = true;
         state.voicePanelVisible = false;
         $("voiceTranscript").replaceChildren();
         $("voicePanel").classList.add("hidden");
@@ -458,6 +459,7 @@
           if (String(current.user?.user_id || "") === String(state.user?.user_id || "")) return;
         } catch {}
         state.user = null;
+        $("sidebarAccount").hidden = true;
         showOnly("authRequired");
         openLoginDialog();
         $("composerArea").classList.add("hidden");
@@ -537,11 +539,13 @@
       error.status = response.status;
       if (response.status === 401 && state.user) {
         state.user = null;
+        $("sidebarAccount").hidden = true;
         showOnly("authRequired");
         setConnection("登录已失效", "error");
         openLoginDialog();
       } else if (guestLoginRequired(response.status, payload)) {
         state.user = null;
+        $("sidebarAccount").hidden = true;
         showOnly("authRequired");
         setConnection("游客访问已关闭", "error");
         openLoginDialog(String(payload.detail || "游客使用已关闭，请登录账户"));
@@ -1780,14 +1784,14 @@
     if (state.pluginCatalogError) {
       const empty = document.createElement("div");
       empty.className = "utility-empty";
-      empty.textContent = "插件目录暂时不可用：" + state.pluginCatalogError;
+      empty.textContent = "插件列表暂时不可用：" + state.pluginCatalogError;
       root.appendChild(empty);
       return;
     }
     if (!state.pluginCatalog.length) {
       const empty = document.createElement("div");
       empty.className = "utility-empty";
-      empty.textContent = "当前尚未开放用户插件授权和执行。服务端插件注册表目前只用于管理员登记 Manifest，待用户授权与安全沙箱接入后才会显示可用插件。";
+      empty.textContent = "服务端尚未提供插件配置。请联系管理员在「插件管理」中配置 GitHub 或 Gmail。";
       root.appendChild(empty);
       return;
     }
@@ -1795,13 +1799,129 @@
       const card = document.createElement("article");
       card.className = "utility-card";
       const title = document.createElement("h3");
-      title.textContent = plugin.name || plugin.id || "未命名插件";
+      title.textContent = plugin.name || plugin.id || "插件";
       const description = document.createElement("p");
-      description.textContent = plugin.description || "暂无说明";
-      const stateLabel = document.createElement("span");
-      stateLabel.className = "utility-status";
-      stateLabel.textContent = "目录可见 · 执行未开放";
-      card.append(title, description, stateLabel);
+      description.textContent = plugin.description || "";
+      const status = document.createElement("p");
+      status.className = "utility-meta";
+      status.textContent = !plugin.enabled || !plugin.configured
+        ? "管理员尚未配置或启用此插件"
+        : plugin.connected ? "已连接账户：" + String(plugin.account_label || "已授权账户") : "尚未连接账户";
+      card.append(title, description, status);
+      if (plugin.enabled && plugin.configured && !plugin.connected) {
+        const connect = document.createElement("button");
+        connect.type = "button";
+        connect.className = "primary-link";
+        connect.textContent = "连接 " + String(plugin.name || plugin.id) + " 账户";
+        connect.addEventListener("click", () => {
+          window.location.assign("/api/user/plugins/oauth/" + encodeURIComponent(plugin.id) + "/start");
+        });
+        card.appendChild(connect);
+      }
+      if (plugin.connected) {
+        const disconnect = document.createElement("button");
+        disconnect.type = "button";
+        disconnect.className = "attach-button";
+        disconnect.textContent = "断开连接";
+        disconnect.addEventListener("click", async () => {
+          disconnect.disabled = true;
+          try {
+            await apiJson("/api/user/plugins/" + encodeURIComponent(plugin.id) + "/disconnect", {method:"POST"});
+            toast("已断开 " + String(plugin.name || plugin.id) + " 账户连接");
+            await loadPluginCatalog(true);
+          } catch (error) {
+            toast("断开连接失败：" + String(error.message || error));
+            disconnect.disabled = false;
+          }
+        });
+        card.appendChild(disconnect);
+        if (plugin.enabled && plugin.configured) {
+        const toolBox = document.createElement("div");
+        toolBox.className = "plugin-toolbox";
+        const query = document.createElement("input");
+        query.type = "search";
+        query.maxLength = plugin.id === "gmail" ? 500 : 200;
+        query.placeholder = plugin.id === "gmail" ? "搜索 Gmail 邮件（例如 from:example.com）" : "搜索 GitHub 仓库";
+        query.setAttribute("aria-label", plugin.id === "gmail" ? "搜索 Gmail 邮件" : "搜索 GitHub 仓库");
+        const run = document.createElement("button");
+        run.type = "button";
+        run.className = "attach-button";
+        run.textContent = "搜索";
+        const results = document.createElement("div");
+        results.className = "plugin-tool-results";
+        run.addEventListener("click", async () => {
+          const value = query.value.trim();
+          if (!value) { toast("请输入搜索内容"); return; }
+          run.disabled = true;
+          results.textContent = "正在搜索…";
+          try {
+            const tool = plugin.id === "gmail" ? "search_messages" : "search_repositories";
+            const payload = await apiJson("/api/user/plugins/" + encodeURIComponent(plugin.id) + "/tools/" + tool, {
+              method:"POST",
+              headers:{"Content-Type":"application/json"},
+              body:JSON.stringify({query:value})
+            });
+            results.replaceChildren();
+            const items = Array.isArray(payload.data) ? payload.data : [];
+            if (!items.length) {
+              results.textContent = "没有找到匹配结果。";
+            } else {
+              items.forEach(item => {
+                const resultCard = document.createElement("div");
+                resultCard.className = "plugin-tool-result";
+                const heading = document.createElement("strong");
+                heading.textContent = plugin.id === "gmail"
+                  ? String(item.subject || "(无主题)")
+                  : String(item.full_name || "GitHub 仓库");
+                const summary = document.createElement("p");
+                summary.textContent = plugin.id === "gmail"
+                  ? [item.from, item.date, item.snippet].filter(Boolean).join("\n")
+                  : [item.description, item.language, item.stars == null ? "" : (String(item.stars) + " stars")].filter(Boolean).join(" · ");
+                const insert = document.createElement("button");
+                insert.type = "button";
+                insert.className = "attach-button";
+                insert.textContent = plugin.id === "gmail" ? "读取邮件并插入到当前聊天" : "插入到当前聊天";
+                insert.addEventListener("click", async () => {
+                  insert.disabled = true;
+                  try {
+                    let context = item;
+                    if (plugin.id === "gmail") {
+                      const detail = await apiJson("/api/user/plugins/gmail/tools/get_message", {
+                        method:"POST",
+                        headers:{"Content-Type":"application/json"},
+                        body:JSON.stringify({message_id:item.id})
+                      });
+                      context = Array.isArray(detail.data) && detail.data[0] ? detail.data[0] : item;
+                    }
+                    const prompt = "请基于以下 " + String(plugin.name || plugin.id) +
+                      " 插件检索结果回答我的问题：\n\n" + JSON.stringify(context, null, 2);
+                    state.sidebarPage = "";
+                    renderAll();
+                    $("messageInput").value = prompt;
+                    resizeComposer();
+                    $("messageInput").focus();
+                  } catch (error) {
+                    toast("读取插件内容失败：" + String(error.message || error));
+                    insert.disabled = false;
+                  }
+                });
+                resultCard.append(heading, summary, insert);
+                results.appendChild(resultCard);
+              });
+            }
+          } catch (error) {
+            results.textContent = "插件搜索失败：" + String(error.message || error);
+          } finally {
+            run.disabled = false;
+          }
+        });
+        query.addEventListener("keydown", event => {
+          if (event.key === "Enter") { event.preventDefault(); run.click(); }
+        });
+        toolBox.append(query, run, results);
+        card.appendChild(toolBox);
+        }
+      }
       root.appendChild(card);
     });
   }
@@ -1812,14 +1932,14 @@
       return;
     }
     try {
-      const payload = await apiJson("/api/client/plugins");
+      const payload = await apiJson("/api/user/plugins");
       state.pluginCatalog = Array.isArray(payload.data) ? payload.data : [];
       state.pluginCatalogError = "";
       state.pluginCatalogLoaded = true;
       recordClientDiagnostic("webchat.plugins.catalog_loaded", {model_count: state.pluginCatalog.length, phase: "plugin_catalog"});
     } catch (error) {
-      state.pluginCatalogError = String(error?.name || "PluginCatalogError");
-      recordClientDiagnostic("webchat.plugins.catalog_failed", {phase: "plugin_catalog", error_name: state.pluginCatalogError}, "warning");
+      state.pluginCatalogError = String(error?.message || error?.name || "PluginCatalogError");
+      recordClientDiagnostic("webchat.plugins.catalog_failed", {phase: "plugin_catalog", error_name: error?.name || "PluginCatalogError"}, "warning");
     }
     renderPluginCatalog();
   }
@@ -2986,6 +3106,7 @@
         }
       } catch {
         state.user = null;
+        $("sidebarAccount").hidden = true;
         showOnly("authRequired");
         setConnection("登录已失效", "error");
         openLoginDialog();
@@ -3062,11 +3183,13 @@
         const guestAccessClosed = guestLoginRequired(response.status, payload);
         if (response.status === 401) {
           state.user = null;
+          $("sidebarAccount").hidden = true;
           showOnly("authRequired");
           setConnection("登录已失效", "error");
           openLoginDialog();
         } else if (guestAccessClosed) {
           state.user = null;
+          $("sidebarAccount").hidden = true;
           showOnly("authRequired");
           setConnection("游客访问已关闭", "error");
           openLoginDialog(String(payload.detail || "游客使用已关闭，请登录账户"));
@@ -3227,48 +3350,42 @@
         // carries the shared service-key entitlement context.
         rows = [];
       }
-      const specialIds = new Set(["gpt-image", "gpt-live", "gpt-live-mini"]);
       const uniqueRows = [];
       const seen = new Set();
       rows.forEach(row => {
         const modelId = String(row?.id || row?.model || "").trim();
-        if (!modelId || seen.has(modelId)) return;
-        if (row.selectable === false && row.validated !== true && !specialIds.has(modelId)) return;
+        if (!modelId || modelId === "chatgpt-web" || /^gpt-(image|live|live-mini)$/.test(modelId) || seen.has(modelId)) return;
+        if (row.selectable === false && row.validated !== true && modelId !== "default") return;
+        if (Array.isArray(row.capabilities) && !row.capabilities.includes("text")) return;
         seen.add(modelId);
         uniqueRows.push({...row, id: modelId});
       });
-      const textRows = uniqueRows.filter(row => !specialIds.has(row.id) &&
-        (!Array.isArray(row.capabilities) || row.capabilities.includes("text")));
-      const specialRows = uniqueRows.filter(row => specialIds.has(row.id));
+      const textRows = uniqueRows;
       select.replaceChildren();
-      const appendGroup = (label, groupRows) => {
-        if (!groupRows.length) return;
-        const group = document.createElement("optgroup");
-        group.label = label;
-        groupRows.forEach(row => {
-          const option = document.createElement("option");
-          option.value = row.id;
-          option.textContent = String(row.label || row.id);
-          if (row.validated === false && row.source === "chatgpt-picker-observed") {
-            option.title = "来自当前 ChatGPT 模型菜单的实时选项；首次请求时会再次确认。";
-          }
-          group.appendChild(option);
-        });
-        select.appendChild(group);
-      };
-      appendGroup("ChatGPT 模型", textRows);
-      appendGroup("图像与语音", specialRows);
-      state.models = uniqueRows;
-      const ids = uniqueRows.map(row => row.id);
+      textRows.forEach(row => {
+        const option = document.createElement("option");
+        option.value = row.id;
+        option.textContent = String(row.label || row.id);
+        if (row.id === "default" && row.mapped_model_id) {
+          option.title = "默认模型映射：" + String(row.mapped_model_id);
+        }
+        if (row.validated === false && row.source === "chatgpt-picker-observed") {
+          option.title = "来自当前 ChatGPT 模型菜单的实时选项；首次请求时会再次确认。";
+        }
+        select.appendChild(option);
+      });
+      state.models = textRows;
+      const ids = textRows.map(row => row.id);
       const conversation = currentConversation();
       const preferred = conversation?.model || state.selectedModel;
-      state.selectedModel = ids.includes(preferred)
-        ? preferred
-        : (textRows[0]?.id || uniqueRows[0]?.id || "");
+      const preferredRow = textRows.find(row => row.id === preferred) ||
+        textRows.find(row => row.id === "default" &&
+          (row.mapped_model_id === preferred || row.label === preferred));
+      state.selectedModel = preferredRow?.id || textRows[0]?.id || "";
       if (!ids.length) {
         const option = document.createElement("option");
         option.value = "";
-        option.textContent = "等待 Worker 同步 ChatGPT 模型…";
+        option.textContent = "等待服务端同步可用文本模型…";
         select.appendChild(option);
       }
       select.value = state.selectedModel;
@@ -3277,7 +3394,7 @@
       recordClientDiagnostic("webchat.models.catalog_loaded", {
         model_count: ids.length, phase: "model_catalog",
       }, ids.length ? "info" : "warning");
-      if (!textRows.length) setConnection("已连接 · 当前没有可用的 ChatGPT 文本模型", "error");
+      if (!textRows.length) setConnection("已连接 · 当前没有可用的文本模型", "error");
       else setConnection("已连接", "ready");
       resizeComposer();
     })();
@@ -3407,6 +3524,9 @@
     state.user = payload.user;
     recordClientDiagnostic("webchat.session.authenticated", {phase: "bootstrap", guest: Boolean(state.user?.is_guest)});
     $("accountName").textContent = state.user.display_name || state.user.email || "Chat2API 用户";
+    $("accountEmail").textContent = state.user.email || (state.user.is_guest ? "游客账户" : "");
+    $("sidebarAccount").hidden = false;
+    $("accountSettingsButton").hidden = false;
     $("guestLoginButton")?.classList.toggle("hidden", !state.user.is_guest);
     $("accountAvatar").textContent = String(state.user.display_name || state.user.email || "U").trim().slice(0,1).toUpperCase();
     state.storageKey = historyKey(state.user.user_id);
@@ -3418,6 +3538,7 @@
     } catch (error) {
       if (error.status === 403 && state.user?.is_guest) {
         state.user = null;
+        $("sidebarAccount").hidden = true;
         showOnly("authRequired");
         setConnection("游客访问已关闭", "error");
         openLoginDialog("游客使用已关闭，请登录账户");
@@ -3606,6 +3727,7 @@
       $("webChatLoginPassword").value = "";
       closeLoginDialog();
       state.user = null;
+      $("sidebarAccount").hidden = true;
       await bootstrap();
     } catch (error) {
       errorBox.textContent = String(error?.message || error);
@@ -3648,7 +3770,35 @@
   renderPendingImages();
   renderPendingFiles();
   resizeComposer();
-  bootstrap().catch((error) => {
+  bootstrap().then(() => {
+    const params = new URLSearchParams(window.location.search);
+    const provider = params.get("provider") || "";
+    if (params.get("tab") === "plugins" && state.user) {
+      state.sidebarPage = "plugins";
+      renderAll();
+    }
+    if (params.get("plugin") === "connected") {
+      toast((provider === "gmail" ? "Gmail" : "GitHub") + " 账户已成功连接");
+    } else if (params.get("plugin_error")) {
+      const messages = {
+        login_required: "请先登录账户，再连接插件",
+        invalid_state: "插件授权状态已失效，请重新连接",
+        authorization_denied: "你取消了插件授权",
+        provider_disabled: "此插件已由管理员停用",
+        token_exchange_failed: "插件授权失败，请检查 OAuth 配置后重试",
+        unknown_provider: "无法识别此插件"
+      };
+      toast(messages[params.get("plugin_error")] || "插件连接失败");
+    }
+    if (params.has("plugin") || params.has("plugin_error")) {
+      params.delete("plugin");
+      params.delete("plugin_error");
+      params.delete("provider");
+      params.delete("tab");
+      const query = params.toString();
+      window.history.replaceState({}, "", window.location.pathname + (query ? "?" + query : "") + window.location.hash);
+    }
+  }).catch((error) => {
     setConnection("初始化失败", "error");
     toast("聊天客户端初始化失败：" + error.message);
   });

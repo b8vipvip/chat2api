@@ -19,9 +19,9 @@ def install_control_plane_authority_v1(app: Any) -> Any:
 def install_control_plane_features_v1(app: Any) -> Any:
     """Install dependent C-02..C-07 services exactly once.
 
-    This wires the available slices into the production ASGI app. It does not
-    claim complete tenant resource isolation, full model-endpoint coverage,
-    executable plugins, or runtime quota reservation.
+    This wires the available C-track slices into the production ASGI app. The
+    plugin OAuth adapter provides bounded user-owned provider connections; it
+    does not enable arbitrary manifest execution or runtime quota reservation.
     """
     if getattr(app.state, "control_plane_features_v1_installed", False):
         return app
@@ -50,10 +50,12 @@ def install_control_plane_features_v1(app: Any) -> Any:
     from .model_entitlement_v1_patch import install_model_entitlements
     install_model_entitlements(app)
 
-    # Product plugins remain metadata-only. No executor or secret loading is
-    # installed by this integration boundary.
+    # Keep the immutable manifest catalogue separate from user-owned OAuth
+    # connections. The provider adapter installs only fixed, allowlisted tools.
     from .plugin_registry_v1_patch import install_plugin_registry
     install_plugin_registry(app)
+    from .plugin_connections_v1 import install_plugin_connections_v1
+    install_plugin_connections_v1(app)
 
     # Install the reservation journal's admin/read-reconcile surface here.
     # This composition owner does not enable request admission or terminal

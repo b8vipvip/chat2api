@@ -351,3 +351,26 @@ body.sidebar-collapsed .sidebar{display:none}
 .webchat-login-error{min-height:18px;color:var(--bad);font-size:12px}
 .webchat-login-actions{display:flex;justify-content:flex-end;gap:9px}
 .webchat-login-actions .send-button{width:auto;padding:0 18px}
+
+/* The account control remains pinned to the bottom of the left rail. */
+.account-subtitle{max-width:172px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#9b9b9b;font-size:10px}
+.sidebar-actions a{padding:6px 10px;border:1px solid #3a3a3a;border-radius:8px;background:#252525;color:#ddd}
+.sidebar-actions a:hover{background:#292929;text-decoration:none!important}
+/* Model selection belongs to the composer, not the conversation header. */
+.composer-model-picker{display:flex;align-items:center;min-width:0}
+.composer-model-picker select{height:32px;min-width:118px;max-width:190px;padding:0 10px;border:1px solid #454545;border-radius:18px;background:#303030;color:#dedede;font-size:11px;font-weight:600}
+.composer-model-picker select:hover{border-color:#686868;background:#383838}
+.composer-model-picker select:disabled{opacity:.55}
+@media(max-width:760px){
+  .composer-controls{flex-wrap:wrap;justify-content:flex-end}
+  .composer-model-picker select{min-width:104px;max-width:140px}
+  .account-subtitle{max-width:140px}
+}
+
+.plugin-toolbox{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;margin-top:12px;padding-top:10px;border-top:1px solid #3a3a3a}
+.plugin-toolbox input{min-width:0;width:100%;padding:8px 10px;border:1px solid #454545;border-radius:10px;background:#252525;color:#eee;font-size:12px}
+.plugin-tool-results{grid-column:1/-1;display:grid;gap:8px;color:#bcbcbc;font-size:12px}
+.plugin-tool-result{display:grid;gap:6px;padding:10px;border:1px solid #3b3b3b;border-radius:10px;background:#242424}
+.plugin-tool-result strong{color:#eee;overflow-wrap:anywhere}
+.plugin-tool-result p{margin:0;color:#aaa;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.55}
+.plugin-tool-result .attach-button{justify-self:start}

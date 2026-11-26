@@ -757,37 +757,42 @@
 
   async function loadPlugins() {
     try {
-      const result = await sessionApi("/api/admin/plugins");
-      const body = $("cPluginRows");
-      body.replaceChildren();
-      (result.data || []).forEach((plugin) => {
-        const row = document.createElement("tr");
-        cell(row, plugin.id);
-        cell(row, plugin.version);
-        cell(row, plugin.sha256);
-        cell(row, plugin.trusted ? "trusted" : "untrusted");
-        cell(row, plugin.execution_enabled ? "enabled" : "disabled");
-        const actionCell = document.createElement("td");
-        actionCell.appendChild(button("详情", "action", async () => {
-          try {
-            const detail = await sessionApi("/api/admin/plugins/" + encodeURIComponent(plugin.id) + "/versions/" + encodeURIComponent(plugin.version));
-            $("cPluginDetail").textContent = JSON.stringify(detail, null, 2);
-          } catch (error) { setStatus("cPluginStatus", error.message, true); }
-        }));
-        row.appendChild(actionCell);
-        body.appendChild(row);
-      });
-      setStatus("cPluginStatus", "插件执行状态固定为关闭");
+      const result = await sessionApi("/api/admin/plugins/providers");
+      const rows = new Map((result.data || []).map((item) => [item.id, item]));
+      for (const provider of ["github", "gmail"]) {
+        const item = rows.get(provider) || {};
+        const prefix = provider === "github" ? "Github" : "Gmail";
+        const id = (suffix) => "cPlugin" + prefix + suffix;
+        $(id("ClientId")).value = item.client_id || "";
+        $(id("ClientSecret")).value = "";
+        $(id("Enabled")).checked = item.enabled === true;
+        if (provider === "github") $(id("PrivateRepos")).checked = item.private_repos === true;
+        $(id("Redirect")).textContent = "OAuth 回调地址：" + (item.redirect_uri || "未配置");
+        setStatus(id("Status"), item.configured
+          ? (item.enabled ? "已配置并启用" : "已配置，当前停用") + (item.client_secret_configured ? " · Secret 已加密保存" : "")
+          : "尚未配置 OAuth Client ID / Secret");
+      }
+      setStatus("cPluginStatus", "配置读取完成；用户授权记录与管理员 OAuth 配置相互隔离");
     } catch (error) { setStatus("cPluginStatus", error.message, true); }
   }
-  $("cPluginRegister")?.addEventListener("click", async () => {
+  async function savePluginProvider(provider) {
+    const prefix = provider === "github" ? "Github" : "Gmail";
+    const id = (suffix) => "cPlugin" + prefix + suffix;
     try {
-      const manifest = JSON.parse($("cPluginManifest").value);
-      const result = await sessionApi("/api/admin/plugins", { method: "POST", body: manifest });
-      $("cPluginDetail").textContent = JSON.stringify(result, null, 2);
+      const body = {
+        client_id: $(id("ClientId")).value.trim(),
+        client_secret: $(id("ClientSecret")).value,
+        enabled: $(id("Enabled")).checked,
+        private_repos: provider === "github" ? $(id("PrivateRepos")).checked : false
+      };
+      await sessionApi("/api/admin/plugins/providers/" + provider, {method:"PUT", body});
+      $(id("ClientSecret")).value = "";
+      setStatus(id("Status"), "配置已保存；Client Secret 不会回显");
       await loadPlugins();
-    } catch (error) { setStatus("cPluginStatus", error.message, true); }
-  });
+    } catch (error) { setStatus(id("Status"), error.message, true); }
+  }
+  $("cPluginGithubSave")?.addEventListener("click", () => savePluginProvider("github"));
+  $("cPluginGmailSave")?.addEventListener("click", () => savePluginProvider("gmail"));
   $("cPluginReload")?.addEventListener("click", loadPlugins);
 
   async function loadManagedKeys() {
