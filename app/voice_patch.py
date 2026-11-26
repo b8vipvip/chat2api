@@ -90,6 +90,10 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
         principal = await api_keys.authenticate(supplied)
         if not principal:
             raise HTTPException(status_code=401, detail="Invalid or disabled API key")
+        from .web_chat_identity_v1 import is_configured_web_chat_service_key
+
+        if is_configured_web_chat_service_key(app, principal.key_id):
+            raise HTTPException(status_code=403, detail="This API Key is reserved for Web Chat Mode 1")
         if "audio" not in principal.scopes and "chat" not in principal.scopes:
             raise HTTPException(status_code=403, detail="API key does not have audio permission")
         return principal

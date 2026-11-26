@@ -16,6 +16,10 @@ from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocket
 
 from .admin_auth import same_origin_admin_request
 from .api_keys import ApiPrincipal
+from .web_chat_identity_v1 import (
+    is_configured_web_chat_service_key,
+    web_chat_session_policy_allows,
+)
 from . import model_capability_routing_patch as model_routing
 from .responses_multimodal_input_v183 import attachment_specs, validate_image_file
 from .token_usage import usage_for
@@ -200,7 +204,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
         if not supplied:
             return None
         principal = await api_keys.authenticate(supplied)
-        if not principal:
+        if not principal or is_configured_web_chat_service_key(app, principal.key_id):
             return None
         if "audio" not in principal.scopes and "chat" not in principal.scopes:
             return None
@@ -275,13 +279,19 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 owner_id = accounts.owner_for_key(issued_principal.key_id)
                 if (
                     not session_user
+                    or not web_chat_session_policy_allows(app, session_user)
                     or not owner_id
                     or str(session_user.get("user_id") or "") != str(owner_id)
                     or not accounts.is_enabled(str(owner_id))
+                    or accounts.owner_for_key(auth_key_id)
                 ):
                     return None
             except Exception:
                 return None
+        elif is_configured_web_chat_service_key(app, auth_key_id):
+            # A Mode 2 ticket issued before the key was reserved for Web Chat
+            # cannot bypass the new Mode 1 routing boundary.
+            return None
         auth_key = getattr(api_keys, "keys", {}).get(auth_key_id)
         if identity is None or auth_key is None:
             return None
@@ -335,13 +345,17 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 owner_id = accounts.owner_for_key(principal.key_id)
                 if (
                     not session_user
+                    or not web_chat_session_policy_allows(app, session_user)
                     or not owner_id
                     or str(session_user.get("user_id") or "") != str(owner_id)
                     or not accounts.is_enabled(str(owner_id))
+                    or accounts.owner_for_key(auth_key_id)
                 ):
                     return False
             except Exception:
                 return False
+        elif is_configured_web_chat_service_key(app, auth_key_id):
+            return False
         key = getattr(api_keys, "keys", {}).get(auth_key_id)
         if identity is None or key is None or key.internal_owner_user_id:
             return False
