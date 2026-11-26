@@ -2294,6 +2294,9 @@
       event.status = "failed";
       event.resultId = callId + "_result";
       event.output = String(error?.message || "插件调用失败").slice(0,500);
+      if (error?.status === 409 && definition?.provider === "github") {
+        try { await loadPluginCatalog(true); } catch {}
+      }
       if (error?.status === 401 || !state.user) throw error;
       result = {
         ok:false,tool:rawName,
