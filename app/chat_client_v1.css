@@ -364,3 +364,11 @@ body.sidebar-collapsed .sidebar{display:none}
   .composer-model-picker select{min-width:104px;max-width:140px}
   .account-subtitle{max-width:140px}
 }
+
+.plugin-toolbox{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;margin-top:12px;padding-top:10px;border-top:1px solid #3a3a3a}
+.plugin-toolbox input{min-width:0;width:100%;padding:8px 10px;border:1px solid #454545;border-radius:10px;background:#252525;color:#eee;font-size:12px}
+.plugin-tool-results{grid-column:1/-1;display:grid;gap:8px;color:#bcbcbc;font-size:12px}
+.plugin-tool-result{display:grid;gap:6px;padding:10px;border:1px solid #3b3b3b;border-radius:10px;background:#242424}
+.plugin-tool-result strong{color:#eee;overflow-wrap:anywhere}
+.plugin-tool-result p{margin:0;color:#aaa;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.55}
+.plugin-tool-result .attach-button{justify-self:start}
