@@ -3655,7 +3655,8 @@
       state.forceScrollToBottom = true;
       conversation.messages.push(userMessage);
       autoTitle(conversation);
-      assistant = {id:id(),role:"assistant",content:"",createdAt:new Date().toISOString(),requestId,pending:true,recoveryStatus:"streaming",toolEvents:[],lastEventId:0};
+      const pluginPlanning = state.selectedPlugins.length > 0;
+      assistant = {id:id(),role:"assistant",content:"",createdAt:new Date().toISOString(),requestId:pluginPlanning ? "" : requestId,pending:true,recoveryStatus:pluginPlanning ? "tool_planning" : "streaming",toolEvents:[],lastEventId:0};
       conversation.messages.push(assistant);
       state.recoveryController = makeRecoveryController(conversation, assistant);
       state.activeRequestRecord = {request_id:requestId, assistant_message_id:assistant.id};
