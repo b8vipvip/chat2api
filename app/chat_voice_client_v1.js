@@ -159,6 +159,11 @@
     let supportsVideoFrames = false;
     let readyTimeoutId = null;
     let closeTimeoutId = null;
+    let sessionEpoch = 0;
+    let playbackEpoch = 0;
+    let stopPromise = null;
+    let stopInProgress = false;
+    let cleanupComplete = true;
 
     function monotonicNow() { return clock(); }
     function state(status, detail = "") {
@@ -176,6 +181,7 @@
       return true;
     }
     function stopPlayback() {
+      playbackEpoch += 1;
       nextPlaybackTime = audioContext ? audioContext.currentTime : 0;
       for (const source of activePlaybackSources) {
         try { source.stop(); } catch {}
@@ -273,7 +279,14 @@
       if (cleanupPromise) return cleanupPromise;
       if (cleaned) return;
       cleaned = true;
+      cleanupComplete = false;
       cleanupPromise = (async () => {
+        // A socket may never emit close (e.g. a suspended browser). Settle
+        // startup ourselves before cancelling its only remaining timeout.
+        const reject = readyReject;
+        readyReject = null;
+        readyResolve = null;
+        if (reject) reject(new Error("GPT-Live startup was cancelled"));
         ready = false;
         started = false;
         stopping = true;
@@ -284,6 +297,7 @@
         readyTimeoutId = null;
         closeTimeoutId = null;
         stopCamera();
+        clearPendingVideoFrame();
         stopMicrophone();
         stopPlayback();
         if (audioContext && audioContextStateListener) {
@@ -297,9 +311,10 @@
         if (socket && socket.readyState < WebSocketImpl.CLOSING) {
           try { socket.close(); } catch {}
         }
-        state("closed");
         if (closeResolve) closeResolve();
         closeResolve = null;
+        cleanupComplete = true;
+        state("closed");
       })();
       return cleanupPromise;
     }
@@ -312,7 +327,8 @@
           try { socket?.close(); } catch {}
           return;
         }
-        if (failIfAudioContextSuspended()) return;
+        // Replayed ready events must not shift the camera timestamp origin.
+        if (ready || failIfAudioContextSuspended()) return;
         ready = true;
         supportsVideoFrames = Array.isArray(payload.supports) && payload.supports.includes("input_video.frame");
         sessionStartedAt = monotonicNow();
@@ -369,11 +385,16 @@
     }
     function handleMessage(message) {
       if (message.data instanceof ArrayBuffer) {
-        playPcm(message.data);
+        if (ready && !stopping && !cleaned) playPcm(message.data);
         return;
       }
       if (typeof Blob !== "undefined" && message.data instanceof Blob) {
-        void message.data.arrayBuffer().then(playPcm).catch(() => {});
+        const epoch = playbackEpoch;
+        const session = sessionEpoch;
+        if (!ready || stopping || cleaned) return;
+        void message.data.arrayBuffer().then(buffer => {
+          if (epoch === playbackEpoch && session === sessionEpoch && ready && !stopping && !cleaned) playPcm(buffer);
+        }).catch(() => {});
         return;
       }
       if (typeof message.data !== "string" || message.data.length > 64 * 1024) return;
@@ -382,15 +403,29 @@
     }
     async function start() {
       if (started || starting) return;
+      if (stopInProgress || !cleanupComplete) throw new Error("GPT-Live previous session is still closing");
       if (!token) throw new Error("请先选择一个 API Key");
       if (!mediaDevices || typeof mediaDevices.getUserMedia !== "function") {
         throw new Error("当前浏览器无法访问麦克风");
       }
       if (!WebSocketImpl || !AudioContextImpl) throw new Error("当前浏览器缺少 WebSocket 或 Web Audio 支持");
       starting = true;
+      const epoch = ++sessionEpoch;
       cleaned = false;
       cleanupPromise = null;
+      stopPromise = null;
       stopping = false;
+      socket = null;
+      clearPendingVideoFrame();
+      cameraStartingGeneration = null;
+      videoSequence = 0;
+      videoFrameCount = 0;
+      videoFrameBytes = 0;
+      videoModeNoticeSent = false;
+      supportsVideoFrames = false;
+      lastVideoTimestampMs = -1;
+      lastVideoCaptureAt = -Infinity;
+      nextPlaybackTime = 0;
       const cancelled = () => cleaned || stopping;
       const assertNotCancelled = () => {
         if (cancelled()) throw new Error("GPT-Live startup was cancelled");
@@ -443,7 +478,9 @@
       url.protocol = pageUrl.protocol === "https:" ? "wss:" : "ws:";
       assertNotCancelled();
       socket = new WebSocketImpl(url.href);
-      socket.binaryType = "arraybuffer";
+      const currentSocket = socket;
+      const isCurrentSocket = () => socket === currentSocket && sessionEpoch === epoch && !cleaned;
+      currentSocket.binaryType = "arraybuffer";
       const readyPromise = new Promise((resolve,reject) => {
         readyResolve = resolve;
         readyReject = reject;
@@ -451,7 +488,8 @@
           readyReject?.(new Error("等待 GPT-Live 就绪超时"));
           readyReject = null;
         },SESSION_READY_TIMEOUT_MS);
-        socket.onopen = () => {
+        currentSocket.onopen = () => {
+          if (!isCurrentSocket()) return;
           if (cancelled()) {
             try { socket.close(); } catch {}
             return;
@@ -463,14 +501,16 @@
             context,
           }));
         };
-        socket.onmessage = handleMessage;
-        socket.onerror = () => {
+        currentSocket.onmessage = message => { if (isCurrentSocket()) handleMessage(message); };
+        currentSocket.onerror = () => {
+          if (!isCurrentSocket()) return;
           if (readyReject) {
             readyReject(new Error("GPT-Live WebSocket 连接失败"));
             readyReject = null;
           }
         };
-        socket.onclose = () => {
+        currentSocket.onclose = () => {
+          if (!isCurrentSocket()) return;
           if (readyReject) {
             readyReject(new Error("GPT-Live 连接在就绪前关闭"));
             readyReject = null;
@@ -512,8 +552,8 @@
       pendingVideoTimestampMs = -1;
       pendingVideoBytes = 0;
     }
-    function releaseUnsentVideoFrame(itemId) {
-      if (pendingVideoItemId !== itemId) return;
+    function releaseUnsentVideoFrame(itemId,epoch) {
+      if (epoch !== sessionEpoch || pendingVideoItemId !== itemId) return;
       clearPendingVideoFrame();
     }
     function cameraCaptureIsCurrent(generation,itemId) {
@@ -523,6 +563,7 @@
     async function captureAndSendFrame() {
       if (!ready || stopping || !cameraStream || videoPending || videoFrameCount >= MAX_VIDEO_FRAMES) return;
       const captureGeneration = cameraGeneration;
+      const captureEpoch = sessionEpoch;
       const captureAt = monotonicNow();
       if (captureAt - lastVideoCaptureAt < VIDEO_FRAME_INTERVAL_MS) return;
       const width = Number(videoElement?.videoWidth || 0);
@@ -545,20 +586,20 @@
         context.drawImage(videoElement,0,0,targetWidth,targetHeight);
         let blob = await new Promise(resolve => canvas.toBlob(resolve,"image/jpeg",0.72));
         if (!cameraCaptureIsCurrent(captureGeneration,itemId)) {
-          releaseUnsentVideoFrame(itemId);
+          releaseUnsentVideoFrame(itemId,captureEpoch);
           return;
         }
         if (!blob) throw new Error("无法编码摄像头画面");
         if (blob.size > MAX_VIDEO_FRAME_BYTES) {
           blob = await new Promise(resolve => canvas.toBlob(resolve,"image/jpeg",0.48));
           if (!cameraCaptureIsCurrent(captureGeneration,itemId)) {
-            releaseUnsentVideoFrame(itemId);
+            releaseUnsentVideoFrame(itemId,captureEpoch);
             return;
           }
         }
         if (!blob || blob.size > MAX_VIDEO_FRAME_BYTES) throw new Error("摄像头画面超过 2 MiB 限制");
         if (videoFrameBytes + blob.size > MAX_VIDEO_TOTAL_BYTES) {
-          releaseUnsentVideoFrame(itemId);
+          releaseUnsentVideoFrame(itemId,captureEpoch);
           event({type:"client.notice",message:"已达到本次实时视频总数据量上限，实时视频已停止"});
           stopCamera();
           return;
@@ -572,7 +613,7 @@
         pendingVideoTimestampMs = timestampMs;
         const dataBase64 = await blobBase64(blob);
         if (!cameraCaptureIsCurrent(captureGeneration,itemId)) {
-          releaseUnsentVideoFrame(itemId);
+          releaseUnsentVideoFrame(itemId,captureEpoch);
           return;
         }
         const uploadHeaders = {
@@ -593,13 +634,13 @@
           }),
         });
         if (!cameraCaptureIsCurrent(captureGeneration,itemId)) {
-          releaseUnsentVideoFrame(itemId);
+          releaseUnsentVideoFrame(itemId,captureEpoch);
           return;
         }
         let file = {};
         try { file = await upload.json(); } catch {}
         if (!cameraCaptureIsCurrent(captureGeneration,itemId)) {
-          releaseUnsentVideoFrame(itemId);
+          releaseUnsentVideoFrame(itemId,captureEpoch);
           return;
         }
         const fileId = String(file.id || "");
@@ -622,7 +663,7 @@
         }
       } catch (error) {
         const stillCurrent = cameraCaptureIsCurrent(captureGeneration,itemId);
-        releaseUnsentVideoFrame(itemId);
+        releaseUnsentVideoFrame(itemId,captureEpoch);
         if (!stillCurrent) return;
         event({type:"client.error",message:String(error?.message || error)});
         stopCamera();
@@ -673,13 +714,22 @@
         if (cameraStartingGeneration === generation) cameraStartingGeneration = null;
       }
     }
-    async function stop() {
+    function stop() {
+      if (stopPromise) return stopPromise;
+      stopInProgress = true;
+      stopping = true;
+      stopPromise = Promise.resolve().then(stopOnce).finally(() => { stopInProgress = false; });
+      return stopPromise;
+    }
+    async function stopOnce() {
       if (!socket || !socketOpen()) {
         await cleanup();
         return;
       }
       stopping = true;
       stopCamera();
+      stopMicrophone();
+      stopPlayback();
       if (!ready) {
         try { socket.close(); } catch {}
         await cleanup();
