@@ -1871,14 +1871,71 @@
         body_text: String(row.body_text || "").slice(0,5000),
       }));
     }
-    if (toolName === "list_issues") {
-      return rows.slice(0,10).map(row => ({
-        number: row.number,
-        title: String(row.title || "").slice(0,300),
-        state: String(row.state || "").slice(0,40),
-        url: String(row.url || "").slice(0,2048),
-        body: String(row.body || "").slice(0,1600),
-      }));
+    if (providerId === "github") {
+      if (toolName === "search_repositories" || toolName === "get_repository") {
+        return rows.slice(0,10).map(row => ({
+          full_name:String(row.full_name || "").slice(0,240),
+          description:String(row.description || "").slice(0,1200),
+          url:String(row.url || "").slice(0,2048),
+          private:row.private === true,
+          default_branch:String(row.default_branch || "").slice(0,200),
+          language:String(row.language || "").slice(0,100),
+          stars:Number.isFinite(Number(row.stars)) ? Number(row.stars) : null,
+          forks:Number.isFinite(Number(row.forks)) ? Number(row.forks) : null,
+          open_issues:Number.isFinite(Number(row.open_issues)) ? Number(row.open_issues) : null,
+          updated_at:String(row.updated_at || "").slice(0,80),
+        }));
+      }
+      if (toolName === "list_issues" || toolName === "get_issue") {
+        return rows.slice(0,20).map(row => ({
+          number:row.number,title:String(row.title || "").slice(0,300),
+          state:String(row.state || "").slice(0,40),url:String(row.url || "").slice(0,2048),
+          body:String(row.body || "").slice(0,5000),
+          labels:Array.isArray(row.labels) ? row.labels.slice(0,20).map(value => String(value).slice(0,100)) : [],
+          created_at:String(row.created_at || "").slice(0,80),
+          updated_at:String(row.updated_at || "").slice(0,80),
+          closed_at:String(row.closed_at || "").slice(0,80),
+        }));
+      }
+      if (toolName === "list_pull_requests" || toolName === "get_pull_request") {
+        return rows.slice(0,20).map(row => ({
+          number:row.number,title:String(row.title || "").slice(0,300),
+          state:String(row.state || "").slice(0,40),url:String(row.url || "").slice(0,2048),
+          body:String(row.body || "").slice(0,5000),draft:row.draft === true,
+          merged:row.merged === true,mergeable:row.mergeable,
+          head:String(row.head || "").slice(0,200),base:String(row.base || "").slice(0,200),
+          changed_files:row.changed_files,additions:row.additions,deletions:row.deletions,
+          commits:row.commits,updated_at:String(row.updated_at || "").slice(0,80),
+        }));
+      }
+      if (toolName === "list_commits") {
+        return rows.slice(0,20).map(row => ({
+          sha:String(row.sha || "").slice(0,40),
+          message:String(row.message || "").slice(0,1200),
+          author:String(row.author || "").slice(0,200),
+          date:String(row.date || "").slice(0,80),
+          url:String(row.url || "").slice(0,2048),
+        }));
+      }
+      if (toolName === "search_code") {
+        return rows.slice(0,10).map(row => ({
+          repository:String(row.repository || "").slice(0,240),
+          path:String(row.path || "").slice(0,500),
+          url:String(row.url || "").slice(0,2048),
+          sha:String(row.sha || "").slice(0,40),
+        }));
+      }
+      if (toolName === "get_file_contents") {
+        return rows.slice(0,1).map(row => ({
+          repository:String(row.repository || "").slice(0,240),
+          path:String(row.path || "").slice(0,500),
+          url:String(row.url || "").slice(0,2048),
+          sha:String(row.sha || "").slice(0,40),
+          size:row.size,
+          content:String(row.content || "").slice(0,24000),
+          truncated:row.truncated === true,
+        }));
+      }
     }
     return rows.slice(0,10).map(row => ({
       full_name: String(row.full_name || "").slice(0,240),
@@ -1896,31 +1953,57 @@
       .map(plugin => String(plugin.id || "")));
     const definitions = [];
     if (selected.has("github") && connected.has("github")) {
+      const repositorySchema = {
+        type:"string",
+        pattern:"^(?!\\\\.{1,2}/)[A-Za-z0-9_.-]{1,100}/(?!\\\\.{1,2}$)[A-Za-z0-9_.-]{1,100}$",
+        description:"Exact owner/repository",
+      };
+      const stateSchema = {type:"string",enum:["open","closed","all"]};
       definitions.push(
         {
-          name:"github.search_repositories",
-          provider:"github",
-          toolName:"search_repositories",
-          description:"Search public or OAuth-authorized GitHub repositories by a natural-language query. Use when repository identity, project metadata, stars, or language is needed.",
-          parameters:{
-            type:"object",additionalProperties:false,
-            properties:{query:{type:"string",minLength:1,maxLength:200,description:"GitHub repository search query"}},
-            required:["query"],
-          },
+          name:"github.search_repositories",provider:"github",toolName:"search_repositories",
+          description:"Search public or OAuth-authorized GitHub repositories by a natural-language query.",
+          parameters:{type:"object",additionalProperties:false,properties:{query:{type:"string",minLength:1,maxLength:200}},required:["query"]},
         },
         {
-          name:"github.list_issues",
-          provider:"github",
-          toolName:"list_issues",
-          description:"List Issues in one exact owner/repository. Use only when the conversation identifies the repository. Pull requests are excluded.",
-          parameters:{
-            type:"object",additionalProperties:false,
-            properties:{
-              repository:{type:"string",pattern:"^(?!\\.{1,2}/)[A-Za-z0-9_.-]{1,100}/(?!\\.{1,2}$)[A-Za-z0-9_.-]{1,100}$",description:"Exact owner/repository"},
-              state:{type:"string",enum:["open","closed","all"],description:"Issue state filter"},
-            },
-            required:["repository"],
-          },
+          name:"github.get_repository",provider:"github",toolName:"get_repository",
+          description:"Read metadata for one exact owner/repository, including visibility, default branch, language, stars, forks and open issue count. Use only a repository named by the conversation or returned by GitHub search.",
+          parameters:{type:"object",additionalProperties:false,properties:{repository:repositorySchema},required:["repository"]},
+        },
+        {
+          name:"github.list_issues",provider:"github",toolName:"list_issues",
+          description:"List Issues in one exact owner/repository. Pull requests are excluded. Use only a repository identified in the conversation or by GitHub search.",
+          parameters:{type:"object",additionalProperties:false,properties:{repository:repositorySchema,state:stateSchema},required:["repository"]},
+        },
+        {
+          name:"github.get_issue",provider:"github",toolName:"get_issue",
+          description:"Read one Issue by its exact repository and issue number. Use a number supplied in the conversation or returned by github.list_issues; do not guess.",
+          parameters:{type:"object",additionalProperties:false,properties:{repository:repositorySchema,issue_number:{type:"integer",minimum:1,maximum:2147483647}},required:["repository","issue_number"]},
+        },
+        {
+          name:"github.list_pull_requests",provider:"github",toolName:"list_pull_requests",
+          description:"List pull requests in one exact owner/repository, including draft, head and base branch metadata.",
+          parameters:{type:"object",additionalProperties:false,properties:{repository:repositorySchema,state:stateSchema},required:["repository"]},
+        },
+        {
+          name:"github.get_pull_request",provider:"github",toolName:"get_pull_request",
+          description:"Read pull request details, merge status and change statistics for an exact repository and pull number. Use a number supplied in the conversation or returned by github.list_pull_requests; do not guess.",
+          parameters:{type:"object",additionalProperties:false,properties:{repository:repositorySchema,pull_number:{type:"integer",minimum:1,maximum:2147483647}},required:["repository","pull_number"]},
+        },
+        {
+          name:"github.list_commits",provider:"github",toolName:"list_commits",
+          description:"Read recent commits for one exact owner/repository. An optional ref may be a branch, tag or commit SHA.",
+          parameters:{type:"object",additionalProperties:false,properties:{repository:repositorySchema,ref:{type:"string",minLength:1,maxLength:255}},required:["repository"]},
+        },
+        {
+          name:"github.search_code",provider:"github",toolName:"search_code",
+          description:"Search code in GitHub. Include repo:owner/repository in the query when the user asks about a specific repository. Returns exact repository and file paths that may be read with github.get_file_contents.",
+          parameters:{type:"object",additionalProperties:false,properties:{query:{type:"string",minLength:1,maxLength:256}},required:["query"]},
+        },
+        {
+          name:"github.get_file_contents",provider:"github",toolName:"get_file_contents",
+          description:"Read a text file from a repository. The exact repository and path must first be returned by github.search_code in this turn; then provide that exact repository and path. An optional ref may be supplied.",
+          parameters:{type:"object",additionalProperties:false,properties:{repository:repositorySchema,path:{type:"string",minLength:1,maxLength:500},ref:{type:"string",minLength:1,maxLength:255}},required:["repository","path"]},
         },
       );
     }
