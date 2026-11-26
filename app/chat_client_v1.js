@@ -2129,6 +2129,12 @@
   async function runAutonomousPluginToolLoop(messages, assistant, keyId, recoveryApi, firstRequestId) {
     const definitions = selectedPluginToolDefinitions();
     if (!definitions.length) return {messages,plannerRequests:0,toolCalls:0};
+    // Planning requests are intentionally not attached to the visible assistant
+    // message: a page reload must never recover the planner's JSON as the answer.
+    assistant.requestId = "";
+    assistant.recoveryStatus = "tool_planning";
+    saveHistory();
+    renderMessages();
     const executed = new Set();
     const knownGmailMessageIds = new Set();
     let plannerRequests = 0;
@@ -2140,7 +2146,6 @@
     while (plannerRequests < maxRounds && toolCalls < maxToolCalls) {
       const plannerRequestId = plannerRequests === 0
         ? firstRequestId : recoveryApi.createRequestId();
-      assistant.requestId = plannerRequestId;
       assistant.lastEventId = 0;
       assistant.recoveryStatus = "tool_planning";
       state.activeRequestRecord = {
@@ -3535,14 +3540,29 @@
   }
   function resumePendingMessages() {
     const pending = [];
+    let planningInterrupted = false;
     state.conversations.forEach((conversation) => {
       (conversation.messages || []).forEach((message) => {
-        if (message.role === "assistant" && message.pending === true && message.requestId) {
+        if (message.role !== "assistant" || message.pending !== true) return;
+        if (message.recoveryStatus === "tool_planning") {
+          message.pending = false;
+          message.recoveryStatus = "error";
+          message.content = "本轮插件工具规划或执行因页面刷新而中断，请重新发送这条问题。";
+          message.toolEvents = (Array.isArray(message.toolEvents) ? message.toolEvents : []).map(event =>
+            event.status === "running"
+              ? {...event,status:"cancelled",resultId:event.resultId || event.callId + "_result",output:"页面刷新导致工具调用中断。"}
+              : event
+          );
+          planningInterrupted = true;
+          return;
+        }
+        if (message.requestId) {
           pending.push({conversation,message});
           void streamNativeContent(message.requestId);
         }
       });
     });
+    if (planningInterrupted) saveHistory();
     pending.forEach(({conversation,message}) => { void recoverPendingMessage(conversation,message); });
   }
   async function sendMessage(text) {
@@ -3671,6 +3691,7 @@
       assistant.lastEventId = 0;
       assistant.recoveryStatus = "streaming";
       state.activeRequestRecord = {request_id:requestId,assistant_message_id:assistant.id};
+      saveHistory();
       const response = await fetch("/api/user/chat/completions", {
         method: "POST",
         credentials: "same-origin",
