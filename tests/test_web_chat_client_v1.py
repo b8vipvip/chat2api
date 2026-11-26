@@ -59,8 +59,8 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         assert 'id="accountSettingsButton" href="/settings">设置</a>' in page.text
         topbar_html = page.text.split('<header class="topbar"', 1)[1].split("</header>", 1)[0]
         composer_html = page.text.split('<footer class="composer-area"', 1)[1].split("</footer>", 1)[0]
-        assert 'id="modelSelect"' not in topbar_html
-        assert 'id="modelSelect"' in composer_html
+        assert 'id="modelSelect"' not in page.text
+        assert 'class="model-picker' not in page.text
         assert 'id="pluginPickerButton"' in composer_html
         assert 'id="pluginsBackToChat"' in page.text
         sidebar_html = page.text.split('<aside class="sidebar"', 1)[1].split("</aside>", 1)[0]
@@ -88,6 +88,10 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         assert "MAX_ASSISTANT_MESSAGE_CHARS = 32000" in script.text
         assert "MAX_LOCAL_MESSAGE_CHARS = 8000" in script.text
         assert "MAX_MESSAGES = 100" in script.text
+        assert 'selectedModel: "default"' in script.text
+        assert "const preferred = conversation?.model || state.selectedModel;" in script.text
+        assert 'state.selectedModel = preferredRow?.id || textRows[0]?.id || "";' in script.text
+        assert "modelSelect" not in script.text
         assert "MAX_VOICE_CONTEXT_CHARS = 8000" in script.text
         assert "buildVoiceContext(voiceConversation)" in script.text
         assert "instructions:DEFAULT_VOICE_INSTRUCTIONS" in script.text

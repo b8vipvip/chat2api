@@ -15,7 +15,7 @@
     pluginCatalogError: "",
     selectedPlugins: [],
     modelCatalogLoadedAt: 0,
-    selectedModel: "gpt-5.6-sol",
+    selectedModel: "default",
     storageKey: "",
     streaming: false,
     streamingMessageId: "",
@@ -195,7 +195,6 @@
     camera.disabled = !state.voiceActive || state.voiceStarting || !selectedKeyHasScope("files");
     if (!selectedKeyHasScope("files")) camera.title = "服务端统一 API Key 缺少 files 权限";
     else camera.title = "在同一 Voice 会话中发送实时视频；若上游不支持 WebRTC 将降级为图片帧";
-    $("modelSelect").disabled = state.streaming || state.voiceActive;
     if (typeof updatePluginPickerButton === "function") updatePluginPickerButton();
     $("newChatButton").disabled = state.streaming || state.voiceActive;
     $("attachButton").disabled = state.streaming || state.voiceActive || !state.webChatKeyId || !selectedKeyHasScope("files");
@@ -1229,7 +1228,6 @@
     state.forceScrollToBottom = true;
     const conversation = currentConversation();
     if (conversation) state.selectedModel = conversation.model || state.selectedModel;
-    $("modelSelect").value = state.selectedModel;
     void loadModels();
     renderAll();
     // Native payloads stay server-authoritative rather than being copied into
@@ -3912,7 +3910,6 @@
     $("attachButton").disabled = true;
     $("fileButton").disabled = true;
     $("newChatButton").disabled = true;
-    $("modelSelect").disabled = true;
     $("messageInput").disabled = true;
     setConnection((pending.length || pendingFiles.length) ? "正在上传附件…" : "正在连接…");
     const diagnosticStartedAt = Date.now();
@@ -4149,7 +4146,6 @@
       else showOnly(state.user ? "serviceUnavailable" : "authRequired");
       $("stopButton").classList.add("hidden");
       $("newChatButton").disabled = false;
-      $("modelSelect").disabled = false;
       $("messageInput").disabled = false;
       renderPendingImages();
       renderPendingFiles();
@@ -4176,7 +4172,6 @@
     if (modelCatalogLoadPromise) return modelCatalogLoadPromise;
     if (!force && state.modelCatalogLoadedAt && Date.now() - state.modelCatalogLoadedAt < 20_000) return;
     modelCatalogLoadPromise = (async () => {
-      const select = $("modelSelect");
       let rows = [];
       try {
         const payload = await apiJson("/api/user/chat/models", {
@@ -4202,19 +4197,6 @@
         uniqueRows.push({...row, id: modelId});
       });
       const textRows = uniqueRows;
-      select.replaceChildren();
-      textRows.forEach(row => {
-        const option = document.createElement("option");
-        option.value = row.id;
-        option.textContent = String(row.label || row.id);
-        if (row.id === "default" && row.mapped_model_id) {
-          option.title = "默认模型映射：" + String(row.mapped_model_id);
-        }
-        if (row.validated === false && row.source === "chatgpt-picker-observed") {
-          option.title = "来自当前 ChatGPT 模型菜单的实时选项；首次请求时会再次确认。";
-        }
-        select.appendChild(option);
-      });
       state.models = textRows;
       const ids = textRows.map(row => row.id);
       const conversation = currentConversation();
@@ -4223,14 +4205,6 @@
         textRows.find(row => row.id === "default" &&
           (row.mapped_model_id === preferred || row.label === preferred));
       state.selectedModel = preferredRow?.id || textRows[0]?.id || "";
-      if (!ids.length) {
-        const option = document.createElement("option");
-        option.value = "";
-        option.textContent = "等待服务端同步可用文本模型…";
-        select.appendChild(option);
-      }
-      select.value = state.selectedModel;
-      select.disabled = state.streaming || ids.length === 0;
       state.modelCatalogLoadedAt = Date.now();
       recordClientDiagnostic("webchat.models.catalog_loaded", {
         model_count: ids.length, phase: "model_catalog",
@@ -4456,17 +4430,6 @@
       toast("导入失败：" + error.message);
     } finally {
       event.target.value = "";
-    }
-  });
-  $("modelSelect").addEventListener("change", (event) => {
-    state.selectedModel = event.target.value;
-    const selectedRow = state.models.find(row => row.id === state.selectedModel);
-    recordClientDiagnostic("webchat.model.selected", {model_id: state.selectedModel, phase: selectedRow?.source || "model_picker"});
-    const conversation = currentConversation();
-    if (conversation) {
-      conversation.model = state.selectedModel;
-      conversation.updatedAt = new Date().toISOString();
-      saveHistory();
     }
   });
   $("sendButton").addEventListener("click", () => sendMessage($("messageInput").value));
