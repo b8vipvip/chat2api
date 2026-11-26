@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import html
 import json
 import re
 import secrets
@@ -358,6 +359,47 @@ class PluginOAuthStore:
 
     def close(self) -> None:
         self.db.close()
+
+
+def _gmail_body_text(payload: Any) -> str:
+    """Decode only text/plain or text/html message parts; never fetch attachments."""
+    plain_parts: list[str] = []
+    html_parts: list[str] = []
+
+    def collect(part: Any) -> None:
+        if not isinstance(part, dict):
+            return
+        mime = str(part.get("mimeType") or "").lower()
+        body = part.get("body") or {}
+        encoded = body.get("data") if isinstance(body, dict) else None
+        if encoded and mime in {"text/plain", "text/html"}:
+            try:
+                encoded_text = str(encoded)
+                padded = encoded_text + ("=" * (-len(encoded_text) % 4))
+                decoded = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8", "replace")
+            except (ValueError, UnicodeError):
+                decoded = ""
+            if decoded:
+                if mime == "text/plain":
+                    plain_parts.append(decoded)
+                else:
+                    html_parts.append(decoded)
+        for child in part.get("parts") or []:
+            collect(child)
+
+    collect(payload)
+    if plain_parts:
+        return "\n\n".join(plain_parts)[:20000]
+    if html_parts:
+        cleaned = "\n".join(html_parts)
+        cleaned = re.sub(r"(?is)<(script|style)\\b[^>]*>.*?</\\1>", " ", cleaned)
+        cleaned = re.sub(r"(?i)<br\\s*/?>|</(p|div|li|tr|h[1-6])\\s*>", "\n", cleaned)
+        cleaned = re.sub(r"<[^>]+>", " ", cleaned)
+        cleaned = html.unescape(cleaned)
+        cleaned = re.sub(r"[ \\t]+", " ", cleaned)
+        cleaned = re.sub(r"\\n{3,}", "\n\n", cleaned)
+        return cleaned.strip()[:20000]
+    return ""
 
 
 def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
@@ -785,6 +827,30 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                             "from": headers.get("from", ""), "date": headers.get("date", ""),
                             "snippet": str(message.get("snippet") or "")[:1200],
                         })
+                elif provider_id == "gmail" and tool_name == "get_message":
+                    message_id = str(payload.get("message_id") or "").strip()
+                    if not _GMAIL_ID.fullmatch(message_id):
+                        raise HTTPException(422, "message_id is invalid", headers=_PRIVATE_HEADERS)
+                    response = await client.get(
+                        "https://gmail.googleapis.com/gmail/v1/users/me/messages/" + message_id,
+                        params={"format": "full"},
+                        headers={"Authorization": "Bearer " + token},
+                    )
+                    response.raise_for_status()
+                    message = response.json()
+                    message_payload = message.get("payload") or {}
+                    message_headers = message_payload.get("headers") or []
+                    headers = {
+                        str(header.get("name") or "").lower(): str(header.get("value") or "")[:500]
+                        for header in message_headers if isinstance(header, dict)
+                    }
+                    data = [{
+                        "id": message_id, "thread_id": message.get("threadId"),
+                        "subject": headers.get("subject", "(无主题)"),
+                        "from": headers.get("from", ""), "date": headers.get("date", ""),
+                        "snippet": str(message.get("snippet") or "")[:1200],
+                        "body_text": _gmail_body_text(message_payload),
+                    }]
                 else:
                     raise HTTPException(404, "Unsupported plugin tool", headers=_PRIVATE_HEADERS)
     
