@@ -718,3 +718,65 @@ def test_expired_github_token_without_refresh_is_cleared_for_reconnect(tmp_path:
         assert "插件授权已过期" in failed_tool.json()["detail"]
         assert store.connection(user["user_id"], "github") is None
         assert client.get("/api/user/me").status_code == 200
+
+
+def test_gmail_invalid_oauth_token_does_not_expire_web_chat_login(tmp_path: Path, monkeypatch):
+    app = make_app(tmp_path)
+    store: PluginOAuthStore = app.state.plugin_oauth_store
+    store.save_provider(
+        "gmail", enabled=True, client_id="google-client",
+        client_secret="google-secret",
+    )
+    with TestClient(app) as client:
+        user = register(client, "gmail-invalid-token@example.com")
+        store.save_connection(
+            user["user_id"], "gmail", "google-subject", "user@example.com",
+            "revoked-gmail-token", "refresh-token", ["gmail.readonly"], None,
+        )
+
+        class UnauthorizedResponse:
+            status_code = 401
+            headers = {}
+
+            def __init__(self, url: str):
+                self.url = url
+
+            def raise_for_status(self):
+                request = httpx.Request("GET", self.url)
+                response = httpx.Response(401, request=request)
+                raise httpx.HTTPStatusError(
+                    "Gmail token revoked", request=request, response=response,
+                )
+
+            def json(self):
+                return {"error": {"message": "Invalid Credentials"}}
+
+        class FakeAsyncClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def get(self, url, **kwargs):
+                return UnauthorizedResponse(url)
+
+        monkeypatch.setattr("app.plugin_connections_v1.httpx.AsyncClient", FakeAsyncClient)
+        login = client.post(
+            "/api/user/login",
+            json={"email": "gmail-invalid-token@example.com", "password": PASSWORD},
+            headers=ORIGIN,
+        )
+        assert login.status_code == 200
+
+        failed_tool = client.post(
+            "/api/user/plugins/gmail/tools/search_messages",
+            headers=ORIGIN, json={"query": "from:example.com"},
+        )
+        assert failed_tool.status_code == 409
+        assert "Gmail 授权已失效" in failed_tool.json()["detail"]
+        assert store.connection(user["user_id"], "gmail") is None
+        assert client.get("/api/user/me").status_code == 200
