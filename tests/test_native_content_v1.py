@@ -859,7 +859,7 @@ def test_native_interactive_controls_validate_and_legacy_projection_is_inert():
             }},
         ]},
         {"tag": "button", "control": {
-            "kind": "copy", "label": "复制代码", "text": "print('hello')\\n",
+            "kind": "copy", "label": "复制代码", "text": "print('hello')\n",
         }},
     ]}}
     validated = validate_native_snapshot(doc)
