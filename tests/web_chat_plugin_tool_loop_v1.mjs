@@ -365,3 +365,18 @@ test("model chains GitHub Pull Request listing into a detail read using returned
   assert.deepEqual(h.calls.map(row => row[1]),["list_pull_requests","get_pull_request"]);
   assert.ok(messages.some(item => item.role === "tool" && item.content.includes("changed_files")));
 });
+
+
+test("GitHub tools stay unavailable until the connected account matches admin OAuth scopes", () => {
+  const h = makeHarness({
+    selectedPlugins:["github"],
+    catalog:[{
+      id:"github",enabled:true,configured:true,connected:true,
+      reauthorization_required:true,reauthorization_mode:"upgrade",
+    }],
+  });
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(h.api.selectedPluginToolDefinitions())),
+    [],
+  );
+});
