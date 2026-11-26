@@ -367,6 +367,9 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
             raise HTTPException(401, "请先登录账户", headers=_PRIVATE_HEADERS)
         if user.get("is_guest"):
             raise HTTPException(403, "游客账户暂不支持连接外部插件", headers=_PRIVATE_HEADERS)
+        from .web_chat_identity_v1 import web_chat_session_policy_allows
+        if not web_chat_session_policy_allows(request.app, user):
+            raise HTTPException(403, "Web Chat 当前不可用", headers=_PRIVATE_HEADERS)
         return user
 
     def admin_actor(request: Request) -> str:
@@ -424,7 +427,7 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                 client_secret=str(payload.get("client_secret") or ""),
                 private_repos=private_repos,
             )
-        except PluginConnectionError as exc:
+        except (PluginConnectionError, ValueError) as exc:
             raise HTTPException(422, str(exc)) from exc
         audit = getattr(app.state, "admin_audit", None)
         if audit is None:
@@ -595,7 +598,29 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
             raise HTTPException(403, "请求来源无效", headers=_PRIVATE_HEADERS)
         if provider_id not in PROVIDERS:
             raise HTTPException(404, "Unknown plugin provider", headers=_PRIVATE_HEADERS)
-        store.disconnect(str(user["user_id"]), provider_id)
+        user_id = str(user["user_id"])
+        connection = store.connection(user_id, provider_id)
+        config = store.provider(provider_id)
+        if connection and config:
+            try:
+                async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=3.0), follow_redirects=False) as client:
+                    if provider_id == "gmail":
+                        await client.post(
+                            "https://oauth2.googleapis.com/revoke",
+                            data={"token": connection["access_token"]},
+                        )
+                    else:
+                        await client.delete(
+                            "https://api.github.com/applications/" + config["client_id"] + "/grant",
+                            auth=(config["client_id"], config["client_secret"]),
+                            json={"access_token": connection["access_token"]},
+                            headers={"Accept": "application/vnd.github+json"},
+                        )
+            except httpx.HTTPError:
+                # Local credential removal is authoritative even if the
+                # provider's revocation endpoint is temporarily unavailable.
+                pass
+        store.disconnect(user_id, provider_id)
         return JSONResponse({"ok": True}, headers=_PRIVATE_HEADERS)
 
     async def access_token_for(user_id: str, provider_id: str) -> str:
@@ -647,7 +672,10 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
             payload = {}
         if not isinstance(payload, dict):
             raise HTTPException(422, "Invalid plugin tool input", headers=_PRIVATE_HEADERS)
-        token = await access_token_for(str(user["user_id"]), provider_id)
+        try:
+            token = await access_token_for(str(user["user_id"]), provider_id)
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, "插件授权刷新暂时失败，请稍后重试", headers=_PRIVATE_HEADERS) from exc
         timeout = httpx.Timeout(15.0, connect=5.0)
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
             if provider_id == "github" and tool_name == "search_repositories":
@@ -709,9 +737,11 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                     )
                     detail.raise_for_status()
                     message = detail.json()
+                    message_payload = message.get("payload") or {}
+                    message_headers = message_payload.get("headers") or []
                     headers = {
                         str(header.get("name") or "").lower(): str(header.get("value") or "")[:500]
-                        for header in message.get("payload", {}).get("headers", [])
+                        for header in message_headers if isinstance(header, dict)
                     }
                     data.append({
                         "id": message_id, "thread_id": message.get("threadId"),
