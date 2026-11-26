@@ -17,6 +17,7 @@
     flushing: false,
     flushTimer: null,
     enqueueChain: Promise.resolve(),
+    pendingEnqueues: new Map(),
     nextOrder: 1,
     serverAckNegotiated: false,
     serverAckSupported: false,
@@ -26,7 +27,16 @@
   const baseTrySendSocket = trySendSocket;
   const baseHandleServerMessage = handleServerMessage;
 
-  function stableEventIdentity(payload) {
+  // Serialize every mutation of the stored queue, including restoration,
+  // ACK removal and retry bookkeeping. A delayed storage write must never
+  // overwrite a later committed snapshot or reorder pre-restart events.
+  function serialized(operation) {
+    const result = state.enqueueChain.then(operation);
+    state.enqueueChain = result.catch(() => {});
+    return result;
+  }
+
+  function stableEventIdentity(payload, allocate = false) {
     const requestId = String(payload?.request_id || "").trim();
     if (!requestId || requestId.length > 128) return null;
     let eventId = String(payload?.worker_event_id || "").trim();
@@ -38,15 +48,19 @@
       const resultId = String(payload.result_id || payload.call_id || payload.id || "").trim();
       if (resultId) eventId = `${requestId.slice(0, 64)}:tool-result:${resultId.slice(0, 48)}`;
     }
-    if (!eventId || eventId.length > 180) return null;
+    // request-v6 and older content controllers emit deltas without an ID.
+    // Allocate an identity once, before the first durable write; every
+    // transport retry uses the stored value (equal text is not an identity).
+    if (!eventId && allocate) eventId = `evt:${crypto.randomUUID()}`;
+    if (!/^[A-Za-z0-9._:-]{1,128}$/.test(eventId)) return null;
     return {requestId, eventId, key: `${requestId}:${eventId}`};
   }
 
-  function normalizePayload(payload) {
+  function normalizePayload(payload, allocate = false) {
     if (!payload || typeof payload !== "object" || !EVENT_TYPES.has(String(payload.type || ""))) {
       return null;
     }
-    const identity = stableEventIdentity(payload);
+    const identity = stableEventIdentity(payload, allocate);
     if (!identity) return null;
     let copy;
     try { copy = JSON.parse(JSON.stringify(payload)); } catch { return null; }
@@ -80,34 +94,41 @@
   }
 
   async function queueWorkerEvent(payload) {
-    const normalized = normalizePayload(payload);
+    const normalized = normalizePayload(payload, true);
     if (!normalized) return "untracked";
-    const operation = state.enqueueChain.then(async () => {
-      const serialized = JSON.stringify(normalized.payload);
-      const existing = state.events.get(normalized.key);
-      if (existing) {
-        if (JSON.stringify(existing.payload) !== serialized) return "conflict";
+    const requestId = normalized.requestId;
+    state.pendingEnqueues.set(requestId, (state.pendingEnqueues.get(requestId) || 0) + 1);
+    try {
+      return await serialized(async () => {
+        const serialized = JSON.stringify(normalized.payload);
+        const existing = state.events.get(normalized.key);
+        if (existing) {
+          if (JSON.stringify(existing.payload) !== serialized) return "conflict";
+          scheduleFlush(0);
+          return "queued";
+        }
+        const row = {
+          payload: normalized.payload,
+          queued_at_ms: Date.now(),
+          last_sent_at_ms: 0,
+          attempts: 0,
+          order: state.nextOrder++,
+        };
+        state.events.set(normalized.key, row);
+        if (!(await persist())) {
+          state.events.delete(normalized.key);
+          state.nextOrder = Math.max(1, state.nextOrder - 1);
+          return "unpersisted";
+        }
         scheduleFlush(0);
         return "queued";
-      }
-      const row = {
-        payload: normalized.payload,
-        queued_at_ms: Date.now(),
-        last_sent_at_ms: 0,
-        attempts: 0,
-        order: state.nextOrder++,
-      };
-      state.events.set(normalized.key, row);
-      if (!(await persist())) {
-        state.events.delete(normalized.key);
-        state.nextOrder = Math.max(1, state.nextOrder - 1);
-        return "unpersisted";
-      }
-      scheduleFlush(0);
-      return "queued";
-    });
-    state.enqueueChain = operation.catch(() => {});
-    return operation;
+      });
+    } finally {
+      const pending = state.pendingEnqueues.get(requestId) || 0;
+      if (pending > 1) state.pendingEnqueues.set(requestId, pending - 1);
+      else state.pendingEnqueues.delete(requestId);
+      globalThis.__CHAT2API_BACKGROUND_TRANSPORT_RECOVERY_V47__?.scheduleFlush?.(0);
+    }
   }
 
   async function restore() {
@@ -136,7 +157,11 @@
     }
   }
 
-  async function flush() {
+  function flush() {
+    return serialized(flushSerialized);
+  }
+
+  async function flushSerialized() {
     if (
       state.restoring || !state.serverAckSupported
       || state.flushing || !state.events.size || !socketReady()
@@ -214,15 +239,18 @@
       state.serverAckNegotiated = true;
       state.serverAckSupported = Array.isArray(message.capabilities)
         && message.capabilities.includes("worker_event_ack_v1");
-      if (!state.serverAckSupported && state.events.size) {
-        // A rollback/older server cannot ACK this protocol. Drop the stale
-        // event queue and let the existing terminal outbox deliver finality.
-        state.events.clear();
-        await persist();
-      } else if (state.serverAckSupported) {
-        scheduleFlush(0);
-      }
-      globalThis.__CHAT2API_BACKGROUND_TRANSPORT_RECOVERY_V47__?.scheduleFlush?.(0);
+      const supportsAck = state.serverAckSupported;
+      await serialized(async () => {
+        if (!supportsAck && state.events.size) {
+          // A rollback/older server cannot ACK this protocol. Drop the stale
+          // event queue and let the existing terminal outbox deliver finality.
+          state.events.clear();
+          await persist();
+        } else if (supportsAck) {
+          scheduleFlush(0);
+        }
+        globalThis.__CHAT2API_BACKGROUND_TRANSPORT_RECOVERY_V47__?.scheduleFlush?.(0);
+      });
       return baseHandleServerMessage(message);
     }
     if (message?.type === "chat.event.ack") {
@@ -232,20 +260,21 @@
         worker_event_id: message.worker_event_id,
       });
       if (!identity) return;
-      const row = state.events.get(identity.key);
-      if (!row) return;
-      if (message.accepted === true || message.discarded === true) {
-        state.events.delete(identity.key);
-        await persist();
-        scheduleFlush(0);
-        // A terminal must not overtake any earlier durable Worker deltas.
-        globalThis.__CHAT2API_BACKGROUND_TRANSPORT_RECOVERY_V47__?.scheduleFlush?.(0);
-      } else {
-        row.last_sent_at_ms = 0;
-        await persist();
-        scheduleFlush(RETRY_MS);
-      }
-      return;
+      return serialized(async () => {
+        const row = state.events.get(identity.key);
+        if (!row) return;
+        if (message.accepted === true || message.discarded === true) {
+          state.events.delete(identity.key);
+          await persist();
+          scheduleFlush(0);
+          // A terminal must not overtake any earlier durable Worker deltas.
+          globalThis.__CHAT2API_BACKGROUND_TRANSPORT_RECOVERY_V47__?.scheduleFlush?.(0);
+        } else {
+          row.last_sent_at_ms = 0;
+          await persist();
+          scheduleFlush(RETRY_MS);
+        }
+      });
     }
     return baseHandleServerMessage(message);
   };
@@ -271,5 +300,5 @@
     if (state.serverAckSupported && state.events.size && socketReady()) scheduleFlush(0);
   }, 1500);
 
-  restore().catch(() => { state.restoring = false; });
+  serialized(restore).catch(() => { state.restoring = false; });
 })();
