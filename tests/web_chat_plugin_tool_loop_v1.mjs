@@ -29,6 +29,10 @@ function makeHarness({selectedPlugins = ["github"], catalog = null, planner = []
     saveHistory(){},
     renderAll(){},
     renderMessages(){},
+    renderPluginCatalog(){},
+    persistPluginSelection(){},
+    updatePluginPickerButton(){},
+    loadPluginCatalog:async () => {},
     setConnection(){},
     recordClientDiagnostic(){},
     id:() => "call-" + (++nextId),
@@ -67,7 +71,7 @@ function makeHarness({selectedPlugins = ["github"], catalog = null, planner = []
   const api = vm.runInNewContext(
     "(() => { " + helperSource + "\nreturn {" +
       "selectedPluginToolDefinitions,parsePluginToolPlan,validatePluginToolArguments," +
-      "runAutonomousPluginToolLoop}; })()",
+      "executePluginToolCall,runAutonomousPluginToolLoop}; })()",
     context,
   );
   return {
@@ -379,4 +383,26 @@ test("GitHub tools stay unavailable until the connected account matches admin OA
     JSON.parse(JSON.stringify(h.api.selectedPluginToolDefinitions())),
     [],
   );
+});
+
+
+test("revoked GitHub OAuth token asks for reconnect without clearing the Web Chat user", async () => {
+  const revoked = new Error("GitHub 授权已失效，请重新连接账户");
+  revoked.status = 409;
+  const h = makeHarness({
+    selectedPlugins:["github"],
+    toolHandler:async () => { throw revoked; },
+  });
+  const definitions = h.api.selectedPluginToolDefinitions();
+  const result = await h.api.executePluginToolCall(
+    {name:"github.search_repositories",arguments:{query:"chat2api"}},
+    definitions,h.assistant,
+  );
+  assert.equal(result.result.ok,false);
+  assert.match(result.result.error,/GitHub 授权已失效/);
+  assert.equal(h.state.user.user_id,"test-user-1");
+  assert.equal(h.state.pluginCatalog[0].reauthorization_required,true);
+  assert.equal(h.state.pluginCatalog[0].reauthorization_mode,"reconnect");
+  assert.deepEqual(h.state.selectedPlugins,[]);
+  assert.equal(h.assistant.toolEvents[0].status,"failed");
 });
