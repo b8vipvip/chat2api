@@ -4,6 +4,8 @@ import base64
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+import pytest
+
 from fastapi.testclient import TestClient
 
 from app.config import Settings
