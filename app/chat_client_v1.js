@@ -2212,7 +2212,9 @@
   }
 
   async function executePluginToolCall(
-    call, definitions, assistant, knownGmailMessageIds = new Set(), knownGithubFileRefs = new Set(),
+    call, definitions, assistant, knownGmailMessageIds = new Set(),
+    knownGithubFileRefs = new Set(), knownGithubRepos = new Set(),
+    knownGithubIssueRefs = new Set(), knownGithubPrRefs = new Set(), userPromptText = "",
   ) {
     const rawName = String(call?.name || call?.function?.name || "").slice(0,120);
     const definition = definitions.find(item => item.name === rawName);
@@ -2228,6 +2230,26 @@
       );
       if (definition.name === "gmail.get_message" && !knownGmailMessageIds.has(args.message_id)) {
         throw new Error("必须先通过本轮 Gmail 搜索取得 message_id，不能猜测或读取未检索的邮件。");
+      }
+      if (definition.provider === "github" && args.repository
+          && !knownGithubRepos.has(args.repository)) {
+        throw new Error("必须使用对话中明确提及或 GitHub 搜索结果返回的 owner/repository。");
+      }
+      if (definition.name === "github.get_issue") {
+        const key = args.repository + "#" + args.issue_number;
+        const explicit = userPromptText.includes("#" + args.issue_number)
+          || new RegExp("\\\\bissue\\\\s*(?:number\\\\s*)?#?" + args.issue_number + "\\\\b","i").test(userPromptText);
+        if (!knownGithubIssueRefs.has(key) && !explicit) {
+          throw new Error("必须先列出本轮 Issue，或使用用户消息中明确提供的 Issue 编号。");
+        }
+      }
+      if (definition.name === "github.get_pull_request") {
+        const key = args.repository + "#" + args.pull_number;
+        const explicit = userPromptText.includes("#" + args.pull_number)
+          || new RegExp("\\\\b(?:pull request|pr)\\\\s*(?:number\\\\s*)?#?" + args.pull_number + "\\\\b","i").test(userPromptText);
+        if (!knownGithubPrRefs.has(key) && !explicit) {
+          throw new Error("必须先列出本轮 Pull Request，或使用用户消息中明确提供的 PR 编号。");
+        }
       }
       if (definition.name === "github.get_file_contents"
           && !knownGithubFileRefs.has(args.repository + ":" + args.path)) {
@@ -2295,6 +2317,16 @@
     const executed = new Set();
     const knownGmailMessageIds = new Set();
     const knownGithubFileRefs = new Set();
+    const knownGithubRepos = new Set();
+    const knownGithubIssueRefs = new Set();
+    const knownGithubPrRefs = new Set();
+    const userPromptText = messages
+      .filter(message => message.role === "user")
+      .map(message => typeof message.content === "string" ? message.content : JSON.stringify(message.content || ""))
+      .join("\\n");
+    for (const match of userPromptText.matchAll(/\\b([A-Za-z0-9_.-]{1,100}\\/[A-Za-z0-9_.-]{1,100})\\b/g)) {
+      knownGithubRepos.add(match[1]);
+    }
     let plannerRequests = 0;
     let toolCalls = 0;
     let limitReached = false;
@@ -2380,12 +2412,36 @@
         executed.add(fingerprint);
         const outcome = await executePluginToolCall(
           call,definitions,assistant,knownGmailMessageIds,knownGithubFileRefs,
+          knownGithubRepos,knownGithubIssueRefs,knownGithubPrRefs,userPromptText,
         );
+        if (outcome.result?.ok && outcome.tool === "github.search_repositories") {
+          (outcome.result.results || []).forEach(row => {
+            const repository = String(row?.full_name || "");
+            if (repository) knownGithubRepos.add(repository);
+          });
+        }
         if (outcome.result?.ok && outcome.tool === "github.search_code") {
           (outcome.result.results || []).forEach(row => {
             const repository = String(row?.repository || "");
             const path = String(row?.path || "");
+            if (repository) knownGithubRepos.add(repository);
             if (repository && path) knownGithubFileRefs.add(repository + ":" + path);
+          });
+        }
+        if (outcome.result?.ok && outcome.tool === "github.list_issues") {
+          (outcome.result.results || []).forEach(row => {
+            const number = Number(row?.number);
+            if (Number.isSafeInteger(number) && number > 0) {
+              knownGithubIssueRefs.add(String(outcome.result.arguments.repository) + "#" + number);
+            }
+          });
+        }
+        if (outcome.result?.ok && outcome.tool === "github.list_pull_requests") {
+          (outcome.result.results || []).forEach(row => {
+            const number = Number(row?.number);
+            if (Number.isSafeInteger(number) && number > 0) {
+              knownGithubPrRefs.add(String(outcome.result.arguments.repository) + "#" + number);
+            }
           });
         }
         if (outcome.result?.ok && outcome.tool === "gmail.search_messages") {
