@@ -506,7 +506,7 @@ def validate_native_snapshot(payload: object) -> dict:
             raise ValueError("Image reference on non-image element")
         if tag in {"details", "select"} and "children" not in value:
             raise ValueError("Interactive container requires children")
-        if tag in {"input", "select", "option", "button"} and "text" in value:
+        if tag in {"input", "select", "button"} and "text" in value:
             raise ValueError("Interactive control cannot carry arbitrary text")
         if tag == "option" and (not isinstance(value.get("text"), str) or not value["text"].strip()):
             raise ValueError("Option requires a visible label")
