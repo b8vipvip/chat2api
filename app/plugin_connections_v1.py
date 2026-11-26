@@ -535,8 +535,14 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                 profile_response.raise_for_status()
                 profile = profile_response.json()
                 scopes = _scope_list(profile_response.headers.get("X-OAuth-Scopes", ""))
+                expires_in = token_payload.get("expires_in")
+                expires_at = int(time.time()) + max(60, int(expires_in)) if expires_in else None
                 return (
-                    {"access_token": access_token, "refresh_token": "", "expires_at": None},
+                    {
+                        "access_token": access_token,
+                        "refresh_token": str(token_payload.get("refresh_token") or ""),
+                        "expires_at": expires_at,
+                    },
                     {"subject": str(profile.get("id") or profile.get("login") or ""),
                      "label": str(profile.get("login") or profile.get("name") or "GitHub account")},
                     scopes,
@@ -561,6 +567,8 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
             )
             profile_response.raise_for_status()
             profile = profile_response.json()
+            if profile.get("email_verified") is False:
+                raise PluginConnectionError("Google account email is not verified")
             expires_in = int(token_payload.get("expires_in") or 3600)
             return (
                 {
@@ -649,24 +657,25 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
         expires_at = connection.get("expires_at")
         if not expires_at or int(expires_at) > int(time.time()) + 60:
             return str(connection["access_token"])
-        if provider_id != "gmail" or not connection.get("refresh_token"):
+        if not connection.get("refresh_token"):
             raise HTTPException(401, "插件授权已过期，请重新连接账户", headers=_PRIVATE_HEADERS)
         config = store.provider(provider_id)
         if not config or not config.get("enabled"):
             raise HTTPException(403, "插件已由管理员停用", headers=_PRIVATE_HEADERS)
         async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=5.0), follow_redirects=False) as client:
             response = await client.post(
-                PROVIDERS["gmail"]["token_url"],
+                PROVIDERS[provider_id]["token_url"],
                 data={
                     "client_id": config["client_id"], "client_secret": config["client_secret"],
                     "refresh_token": connection["refresh_token"], "grant_type": "refresh_token",
                 },
+                headers={"Accept": "application/json"},
             )
             response.raise_for_status()
             payload = response.json()
         token = str(payload.get("access_token") or "")
         if not token:
-            raise HTTPException(401, "Gmail 授权已失效，请重新连接账户", headers=_PRIVATE_HEADERS)
+            raise HTTPException(401, "插件授权已失效，请重新连接账户", headers=_PRIVATE_HEADERS)
         new_expiry = int(time.time()) + max(60, int(payload.get("expires_in") or 3600))
         store.update_access_token(
             user_id, provider_id, token, payload.get("refresh_token"), new_expiry,
