@@ -386,7 +386,8 @@
               truncated=true;
               return null;
             }
-            chars+=text.length;nodes+=1;
+            // The same source remains in its pre/code node; count it once.
+            nodes+=1;
             return {tag:"button",control:{kind:"copy",
               label:/复制/.test(label)?"复制代码":"Copy code",text}};
           }
