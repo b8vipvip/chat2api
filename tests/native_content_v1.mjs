@@ -871,7 +871,7 @@ assert.equal(rasterActive.nativeFinalCaptureCommitted,true);
 assert.equal(rasterActive.nativeCanvasOmitted,0);
 
 // Prior Windows v1.0.3 vs Chrome comparison found three standalone
-// "\\n  " text nodes (9 characters) discarded inside pre/code. The formal
+// "\n  " text nodes (9 characters) discarded inside pre/code. The formal
 // request observer must retain them, not just the independent diagnostic.
 const codeNative=new Element("PRE",[new Element("CODE",[
   new Element("SPAN",[{nodeType:3,nodeValue:"x=1"},{nodeType:3,nodeValue:"\n  "},
@@ -1065,7 +1065,7 @@ select.options=[
   {value:"line",label:"折线图",selected:false,disabled:false},
 ];
 const copyButton=new Element("BUTTON");copyButton.attributes["aria-label"]="Copy code";
-const pre=new Element("PRE");pre.textContent="print('hello')\\n";
+const pre=new Element("PRE");pre.textContent="print('hello')\n";
 const interactiveRoot=new Element("DIV",[details,checkbox,radio,range,select,copyButton,pre]);
 const interactiveActive={requestId:"req_interactive12345",submitStartedAt:Date.now(),
   lastCandidateNode:interactiveRoot};
@@ -1088,6 +1088,6 @@ assert.equal(interactiveNodes[4].control.selected,"bar");
 assert.equal(interactiveNodes[4].children.length,2);
 assert.equal(interactiveNodes[4].children[0].control.value,"bar");
 assert.deepEqual(interactiveNodes[5].control,
-  {kind:"copy",label:"Copy code",text:"print('hello')\\n"});
+  {kind:"copy",label:"Copy code",text:"print('hello')\n"});
 assert.ok(!JSON.stringify(interactiveSent).includes("onclick"));
 console.log("Native interactive controls: safe disclosure, choice, select, slider and code-copy capture");
