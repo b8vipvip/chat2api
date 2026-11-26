@@ -189,7 +189,7 @@ const interactive = {
       {tag:"option",text:"柱状图",control:{kind:"option",value:"bar",disabled:false,selected:true}},
       {tag:"option",text:"折线图",control:{kind:"option",value:"line",disabled:false,selected:false}},
     ]},
-    {tag:"button",control:{kind:"copy",label:"Copy code",text:"print('hello')\\n"}},
+    {tag:"button",control:{kind:"copy",label:"Copy code",text:"print('hello')\n"}},
   ]},
 };
 assert.equal(renderer.validateSnapshot(interactive),true);
@@ -228,7 +228,7 @@ assert.equal(copyControl.type,"button");
 assert.equal(copyControl.textContent,"Copy code");
 copyControl.events.click();
 await new Promise(resolve=>setImmediate(resolve));
-assert.equal(copied,"print('hello')\\n");
+assert.equal(copied,"print('hello')\n");
 assert.equal(copyControl.textContent,"已复制");
 
 const unsafeControl=structuredClone(interactive);
