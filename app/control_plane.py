@@ -157,8 +157,8 @@ def permission_for_admin_route(path: str, method: str) -> str | None:
         return "system:read"
     if path == "/api/admin/modes":
         return "system:" + suffix
-    if path == "/api/admin/plugins" or re.fullmatch(
-        r"/api/admin/plugins/[^/]+/versions/[^/]+", path
+    if path in {"/api/admin/plugins", "/api/admin/plugins/providers"} or re.fullmatch(
+        r"/api/admin/plugins/(?:providers/[^/]+|[^/]+/versions/[^/]+)", path
     ):
         return "plugins:" + suffix
     return None
