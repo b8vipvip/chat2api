@@ -420,28 +420,45 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
             private_repos = payload.get("private_repos", False)
             if type(enabled) is not bool or type(private_repos) is not bool:
                 raise PluginConnectionError("enabled and private_repos must be booleans")
-            saved = store.save_provider(
-                provider_id, enabled=enabled,
-                client_id=str(payload.get("client_id") or ""),
-                client_secret=str(payload.get("client_secret") or ""),
-                private_repos=private_repos,
-            )
         except (PluginConnectionError, ValueError) as exc:
             raise HTTPException(422, str(exc)) from exc
         audit = getattr(app.state, "admin_audit", None)
         if audit is None:
             audit = AdminAuditStore(app.state.settings.data_dir)
             app.state.admin_audit = audit
+        request_id = str(request.headers.get("x-request-id") or "")
         try:
             audit.append(
-                actor=actor, action="plugin.provider.updated",
+                actor=actor, action="plugin.provider.update_requested",
                 target_type="plugin_provider", target_id=provider_id,
-                details={"enabled": bool(saved.get("enabled")), "private_repos": bool(saved.get("private_repos"))},
-                request_id=str(request.headers.get("x-request-id") or ""),
+                details={"enabled": enabled, "private_repos": private_repos},
+                request_id=request_id,
             )
         except AdminAuditError as exc:
-            raise HTTPException(503, "Administrator audit unavailable; provider update cannot be confirmed") from exc
-        return {"provider": public_provider(request, provider_id)}
+            raise HTTPException(503, "Administrator audit unavailable; provider update denied") from exc
+        try:
+            saved = store.save_provider(
+                provider_id, enabled=enabled,
+                client_id=str(payload.get("client_id") or ""),
+                client_secret=str(payload.get("client_secret") or ""),
+                private_repos=private_repos,
+            )
+        except PluginConnectionError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        audit_pending = False
+        try:
+            audit.append(
+                actor=actor, action="plugin.provider.update_completed",
+                target_type="plugin_provider", target_id=provider_id,
+                details={"enabled": bool(saved.get("enabled")), "private_repos": bool(saved.get("private_repos"))},
+                request_id=request_id,
+            )
+        except AdminAuditError:
+            # The configuration is already committed. Preserve success and
+            # expose the pending audit completion for the administrator.
+            app.state.admin_audit_completion_pending = True
+            audit_pending = True
+        return {"provider": public_provider(request, provider_id), "audit_completion_pending": audit_pending}
 
     @app.get("/api/user/plugins")
     async def user_plugin_catalog(request: Request) -> JSONResponse:
