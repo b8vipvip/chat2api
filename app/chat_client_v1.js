@@ -1835,6 +1835,7 @@
           }
         });
         card.appendChild(disconnect);
+        if (plugin.enabled && plugin.configured) {
         const toolBox = document.createElement("div");
         toolBox.className = "plugin-toolbox";
         const query = document.createElement("input");
@@ -1904,6 +1905,7 @@
         });
         toolBox.append(query, run, results);
         card.appendChild(toolBox);
+        }
       }
       root.appendChild(card);
     });
