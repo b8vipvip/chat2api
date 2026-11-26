@@ -244,7 +244,7 @@ test("model chains GitHub code search into a grounded file read", async () => {
       return {data:[{
         repository:"acme/project",path:"README.md",
         url:"https://github.com/acme/project/blob/main/README.md",
-        content:"# Project\\n\\nThis is the readme.",
+        content:"# Project\n\nThis is the readme.",
         truncated:false,
       }]};
     },
