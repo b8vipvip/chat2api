@@ -433,7 +433,7 @@ test("model chains GitHub Pull Request listing into changed-file patch retrieval
     selectedPlugins:["github"],
     planner:[
       '{"tool_calls":[{"name":"github.list_pull_requests","arguments":{"repository":"acme/project","state":"open"}}]}',
-      '{"tool_calls":[{"name":"github.get_pull_request_files","arguments":{"repository":"acme/project","pull_number":15}}]}',
+      '{"tool_calls":[{"name":"github.get_pull_request_files","arguments":{"repository":"acme/project","pull_number":15,"page":2}}]}',
       '{"tool_calls":[]}',
     ],
     toolHandler:async (provider,tool,args) => {
@@ -442,7 +442,7 @@ test("model chains GitHub Pull Request listing into changed-file patch retrieval
         return {data:[{number:15,title:"Improve parser",state:"open",url:"https://github.com/acme/project/pull/15"}]};
       }
       assert.equal(tool,"get_pull_request_files");
-      assert.deepEqual(JSON.parse(JSON.stringify(args)),{repository:"acme/project",pull_number:15});
+      assert.deepEqual(JSON.parse(JSON.stringify(args)),{repository:"acme/project",pull_number:15,page:2});
       return {data:[{
         number:15,filename:"src/parser.py",status:"modified",
         additions:3,deletions:1,changes:4,
