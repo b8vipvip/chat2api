@@ -459,7 +459,7 @@ def test_github_repository_issue_pull_request_commit_and_file_read_tools(tmp_pat
                         "additions": 3, "deletions": 1, "changes": 4,
                         "sha": "d" * 40,
                         "blob_url": "https://github.com/acme/project/blob/main/src/parser.py",
-                        "patch": "@@ -1 +1 @@\\n-old\\n+new",
+                        "patch": "@@ -1 +1 @@\n-old\n+new",
                     }])
                 if url == "https://api.github.com/repos/acme/project/commits":
                     assert kwargs["params"]["sha"] == "main"
