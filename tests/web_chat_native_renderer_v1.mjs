@@ -204,6 +204,7 @@ const interactiveContext = {
 vm.runInNewContext(interactiveRendererSource,interactiveContext);
 const interactiveRenderer=interactiveWindow.Chat2APINativeRendererV1;
 assert.equal(interactiveRenderer.renderNativeSnapshot(interactiveHost,interactive),true);
+assert.match(interactiveHost.childNodes[0].textContent,/本地预览/);
 const renderedDetails=findTag(interactiveHost,"details");
 assert.equal(renderedDetails.open,true);
 const renderedInputs=findAll(interactiveHost,node=>node.tagName==="input");
