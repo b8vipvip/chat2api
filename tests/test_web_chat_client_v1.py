@@ -47,6 +47,12 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         assert 'href="/console"' not in page.text
         assert 'id="pluginsButton"' in page.text
         assert 'id="libraryButton"' in page.text
+        assert 'id="sidebarAccount"' in page.text
+        assert 'id="accountSettingsButton" href="/settings">设置</a>' in page.text
+        topbar_html = page.text.split('<header class="topbar"', 1)[1].split("</header>", 1)[0]
+        composer_html = page.text.split('<footer class="composer-area"', 1)[1].split("</footer>", 1)[0]
+        assert 'id="modelSelect"' not in topbar_html
+        assert 'id="modelSelect"' in composer_html
         sidebar_html = page.text.split('<aside class="sidebar"', 1)[1].split("</aside>", 1)[0]
         assert 'id="newChatButton"' not in sidebar_html
         assert 'id="pluginsButton"' in sidebar_html and 'id="libraryButton"' in sidebar_html
@@ -126,6 +132,9 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         assert "Authorization" not in script.text
         assert "/api/user/chat/session" in script.text
         assert "/api/user/chat/models" in script.text
+        assert "/api/user/plugins" in script.text
+        assert "/api/user/plugins/oauth/" in script.text
+        assert "mapped_model_id" in script.text
         assert 'apiJson("/api/user/models")' not in script.text
         assert "当前账户或服务端统一 API Key 没有可用模型" in script.text
         assert "/api/user/chat/files" in script.text
@@ -470,9 +479,9 @@ def test_guest_web_chat_is_policy_gated_and_uses_account_scoped_identity(tmp_pat
 
 def test_every_web_chat_session_expiry_path_opens_inline_login_dialog() -> None:
     source = (Path(__file__).resolve().parents[1] / "app" / "chat_client_v1.js").read_text(encoding="utf-8")
-    assert 'if (response.status === 401) {\n          state.user = null;\n          showOnly("authRequired");\n          setConnection("登录已失效", "error");\n          openLoginDialog();' in source
-    assert 'state.user = null;\n        showOnly("authRequired");\n        setConnection("登录已失效", "error");\n        openLoginDialog();\n        throw new Error("用户登录状态已失效，请重新登录后再继续聊天")' in source
-    assert 'state.user = null;\n        showOnly("authRequired");\n        openLoginDialog();\n        $("composerArea").classList.add("hidden");' in source
+    assert 'if (response.status === 401) {\n          state.user = null;\n          $("sidebarAccount").hidden = true;\n          showOnly("authRequired");\n          setConnection("登录已失效", "error");\n          openLoginDialog();' in source
+    assert 'state.user = null;\n        $("sidebarAccount").hidden = true;\n        showOnly("authRequired");\n        setConnection("登录已失效", "error");\n        openLoginDialog();\n        throw new Error("用户登录状态已失效，请重新登录后再继续聊天")' in source
+    assert 'state.user = null;\n        $("sidebarAccount").hidden = true;\n        showOnly("authRequired");\n        openLoginDialog();\n        $("composerArea").classList.add("hidden");' in source
 
 
 def test_guest_policy_revocation_also_opens_inline_login_dialog() -> None:
@@ -480,6 +489,6 @@ def test_guest_policy_revocation_also_opens_inline_login_dialog() -> None:
     assert 'function guestLoginRequired(status, payload)' in source
     assert 'String(payload?.detail || "").includes("游客使用已关闭")' in source
     assert 'else if (guestLoginRequired(response.status, payload))' in source
-    assert 'else if (guestLoginRequired(response.status, payload)) {\n        state.user = null;\n        showOnly("authRequired");' in source
+    assert 'else if (guestLoginRequired(response.status, payload)) {\n        state.user = null;\n        $("sidebarAccount").hidden = true;\n        showOnly("authRequired");' in source
     assert 'const guestAccessClosed = guestLoginRequired(response.status, payload);' in source
     assert source.count('openLoginDialog(String(payload.detail || "游客使用已关闭，请登录账户"));') == 2
