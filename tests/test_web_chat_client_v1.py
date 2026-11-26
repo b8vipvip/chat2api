@@ -139,6 +139,7 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         assert "selectedPlugins" in script.text
         assert "restorePluginSelection" in script.text
         assert "runSelectedPluginsForPrompt" in script.text
+        assert "shouldQueryPlugin" in script.text
         assert "buildPluginContextMessage" in script.text
         assert "list_issues" in script.text
         assert 'callPluginTool("gmail", "get_message"' in script.text
