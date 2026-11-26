@@ -317,7 +317,7 @@
       if(blocks.length>1) return "";
       if(blocks.length===1) {
         const code=composedFind(blocks[0],node=>node.tagName?.toLowerCase()==="code",2)[0] || blocks[0];
-        const text=plainText(code);
+        const text=String(code.textContent ?? code.innerText ?? "");
         if(text && text.length<=150000) return text;
         return "";
       }
