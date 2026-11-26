@@ -688,3 +688,33 @@ def test_github_invalid_oauth_token_does_not_expire_web_chat_login(tmp_path: Pat
         session = client.get("/api/user/me")
         assert session.status_code == 200
         assert session.json()["user"]["user_id"] == user["user_id"]
+
+
+def test_expired_github_token_without_refresh_is_cleared_for_reconnect(tmp_path: Path):
+    app = make_app(tmp_path)
+    store: PluginOAuthStore = app.state.plugin_oauth_store
+    store.save_provider(
+        "github", enabled=True, client_id="gh-client",
+        client_secret="gh-secret", private_repos=False,
+    )
+    with TestClient(app) as client:
+        user = register(client, "github-expired-token@example.com")
+        store.save_connection(
+            user["user_id"], "github", "42", "octocat",
+            "expired-github-token", "", ["read:user"], 1,
+        )
+        login = client.post(
+            "/api/user/login",
+            json={"email": "github-expired-token@example.com", "password": PASSWORD},
+            headers=ORIGIN,
+        )
+        assert login.status_code == 200
+
+        failed_tool = client.post(
+            "/api/user/plugins/github/tools/search_repositories",
+            headers=ORIGIN, json={"query": "chat2api"},
+        )
+        assert failed_tool.status_code == 409
+        assert "插件授权已过期" in failed_tool.json()["detail"]
+        assert store.connection(user["user_id"], "github") is None
+        assert client.get("/api/user/me").status_code == 200
