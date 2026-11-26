@@ -452,6 +452,15 @@ def test_github_repository_issue_pull_request_commit_and_file_read_tools(tmp_pat
                         "created_at": "2026-11-20T00:00:00Z",
                         "updated_at": "2026-11-25T00:00:00Z",
                     })
+                if url == "https://api.github.com/repos/acme/project/pulls/8/files":
+                    assert kwargs["params"]["per_page"] == 20
+                    return FakeResponse([{
+                        "filename": "src/parser.py", "status": "modified",
+                        "additions": 3, "deletions": 1, "changes": 4,
+                        "sha": "d" * 40,
+                        "blob_url": "https://github.com/acme/project/blob/main/src/parser.py",
+                        "patch": "@@ -1 +1 @@\\n-old\\n+new",
+                    }])
                 if url == "https://api.github.com/repos/acme/project/commits":
                     assert kwargs["params"]["sha"] == "main"
                     return FakeResponse([{
@@ -500,6 +509,7 @@ def test_github_repository_issue_pull_request_commit_and_file_read_tools(tmp_pat
             ("get_issue", {"repository": "acme/project", "issue_number": 7}),
             ("list_pull_requests", {"repository": "acme/project", "state": "open"}),
             ("get_pull_request", {"repository": "acme/project", "pull_number": 8}),
+            ("get_pull_request_files", {"repository": "acme/project", "pull_number": 8}),
             ("list_commits", {"repository": "acme/project", "ref": "main"}),
             ("search_code", {"query": "repo:acme/project parser"}),
             ("get_file_contents", {"repository": "acme/project", "path": "docs/hello world.md", "ref": "main"}),
@@ -518,10 +528,12 @@ def test_github_repository_issue_pull_request_commit_and_file_read_tools(tmp_pat
         assert responses[1][0]["labels"] == ["bug"]
         assert responses[2][0]["draft"] is True
         assert responses[3][0]["mergeable"] is True
-        assert responses[4][0]["sha"] == "a" * 40
-        assert responses[5][0]["path"] == "docs/hello world.md"
-        assert responses[6][0]["content"] == "print('hello')\n"
-        assert len(fake_clients) == 7
+        assert responses[4][0]["filename"] == "src/parser.py"
+        assert responses[4][0]["patch"].startswith("@@ -1 +1 @@")
+        assert responses[5][0]["sha"] == "a" * 40
+        assert responses[6][0]["path"] == "docs/hello world.md"
+        assert responses[7][0]["content"] == "print('hello')\n"
+        assert len(fake_clients) == 8
 
         invalid_path = client.post(
             "/api/user/plugins/github/tools/get_file_contents",
@@ -535,9 +547,9 @@ def test_github_repository_issue_pull_request_commit_and_file_read_tools(tmp_pat
             json={"repository": "acme/project", "issue_number": True},
         )
         assert invalid_number.status_code == 422
-        assert len(fake_clients) == 9
-        assert fake_clients[7].calls == []
+        assert len(fake_clients) == 10
         assert fake_clients[8].calls == []
+        assert fake_clients[9].calls == []
 
 
 @pytest.mark.parametrize(
