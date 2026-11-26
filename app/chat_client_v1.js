@@ -2731,6 +2731,12 @@
   function applyNativeSnapshot(requestId,snapshot) {
     const renderer = window.Chat2APINativeRendererV1;
     if (!renderer || typeof renderer.validateSnapshot !== "function" || !renderer.validateSnapshot(snapshot)) return false;
+    const previous = state.nativeSnapshots.get(requestId);
+    // GET hydration and native SSE can complete in either order. A stale
+    // DOM revision must not replace newer media, citations or final content.
+    if (previous && (snapshot.revision < previous.revision ||
+        (snapshot.revision === previous.revision && previous.finality === "verified-final" &&
+          snapshot.finality !== "verified-final"))) return false;
     state.nativeSnapshots.set(requestId,snapshot);
     while (state.nativeSnapshots.size > 24) state.nativeSnapshots.delete(state.nativeSnapshots.keys().next().value);
     const found = assistantMessageForRequest(requestId);
@@ -2739,20 +2745,29 @@
     return true;
   }
   async function refreshNativeSnapshot(requestId) {
+    const before = state.nativeSnapshots.get(requestId);
     try {
       const response = await fetch("/api/user/chat/requests/" + encodeURIComponent(requestId) + "/native-content",
         {method:"GET",credentials:"same-origin",cache:"no-store",headers:{Accept:"application/json"}});
       if (response.status === 404) {
         const previous = state.nativeSnapshots.get(requestId);
-        if (previous && previous.finality !== "verified-final") {
+        if (previous && previous === before && previous.finality !== "verified-final") {
           state.nativeSnapshots.delete(requestId);
           const found = assistantMessageForRequest(requestId);
+          if (found) delete found.message.nativeFinality;
           if (found && currentConversation()?.id === found.conversation.id) renderMessages();
         }
         return false;
       }
       if (!response.ok) return false;
-      return applyNativeSnapshot(requestId,await response.json());
+      const snapshot = await response.json();
+      const current = state.nativeSnapshots.get(requestId);
+      // An asset can finish archiving without incrementing the DOM revision.
+      // Do not overwrite a snapshot received while this GET was in flight,
+      // unless the response proves a strictly newer revision. A later GET
+      // started from the current snapshot can still hydrate same-revision files.
+      if (current && current !== before && Number(snapshot?.revision) <= current.revision) return false;
+      return applyNativeSnapshot(requestId,snapshot);
     } catch (_) { return false; }
   }
   function consumeNativeSseFrame(frame,requestId) {
