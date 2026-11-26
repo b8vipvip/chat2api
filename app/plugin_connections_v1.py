@@ -392,12 +392,12 @@ def _gmail_body_text(payload: Any) -> str:
         return "\n\n".join(plain_parts)[:20000]
     if html_parts:
         cleaned = "\n".join(html_parts)
-        cleaned = re.sub(r"(?is)<(script|style)\\b[^>]*>.*?</\\1>", " ", cleaned)
-        cleaned = re.sub(r"(?i)<br\\s*/?>|</(p|div|li|tr|h[1-6])\\s*>", "\n", cleaned)
+        cleaned = re.sub(r"(?is)<(script|style)\b[^>]*>.*?</\1>", " ", cleaned)
+        cleaned = re.sub(r"(?i)<br\s*/?>|</(p|div|li|tr|h[1-6])\s*>", "\n", cleaned)
         cleaned = re.sub(r"<[^>]+>", " ", cleaned)
         cleaned = html.unescape(cleaned)
-        cleaned = re.sub(r"[ \\t]+", " ", cleaned)
-        cleaned = re.sub(r"\\n{3,}", "\n\n", cleaned)
+        cleaned = re.sub(r"[ \t]+", " ", cleaned)
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
         return cleaned.strip()[:20000]
     return ""
 
