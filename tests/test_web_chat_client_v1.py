@@ -138,12 +138,26 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         assert "/api/user/plugins/oauth/" in script.text
         assert "selectedPlugins" in script.text
         assert "restorePluginSelection" in script.text
-        assert "runSelectedPluginsForPrompt" in script.text
-        assert "shouldQueryPlugin" in script.text
-        assert "buildPluginContextMessage" in script.text
+        assert "selectedPluginToolDefinitions" in script.text
+        assert "buildPluginPlannerPrompt" in script.text
+        assert "parsePluginToolPlan" in script.text
+        assert "validatePluginToolArguments" in script.text
+        assert "executePluginToolCall" in script.text
+        assert "runAutonomousPluginToolLoop" in script.text
+        assert 'assistant.requestId = "";' in script.text
+        assert 'message.recoveryStatus === "tool_planning"' in script.text
+        assert "页面刷新导致工具调用中断" in script.text
+        assert "maxRounds = 3" in script.text
+        assert "maxToolCalls = 6" in script.text
+        assert "knownGmailMessageIds" in script.text
+        assert 'role:"tool"' in script.text
+        assert "stream:false" in script.text
+        assert "tool_calls" in script.text
+        assert "shouldQueryPlugin" not in script.text
+        assert "runSelectedPluginsForPrompt" not in script.text
+        assert "buildPluginContextMessage" not in script.text
         assert "list_issues" in script.text
-        assert 'callPluginTool("gmail", "get_message"' in script.text
-        assert "不可信外部输入" in script.text
+        assert "不可信数据" in script.text
         assert '$("sidebarAccount").hidden = false;' in script.text
         assert '$("accountSettingsButton").hidden = false;' in script.text
         assert "mapped_model_id" in script.text

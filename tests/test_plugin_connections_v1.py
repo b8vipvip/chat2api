@@ -251,6 +251,18 @@ def test_github_plugin_tool_is_read_only_and_scoped_to_the_connected_user(tmp_pa
         assert result.status_code == 200, result.text
         assert result.json()["data"][0]["full_name"] == "b8vipvip/chat2api"
         assert "user-a-access-token" not in result.text
+        invalid_repository = client.post(
+            "/api/user/plugins/github/tools/list_issues",
+            headers=ORIGIN,
+            json={"repository": "../private"},
+        )
+        assert invalid_repository.status_code == 422
+        dot_repository = client.post(
+            "/api/user/plugins/github/tools/list_issues",
+            headers=ORIGIN,
+            json={"repository": "owner/.."},
+        )
+        assert dot_repository.status_code == 422
 
         login_b = client.post(
             "/api/user/login",

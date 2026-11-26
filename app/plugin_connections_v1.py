@@ -31,7 +31,7 @@ from .user_commerce import USER_SESSION_COOKIE
 
 
 _PRIVATE_HEADERS = {"Cache-Control": "private, no-store", "Vary": "Cookie"}
-_GITHUB_REPO = re.compile(r"^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$")
+_GITHUB_REPO = re.compile(r"^(?!\.{1,2}/)[A-Za-z0-9_.-]{1,100}/(?!\.{1,2}$)[A-Za-z0-9_.-]{1,100}$")
 _GMAIL_ID = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
 
 PROVIDERS: dict[str, dict[str, Any]] = {
