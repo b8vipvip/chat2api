@@ -95,6 +95,7 @@ def install_plugin_registry(app: FastAPI) -> FastAPI:
         connections = getattr(app.state, "plugin_oauth_store", None)
         if connections is None:
             return {"data": [], "execution_enabled": False}
-        return {"data": connections.public_catalog(), "execution_enabled": True}
+        catalog = connections.public_catalog()
+        return {"data": catalog, "execution_enabled": bool(catalog)}
 
     return app
