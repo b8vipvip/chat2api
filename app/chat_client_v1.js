@@ -1880,15 +1880,30 @@
                 const insert = document.createElement("button");
                 insert.type = "button";
                 insert.className = "attach-button";
-                insert.textContent = "插入到当前聊天";
-                insert.addEventListener("click", () => {
-                  const prompt = "请基于以下 " + String(plugin.name || plugin.id) +
-                    " 插件检索结果回答我的问题：\n\n" + JSON.stringify(item, null, 2);
-                  state.sidebarPage = "";
-                  renderAll();
-                  $("messageInput").value = prompt;
-                  resizeComposer();
-                  $("messageInput").focus();
+                insert.textContent = plugin.id === "gmail" ? "读取邮件并插入到当前聊天" : "插入到当前聊天";
+                insert.addEventListener("click", async () => {
+                  insert.disabled = true;
+                  try {
+                    let context = item;
+                    if (plugin.id === "gmail") {
+                      const detail = await apiJson("/api/user/plugins/gmail/tools/get_message", {
+                        method:"POST",
+                        headers:{"Content-Type":"application/json"},
+                        body:JSON.stringify({message_id:item.id})
+                      });
+                      context = Array.isArray(detail.data) && detail.data[0] ? detail.data[0] : item;
+                    }
+                    const prompt = "请基于以下 " + String(plugin.name || plugin.id) +
+                      " 插件检索结果回答我的问题：\n\n" + JSON.stringify(context, null, 2);
+                    state.sidebarPage = "";
+                    renderAll();
+                    $("messageInput").value = prompt;
+                    resizeComposer();
+                    $("messageInput").focus();
+                  } catch (error) {
+                    toast("读取插件内容失败：" + String(error.message || error));
+                    insert.disabled = false;
+                  }
                 });
                 resultCard.append(heading, summary, insert);
                 results.appendChild(resultCard);
