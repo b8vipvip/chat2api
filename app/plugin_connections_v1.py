@@ -441,10 +441,6 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
             raise HTTPException(503, "Administrator audit unavailable; provider update cannot be confirmed") from exc
         return {"provider": public_provider(request, provider_id)}
 
-    @app.get("/api/client/plugins")
-    async def client_plugin_catalog() -> dict[str, Any]:
-        return {"data": store.public_catalog(), "execution_enabled": True}
-
     @app.get("/api/user/plugins")
     async def user_plugin_catalog(request: Request) -> JSONResponse:
         user = current_user(request)
