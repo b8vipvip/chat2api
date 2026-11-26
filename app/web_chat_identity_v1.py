@@ -22,6 +22,28 @@ def _private_error(status_code: int, detail: str) -> HTTPException:
     )
 
 
+def is_configured_web_chat_service_key(app: Any, key_id: str) -> bool:
+    """A configured Mode 1 service credential cannot authenticate Mode 2."""
+    control_plane = getattr(app.state, "control_plane", None)
+    return bool(
+        control_plane is not None
+        and key_id
+        and control_plane.client_api_key_id() == key_id
+    )
+
+
+def web_chat_session_policy_allows(app: Any, user: dict[str, Any]) -> bool:
+    """Re-evaluate administrator policy for existing Web Chat sessions."""
+    control_plane = getattr(app.state, "control_plane", None)
+    if control_plane is None or not user:
+        return False
+    policy = control_plane.public_client()
+    return (
+        policy.get("web_chat_enabled") is True
+        and (not user.get("is_guest") or policy.get("guest_enabled") is True)
+    )
+
+
 async def resolve_web_chat_principal(
     request: Any,
     requested_user_key_id: str | None = None,
