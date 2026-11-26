@@ -679,6 +679,10 @@ def test_github_invalid_oauth_token_does_not_expire_web_chat_login(tmp_path: Pat
         )
         assert failed_tool.status_code == 409
         assert "GitHub 授权已失效" in failed_tool.json()["detail"]
+        assert store.connection(user["user_id"], "github") is None
+        refreshed_catalog = client.get("/api/user/plugins")
+        github = next(row for row in refreshed_catalog.json()["data"] if row["id"] == "github")
+        assert github["connected"] is False
 
         # A provider-token failure must not clear the separate Web Chat account session.
         session = client.get("/api/user/me")
