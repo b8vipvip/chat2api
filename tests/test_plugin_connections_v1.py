@@ -4,6 +4,8 @@ import base64
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+import pytest
+
 from fastapi.testclient import TestClient
 
 from app.config import Settings
@@ -262,3 +264,102 @@ def test_github_plugin_tool_is_read_only_and_scoped_to_the_connected_user(tmp_pa
             json={"query": "chat2api"},
         )
         assert denied.status_code == 409
+
+@pytest.mark.parametrize("provider_id", ["github", "gmail"])
+def test_oauth_callback_persists_the_authenticated_users_provider_connection(
+    tmp_path: Path, monkeypatch, provider_id: str,
+):
+    app = make_app(tmp_path / provider_id)
+    store: PluginOAuthStore = app.state.plugin_oauth_store
+    client_id = provider_id + "-client"
+    access_token = provider_id + "-user-access-token"
+    store.save_provider(
+        provider_id, enabled=True, client_id=client_id,
+        client_secret=provider_id + "-client-secret", private_repos=False,
+    )
+
+    with TestClient(app) as client:
+        user = register(client, provider_id + "-oauth@example.com")
+        started = client.get(
+            "/api/user/plugins/oauth/" + provider_id + "/start",
+            follow_redirects=False,
+        )
+        assert started.status_code == 303
+        authorization = parse_qs(urlsplit(started.headers["location"]).query)
+        state = authorization["state"][0]
+        assert authorization["code_challenge_method"] == ["S256"]
+
+        class FakeResponse:
+            def __init__(self, payload, headers=None):
+                self.payload = payload
+                self.headers = headers or {}
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self.payload
+
+        class FakeAsyncClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def post(self, url, **kwargs):
+                if provider_id == "github":
+                    assert url == "https://github.com/login/oauth/access_token"
+                    assert kwargs["data"]["code_verifier"]
+                    return FakeResponse({
+                        "access_token": access_token,
+                        "refresh_token": "github-refresh-token",
+                        "expires_in": 3600,
+                    })
+                assert url == "https://oauth2.googleapis.com/token"
+                assert kwargs["data"]["code_verifier"]
+                return FakeResponse({
+                    "access_token": access_token,
+                    "refresh_token": "gmail-refresh-token",
+                    "expires_in": 3600,
+                    "scope": "openid email profile https://www.googleapis.com/auth/gmail.readonly",
+                })
+
+            async def get(self, url, **kwargs):
+                if provider_id == "github":
+                    assert url == "https://api.github.com/user"
+                    return FakeResponse(
+                        {"id": 4242, "login": "octocat"},
+                        {"X-OAuth-Scopes": "read:user"},
+                    )
+                assert url == "https://openidconnect.googleapis.com/v1/userinfo"
+                return FakeResponse({
+                    "sub": "google-subject-4242",
+                    "email": provider_id + "-oauth@example.com",
+                    "name": "Plugin Test User",
+                    "email_verified": True,
+                })
+
+        monkeypatch.setattr("app.plugin_connections_v1.httpx.AsyncClient", FakeAsyncClient)
+        callback = client.get(
+            "/api/user/plugins/oauth/" + provider_id + "/callback",
+            params={"state": state, "code": "authorization-code"},
+            follow_redirects=False,
+        )
+        assert callback.status_code == 303
+        assert callback.headers["location"] == (
+            "/chat?tab=plugins&plugin=connected&provider=" + provider_id
+        )
+
+        connection = store.connection(user["user_id"], provider_id)
+        assert connection is not None
+        assert connection["access_token"] == access_token
+        assert connection["refresh_token"]
+        catalog = client.get("/api/user/plugins")
+        assert catalog.status_code == 200
+        row = next(item for item in catalog.json()["data"] if item["id"] == provider_id)
+        assert row["connected"] is True
+        assert access_token not in catalog.text
