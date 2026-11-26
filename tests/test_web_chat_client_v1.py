@@ -134,6 +134,7 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         assert "/api/user/chat/models" in script.text
         assert "/api/user/plugins" in script.text
         assert "/api/user/plugins/oauth/" in script.text
+        assert '$("sidebarAccount").hidden = false;' in script.text
         assert "mapped_model_id" in script.text
         assert 'apiJson("/api/user/models")' not in script.text
         assert "当前账户或服务端统一 API Key 没有可用模型" in script.text
