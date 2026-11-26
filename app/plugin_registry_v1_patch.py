@@ -90,7 +90,11 @@ def install_plugin_registry(app: FastAPI) -> FastAPI:
 
     @app.get("/api/client/plugins")
     async def client_plugins() -> dict[str, Any]:
-        # No user grant, trust/sandbox or Secret Store approval exists yet.
-        return {"data": [], "execution_enabled": False}
+        # Only fixed providers with an administrator-configured OAuth app are
+        # discoverable. User-specific grants are returned by /api/user/plugins.
+        connections = getattr(app.state, "plugin_oauth_store", None)
+        if connections is None:
+            return {"data": [], "execution_enabled": False}
+        return {"data": connections.public_catalog(), "execution_enabled": True}
 
     return app
