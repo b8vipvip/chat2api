@@ -1,7 +1,7 @@
 /* Mode 1 native-content renderer. */
 (() => {
   "use strict";
-  const HTML_TAGS = new Set(["div","p","span","strong","em","h1","h2","h3","h4","ul","ol","li","blockquote","pre","code","table","thead","tbody","tr","td","th","figure","figcaption","img","hr","br","a"]);
+  const HTML_TAGS = new Set(["div","p","span","strong","em","h1","h2","h3","h4","ul","ol","li","blockquote","pre","code","table","thead","tbody","tr","td","th","figure","figcaption","img","hr","br","a","details","summary","input","select","option","button"]);
   const MATH_TAGS = new Set(["math","semantics","mrow","mi","mo","mn","msub","mfrac","mtext","annotation","mover","munder","munderover","msup","msubsup","msqrt","mroot","mspace","mstyle","mtable","mtr","mtd","mmultiscripts","mphantom","menclose","mpadded","merror","ms","mfenced","mprescripts","none","mstack","mlongdiv","msgroup","msrow","mscarries","mscarry","msline"]);
   const MATH_GLOBAL_ATTRS = new Set(["mathvariant","mathsize","mathcolor","mathbackground","displaystyle","scriptlevel","dir"]);
   const MATH_ATTRS_BY_TAG = {
@@ -191,6 +191,48 @@
     if (key === "open" || key === "close" || key === "separators") return /^[^<>\u0000-\u001f\u007f]{0,16}$/.test(value);
     return false;
   }
+  function safeControlText(value,limit,allowNewlines=false) {
+    if (typeof value !== "string" || value.length > limit) return false;
+    return ![...value].some(char => {
+      const code=char.charCodeAt(0);
+      return (code < 32 && !(allowNewlines && [9,10,13].includes(code))) || code===127;
+    });
+  }
+  function validControl(tag,control) {
+    if (!control || typeof control!=="object" || Array.isArray(control) ||
+        typeof control.kind!=="string") return false;
+    const keys=Object.keys(control).sort().join(",");
+    const exact=(expected)=>keys===[...expected].sort().join(",");
+    if (tag==="details") return exact(["kind","open"]) &&
+      control.kind==="disclosure" && typeof control.open==="boolean";
+    if (tag==="input") {
+      if (!safeControlText(control.label,160) || !control.label.trim() ||
+          typeof control.disabled!=="boolean") return false;
+      if (control.kind==="checkbox") return exact(["kind","label","disabled","checked"]) &&
+        typeof control.checked==="boolean";
+      if (control.kind==="radio") return exact(["kind","label","disabled","checked","group"]) &&
+        typeof control.checked==="boolean" && typeof control.group==="string" &&
+        /^[A-Za-z0-9_-]{1,64}$/.test(control.group);
+      if (control.kind==="range") return exact(["kind","label","disabled","min","max","step","value"]) &&
+        [control.min,control.max,control.step,control.value].every(Number.isFinite) &&
+        [control.min,control.max,control.step,control.value].every(value=>Math.abs(value)<=1000000) &&
+        control.min<control.max && control.step>0 &&
+        control.value>=control.min && control.value<=control.max;
+      return false;
+    }
+    if (tag==="select") return exact(["kind","label","disabled","selected"]) &&
+      control.kind==="select" && safeControlText(control.label,160) &&
+      control.label.trim().length>0 && safeControlText(control.selected,128) &&
+      typeof control.disabled==="boolean";
+    if (tag==="option") return exact(["kind","value","disabled","selected"]) &&
+      control.kind==="option" && safeControlText(control.value,128) &&
+      typeof control.disabled==="boolean" && typeof control.selected==="boolean";
+    if (tag==="button") return exact(["kind","label","text"]) && control.kind==="copy" &&
+      safeControlText(control.label,80) && control.label.trim().length>0 &&
+      safeControlText(control.text,150000,true) && control.text.length>0;
+    return false;
+  }
+  let renderSequence=0;
   function validateNode(value,depth,parentTag,counts) {
     if (!value || typeof value !== "object" || Array.isArray(value) || depth > 64 || counts.nodes >= MAX_NODES) return false;
     counts.nodes += 1;
@@ -198,8 +240,13 @@
     if (typeof tag !== "string" || !SAFE_TAGS.has(tag)) return false;
     if (SVG_TAGS.has(parentTag) && !SVG_TAGS.has(tag)) return false;
     if (SVG_TAGS.has(tag) && !SVG_TAGS.has(parentTag) && tag !== "svg") return false;
-    const allowed = new Set(["tag","text","children","style","media_index","intrinsic_width","intrinsic_height","source_sha256","attrs","math_attrs","col_span","row_span","href"]);
+    const allowed = new Set(["tag","text","children","style","media_index","intrinsic_width","intrinsic_height","source_sha256","attrs","math_attrs","col_span","row_span","href","control"]);
     if (Object.keys(value).some(key => !allowed.has(key))) return false;
+    const controlRequired=["details","input","select","option","button"].includes(tag);
+    if (controlRequired !== (value.control !== undefined)) return false;
+    if (value.control !== undefined && !validControl(tag,value.control)) return false;
+    if (tag==="summary" && parentTag!=="details") return false;
+    if (tag==="option" && parentTag!=="select") return false;
     if (value.href !== undefined && (tag !== "a" || !safeExternalLinkUrl(value.href))) return false;
     if (Object.prototype.hasOwnProperty.call(value,"attrs")) {
       if (!SVG_TAGS.has(tag) || !value.attrs || typeof value.attrs !== "object" || Array.isArray(value.attrs) || Object.keys(value.attrs).length > 24) return false;
@@ -231,8 +278,11 @@
     if (value.col_span !== undefined && (!["td","th"].includes(tag) || !Number.isInteger(value.col_span) || value.col_span < 2 || value.col_span > 256)) return false;
     if (value.row_span !== undefined && (!["td","th"].includes(tag) || !Number.isInteger(value.row_span) || (value.row_span !== 0 && value.row_span < 2) || value.row_span > 256)) return false;
     if (value.children !== undefined) {
-      if (["img","hr","br"].includes(tag) || !Array.isArray(value.children) || value.children.length > 8192) return false;
+      if (["img","hr","br","input","option","button"].includes(tag) || !Array.isArray(value.children) || value.children.length > 8192) return false;
+      if (tag==="select" && (!value.children.length || value.children.some(child=>child?.tag!=="option"))) return false;
+      if (tag==="details" && (!value.children.length || value.children[0]?.tag!=="summary")) return false;
       for (const child of value.children) if (!validateNode(child,depth+1,tag,counts)) return false;
+      if (tag==="select" && !value.children.some(child=>child.control?.value===value.control.selected)) return false;
     }
     return true;
   }
@@ -245,11 +295,60 @@
         !Array.isArray(snapshot.files) || snapshot.files.length > 10) return false;
     return validateNode(snapshot.root,0,"",{nodes:0,chars:0});
   }
-  function createNode(value,snapshot,depth) {
+  function createNode(value,snapshot,depth,context) {
     if (depth > 64) throw new Error("native tree depth exceeded");
     const tag = value.tag;
     let element;
     if (SVG_TAGS.has(tag)) element = document.createElementNS(SVG_NS,tag === "clippath" ? "clipPath" : tag);
+    else if (tag==="button" && value.control?.kind==="copy") {
+      element=document.createElement("button");
+      element.type="button";
+      element.className="native-copy-control";
+      element.textContent=value.control.label;
+      element.addEventListener?.("click",()=>{
+        const clipboard=globalThis.navigator?.clipboard;
+        if (!clipboard?.writeText) {
+          element.textContent="无法访问剪贴板";
+          return;
+        }
+        Promise.resolve(clipboard.writeText(value.control.text)).then(()=>{
+          element.textContent="已复制";
+          element.setAttribute("aria-label","已复制");
+        }).catch(()=>{
+          element.textContent="复制失败";
+        });
+      });
+      return element;
+    } else if (tag==="input") {
+      element=document.createElement("input");
+      element.type=value.control.kind;
+      element.disabled=value.control.disabled;
+      element.setAttribute("aria-label",value.control.label);
+      if (value.control.kind==="range") {
+        element.min=String(value.control.min);
+        element.max=String(value.control.max);
+        element.step=String(value.control.step);
+        element.value=String(value.control.value);
+      } else {
+        element.checked=value.control.checked;
+        if (value.control.kind==="radio") {
+          const groupKey=value.control.group;
+          if (!context.radioGroups.has(groupKey))
+            context.radioGroups.set(groupKey,context.prefix+"-"+groupKey);
+          element.name=context.radioGroups.get(groupKey);
+        }
+      }
+      return element;
+    } else if (tag==="select") {
+      element=document.createElement("select");
+      element.disabled=value.control.disabled;
+      element.setAttribute("aria-label",value.control.label);
+    } else if (tag==="option") {
+      element=document.createElement("option");
+      element.value=value.control.value;
+      element.disabled=value.control.disabled;
+      element.selected=value.control.selected;
+    }
     else if (MATH_TAGS.has(tag)) element = document.createElementNS(MATH_NS,tag);
     else if (tag === "a") {
       const href = safeExternalLinkUrl(value.href);
@@ -264,6 +363,7 @@
     if (value.style) Object.entries(value.style).forEach(([key,item]) => { if (validStyle(key,item,tag)) element.style[key] = item; });
     if (value.attrs) Object.entries(value.attrs).forEach(([key,item]) => { if (validSvgAttribute(key,item)) element.setAttribute(key,item); });
     if (value.math_attrs) Object.entries(value.math_attrs).forEach(([key,item]) => { if (validMathAttribute(tag,key,item)) element.setAttribute(key,item); });
+    if (value.control?.kind==="disclosure") element.open=value.control.open;
     if (value.col_span !== undefined) element.colSpan = value.col_span;
     if (value.row_span !== undefined) element.rowSpan = value.row_span;
     if (tag === "img") {
@@ -279,7 +379,8 @@
       if (value.intrinsic_width && value.intrinsic_height) { element.width = value.intrinsic_width; element.height = value.intrinsic_height; }
     }
     if (typeof value.text === "string") element.appendChild(document.createTextNode(value.text));
-    for (const child of value.children || []) element.appendChild(createNode(child,snapshot,depth+1));
+    for (const child of value.children || []) element.appendChild(createNode(child,snapshot,depth+1,context));
+    if (tag==="select") element.value=value.control.selected;
     return element;
   }
   function renderNativeSnapshot(host,snapshot,sourceReferences=[]) {
@@ -289,7 +390,7 @@
       state.className = "native-delivery-state";
       state.textContent = snapshot.finality === "verified-final" ? "ChatGPT 原生内容 · 已验证完成" : "ChatGPT 原生内容 · 实时更新，最终校验中";
       const root = document.createElement("div"); root.className = "native-rich-root";
-      root.appendChild(createNode(snapshot.root,snapshot,0));
+      root.appendChild(createNode(snapshot.root,snapshot,0,{radioGroups:new Map(),prefix:"native-"+(++renderSequence)}));
       const files = document.createElement("div"); files.className = "native-generated-files";
       for (const item of snapshot.files) {
         if (!item || typeof item !== "object" || typeof item.filename !== "string") continue;
