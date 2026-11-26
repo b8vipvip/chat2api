@@ -1898,6 +1898,22 @@
           closed_at:String(row.closed_at || "").slice(0,80),
         }));
       }
+      if (toolName === "get_pull_request_files") {
+        return rows.slice(0,5).map(row => ({
+          number:row.number,
+          page:row.page,
+          has_more:row.has_more === true,
+          filename:String(row.filename || "").slice(0,500),
+          status:String(row.status || "").slice(0,40),
+          additions:row.additions,deletions:row.deletions,changes:row.changes,
+          sha:String(row.sha || "").slice(0,40),
+          previous_filename:String(row.previous_filename || "").slice(0,500),
+          url:String(row.url || "").slice(0,2048),
+          patch_available:row.patch_available === true,
+          patch:String(row.patch || "").slice(0,1600),
+          patch_truncated:row.patch_truncated === true || String(row.patch || "").length > 1600,
+        }));
+      }
       if (toolName === "list_pull_requests" || toolName === "get_pull_request") {
         return rows.slice(0,20).map(row => ({
           number:row.number,title:String(row.title || "").slice(0,300),
@@ -1990,6 +2006,11 @@
           name:"github.get_pull_request",provider:"github",toolName:"get_pull_request",
           description:"Read pull request details, merge status and change statistics for an exact repository and pull number. Use a number supplied in the conversation or returned by github.list_pull_requests; do not guess.",
           parameters:{type:"object",additionalProperties:false,properties:{repository:repositorySchema,pull_number:{type:"integer",minimum:1,maximum:2147483647}},required:["repository","pull_number"]},
+        },
+        {
+          name:"github.get_pull_request_files",provider:"github",toolName:"get_pull_request_files",
+          description:"Read up to five changed files and bounded unified diff patches for one pull request. Use a PR number supplied by the user or returned by github.list_pull_requests. Each result reports has_more; use the next page (1-100) only when true.",
+          parameters:{type:"object",additionalProperties:false,properties:{repository:repositorySchema,pull_number:{type:"integer",minimum:1,maximum:2147483647},page:{type:"integer",minimum:1,maximum:100}},required:["repository","pull_number"]},
         },
         {
           name:"github.list_commits",provider:"github",toolName:"list_commits",
@@ -2122,6 +2143,15 @@
     if (definition.name === "github.get_pull_request") {
       return {repository:repositoryValue(),pull_number:positiveNumber(args.pull_number)};
     }
+    if (definition.name === "github.get_pull_request_files") {
+      const repository = repositoryValue();
+      const pull_number = positiveNumber(args.pull_number);
+      const page = args.page === undefined ? 1 : args.page;
+      if (typeof page !== "number" || !Number.isSafeInteger(page) || page < 1 || page > 100) {
+        throw new Error("GitHub PR 文件页码必须为 1-100 的整数");
+      }
+      return {repository,pull_number,page};
+    }
     if (definition.name === "github.list_commits") {
       const repository = repositoryValue();
       const ref = refValue();
@@ -2167,6 +2197,8 @@
         url = String(row.url || "");
         if (definition.toolName === "list_issues" || definition.toolName === "get_issue") {
           title = "#" + String(row.number || "") + " " + String(row.title || "GitHub Issue");
+        } else if (definition.toolName === "get_pull_request_files") {
+          title = "PR #" + String(row.number || "") + " · " + String(row.filename || "changed file");
         } else if (definition.toolName === "list_pull_requests" || definition.toolName === "get_pull_request") {
           title = "PR #" + String(row.number || "") + " " + String(row.title || "GitHub Pull Request");
         } else if (definition.toolName === "list_commits") {
@@ -2176,7 +2208,7 @@
         } else {
           title = String(row.full_name || "GitHub repository");
         }
-        snippet = String(row.description || row.body || row.message || row.content || row.state || "").slice(0,420);
+        snippet = String(row.description || row.body || row.message || row.patch || row.content || row.state || "").slice(0,420);
       } else if (definition.provider === "gmail") {
         const messageId = String(row.id || row.message_id || "");
         if (!/^[A-Za-z0-9_-]{1,256}$/.test(messageId)) return;
@@ -2244,7 +2276,7 @@
           throw new Error("必须先列出本轮 Issue，或使用用户消息中明确提供的 Issue 编号。");
         }
       }
-      if (definition.name === "github.get_pull_request") {
+      if (definition.name === "github.get_pull_request" || definition.name === "github.get_pull_request_files") {
         const key = args.repository + "#" + args.pull_number;
         const explicit = new RegExp("(?:^|[^0-9])#" + args.pull_number + "(?:$|[^0-9])").test(userPromptText)
           || new RegExp("\\b(?:pull request|pr)\\s*(?:number\\s*)?#?" + args.pull_number + "\\b","i").test(userPromptText);
@@ -2565,7 +2597,18 @@
           connect.disabled = true;
           try {
             if (needsReauthorization && plugin.connected) {
-              await apiJson("/api/user/plugins/" + encodeURIComponent(plugin.id) + "/disconnect", {method:"POST"});
+              const requireRevocation = plugin.id === "github" && plugin.reauthorization_mode === "downgrade";
+              const disconnected = await apiJson(
+                "/api/user/plugins/" + encodeURIComponent(plugin.id) + "/disconnect",
+                {
+                  method:"POST",
+                  headers:{"Content-Type":"application/json"},
+                  body:JSON.stringify({require_provider_revocation:requireRevocation}),
+                },
+              );
+              if (requireRevocation && !["revoked","already_revoked"].includes(disconnected.provider_revocation)) {
+                throw new Error("未能确认撤销 GitHub 旧 repo 权限，已保留原连接。请先在 GitHub 授权设置中撤销此应用后重试。");
+              }
             }
             window.location.assign("/api/user/plugins/oauth/" + encodeURIComponent(plugin.id) + "/start");
           } catch (error) {
@@ -2583,8 +2626,16 @@
         disconnect.addEventListener("click", async () => {
           disconnect.disabled = true;
           try {
-            await apiJson("/api/user/plugins/" + encodeURIComponent(plugin.id) + "/disconnect", {method:"POST"});
-            toast("已断开 " + String(plugin.name || plugin.id) + " 账户连接");
+            const result = await apiJson(
+              "/api/user/plugins/" + encodeURIComponent(plugin.id) + "/disconnect",
+              {method:"POST"},
+            );
+            if (["failed","unavailable"].includes(result.provider_revocation)) {
+              toast("本地连接已断开，但第三方授权未能确认撤销；如需彻底撤销，请在 " +
+                String(plugin.name || plugin.id) + " 账户的已授权应用设置中移除此应用。");
+            } else {
+              toast("已断开 " + String(plugin.name || plugin.id) + " 账户连接");
+            }
             await loadPluginCatalog(true);
           } catch (error) {
             toast("断开连接失败：" + String(error.message || error));

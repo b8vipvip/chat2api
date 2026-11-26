@@ -534,6 +534,29 @@ def test_github_plugin_ui_prompts_for_oauth_scope_reauthorization() -> None:
     ).read_text(encoding="utf-8")
     assert 'plugin.reauthorization_required === true' in source
     assert '"重新授权并更新权限"' in source
-    assert 'await apiJson("/api/user/plugins/" + encodeURIComponent(plugin.id) + "/disconnect", {method:"POST"});' in source
+    assert 'const disconnected = await apiJson(' in source
+    assert '"/api/user/plugins/" + encodeURIComponent(plugin.id) + "/disconnect"' in source
+    assert 'body:JSON.stringify({require_provider_revocation:requireRevocation})' in source
     assert 'plugin.connected && !plugin.reauthorization_required' in source
     assert 'if (plugin.connected && plugin.enabled && plugin.configured && !needsReauthorization)' in source
+
+
+def test_web_chat_plugin_and_live_video_copy_matches_supported_capabilities() -> None:
+    html = (
+        Path(__file__).resolve().parents[1] / "app" / "chat_client_v1.html"
+    ).read_text(encoding="utf-8")
+    assert "PR 详情及变更文件/差异分页读取" in html
+    assert "每秒最多 5 帧连续发送" in html
+    assert "不支持或轨道中断时会明确降级为快照" in html
+    assert "不保证音视频帧级同步" in html
+    assert "每秒最多一张快照" not in html
+
+
+def test_github_scope_downgrade_ui_requires_confirmed_remote_revocation() -> None:
+    source = (
+        Path(__file__).resolve().parents[1] / "app" / "chat_client_v1.js"
+    ).read_text(encoding="utf-8")
+    assert 'plugin.reauthorization_mode === "downgrade"' in source
+    assert 'require_provider_revocation:requireRevocation' in source
+    assert '["revoked","already_revoked"].includes(disconnected.provider_revocation)' in source
+    assert "已保留原连接" in source

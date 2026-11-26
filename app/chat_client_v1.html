@@ -84,7 +84,7 @@
       <section class="utility-screen hidden" id="pluginsScreen" aria-label="插件">
         <div class="utility-page">
           <div class="utility-page-header plugin-page-header">
-            <div><h1>插件</h1><p>连接你自己的 GitHub、Gmail 账户。启用“在聊天中自动使用”后，模型会根据当前问题自主选择工具。GitHub 支持仓库搜索与详情、Issue、Pull Request、提交记录、代码搜索和文件读取；Gmail 支持邮件搜索与读取。插件结果会返回模型继续分析，数据按不可信资料处理。当前仅开放只读操作，不会发送邮件或修改仓库。私有仓库访问需管理员启用授权；GitHub OAuth 的 repo 范围较宽，当前 Web Chat 仅开放读取接口，不提供仓库写操作。</p></div>
+            <div><h1>插件</h1><p>连接你自己的 GitHub、Gmail 账户。启用“在聊天中自动使用”后，模型会根据当前问题自主选择工具。GitHub 支持仓库搜索与详情、Issue、PR 详情及变更文件/差异分页读取、提交记录、代码搜索和文件读取；Gmail 支持邮件搜索与读取。插件结果会返回模型继续分析，数据按不可信资料处理。当前仅开放只读操作，不会发送邮件或修改仓库。私有仓库访问需管理员启用授权；GitHub OAuth 的 repo 范围较宽，当前 Web Chat 仅开放读取接口，不提供仓库写操作。</p></div>
             <button class="attach-button" id="pluginsBackToChat" type="button">返回聊天</button>
           </div>
           <div class="utility-list" id="pluginList"><div class="utility-empty">正在加载插件…</div></div>
@@ -131,7 +131,7 @@
               </div>
               <video id="voiceCameraPreview" class="voice-camera-preview hidden" autoplay playsinline muted></video>
               <div class="voice-transcript" id="voiceTranscript" aria-live="polite"></div>
-              <p class="voice-disclaimer">语音通过已配对的 Chrome Worker 和当前登录的 ChatGPT Voice 会话处理。摄像头以每秒最多一张快照的方式发送，不是连续视频轨道。</p>
+              <p class="voice-disclaimer">语音通过已配对的 Chrome Worker 和当前登录的 ChatGPT Voice 会话处理。摄像头在上游成功挂载 WebRTC 视频轨道时以每秒最多 5 帧连续发送；不支持或轨道中断时会明确降级为快照。当前不保证音视频帧级同步。</p>
             </section>
             <input id="fileInput" class="sr-only" type="file" accept=".pdf,.txt,.md,.csv,.json,.rtf,.docx,.xlsx,.pptx" multiple>
             <input id="imageInput" class="sr-only" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple>

@@ -304,6 +304,8 @@ jobs:
         run: node tests/web_chat_reference_sync_v1.mjs
       - name: Web Chat SSE replay and terminal regression
         run: node --test tests/web_chat_stream_terminal_v1.mjs
+      - name: Web Chat authorized plugin tool loop regression
+        run: node --test tests/web_chat_plugin_tool_loop_v1.mjs
 
       - name: Web Chat Live Voice and rich citation regressions
         run: |
