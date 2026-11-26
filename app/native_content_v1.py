@@ -436,7 +436,8 @@ def validate_native_snapshot(payload: object) -> dict:
         if "control" in value:
             result["control"] = _validate_native_control(tag, value["control"])
             control = result["control"]
-            chars += len(control.get("text", "")) + len(control.get("label", ""))
+            # Copy text duplicates the already-counted adjacent pre/code node.
+            chars += len(control.get("label", ""))
             if chars > MAX_TEXT:
                 raise ValueError("Native interactive content too large")
         if tag == "summary" and parent_tag != "details":
