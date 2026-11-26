@@ -948,6 +948,13 @@ def test_native_select_enforces_option_cap_and_disclosure_summary_uniqueness():
             }, "children": options,
         }})
 
+    empty_disclosure = validate_native_snapshot({
+        "version": 1, "revision": 1, "root": {
+            "tag": "details", "control": {"kind": "disclosure", "open": False},
+        },
+    })
+    assert empty_disclosure["root"]["children"] == []
+
     with pytest.raises(ValueError, match="at most one leading summary"):
         validate_native_snapshot({"version": 1, "revision": 1, "root": {
             "tag": "details", "control": {"kind": "disclosure", "open": True},

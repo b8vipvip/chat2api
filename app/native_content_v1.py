@@ -449,6 +449,11 @@ def validate_native_snapshot(payload: object) -> dict:
                     raise ValueError("Unsupported legacy native button action")
             else:
                 raise ValueError("Legacy interaction metadata on unsupported element")
+        if tag == "details" and "children" not in value:
+            # Empty disclosures are valid HTML; normalize to the array shape
+            # consumed by the browser renderer.
+            value = dict(value)
+            value["children"] = []
         if parent_tag in SVG_TAGS and tag not in SVG_TAGS:
             raise ValueError("Invalid SVG children")
         if tag in SVG_TAGS and parent_tag not in SVG_TAGS and tag != "svg":

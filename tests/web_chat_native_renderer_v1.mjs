@@ -247,6 +247,11 @@ const disclosureWithoutSummary = {
   ]},
 };
 assert.equal(interactiveRenderer.validateSnapshot(disclosureWithoutSummary),true);
+const emptyDisclosure = {
+  version:1,revision:7,finality:"verified-final",assets:[],files:[],
+  root:{tag:"details",control:{kind:"disclosure",open:false},children:[]},
+};
+assert.equal(interactiveRenderer.validateSnapshot(emptyDisclosure),true);
 const tooManyOptions=structuredClone(interactive);
 tooManyOptions.root.children[4].children=Array.from({length:65},(_,index)=>({
   tag:"option",text:`Option ${index}`,control:{
