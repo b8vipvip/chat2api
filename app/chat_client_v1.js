@@ -1899,7 +1899,7 @@
         }));
       }
       if (toolName === "get_pull_request_files") {
-        return rows.slice(0,8).map(row => ({
+        return rows.slice(0,5).map(row => ({
           number:row.number,
           filename:String(row.filename || "").slice(0,500),
           status:String(row.status || "").slice(0,40),
@@ -1907,8 +1907,8 @@
           sha:String(row.sha || "").slice(0,40),
           previous_filename:String(row.previous_filename || "").slice(0,500),
           url:String(row.url || "").slice(0,2048),
-          patch:String(row.patch || "").slice(0,1200),
-          patch_truncated:row.patch_truncated === true,
+          patch:String(row.patch || "").slice(0,1600),
+          patch_truncated:row.patch_truncated === true || String(row.patch || "").length > 1600,
         }));
       }
       if (toolName === "list_pull_requests" || toolName === "get_pull_request") {
@@ -2006,8 +2006,8 @@
         },
         {
           name:"github.get_pull_request_files",provider:"github",toolName:"get_pull_request_files",
-          description:"Read the changed file list and bounded unified diff patches for one pull request. Use a PR number supplied by the user or returned by github.list_pull_requests.",
-          parameters:{type:"object",additionalProperties:false,properties:{repository:repositorySchema,pull_number:{type:"integer",minimum:1,maximum:2147483647}},required:["repository","pull_number"]},
+          description:"Read up to five changed files and bounded unified diff patches for one pull request. Use a PR number supplied by the user or returned by github.list_pull_requests. Use page 1-20 to retrieve subsequent groups of files.",
+          parameters:{type:"object",additionalProperties:false,properties:{repository:repositorySchema,pull_number:{type:"integer",minimum:1,maximum:2147483647},page:{type:"integer",minimum:1,maximum:20}},required:["repository","pull_number"]},
         },
         {
           name:"github.list_commits",provider:"github",toolName:"list_commits",
@@ -2137,8 +2137,17 @@
     if (definition.name === "github.get_issue") {
       return {repository:repositoryValue(),issue_number:positiveNumber(args.issue_number)};
     }
-    if (definition.name === "github.get_pull_request" || definition.name === "github.get_pull_request_files") {
+    if (definition.name === "github.get_pull_request") {
       return {repository:repositoryValue(),pull_number:positiveNumber(args.pull_number)};
+    }
+    if (definition.name === "github.get_pull_request_files") {
+      const repository = repositoryValue();
+      const pull_number = positiveNumber(args.pull_number);
+      const page = args.page === undefined ? 1 : args.page;
+      if (typeof page !== "number" || !Number.isSafeInteger(page) || page < 1 || page > 20) {
+        throw new Error("GitHub PR 文件页码必须为 1-20 的整数");
+      }
+      return {repository,pull_number,page};
     }
     if (definition.name === "github.list_commits") {
       const repository = repositoryValue();
