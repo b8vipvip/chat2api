@@ -969,6 +969,38 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                             "commits": row.get("commits"), "created_at": row.get("created_at"),
                             "updated_at": row.get("updated_at"),
                         }]
+                    elif tool_name == "get_pull_request_files":
+                        repository = _github_repo_name(payload.get("repository"))
+                        pull_number = _github_resource_number(payload.get("pull_number"))
+                        page = payload.get("page", 1)
+                        if type(page) is not int or not 1 <= page <= 20:
+                            raise HTTPException(422, "page must be an integer between 1 and 20", headers=_PRIVATE_HEADERS)
+                        response = await client.get(
+                            "https://api.github.com/repos/" + repository + "/pulls/" + str(pull_number) + "/files",
+                            params={"per_page": 5, "page": page},
+                            headers=github_headers,
+                        )
+                        response.raise_for_status()
+                        payload_rows = response.json()
+                        if not isinstance(payload_rows, list):
+                            raise HTTPException(502, "GitHub returned an invalid pull request file list", headers=_PRIVATE_HEADERS)
+                        has_more = len(payload_rows) >= 5
+                        data = [{
+                            "number": pull_number,
+                            "page": page,
+                            "has_more": has_more,
+                            "filename": str(row.get("filename") or "")[:500],
+                            "status": str(row.get("status") or "")[:40],
+                            "additions": row.get("additions"),
+                            "deletions": row.get("deletions"),
+                            "changes": row.get("changes"),
+                            "sha": str(row.get("sha") or "")[:40],
+                            "previous_filename": str(row.get("previous_filename") or "")[:500],
+                            "url": row.get("blob_url") or row.get("html_url"),
+                            "patch_available": isinstance(row.get("patch"), str),
+                            "patch": str(row.get("patch") or "")[:6000],
+                            "patch_truncated": len(str(row.get("patch") or "")) > 6000,
+                        } for row in payload_rows[:5] if isinstance(row, dict)]
                     elif tool_name == "list_commits":
                         repository = _github_repo_name(payload.get("repository"))
                         params = {"per_page": 20}
