@@ -42,9 +42,9 @@ def _github_repo_name(value: Any) -> str:
     return repository
 
 
-def _github_issue_number(value: Any) -> int:
+def _github_resource_number(value: Any) -> int:
     if type(value) is not int or not 1 <= value <= 2_147_483_647:
-        raise HTTPException(422, "issue_number must be a positive integer", headers=_PRIVATE_HEADERS)
+        raise HTTPException(422, "Issue or Pull Request number must be a positive integer", headers=_PRIVATE_HEADERS)
     return value
 
 
@@ -857,7 +857,7 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                         } for row in response.json()[:20] if isinstance(row, dict) and not row.get("pull_request")]
                     elif tool_name == "get_issue":
                         repository = _github_repo_name(payload.get("repository"))
-                        issue_number = _github_issue_number(payload.get("issue_number"))
+                        issue_number = _github_resource_number(payload.get("issue_number"))
                         response = await client.get(
                             "https://api.github.com/repos/" + repository + "/issues/" + str(issue_number),
                             headers=github_headers,
@@ -896,7 +896,7 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                         } for row in response.json()[:20] if isinstance(row, dict)]
                     elif tool_name == "get_pull_request":
                         repository = _github_repo_name(payload.get("repository"))
-                        issue_number = _github_issue_number(payload.get("pull_number"))
+                        issue_number = _github_resource_number(payload.get("pull_number"))
                         response = await client.get(
                             "https://api.github.com/repos/" + repository + "/pulls/" + str(issue_number),
                             headers=github_headers,
