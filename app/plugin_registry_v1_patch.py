@@ -1,4 +1,4 @@
-"""C-05a product Plugin Registry API: metadata only, execution disabled."""
+"""C-05a manifest metadata registry plus the fixed OAuth provider catalogue."""
 from __future__ import annotations
 
 import logging
