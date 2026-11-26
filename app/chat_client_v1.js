@@ -3526,7 +3526,7 @@
     $("accountName").textContent = state.user.display_name || state.user.email || "Chat2API 用户";
     $("accountEmail").textContent = state.user.email || (state.user.is_guest ? "游客账户" : "");
     $("sidebarAccount").hidden = false;
-    $("accountSettingsButton").hidden = Boolean(state.user.is_guest);
+    $("accountSettingsButton").hidden = false;
     $("guestLoginButton")?.classList.toggle("hidden", !state.user.is_guest);
     $("accountAvatar").textContent = String(state.user.display_name || state.user.email || "U").trim().slice(0,1).toUpperCase();
     state.storageKey = historyKey(state.user.user_id);
