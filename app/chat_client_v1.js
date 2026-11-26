@@ -3661,7 +3661,7 @@
       state.forceScrollToBottom = true;
       conversation.messages.push(userMessage);
       autoTitle(conversation);
-      const pluginPlanning = state.selectedPlugins.length > 0;
+      const pluginPlanning = Array.isArray(state.selectedPlugins) && state.selectedPlugins.length > 0;
       assistant = {id:id(),role:"assistant",content:"",createdAt:new Date().toISOString(),requestId:pluginPlanning ? "" : requestId,pending:true,recoveryStatus:pluginPlanning ? "tool_planning" : "streaming",toolEvents:[],lastEventId:0};
       conversation.messages.push(assistant);
       state.recoveryController = makeRecoveryController(conversation, assistant);
@@ -3687,7 +3687,8 @@
       let messages = conversation.messages
         .filter((message) => message.id !== assistant.id)
         .map((message) => ({role:message.role,content:message.content}));
-      if (state.selectedPlugins.length && typeof runAutonomousPluginToolLoop === "function") {
+      if (Array.isArray(state.selectedPlugins) && state.selectedPlugins.length > 0
+          && typeof runAutonomousPluginToolLoop === "function") {
         const toolLoop = await runAutonomousPluginToolLoop(
           messages,assistant,keyId,recoveryApi,requestId,
         );
