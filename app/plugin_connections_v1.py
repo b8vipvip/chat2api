@@ -1117,6 +1117,9 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                     raise HTTPException(429, "GitHub API 请求额度已用完，请稍后重试", headers=_PRIVATE_HEADERS) from exc
                 if status == 403:
                     raise HTTPException(403, "GitHub 拒绝了此操作，请检查账户权限或 OAuth 授权范围", headers=_PRIVATE_HEADERS) from exc
+            elif provider_id == "gmail" and exc.response.status_code == 401:
+                store.disconnect(str(user["user_id"]), provider_id)
+                raise HTTPException(409, "Gmail 授权已失效，请重新连接账户", headers=_PRIVATE_HEADERS) from exc
             raise HTTPException(502, "插件服务暂时不可用，请稍后重试", headers=_PRIVATE_HEADERS) from exc
         except (httpx.HTTPError, ValueError, TypeError, AttributeError) as exc:
             raise HTTPException(502, "插件服务暂时不可用，请稍后重试", headers=_PRIVATE_HEADERS) from exc
