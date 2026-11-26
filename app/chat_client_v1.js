@@ -2728,19 +2728,75 @@
     }
     return null;
   }
+  function nativeArchiveFileIdentity(item,index) {
+    const explicit = String(item?.file_id || item?.id || "").trim();
+    if (explicit) return "id:" + explicit;
+    const filename = String(item?.filename || "").trim();
+    if (!filename) return "index:" + index;
+    return "name:" + [filename,String(item?.mime_type || "").toLowerCase(),String(item?.bytes ?? ""),String(index)].join("\u0000");
+  }
+  function nativeArchiveFileRank(item) {
+    const status = String(item?.status || "").toLowerCase();
+    if (status === "ready" && typeof item?.url === "string" && item.url) return 3;
+    if (status === "failed" || status === "unavailable" || status === "ready") return 2;
+    if (status === "processing") return 1;
+    return 0;
+  }
+  function mergeNativeArchiveFiles(previous, incoming) {
+    const rows = (Array.isArray(previous) ? previous : []).slice(0,10).map(item => ({...item}));
+    const positions = new Map(rows.map((item,index) => [nativeArchiveFileIdentity(item,index),index]));
+    (Array.isArray(incoming) ? incoming : []).slice(0,10).forEach((item,index) => {
+      const key = nativeArchiveFileIdentity(item,index);
+      const position = positions.get(key);
+      if (position === undefined) {
+        if (rows.length < 10) {
+          positions.set(key,rows.length);
+          rows.push({...item});
+        }
+        return;
+      }
+      const old = rows[position];
+      const winner = nativeArchiveFileRank(item) > nativeArchiveFileRank(old) ? item : old;
+      const merged = {...old,...item};
+      if (winner.status !== undefined) merged.status = winner.status;
+      else delete merged.status;
+      if (typeof winner.url === "string" && winner.url) merged.url = winner.url;
+      else if (typeof old.url === "string" && old.url) merged.url = old.url;
+      else delete merged.url;
+      rows[position] = merged;
+    });
+    return rows;
+  }
+  function mergeNativeSnapshot(previous,snapshot) {
+    if (!previous) return snapshot;
+    if (snapshot.revision < previous.revision) return null;
+    if (snapshot.revision > previous.revision) return snapshot;
+    // A DOM revision identifies one immutable tree. Only its archive envelope
+    // (media URLs, generated-file readiness and finality) may be enriched.
+    if (JSON.stringify(snapshot.root) !== JSON.stringify(previous.root)) return null;
+    const oldAssets = Array.isArray(previous.assets) ? previous.assets : [];
+    const newAssets = Array.isArray(snapshot.assets) ? snapshot.assets : [];
+    const assets = Array.from({length:Math.max(oldAssets.length,newAssets.length)},(_,index) => {
+      const oldValue = oldAssets[index], newValue = newAssets[index];
+      return typeof oldValue === "string" && oldValue ? oldValue :
+        (typeof newValue === "string" ? newValue : "");
+    });
+    const files = mergeNativeArchiveFiles(previous.files,snapshot.files);
+    const finality = previous.finality === "verified-final" || snapshot.finality === "verified-final"
+      ? "verified-final" : "live-provisional";
+    const merged = {...snapshot,assets,files,finality};
+    return JSON.stringify(merged) === JSON.stringify(previous) ? null : merged;
+  }
   function applyNativeSnapshot(requestId,snapshot) {
     const renderer = window.Chat2APINativeRendererV1;
     if (!renderer || typeof renderer.validateSnapshot !== "function" || !renderer.validateSnapshot(snapshot)) return false;
     const previous = state.nativeSnapshots.get(requestId);
-    // GET hydration and native SSE can complete in either order. A stale
-    // DOM revision must not replace newer media, citations or final content.
-    if (previous && (snapshot.revision < previous.revision ||
-        (snapshot.revision === previous.revision && previous.finality === "verified-final" &&
-          snapshot.finality !== "verified-final"))) return false;
-    state.nativeSnapshots.set(requestId,snapshot);
+    const accepted = mergeNativeSnapshot(previous,snapshot);
+    if (!accepted) return false;
+    state.nativeSnapshots.set(requestId,accepted);
     while (state.nativeSnapshots.size > 24) state.nativeSnapshots.delete(state.nativeSnapshots.keys().next().value);
     const found = assistantMessageForRequest(requestId);
-    if (found) found.message.nativeFinality = snapshot.finality;
+    if (found) found.message.nativeFinality = accepted.finality;
     if (found && currentConversation()?.id === found.conversation.id) renderMessages();
     return true;
   }
@@ -2762,11 +2818,9 @@
       if (!response.ok) return false;
       const snapshot = await response.json();
       const current = state.nativeSnapshots.get(requestId);
-      // An asset can finish archiving without incrementing the DOM revision.
-      // Do not overwrite a snapshot received while this GET was in flight,
-      // unless the response proves a strictly newer revision. A later GET
-      // started from the current snapshot can still hydrate same-revision files.
-      if (current && current !== before && Number(snapshot?.revision) <= current.revision) return false;
+      if (current && Number(snapshot?.revision) < current.revision) return false;
+      // Same-revision GETs are safe to merge: tree identity is immutable and
+      // archive/file/finality enrichment is monotonic in mergeNativeSnapshot.
       return applyNativeSnapshot(requestId,snapshot);
     } catch (_) { return false; }
   }

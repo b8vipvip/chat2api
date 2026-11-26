@@ -4,17 +4,22 @@ import vm from "node:vm";
 
 const source = await readFile(new URL("../app/chat_native_renderer_v1.js", import.meta.url), "utf8");
 class FakeElement {
-  constructor(tagName) { this.tagName=tagName; this.childNodes=[]; this.style={}; this.attributes={}; }
+  constructor(tagName) { this.tagName=tagName; this.childNodes=[]; this.style={}; this.attributes={}; this.listeners={}; }
   appendChild(node) { this.childNodes.push(node); return node; }
   replaceChildren(...nodes) { this.childNodes=nodes; }
   setAttribute(name,value) { this.attributes[name]=value; }
+  addEventListener(name,callback) { this.listeners[name]=callback; }
+  click() { return this.listeners.click?.(); }
 }
 const document = {
   createElement:(tag)=>new FakeElement(tag),
   createElementNS:(_namespace,tag)=>new FakeElement(tag),
   createTextNode:(text)=>({nodeType:3,textContent:String(text)}),
 };
-const window = {location:{origin:"https://chat.example"}};
+const clipboardWrites = [];
+const window = {location:{origin:"https://chat.example"},navigator:{clipboard:{
+  writeText:async value=>{clipboardWrites.push(value);}
+}}};
 vm.runInNewContext(source, {window, URL, document});
 const renderer = window.Chat2APINativeRendererV1;
 assert(renderer && renderer.validateSnapshot);
@@ -55,6 +60,32 @@ const good = {
   ]}
 };
 assert.equal(renderer.validateSnapshot(good),true);
+const interactive = structuredClone(good);
+interactive.root.children.push(
+  {tag:"details",open:true,children:[
+    {tag:"summary",text:"展开更多信息"},
+    {tag:"p",text:"折叠内容仍保留在原生快照中"}
+  ]},
+  {tag:"button",text:"复制代码",action:"copy-text",action_value:"print('hello')"}
+);
+assert.equal(renderer.validateSnapshot(interactive),true);
+const missingButtonAction = structuredClone(interactive);
+delete missingButtonAction.root.children.at(-1).action;
+delete missingButtonAction.root.children.at(-1).action_value;
+assert.equal(renderer.validateSnapshot(missingButtonAction),false);
+const unsafeButtonAction = structuredClone(interactive);
+unsafeButtonAction.root.children.at(-1).action = "execute-script";
+assert.equal(renderer.validateSnapshot(unsafeButtonAction),false);
+const actionOnText = structuredClone(interactive);
+actionOnText.root.children[0].action = "copy-text";
+actionOnText.root.children[0].action_value = "x";
+assert.equal(renderer.validateSnapshot(actionOnText),false);
+const summaryOutsideDisclosure = structuredClone(interactive);
+summaryOutsideDisclosure.root.children.push({tag:"summary",text:"不允许游离 summary"});
+assert.equal(renderer.validateSnapshot(summaryOutsideDisclosure),false);
+const invalidDisclosureState = structuredClone(interactive);
+invalidDisclosureState.root.children.at(-2).open = "true";
+assert.equal(renderer.validateSnapshot(invalidDisclosureState),false);
 const validZeroRowSpan = structuredClone(good);
 validZeroRowSpan.root.children.push({tag:"table",children:[{tag:"tbody",children:[{tag:"tr",children:[{tag:"td",row_span:0,text:"span"}]}]}]});
 assert.equal(renderer.validateSnapshot(validZeroRowSpan),true);
@@ -91,7 +122,7 @@ wrongMathAttributeScope.root.children[1].math_attrs = {stretchy:"true"};
 assert.equal(renderer.validateSnapshot(wrongMathAttributeScope),false);
 
 const renderedHost = new FakeElement("host");
-assert.equal(renderer.renderNativeSnapshot(renderedHost,good,[
+assert.equal(renderer.renderNativeSnapshot(renderedHost,interactive,[
   {id:"turn0search0",url:"https://docs.python.org/3/",title:"Python docs",snippet:"Official documentation"},
   {id:"bad<script>",url:"https://evil.example/source",title:"Unsafe ID"},
   {id:"turn0private",url:"https://127.0.0.1/private",title:"Private URL"},
@@ -104,6 +135,15 @@ function findTag(node,tag) {
   }
   return null;
 }
+const renderedDisclosure = findTag(renderedHost,"details");
+const renderedCopyButton = findTag(renderedHost,"button");
+assert.ok(renderedDisclosure);
+assert.equal(renderedDisclosure.open,true);
+assert.ok(renderedCopyButton);
+assert.equal(renderedCopyButton.type,"button");
+await renderedCopyButton.click();
+assert.deepEqual(clipboardWrites,["print('hello')"]);
+assert.equal(renderedCopyButton.textContent,"已复制");
 const renderedMath = findTag(renderedHost,"math");
 const renderedFraction = findTag(renderedHost,"mfrac");
 const renderedOperator = findTag(renderedHost,"mo");

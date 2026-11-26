@@ -7,7 +7,7 @@
   "use strict";
   const KEY = "__CHAT2API_NATIVE_CONTENT_V1__";
   if (globalThis[KEY]) return;
-  const tags = new Set("div p span strong em h1 h2 h3 h4 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br a".split(" "));
+  const tags = new Set("div p span strong em h1 h2 h3 h4 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br a details summary button".split(" "));
   // Do not serialize MathML as HTML div/span descendants; its parent structure
   // and unit labels require the MathML namespace through the server and UI.
   const mathTags = new Set("math semantics mrow mi mo mn msub mfrac mtext annotation mover munder munderover msup msubsup msqrt mroot mspace mstyle mtable mtr mtd mmultiscripts mphantom menclose mpadded merror ms mfenced mprescripts none mstack mlongdiv msgroup msrow mscarries mscarry msline".split(" "));
@@ -81,7 +81,7 @@
     if(key==="font-weight")return ["normal","bold","400","500","600","700"].includes(v)?v:"";
     return svgNumber.test(v)?v:"";
   }
-  const banned = "button,script,style,form,nav,header,footer,aside,input,textarea,select,iframe,canvas,[role='menu'],[contenteditable='true']";
+  const banned = "script,style,form,nav,header,footer,aside,input,textarea,select,iframe,canvas,[role='menu'],[contenteditable='true']";
   const styleKeys = {
     display: ["block","inline","inline-block","flex","inline-flex","grid","block math","inline math"],
     flexDirection: ["row","row-reverse","column","column-reverse"],
@@ -295,6 +295,21 @@
     }
     return found;
   }
+  function copyCodeForButton(button) {
+    const rawLabel = button.getAttribute?.("aria-label") || button.getAttribute?.("title") || button.textContent || "";
+    const label = String(rawLabel).replace(/\s+/g," ").trim();
+    if (!/^(?:copy(?: code)?|复制(?:代码)?)$/i.test(label)) return null;
+    let ancestor = button.parentElement;
+    for (let depth=0;ancestor && depth<8;depth++,ancestor=ancestor.parentElement) {
+      const codeNodes = composedFind(ancestor,node=>node.tagName?.toLowerCase()==="code",2);
+      if (codeNodes.length !== 1) continue;
+      const text = String(codeNodes[0].textContent || "");
+      if (!text.trim() || text.length > 150000) return null;
+      return {label:/复制/.test(label) ? "复制代码" : "Copy code",text};
+    }
+    return null;
+  }
+
   function snapshot(active) {
     if (active) { active.nativeStructuralFailure = ""; active.nativeStructuralMaxChildren = 0; active.nativeSvgChartsCaptured = 0; active.nativeGraphicsUnsupported = 0; active.nativeCanvasOmitted = 0; active.nativeCodeEditorCaptured = 0; }
     if (!active?.submitStartedAt || typeof Element === "undefined") return null;
@@ -344,6 +359,14 @@
       if (tag === "button") {
         if (element.closest?.("nav,aside,footer,header,form,[role='menu'],[role='dialog']"))
           return null;
+        const copy = copyCodeForButton(element);
+        if (copy) {
+          if (chars + copy.label.length > textBudget) return null;
+          // The same source text is already counted when its <code> node is serialized.
+          nodes += 1;
+          return {tag:"button",style:safeStyle(element),text:copy.label,
+            action:"copy-text",action_value:copy.text};
+        }
         const graphical = composedFind(element,node=>{
           const type=node.tagName?.toLowerCase();
           const raster=type==="img" && !node.closest?.("svg");
@@ -534,6 +557,7 @@
           !(svgElement && ["path","line","rect","circle","ellipse","polyline","polygon"].includes(mapped))) return null;
       nodes += 1;
       const result = {tag:mapped,style:safeStyle(element)};
+      if (mapped === "details") result.open = element.open === true;
       if(mathElement){
         const mathAttrs=safeMathAttributes(element);
         if(Object.keys(mathAttrs).length)result.math_attrs=mathAttrs;
