@@ -434,6 +434,10 @@ def validate_native_snapshot(payload: object) -> dict:
             raise ValueError("Interactive element is missing safe control metadata")
         if "control" in value:
             result["control"] = _validate_native_control(tag, value["control"])
+            control = result["control"]
+            chars += len(control.get("text", "")) + len(control.get("label", ""))
+            if chars > MAX_TEXT:
+                raise ValueError("Native interactive content too large")
         if tag == "summary" and parent_tag != "details":
             raise ValueError("Summary must belong to a disclosure")
         if tag == "option" and parent_tag != "select":
@@ -498,6 +502,12 @@ def validate_native_snapshot(payload: object) -> dict:
         elif any(k in value for k in ("media_index", "intrinsic_width",
                                        "intrinsic_height", "source_sha256")):
             raise ValueError("Image reference on non-image element")
+        if tag in {"details", "select"} and "children" not in value:
+            raise ValueError("Interactive container requires children")
+        if tag in {"input", "select", "option", "button"} and "text" in value:
+            raise ValueError("Interactive control cannot carry arbitrary text")
+        if tag == "option" and (not isinstance(value.get("text"), str) or not value["text"].strip()):
+            raise ValueError("Option requires a visible label")
         if "text" in value:
             content = value["text"]
             if tag == "img" or tag in (SVG_TAGS - {"text", "tspan"}) or not isinstance(content, str):
@@ -550,9 +560,11 @@ def validate_native_snapshot(payload: object) -> dict:
                 raise ValueError("Invalid SVG children")
             result["children"] = [node(child, depth + 1, tag) for child in children]
         if tag == "select":
-            option_values = [child.get("control", {}).get("value") for child in result.get("children", [])]
-            if result["control"]["selected"] not in option_values:
-                raise ValueError("Select value must match an option")
+            option_controls = [child.get("control", {}) for child in result.get("children", [])]
+            selected_options = [item for item in option_controls if item.get("selected") is True]
+            if (len(selected_options) != 1
+                    or selected_options[0].get("value") != result["control"]["selected"]):
+                raise ValueError("Select must have exactly one selected option")
         return result
 
     root = node(payload["root"], 0)
