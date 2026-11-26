@@ -14,11 +14,18 @@
     restoring: true,
     flushing: false,
     flushTimer: null,
+    mutationChain: Promise.resolve(),
   };
   globalThis[KEY] = state;
 
   const baseTrySendSocket = trySendSocket;
   const baseHandleServerMessage = handleServerMessage;
+
+  function serialized(operation) {
+    const result = state.mutationChain.then(operation);
+    state.mutationChain = result.catch(() => {});
+    return result;
+  }
 
   handleServerMessage = async function handleServerMessageWithTerminalAck(message) {
     if (message?.type === "chat.terminal.ack") {
@@ -27,9 +34,10 @@
       const key = `${requestId}:${terminalType}`;
       // A negative acknowledgement is a rejection, not permission to forget
       // the only durable copy of the Worker terminal.
-      if (message.accepted === true && state.outbox.delete(key)) await persist();
-      else if (state.outbox.has(key)) scheduleFlush(2500);
-      return;
+      return serialized(async () => {
+        if (message.accepted === true && state.outbox.delete(key)) await persist();
+        else if (state.outbox.has(key)) scheduleFlush(2500);
+      });
     }
     return baseHandleServerMessage(message);
   };
@@ -83,7 +91,11 @@
     }
   }
 
-  async function queueTerminal(payload) {
+  function queueTerminal(payload) {
+    return serialized(() => queueTerminalSerialized(payload));
+  }
+
+  async function queueTerminalSerialized(payload) {
     if (!recoverableTerminal(payload)) return false;
     const copy = JSON.parse(JSON.stringify(payload));
     const previous = new Map(state.outbox);
@@ -103,12 +115,16 @@
     return true;
   }
 
-  async function flush() {
+  function flush() {
+    return serialized(flushSerialized);
+  }
+
+  async function flushSerialized() {
     if (state.restoring || state.flushing || !state.outbox.size || !socketReady()) return false;
     const workerOutbox = globalThis.__CHAT2API_BACKGROUND_WORKER_EVENT_OUTBOX_V1__;
     // Wait for server capability negotiation before deciding whether pending
     // Worker events must be drained or can be discarded for an older server.
-    if (workerOutbox && workerOutbox.serverAckNegotiated !== true) return false;
+    if (workerOutbox && (workerOutbox.restoring || workerOutbox.serverAckNegotiated !== true)) return false;
     const workerEvents = workerOutbox?.serverAckSupported ? workerOutbox.events : null;
     state.flushing = true;
     try {
@@ -117,7 +133,7 @@
         const hasEarlierWorkerEvents = workerEvents && [...workerEvents.values()].some(
           event => String(event.payload?.request_id || "") === requestId,
         );
-        if (hasEarlierWorkerEvents) continue;
+        if (hasEarlierWorkerEvents || workerOutbox?.pendingEnqueues?.has(requestId)) continue;
         if (Date.now() - Number(item.queued_at_ms || 0) > RETENTION_MS) {
           state.outbox.delete(key);
           continue;
@@ -183,5 +199,5 @@
     if (state.outbox.size && socketReady()) scheduleFlush(0);
   }, 1500);
 
-  restore().catch(() => { state.restoring = false; });
+  serialized(restore).catch(() => { state.restoring = false; });
 })();
