@@ -395,8 +395,9 @@ def test_github_repository_issue_pull_request_commit_and_file_read_tools(tmp_pat
         )
 
         class FakeResponse:
-            def __init__(self, payload):
+            def __init__(self, payload, headers=None):
                 self.payload = payload
+                self.headers = headers or {}
 
             def raise_for_status(self):
                 return None
