@@ -1819,6 +1819,11 @@
   }
 
   function setPluginSelected(providerId, checked) {
+    if (state.streaming) {
+      toast("当前回复完成后再修改插件选择。");
+      renderPluginCatalog();
+      return;
+    }
     const available = state.pluginCatalog.some(plugin =>
       plugin && plugin.id === providerId && plugin.enabled && plugin.configured && plugin.connected
     );
@@ -2115,6 +2120,7 @@
       event.status = "failed";
       event.resultId = callId + "_result";
       event.output = String(error?.message || "插件调用失败").slice(0,500);
+      if (error?.status === 401 || !state.user) throw error;
       result = {
         ok:false,tool:rawName,
         error:String(error?.message || "插件调用失败").slice(0,500),
