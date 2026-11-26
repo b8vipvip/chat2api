@@ -173,6 +173,7 @@ The first native-interaction delivery slice adds a typed control contract to the
 - Native disclosures (details / summary) preserve their open state and remain locally expandable.
 - Labeled checkbox, radio and range inputs preserve bounded state. Radio groups are re-namespaced per rendered snapshot so separate messages cannot interfere.
 - Single-select controls preserve at most 64 bounded options and the selected option.
+- SVG chart title/description nodes are preserved as native SVG metadata so browsers can expose hover tooltips and accessible descriptions.
 - A recognized code-block copy button is reconstructed as a local clipboard action only when it can be associated with exactly one nearby code block.
 - Worker capture, the Python snapshot authority and the browser renderer each validate the same typed control schema. Unsupported input types, form submission, arbitrary button actions, event handlers, inline scripts and unknown control properties are rejected or omitted.
 - The legacy /v1/native-content projection downgrades these controls to inert text so older consumers do not receive unknown interactive semantics.
