@@ -1078,20 +1078,20 @@ await interactiveCapture.capture(interactiveActive,true);
 assert.equal(interactiveSent.length,1);
 const interactiveTree=interactiveSent[0].event.snapshot.root;
 const interactiveNodes=interactiveTree.children;
-assert.deepEqual(interactiveNodes.map(node=>node.tag),
+assert.deepEqual(Array.from(interactiveNodes,node=>node.tag),
   ["details","input","input","input","select","button","pre"]);
-assert.deepEqual(interactiveNodes[0].control,{kind:"disclosure",open:true});
+assert.deepEqual(JSON.parse(JSON.stringify(interactiveNodes[0].control)),{kind:"disclosure",open:true});
 assert.equal(interactiveNodes[0].children[0].tag,"summary");
-assert.deepEqual(interactiveNodes[1].control,
+assert.deepEqual(JSON.parse(JSON.stringify(interactiveNodes[1].control)),
   {kind:"checkbox",label:"包含税费",disabled:false,checked:true});
-assert.deepEqual(interactiveNodes[2].control,
+assert.deepEqual(JSON.parse(JSON.stringify(interactiveNodes[2].control)),
   {kind:"radio",label:"按月统计",disabled:false,checked:true,group:"period"});
-assert.deepEqual(interactiveNodes[3].control,
+assert.deepEqual(JSON.parse(JSON.stringify(interactiveNodes[3].control)),
   {kind:"range",label:"透明度",disabled:false,min:0,max:100,step:5,value:45});
 assert.equal(interactiveNodes[4].control.selected,"bar");
 assert.equal(interactiveNodes[4].children.length,2);
 assert.equal(interactiveNodes[4].children[0].control.value,"bar");
-assert.deepEqual(interactiveNodes[5].control,
+assert.deepEqual(JSON.parse(JSON.stringify(interactiveNodes[5].control)),
   {kind:"copy",label:"Copy code",text:"print('hello')\n"});
 assert.ok(!JSON.stringify(interactiveSent).includes("onclick"));
 
