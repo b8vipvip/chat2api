@@ -340,7 +340,7 @@ GRID_COLUMNS = re.compile(r"^(?:\d{1,4}(?:\.\d{1,2})?(?:px|%)|minmax\(\d{1,4}(?:
 def _control_text(value: object, limit: int, *, allow_newlines: bool = False) -> bool:
     if not isinstance(value, str) or len(value) > limit:
         return False
-    allowed = {"\\t", "\\n", "\\r"} if allow_newlines else set()
+    allowed = {"\\t", "\n", "\\r"} if allow_newlines else set()
     return not any((ord(char) < 32 and char not in allowed) or ord(char) == 127
                    for char in value)
 
