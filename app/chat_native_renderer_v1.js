@@ -246,7 +246,8 @@
     if (controlRequired !== (value.control !== undefined)) return false;
     if (value.control !== undefined && !validControl(tag,value.control)) return false;
     if (value.control !== undefined) {
-      counts.chars += (value.control.text || "").length + (value.control.label || "").length;
+      // Copy text is the same adjacent code block already counted in the tree.
+      counts.chars += (value.control.label || "").length;
       if (counts.chars > MAX_TEXT) return false;
     }
     if (["details","select"].includes(tag) && !Array.isArray(value.children)) return false;
