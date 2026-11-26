@@ -196,6 +196,7 @@
     if (!selectedKeyHasScope("files")) camera.title = "服务端统一 API Key 缺少 files 权限";
     else camera.title = "在同一 Voice 会话中发送实时视频；若上游不支持 WebRTC 将降级为图片帧";
     $("modelSelect").disabled = state.streaming || state.voiceActive;
+    updatePluginPickerButton();
     $("newChatButton").disabled = state.streaming || state.voiceActive;
     $("attachButton").disabled = state.streaming || state.voiceActive || !state.webChatKeyId || !selectedKeyHasScope("files");
     $("fileButton").disabled = state.streaming || state.voiceActive || !state.webChatKeyId || !selectedKeyHasScope("files");
