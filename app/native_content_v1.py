@@ -428,7 +428,16 @@ def validate_native_snapshot(payload: object) -> dict:
         # sees only the typed control contract.
         legacy_open = "open" in value
         legacy_action = "action" in value or "action_value" in value
-        if legacy_open or legacy_action:
+        if tag == "details" and "control" not in value and not legacy_action:
+            # The earliest disclosure snapshots did not persist an explicit
+            # open flag. Their browser default was closed, so normalize it.
+            value = dict(value)
+            opened = value.pop("open", False)
+            if type(opened) is not bool:
+                raise ValueError("Invalid legacy disclosure state")
+            value["control"] = {"kind": "disclosure", "open": opened}
+            value.setdefault("children", [])
+        elif legacy_open or legacy_action:
             value = dict(value)
             if "control" in value:
                 raise ValueError("Mixed legacy and typed native controls")
