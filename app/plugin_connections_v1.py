@@ -994,7 +994,7 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                             "patch_available": isinstance(row.get("patch"), str),
                             "patch": str(row.get("patch") or "")[:6000],
                             "patch_truncated": len(str(row.get("patch") or "")) > 6000,
-                        } for row in response.json()[:20] if isinstance(row, dict)]
+                        } for row in response.json()[:5] if isinstance(row, dict)]
                     elif tool_name == "list_commits":
                         repository = _github_repo_name(payload.get("repository"))
                         params = {"per_page": 20}
