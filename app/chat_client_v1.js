@@ -1971,6 +1971,7 @@
     if (first >= 0 && last > first) raw = raw.slice(first,last + 1);
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)
+        || Object.keys(parsed).some(key => key !== "tool_calls")
         || !Array.isArray(parsed.tool_calls)) {
       throw new Error("模型工具规划格式无效");
     }
@@ -2132,6 +2133,7 @@
     const knownGmailMessageIds = new Set();
     let plannerRequests = 0;
     let toolCalls = 0;
+    let limitReached = false;
     const maxRounds = 3;
     const maxToolCalls = 6;
 
@@ -2229,8 +2231,12 @@
           }),
         });
         toolCalls += 1;
-        if (toolCalls >= maxToolCalls) break;
+        if (toolCalls >= maxToolCalls) {
+          limitReached = true;
+          break;
+        }
       }
+      if (plannerRequests >= maxRounds && calls.length > 0) limitReached = true;
     }
 
     if (toolCalls > 0) {
@@ -2243,7 +2249,7 @@
         ].join("\n"),
       });
     }
-    if (plannerRequests >= maxRounds || toolCalls >= maxToolCalls) {
+    if (limitReached) {
       messages.push({
         role:"system",
         content:"本轮只读插件工具调用次数已达到安全上限。请基于目前已取得的数据回答，并说明尚未查询的部分。",
