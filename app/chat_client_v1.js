@@ -2295,7 +2295,18 @@
       event.resultId = callId + "_result";
       event.output = String(error?.message || "插件调用失败").slice(0,500);
       if (error?.status === 409 && definition?.provider === "github") {
-        try { await loadPluginCatalog(true); } catch {}
+        if (/授权已失效|授权已过期/.test(String(error?.message || ""))) {
+          state.pluginCatalog = state.pluginCatalog.map(plugin => plugin?.id === "github"
+            ? {...plugin,reauthorization_required:true,reauthorization_mode:"reconnect",
+              reauthorization_reason:"GitHub 授权已失效，请重新连接账户"}
+            : plugin);
+          state.selectedPlugins = state.selectedPlugins.filter(value => value !== "github");
+          persistPluginSelection();
+          updatePluginPickerButton();
+          renderPluginCatalog();
+        } else {
+          try { await loadPluginCatalog(true); } catch {}
+        }
       }
       if (error?.status === 401 || !state.user) throw error;
       result = {
