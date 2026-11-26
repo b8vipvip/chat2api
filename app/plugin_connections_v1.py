@@ -1025,7 +1025,8 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                         payload_rows = response.json()
                         if not isinstance(payload_rows, list):
                             raise HTTPException(502, "GitHub returned an invalid pull request file list", headers=_PRIVATE_HEADERS)
-                        has_more = len(payload_rows) >= 5
+                        link_header = str(getattr(response, "headers", {}).get("Link") or "")
+                        has_more = 'rel="next"' in link_header
                         data = [{
                             "number": pull_number,
                             "page": page,
