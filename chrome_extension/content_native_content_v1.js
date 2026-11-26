@@ -21,7 +21,7 @@
   // variables, relative colors, nested functions or external url() values.
   const modernColor=/^(?:(?:oklab|oklch)\(\s*[-+]?\d*\.?\d+\s+[-+]?\d*\.?\d+\s+[-+]?\d*\.?\d+(?:\s*\/\s*\d*\.?\d+)?\s*\)|color\(srgb\s+\d*\.?\d+\s+\d*\.?\d+\s+\d*\.?\d+(?:\s*\/\s*\d*\.?\d+)?\s*\))$/i;
 
-  const svgTags=new Set("svg g path line rect circle ellipse polyline polygon text tspan defs clippath".split(" "));
+  const svgTags=new Set("svg g path line rect circle ellipse polyline polygon text tspan title desc defs clippath".split(" "));
   const svgAttrs=new Set("viewBox width height preserveAspectRatio x y dx dy x1 x2 y1 y2 cx cy r rx ry d points transform fill stroke stroke-width stroke-linecap stroke-linejoin stroke-dasharray opacity fill-opacity stroke-opacity text-anchor dominant-baseline font-size font-weight id clip-path".split(" "));
   const svgNumber=/^[-+]?(?:\d{1,6}(?:\.\d{1,5})?|\.\d{1,5})(?:px|%)?$/;
   const svgGeometry=/^[MmLlHhVvCcSsQqTtAaZzEe0-9+.,\-\s]+$/;
@@ -596,6 +596,17 @@
           result.intrinsic_width=nw;result.intrinsic_height=nh;
         }
         return result;
+      }
+      if(svgElement && (tag==="title" || tag==="desc")) {
+        const raw=plainText(element);
+        if(!raw) return null;
+        if(chars+raw.length>textBudget) {
+          active.nativeStructuralFailure="max-text";
+          truncated=true;
+          return null;
+        }
+        chars+=raw.length;nodes+=1;
+        return {tag:mapped,text:raw};
       }
       if ((mathTokens.has(mapped) || (svgElement && (tag==="text"||tag==="tspan"))) && [...element.childNodes]
           .every(n => n.nodeType === Node.TEXT_NODE)) {
