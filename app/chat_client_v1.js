@@ -2597,7 +2597,18 @@
           connect.disabled = true;
           try {
             if (needsReauthorization && plugin.connected) {
-              await apiJson("/api/user/plugins/" + encodeURIComponent(plugin.id) + "/disconnect", {method:"POST"});
+              const requireRevocation = plugin.id === "github" && plugin.reauthorization_mode === "downgrade";
+              const disconnected = await apiJson(
+                "/api/user/plugins/" + encodeURIComponent(plugin.id) + "/disconnect",
+                {
+                  method:"POST",
+                  headers:{"Content-Type":"application/json"},
+                  body:JSON.stringify({require_provider_revocation:requireRevocation}),
+                },
+              );
+              if (requireRevocation && !["revoked","already_revoked"].includes(disconnected.provider_revocation)) {
+                throw new Error("未能确认撤销 GitHub 旧 repo 权限，已保留原连接。请先在 GitHub 授权设置中撤销此应用后重试。");
+              }
             }
             window.location.assign("/api/user/plugins/oauth/" + encodeURIComponent(plugin.id) + "/start");
           } catch (error) {
@@ -2615,8 +2626,16 @@
         disconnect.addEventListener("click", async () => {
           disconnect.disabled = true;
           try {
-            await apiJson("/api/user/plugins/" + encodeURIComponent(plugin.id) + "/disconnect", {method:"POST"});
-            toast("已断开 " + String(plugin.name || plugin.id) + " 账户连接");
+            const result = await apiJson(
+              "/api/user/plugins/" + encodeURIComponent(plugin.id) + "/disconnect",
+              {method:"POST"},
+            );
+            if (["failed","unavailable"].includes(result.provider_revocation)) {
+              toast("本地连接已断开，但第三方授权未能确认撤销；如需彻底撤销，请在 " +
+                String(plugin.name || plugin.id) + " 账户的已授权应用设置中移除此应用。");
+            } else {
+              toast("已断开 " + String(plugin.name || plugin.id) + " 账户连接");
+            }
             await loadPluginCatalog(true);
           } catch (error) {
             toast("断开连接失败：" + String(error.message || error));
