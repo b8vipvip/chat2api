@@ -2238,7 +2238,7 @@
       if (definition.name === "github.get_issue") {
         const key = args.repository + "#" + args.issue_number;
         const explicit = userPromptText.includes("#" + args.issue_number)
-          || new RegExp("\\\\bissue\\\\s*(?:number\\\\s*)?#?" + args.issue_number + "\\\\b","i").test(userPromptText);
+          || new RegExp("\\bissue\\s*(?:number\\s*)?#?" + args.issue_number + "\\b","i").test(userPromptText);
         if (!knownGithubIssueRefs.has(key) && !explicit) {
           throw new Error("必须先列出本轮 Issue，或使用用户消息中明确提供的 Issue 编号。");
         }
@@ -2246,7 +2246,7 @@
       if (definition.name === "github.get_pull_request") {
         const key = args.repository + "#" + args.pull_number;
         const explicit = userPromptText.includes("#" + args.pull_number)
-          || new RegExp("\\\\b(?:pull request|pr)\\\\s*(?:number\\\\s*)?#?" + args.pull_number + "\\\\b","i").test(userPromptText);
+          || new RegExp("\\b(?:pull request|pr)\\s*(?:number\\s*)?#?" + args.pull_number + "\\b","i").test(userPromptText);
         if (!knownGithubPrRefs.has(key) && !explicit) {
           throw new Error("必须先列出本轮 Pull Request，或使用用户消息中明确提供的 PR 编号。");
         }
@@ -2323,8 +2323,8 @@
     const userPromptText = messages
       .filter(message => message.role === "user")
       .map(message => typeof message.content === "string" ? message.content : JSON.stringify(message.content || ""))
-      .join("\\n");
-    for (const match of userPromptText.matchAll(/\\b([A-Za-z0-9_.-]{1,100}\\/[A-Za-z0-9_.-]{1,100})\\b/g)) {
+      .join("\n");
+    for (const match of userPromptText.matchAll(/\b([A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100})\b/g)) {
       knownGithubRepos.add(match[1]);
     }
     let plannerRequests = 0;
