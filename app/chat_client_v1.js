@@ -2061,7 +2061,7 @@
     return event;
   }
 
-  async function executePluginToolCall(call, definitions, assistant) {
+  async function executePluginToolCall(call, definitions, assistant, knownGmailMessageIds = new Set()) {
     const rawName = String(call?.name || call?.function?.name || "").slice(0,120);
     const definition = definitions.find(item => item.name === rawName);
     const callId = "plugin_" + id().replace(/[^A-Za-z0-9_.:-]/g,"").slice(0,80);
@@ -2074,6 +2074,9 @@
       const args = validatePluginToolArguments(
         definition, call?.arguments ?? call?.function?.arguments ?? {},
       );
+      if (definition.name === "gmail.get_message" && !knownGmailMessageIds.has(args.message_id)) {
+        throw new Error("必须先通过本轮 Gmail 搜索取得 message_id，不能猜测或读取未检索的邮件。");
+      }
       event.arguments = JSON.stringify(args).slice(0,1200);
       const response = await callPluginTool(definition.provider,definition.toolName,args);
       const rows = Array.isArray(response.data) ? response.data : [];
@@ -2126,6 +2129,7 @@
     const definitions = selectedPluginToolDefinitions();
     if (!definitions.length) return {messages,plannerRequests:0,toolCalls:0};
     const executed = new Set();
+    const knownGmailMessageIds = new Set();
     let plannerRequests = 0;
     let toolCalls = 0;
     const maxRounds = 3;
@@ -2209,7 +2213,13 @@
           continue;
         }
         executed.add(fingerprint);
-        const outcome = await executePluginToolCall(call,definitions,assistant);
+        const outcome = await executePluginToolCall(call,definitions,assistant,knownGmailMessageIds);
+        if (outcome.result?.ok && outcome.tool === "gmail.search_messages") {
+          (outcome.result.results || []).forEach(row => {
+            const messageId = String(row?.message_id || "");
+            if (/^[A-Za-z0-9_-]{1,256}$/.test(messageId)) knownGmailMessageIds.add(messageId);
+          });
+        }
         messages.push({
           role:"tool",
           content:JSON.stringify({
