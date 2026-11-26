@@ -459,6 +459,7 @@ def test_github_repository_issue_pull_request_commit_and_file_read_tools(tmp_pat
                         "additions": 3, "deletions": 1, "changes": 4,
                         "sha": "d" * 40,
                         "blob_url": "https://github.com/acme/project/blob/main/src/parser.py",
+                        "patch_available": True,
                         "patch": "@@ -1 +1 @@\n-old\n+new",
                     }])
                 if url == "https://api.github.com/repos/acme/project/commits":
@@ -529,6 +530,7 @@ def test_github_repository_issue_pull_request_commit_and_file_read_tools(tmp_pat
         assert responses[2][0]["draft"] is True
         assert responses[3][0]["mergeable"] is True
         assert responses[4][0]["filename"] == "src/parser.py"
+        assert responses[4][0]["patch_available"] is True
         assert responses[4][0]["patch"].startswith("@@ -1 +1 @@")
         assert responses[5][0]["sha"] == "a" * 40
         assert responses[6][0]["path"] == "docs/hello world.md"
