@@ -1090,4 +1090,23 @@ assert.equal(interactiveNodes[4].children[0].control.value,"bar");
 assert.deepEqual(interactiveNodes[5].control,
   {kind:"copy",label:"Copy code",text:"print('hello')\n"});
 assert.ok(!JSON.stringify(interactiveSent).includes("onclick"));
+
+const svgNS="http://www.w3.org/2000/svg";
+const chartTitle=new Element("TITLE",[{nodeType:3,nodeValue:"季度收入趋势"}]);
+chartTitle.textContent="季度收入趋势";chartTitle.namespaceURI=svgNS;
+const chartDesc=new Element("DESC",[{nodeType:3,nodeValue:"按季度展示收入变化"}]);
+chartDesc.textContent="按季度展示收入变化";chartDesc.namespaceURI=svgNS;
+const chartPath=new Element("PATH");chartPath.namespaceURI=svgNS;
+chartPath.attributes.d="M0 0 L640 320";chartPath.attributes.stroke="#123456";
+const chart=new Element("SVG",[chartTitle,chartDesc,chartPath]);chart.namespaceURI=svgNS;
+chart.getBoundingClientRect=()=>({width:640,height:320});
+const chartReply=capture.snapshot({
+  requestId:"req_nativecharttitle01",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[chart]),
+});
+assert.equal(chartReply.root.children[0].tag,"svg");
+assert.equal(chartReply.root.children[0].children[0].tag,"title");
+assert.equal(chartReply.root.children[0].children[0].text,"季度收入趋势");
+assert.equal(chartReply.root.children[0].children[1].tag,"desc");
+assert.equal(chartReply.root.children[0].children[1].text,"按季度展示收入变化");
 console.log("Native interactive controls: safe disclosure, choice, select, slider and code-copy capture");
