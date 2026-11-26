@@ -977,7 +977,7 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                             text_content = decoded.decode("utf-8")
                         except UnicodeDecodeError as exc:
                             raise HTTPException(422, "Only UTF-8 text files can be read by the GitHub plugin", headers=_PRIVATE_HEADERS) from exc
-                        if "\\x00" in text_content:
+                        if "\x00" in text_content:
                             raise HTTPException(422, "Binary files are not supported by the GitHub text reader", headers=_PRIVATE_HEADERS)
                         data = [{
                             "repository": repository, "path": path,
