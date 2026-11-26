@@ -973,7 +973,12 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                         if type(size) is not int or size > 1_000_000 or not isinstance(encoded_content, str):
                             raise HTTPException(413, "GitHub file is too large or cannot be read through the contents API", headers=_PRIVATE_HEADERS)
                         decoded = base64.b64decode("".join(encoded_content.split()))
-                        text_content = decoded.decode("utf-8", errors="replace")
+                        try:
+                            text_content = decoded.decode("utf-8")
+                        except UnicodeDecodeError as exc:
+                            raise HTTPException(422, "Only UTF-8 text files can be read by the GitHub plugin", headers=_PRIVATE_HEADERS) from exc
+                        if "\\x00" in text_content:
+                            raise HTTPException(422, "Binary files are not supported by the GitHub text reader", headers=_PRIVATE_HEADERS)
                         data = [{
                             "repository": repository, "path": path,
                             "url": row.get("html_url"), "sha": str(row.get("sha") or "")[:40],
