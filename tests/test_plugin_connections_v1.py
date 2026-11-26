@@ -238,6 +238,7 @@ def test_github_plugin_tool_is_read_only_and_scoped_to_the_connected_user(tmp_pa
         login_a = client.post(
             "/api/user/login",
             json={"email": "plugin-tool-a@example.com", "password": PASSWORD},
+            headers=ORIGIN,
         )
         assert login_a.status_code == 200
         result = client.post(
@@ -252,6 +253,7 @@ def test_github_plugin_tool_is_read_only_and_scoped_to_the_connected_user(tmp_pa
         login_b = client.post(
             "/api/user/login",
             json={"email": "plugin-tool-b@example.com", "password": PASSWORD},
+            headers=ORIGIN,
         )
         assert login_b.status_code == 200
         denied = client.post(
