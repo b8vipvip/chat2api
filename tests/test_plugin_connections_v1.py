@@ -536,3 +536,84 @@ def test_github_repository_issue_pull_request_commit_and_file_read_tools(tmp_pat
         assert len(fake_clients) == 9
         assert fake_clients[7].calls == []
         assert fake_clients[8].calls == []
+
+
+@pytest.mark.parametrize(
+    ("private_repos", "granted_scopes", "expected_mode"),
+    [
+        (True, ["read:user"], "upgrade"),
+        (False, ["read:user", "repo"], "downgrade"),
+    ],
+)
+def test_github_scope_change_requires_reauthorization_and_blocks_tools(
+    tmp_path: Path, private_repos: bool, granted_scopes: list[str], expected_mode: str,
+):
+    app = make_app(tmp_path)
+    store: PluginOAuthStore = app.state.plugin_oauth_store
+    store.save_provider(
+        "github", enabled=True, client_id="gh-client",
+        client_secret="gh-secret", private_repos=private_repos,
+    )
+    with TestClient(app) as client:
+        user = register(client, "github-scope@example.com")
+        store.save_connection(
+            user["user_id"], "github", "42", "octocat",
+            "github-scope-token", "", granted_scopes, None,
+        )
+        login = client.post(
+            "/api/user/login",
+            json={"email": "github-scope@example.com", "password": PASSWORD},
+            headers=ORIGIN,
+        )
+        assert login.status_code == 200
+
+        catalog = client.get("/api/user/plugins")
+        assert catalog.status_code == 200
+        github = next(row for row in catalog.json()["data"] if row["id"] == "github")
+        assert github["reauthorization_required"] is True
+        assert github["reauthorization_mode"] == expected_mode
+        assert github["scopes"] == granted_scopes
+
+        denied = client.post(
+            "/api/user/plugins/github/tools/search_repositories",
+            headers=ORIGIN, json={"query": "chat2api"},
+        )
+        assert denied.status_code == 409
+        if expected_mode == "upgrade":
+            assert "授予 repo 权限" in denied.json()["detail"]
+        else:
+            assert "撤销旧 repo 权限" in denied.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    ("private_repos", "granted_scopes"),
+    [
+        (False, ["read:user"]),
+        (True, ["read:user", "repo"]),
+    ],
+)
+def test_github_matching_oauth_scope_does_not_require_reauthorization(
+    tmp_path: Path, private_repos: bool, granted_scopes: list[str],
+):
+    app = make_app(tmp_path)
+    store: PluginOAuthStore = app.state.plugin_oauth_store
+    store.save_provider(
+        "github", enabled=True, client_id="gh-client",
+        client_secret="gh-secret", private_repos=private_repos,
+    )
+    with TestClient(app) as client:
+        user = register(client, "github-scope-match@example.com")
+        store.save_connection(
+            user["user_id"], "github", "42", "octocat",
+            "github-scope-token", "", granted_scopes, None,
+        )
+        login = client.post(
+            "/api/user/login",
+            json={"email": "github-scope-match@example.com", "password": PASSWORD},
+            headers=ORIGIN,
+        )
+        assert login.status_code == 200
+        catalog = client.get("/api/user/plugins")
+        github = next(row for row in catalog.json()["data"] if row["id"] == "github")
+        assert github["reauthorization_required"] is False
+        assert github["reauthorization_mode"] == ""
