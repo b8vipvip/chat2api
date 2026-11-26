@@ -2169,7 +2169,7 @@
         } else if (definition.toolName === "list_pull_requests" || definition.toolName === "get_pull_request") {
           title = "PR #" + String(row.number || "") + " " + String(row.title || "GitHub Pull Request");
         } else if (definition.toolName === "list_commits") {
-          title = String(row.sha || "").slice(0,7) + " " + String(row.message || "GitHub commit").split("\\n")[0];
+          title = String(row.sha || "").slice(0,7) + " " + String(row.message || "GitHub commit").split("\n")[0];
         } else if (definition.toolName === "search_code" || definition.toolName === "get_file_contents") {
           title = String(row.repository || "") + ":" + String(row.path || "");
         } else {
@@ -2257,6 +2257,7 @@
           if (typeof copy.body_text === "string") copy.body_text = copy.body_text.slice(0,1800);
           if (typeof copy.body === "string") copy.body = copy.body.slice(0,1800);
           if (typeof copy.snippet === "string") copy.snippet = copy.snippet.slice(0,700);
+          if (typeof copy.content === "string") copy.content = copy.content.slice(0,7000);
           return copy;
         });
       }
