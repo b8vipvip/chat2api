@@ -251,7 +251,7 @@
       if (counts.chars > MAX_TEXT) return false;
     }
     if (["details","select"].includes(tag) && !Array.isArray(value.children)) return false;
-    if (["input","select","option","button"].includes(tag) && value.text !== undefined) return false;
+    if (["input","select","button"].includes(tag) && value.text !== undefined) return false;
     if (["input","option","button"].includes(tag) && value.children !== undefined) return false;
     if (tag==="option" && (typeof value.text!=="string" || !value.text.trim())) return false;
     if (tag==="summary" && parentTag!=="details") return false;
