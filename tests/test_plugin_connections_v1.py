@@ -524,14 +524,20 @@ def test_github_repository_issue_pull_request_commit_and_file_read_tools(tmp_pat
             ("get_file_contents", {"repository": "acme/project", "path": "docs/hello world.md", "ref": "main"}),
         ]
         responses = []
+        response_payloads = []
         for tool_name, payload in requests:
             response = client.post(
                 "/api/user/plugins/github/tools/" + tool_name,
                 headers=ORIGIN, json=payload,
             )
             assert response.status_code == 200, (tool_name, response.text)
-            responses.append(response.json()["data"])
+            payload_json = response.json()
+            response_payloads.append(payload_json)
+            responses.append(payload_json["data"])
 
+        assert response_payloads[4]["pagination"] == {
+            "page": 2, "per_page": 5, "has_more": True,
+        }
         assert responses[0][0]["default_branch"] == "main"
         assert responses[1][0]["number"] == 7
         assert responses[1][0]["labels"] == ["bug"]
