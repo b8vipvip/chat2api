@@ -125,7 +125,7 @@ hydration = refreshNativeSnapshot("native-race");
 assert.equal(applyNativeSnapshot("native-race",v2WithMedia),true);
 finishFetch({ok:true,status:200,json:async()=>v2});
 assert.equal(await hydration,false,"same-revision archive data must not regress");
-assert.equal(raceState.nativeSnapshots.get("native-race"),v2WithMedia);
+assert.deepEqual(raceState.nativeSnapshots.get("native-race"),v2WithMedia);
 // A late same-revision SSE replay without archived media must not erase the
 // media envelope that arrived first. A conflicting DOM tree cannot reuse a revision.
 assert.equal(applyNativeSnapshot("native-race",v2),false,"same-revision SSE replay cannot remove media");
