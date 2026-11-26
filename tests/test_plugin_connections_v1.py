@@ -180,3 +180,83 @@ def test_gmail_body_decoder_prefers_plain_text_and_ignores_attachments():
 
     html_only = {"mimeType": "text/html", "body": {"data": html_body}}
     assert _gmail_body_text(html_only) == "HTML fallback"
+
+
+def test_github_plugin_tool_is_read_only_and_scoped_to_the_connected_user(tmp_path: Path, monkeypatch):
+    app = make_app(tmp_path)
+    store: PluginOAuthStore = app.state.plugin_oauth_store
+    store.save_provider(
+        "github", enabled=True, client_id="gh-client",
+        client_secret="gh-secret", private_repos=False,
+    )
+
+    with TestClient(app) as client:
+        user_a = register(client, "plugin-tool-a@example.com")
+        register(client, "plugin-tool-b@example.com")
+        store.save_connection(
+            user_a["user_id"], "github", "42", "octocat",
+            "user-a-access-token", "", ["read:user"], None,
+        )
+
+        class FakeResponse:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self.payload
+
+        class FakeAsyncClient:
+            def __init__(self, *args, **kwargs):
+                self.calls = []
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def get(self, url, **kwargs):
+                self.calls.append((url, kwargs))
+                assert url == "https://api.github.com/search/repositories"
+                assert kwargs["params"]["per_page"] == 10
+                assert kwargs["headers"]["Authorization"] == "Bearer user-a-access-token"
+                return FakeResponse({
+                    "items": [{
+                        "full_name": "b8vipvip/chat2api",
+                        "description": "ChatGPT-compatible API bridge",
+                        "html_url": "https://github.com/b8vipvip/chat2api",
+                        "stargazers_count": 123,
+                        "language": "Python",
+                    }],
+                })
+
+        monkeypatch.setattr("app.plugin_connections_v1.httpx.AsyncClient", FakeAsyncClient)
+
+        login_a = client.post(
+            "/api/user/login",
+            json={"email": "plugin-tool-a@example.com", "password": PASSWORD},
+        )
+        assert login_a.status_code == 200
+        result = client.post(
+            "/api/user/plugins/github/tools/search_repositories",
+            headers=ORIGIN,
+            json={"query": "chat2api"},
+        )
+        assert result.status_code == 200, result.text
+        assert result.json()["data"][0]["full_name"] == "b8vipvip/chat2api"
+        assert "user-a-access-token" not in result.text
+
+        login_b = client.post(
+            "/api/user/login",
+            json={"email": "plugin-tool-b@example.com", "password": PASSWORD},
+        )
+        assert login_b.status_code == 200
+        denied = client.post(
+            "/api/user/plugins/github/tools/search_repositories",
+            headers=ORIGIN,
+            json={"query": "chat2api"},
+        )
+        assert denied.status_code == 409
