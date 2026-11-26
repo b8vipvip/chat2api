@@ -96,6 +96,8 @@ def install_plugin_registry(app: FastAPI) -> FastAPI:
         if connections is None:
             return {"data": [], "execution_enabled": False}
         catalog = connections.public_catalog()
-        return {"data": catalog, "execution_enabled": bool(catalog)}
+        # This endpoint describes availability only. Arbitrary Manifest
+        # execution remains disabled; fixed provider tools use /api/user/plugins.
+        return {"data": catalog, "execution_enabled": False}
 
     return app
