@@ -977,9 +977,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # retain their all-or-nothing projection.
         candidates = native_image_identity_candidates(snapshot, asset_metadata)
         if candidates["status"] == "verified-sha256":
-            visible_assets = native_visible_asset_projection(assets, candidates)
+            visible_assets = [assets[index] for index in candidates["indices"]]
         elif preserve_native_tree and candidates["status"] == "verified-sha256-partial":
             visible_assets = native_visible_asset_projection(assets, candidates)
+        elif candidates["status"] == "verified-sha256-partial":
+            visible_assets = []
         else:
             visible_assets = []
         result = {**snapshot,
