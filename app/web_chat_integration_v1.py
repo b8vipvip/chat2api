@@ -100,9 +100,66 @@ def install_web_chat_features_v1(app: Any) -> Any:
         if registry is None:
             raise HTTPException(status_code=503, detail="model catalog unavailable",
                                 headers=_PRIVATE_HEADERS)
-        # resolve_chat_identity binds the per-user routing identity and
-        # shared service-key entitlement context for this request.
-        models = registry.model_catalog(online_only=True)
+        # The administrator's "可用模型" projection is the single source
+        # for Web Chat choices. A Free page-default remains the routing alias
+        # "default", while its visible label is the configured concrete model ID.
+        # This preserves the dispatch semantics without displaying a misleading
+        # generic alias or exposing image/voice-only routes as text models.
+        model_task_snapshot = getattr(request.app.state, "worker_model_tasks_v147_snapshot", None)
+        models: list[dict[str, Any]] = []
+        if callable(model_task_snapshot):
+            try:
+                available_payload = await model_task_snapshot()
+            except Exception as error:
+                raise HTTPException(status_code=503, detail="available model catalogue unavailable",
+                                    headers=_PRIVATE_HEADERS) from error
+            available_rows = available_payload.get("available_models") or []
+            default_mapping = str(available_payload.get("available_models_default_mapping") or "").strip()
+            catalog = {
+                str(row.get("id") or ""): dict(row)
+                for row in registry.model_catalog(online_only=True)
+                if isinstance(row, dict)
+            }
+            for available in available_rows:
+                if not isinstance(available, dict):
+                    continue
+                model_id = str(available.get("id") or "").strip()
+                if not model_id or model_id in {"gpt-image", "gpt-live", "gpt-live-mini", "chatgpt-web"}:
+                    continue
+                if model_id == "default":
+                    models.append({
+                        "id": "default",
+                        "label": default_mapping or "默认模型",
+                        "mapped_model_id": default_mapping or None,
+                        "capabilities": ["text", "vision", "file-understanding"],
+                        "selectable": True,
+                        "source": "worker-available-default",
+                    })
+                    continue
+                row = catalog.get(model_id, {
+                    "id": model_id, "object": "model", "created": 0,
+                    "owned_by": "chat2api", "capabilities": ["text"],
+                })
+                row["id"] = model_id
+                row["label"] = model_id
+                row["selectable"] = True
+                models.append(row)
+        else:
+            # Compatibility for focused tests and older composition roots that
+            # have not installed the v147 available-model projection.
+            minimum = getattr(registry, "legacy_minimum_model", None)
+            default_mapping = str(minimum() or "").strip() if callable(minimum) else ""
+            for source in registry.model_catalog(online_only=True):
+                if not isinstance(source, dict):
+                    continue
+                model_id = str(source.get("id") or "")
+                if model_id in {"chatgpt-web", "gpt-image", "gpt-live", "gpt-live-mini"}:
+                    continue
+                row = dict(source)
+                if model_id == "default":
+                    row["label"] = default_mapping or "默认模型"
+                    row["mapped_model_id"] = default_mapping or None
+                models.append(row)
         return JSONResponse({
             "object": "list",
             "data": models,
