@@ -203,8 +203,9 @@ def test_github_plugin_tool_is_read_only_and_scoped_to_the_connected_user(tmp_pa
         )
 
         class FakeResponse:
-            def __init__(self, payload):
+            def __init__(self, payload, headers=None):
                 self.payload = payload
+                self.headers = headers or {}
 
             def raise_for_status(self):
                 return None
@@ -465,7 +466,9 @@ def test_github_repository_issue_pull_request_commit_and_file_read_tools(tmp_pat
                         "additions": 1, "deletions": 0, "changes": 1,
                         "sha": str(index) * 40,
                         "blob_url": f"https://github.com/acme/project/blob/main/src/module-{index}.py",
-                    } for index in range(2, 6)]])
+                    } for index in range(2, 6)]], {
+                        "Link": '<https://api.github.com/repos/acme/project/pulls/8/files?page=3>; rel="next"',
+                    })
                 if url == "https://api.github.com/repos/acme/project/commits":
                     assert kwargs["params"]["sha"] == "main"
                     return FakeResponse([{
