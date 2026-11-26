@@ -447,7 +447,7 @@ test("model chains GitHub Pull Request listing into changed-file patch retrieval
         number:15,filename:"src/parser.py",status:"modified",
         additions:3,deletions:1,changes:4,
         url:"https://github.com/acme/project/blob/main/src/parser.py",
-        patch:"@@ -1,2 +1,3 @@\\n-old\\n+new",
+        patch:"@@ -1,2 +1,3 @@\n-old\n+new",
       }]};
     },
   });
