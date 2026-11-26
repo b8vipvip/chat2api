@@ -67,6 +67,7 @@ def test_native_content_v303_features_are_advertised():
     assert payload["features"]["native_interactive_control_label_budget_v1"] is True
     assert payload["features"]["native_partial_image_slot_projection_v1"] is True
     assert "native-control-label-budget-v1" in payload["server"]["feature_revision"]
+    assert "native-control-budget-v1" in payload["chrome_bridge"]["build_revision"]
 
 
 def test_realtime_protocol_contract_matches_live_bridge():
