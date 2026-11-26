@@ -26,6 +26,7 @@ def make_app(tmp_path: Path):
         CHAT2API_ADMIN_PASSWORD="strong-root-password",
     ))
     install_control_plane_v1(app)
+    app.state.control_plane.update_client({"web_chat_enabled": True})
     install_v17_patch(app)
     install_user_console_v104_patch(app)
     install_plugin_registry(app)
