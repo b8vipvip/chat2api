@@ -238,3 +238,19 @@ const malformedSelect=structuredClone(interactive);
 malformedSelect.root.children[4].control.selected="missing";
 assert.equal(renderer.validateSnapshot(malformedSelect),false);
 console.log("native-renderer-interactive-controls-passed");
+
+
+const chartSnapshot={
+  version:1,revision:5,finality:"verified-final",assets:[],files:[],
+  root:{tag:"svg",attrs:{viewBox:"0 0 640 320"},children:[
+    {tag:"title",text:"季度收入趋势"},
+    {tag:"desc",text:"按季度展示收入变化"},
+    {tag:"path",attrs:{d:"M0 0 L640 320",stroke:"#123456"}},
+  ]},
+};
+assert.equal(interactiveRenderer.validateSnapshot(chartSnapshot),true);
+const chartHost=new FakeElement("host");
+assert.equal(interactiveRenderer.renderNativeSnapshot(chartHost,chartSnapshot),true);
+assert.equal(findTag(chartHost,"title").childNodes[0].textContent,"季度收入趋势");
+assert.equal(findTag(chartHost,"desc").childNodes[0].textContent,"按季度展示收入变化");
+console.log("native-renderer-svg-chart-tooltip-passed");
