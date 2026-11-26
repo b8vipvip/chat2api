@@ -310,3 +310,58 @@ test("GitHub issue, pull request and file path arguments are strictly validated"
     /安全的相对路径/,
   );
 });
+
+
+test("model chains GitHub Issue listing into a detail read using returned numbers", async () => {
+  const h = makeHarness({
+    selectedPlugins:["github"],
+    planner:[
+      '{"tool_calls":[{"name":"github.list_issues","arguments":{"repository":"acme/project","state":"open"}}]}',
+      '{"tool_calls":[{"name":"github.get_issue","arguments":{"repository":"acme/project","issue_number":12}}]}',
+      '{"tool_calls":[]}',
+    ],
+    toolHandler:async (provider,tool,args) => {
+      assert.equal(provider,"github");
+      if (tool === "list_issues") {
+        return {data:[{number:12,title:"Parser fails",state:"open",url:"https://github.com/acme/project/issues/12"}]};
+      }
+      assert.equal(tool,"get_issue");
+      assert.deepEqual(JSON.parse(JSON.stringify(args)),{repository:"acme/project",issue_number:12});
+      return {data:[{number:12,title:"Parser fails",state:"open",body:"Reproduction steps"}]};
+    },
+  });
+  const messages = [{role:"user",content:"查看 acme/project 的开放 Issue，并读取第一条详情"}];
+  const result = await h.api.runAutonomousPluginToolLoop(
+    messages,h.assistant,"key-1",h.recoveryApi,"req-planner-1",
+  );
+  assert.equal(result.toolCalls,2);
+  assert.deepEqual(h.calls.map(row => row[1]),["list_issues","get_issue"]);
+  assert.ok(messages.some(item => item.role === "tool" && item.content.includes("Reproduction steps")));
+});
+
+test("model chains GitHub Pull Request listing into a detail read using returned numbers", async () => {
+  const h = makeHarness({
+    selectedPlugins:["github"],
+    planner:[
+      '{"tool_calls":[{"name":"github.list_pull_requests","arguments":{"repository":"acme/project","state":"open"}}]}',
+      '{"tool_calls":[{"name":"github.get_pull_request","arguments":{"repository":"acme/project","pull_number":15}}]}',
+      '{"tool_calls":[]}',
+    ],
+    toolHandler:async (provider,tool,args) => {
+      assert.equal(provider,"github");
+      if (tool === "list_pull_requests") {
+        return {data:[{number:15,title:"Improve parser",state:"open",url:"https://github.com/acme/project/pull/15"}]};
+      }
+      assert.equal(tool,"get_pull_request");
+      assert.deepEqual(JSON.parse(JSON.stringify(args)),{repository:"acme/project",pull_number:15});
+      return {data:[{number:15,title:"Improve parser",state:"open",merged:false,changed_files:2}]};
+    },
+  });
+  const messages = [{role:"user",content:"检查 acme/project 的开放 PR"}];
+  const result = await h.api.runAutonomousPluginToolLoop(
+    messages,h.assistant,"key-1",h.recoveryApi,"req-planner-1",
+  );
+  assert.equal(result.toolCalls,2);
+  assert.deepEqual(h.calls.map(row => row[1]),["list_pull_requests","get_pull_request"]);
+  assert.ok(messages.some(item => item.role === "tool" && item.content.includes("changed_files")));
+});
