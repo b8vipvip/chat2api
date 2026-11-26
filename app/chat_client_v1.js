@@ -2045,7 +2045,7 @@
 
   function recordPluginToolEvent(assistant, definition, callId, args) {
     const event = {
-      toolName:(definition?.provider === "github" ? "GitHub" : "Gmail")
+      toolName:(definition?.provider === "github" ? "GitHub" : definition?.provider === "gmail" ? "Gmail" : "插件")
         + " · " + String(definition?.toolName || "未授权工具"),
       callId,
       resultId:"",
@@ -3641,7 +3641,7 @@
       resizeComposer();
       renderAll();
 
-      const messages = conversation.messages
+      let messages = conversation.messages
         .filter((message) => message.id !== assistant.id)
         .map((message) => ({role:message.role,content:message.content}));
       if (state.selectedPlugins.length && typeof runAutonomousPluginToolLoop === "function") {
