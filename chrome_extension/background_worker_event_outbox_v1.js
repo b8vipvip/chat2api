@@ -100,28 +100,28 @@
     state.pendingEnqueues.set(requestId, (state.pendingEnqueues.get(requestId) || 0) + 1);
     try {
       return await serialized(async () => {
-      const serialized = JSON.stringify(normalized.payload);
-      const existing = state.events.get(normalized.key);
-      if (existing) {
-        if (JSON.stringify(existing.payload) !== serialized) return "conflict";
+        const serialized = JSON.stringify(normalized.payload);
+        const existing = state.events.get(normalized.key);
+        if (existing) {
+          if (JSON.stringify(existing.payload) !== serialized) return "conflict";
+          scheduleFlush(0);
+          return "queued";
+        }
+        const row = {
+          payload: normalized.payload,
+          queued_at_ms: Date.now(),
+          last_sent_at_ms: 0,
+          attempts: 0,
+          order: state.nextOrder++,
+        };
+        state.events.set(normalized.key, row);
+        if (!(await persist())) {
+          state.events.delete(normalized.key);
+          state.nextOrder = Math.max(1, state.nextOrder - 1);
+          return "unpersisted";
+        }
         scheduleFlush(0);
         return "queued";
-      }
-      const row = {
-        payload: normalized.payload,
-        queued_at_ms: Date.now(),
-        last_sent_at_ms: 0,
-        attempts: 0,
-        order: state.nextOrder++,
-      };
-      state.events.set(normalized.key, row);
-      if (!(await persist())) {
-        state.events.delete(normalized.key);
-        state.nextOrder = Math.max(1, state.nextOrder - 1);
-        return "unpersisted";
-      }
-      scheduleFlush(0);
-      return "queued";
       });
     } finally {
       const pending = state.pendingEnqueues.get(requestId) || 0;
@@ -236,19 +236,20 @@
 
   handleServerMessage = async function handleServerMessageWithWorkerEventAck(message) {
     if (message?.type === "server.hello") {
-      await serialized(async () => {
       state.serverAckNegotiated = true;
       state.serverAckSupported = Array.isArray(message.capabilities)
         && message.capabilities.includes("worker_event_ack_v1");
-      if (!state.serverAckSupported && state.events.size) {
-        // A rollback/older server cannot ACK this protocol. Drop the stale
-        // event queue and let the existing terminal outbox deliver finality.
-        state.events.clear();
-        await persist();
-      } else if (state.serverAckSupported) {
-        scheduleFlush(0);
-      }
-      globalThis.__CHAT2API_BACKGROUND_TRANSPORT_RECOVERY_V47__?.scheduleFlush?.(0);
+      const supportsAck = state.serverAckSupported;
+      await serialized(async () => {
+        if (!supportsAck && state.events.size) {
+          // A rollback/older server cannot ACK this protocol. Drop the stale
+          // event queue and let the existing terminal outbox deliver finality.
+          state.events.clear();
+          await persist();
+        } else if (supportsAck) {
+          scheduleFlush(0);
+        }
+        globalThis.__CHAT2API_BACKGROUND_TRANSPORT_RECOVERY_V47__?.scheduleFlush?.(0);
       });
       return baseHandleServerMessage(message);
     }
@@ -260,19 +261,19 @@
       });
       if (!identity) return;
       return serialized(async () => {
-      const row = state.events.get(identity.key);
-      if (!row) return;
-      if (message.accepted === true || message.discarded === true) {
-        state.events.delete(identity.key);
-        await persist();
-        scheduleFlush(0);
-        // A terminal must not overtake any earlier durable Worker deltas.
-        globalThis.__CHAT2API_BACKGROUND_TRANSPORT_RECOVERY_V47__?.scheduleFlush?.(0);
-      } else {
-        row.last_sent_at_ms = 0;
-        await persist();
-        scheduleFlush(RETRY_MS);
-      }
+        const row = state.events.get(identity.key);
+        if (!row) return;
+        if (message.accepted === true || message.discarded === true) {
+          state.events.delete(identity.key);
+          await persist();
+          scheduleFlush(0);
+          // A terminal must not overtake any earlier durable Worker deltas.
+          globalThis.__CHAT2API_BACKGROUND_TRANSPORT_RECOVERY_V47__?.scheduleFlush?.(0);
+        } else {
+          row.last_sent_at_ms = 0;
+          await persist();
+          scheduleFlush(RETRY_MS);
+        }
       });
     }
     return baseHandleServerMessage(message);
