@@ -1907,6 +1907,7 @@
           sha:String(row.sha || "").slice(0,40),
           previous_filename:String(row.previous_filename || "").slice(0,500),
           url:String(row.url || "").slice(0,2048),
+          patch_available:row.patch_available === true,
           patch:String(row.patch || "").slice(0,1600),
           patch_truncated:row.patch_truncated === true || String(row.patch || "").length > 1600,
         }));
