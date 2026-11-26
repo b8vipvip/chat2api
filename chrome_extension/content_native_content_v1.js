@@ -381,12 +381,14 @@
         if (/^(?:copy(?: code)?|复制(?:代码)?)$/i.test(label)) {
           const text=copyCodeForButton(element);
           if(text) {
-            if(chars+text.length>textBudget) {
-              active.nativeStructuralFailure="interactive-copy-text-budget";
+            // The server counts the visible control label, not the duplicate
+            // clipboard payload (the source code node owns the text budget).
+            if(chars+label.length>textBudget) {
+              active.nativeStructuralFailure="interactive-copy-label-budget";
               truncated=true;
               return null;
             }
-            // The same source remains in its pre/code node; count it once.
+            chars+=label.length;
             nodes+=1;
             return {tag:"button",control:{kind:"copy",
               label:/复制/.test(label)?"复制代码":"Copy code",text}};
@@ -445,6 +447,12 @@
         const kind=String(element.type || element.getAttribute?.("type") || "text").toLowerCase();
         const label=controlLabel(element);
         if(!label) return null;
+        if(chars+label.length>textBudget) {
+          active.nativeStructuralFailure="interactive-input-label-budget";
+          truncated=true;
+          return null;
+        }
+        chars+=label.length;
         const disabled=Boolean(element.disabled);
         let control=null;
         if(kind==="checkbox") control={kind,label,disabled,checked:Boolean(element.checked)};
@@ -469,7 +477,8 @@
         return {tag:"input",style:safeStyle(element),control};
       }
       if(tag==="select") {
-        if(element.multiple || !controlLabel(element)) return null;
+        const selectLabel=controlLabel(element);
+        if(element.multiple || !selectLabel) return null;
         const options=[...(element.options || [])];
         if(!options.length || options.length>64) return null;
         const children=[];
@@ -484,14 +493,15 @@
         }
         const selected=String(element.value ?? "");
         if(!safeOptionText(selected) || !options.some(option=>String(option.value ?? "")===selected)) return null;
-        nodes+=children.length+1;
-        if(chars>textBudget) {
+        if(chars+selectLabel.length>textBudget) {
           active.nativeStructuralFailure="interactive-select-text-budget";
           truncated=true;
           return null;
         }
+        chars+=selectLabel.length;
+        nodes+=children.length+1;
         return {tag:"select",style:safeStyle(element),control:{
-          kind:"select",label:controlLabel(element),disabled:Boolean(element.disabled),selected,
+          kind:"select",label:selectLabel,disabled:Boolean(element.disabled),selected,
         },children};
       }
       if(tag==="option") return null;
