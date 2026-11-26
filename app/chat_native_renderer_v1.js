@@ -34,7 +34,7 @@
   };
   const MATH_NOTATION = new Set(["longdiv","actuarial","radical","box","roundedbox","circle","left","right","top","bottom","updiagonalstrike","downdiagonalstrike","verticalstrike","horizontalstrike","madruwb"]);
   const MATH_MULTI_LENGTH_ATTRS = new Set(["rowspacing","columnspacing","framespacing","columnwidth"]);
-  const SVG_TAGS = new Set(["svg","g","path","line","rect","circle","ellipse","polyline","polygon","text","tspan","defs","clippath"]);
+  const SVG_TAGS = new Set(["svg","g","path","line","rect","circle","ellipse","polyline","polygon","text","tspan","title","desc","defs","clippath"]);
   const SAFE_TAGS = new Set([...HTML_TAGS,...MATH_TAGS,...SVG_TAGS]);
   const SVG_ATTRS = new Set(["viewBox","width","height","preserveAspectRatio","x","y","dx","dy","x1","x2","y1","y2","cx","cy","r","rx","ry","d","points","transform","fill","stroke","stroke-width","stroke-linecap","stroke-linejoin","stroke-dasharray","opacity","fill-opacity","stroke-opacity","text-anchor","dominant-baseline","font-size","font-weight","id","clip-path"]);
   const SAFE_STYLES = {
@@ -275,7 +275,7 @@
       if (value.text !== undefined || value.children !== undefined) return false;
     } else if (["media_index","intrinsic_width","intrinsic_height","source_sha256"].some(key => Object.prototype.hasOwnProperty.call(value,key))) return false;
     if (value.text !== undefined) {
-      if (typeof value.text !== "string" || tag === "img" || (SVG_TAGS.has(tag) && !["text","tspan"].includes(tag))) return false;
+      if (typeof value.text !== "string" || tag === "img" || (SVG_TAGS.has(tag) && !["text","tspan","title","desc"].includes(tag))) return false;
       counts.chars += value.text.length;
       if (counts.chars > MAX_TEXT) return false;
     }
