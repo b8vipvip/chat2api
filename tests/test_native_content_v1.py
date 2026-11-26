@@ -828,43 +828,121 @@ def test_mathml_presentation_attributes_reject_unsafe_values_and_scopes(tag, att
         })
 
 
-def test_native_disclosure_and_copy_action_contract_roundtrip(tmp_path):
+def test_native_interactive_controls_validate_and_legacy_projection_is_inert():
     from app.native_content_v1 import native_public_v1_tree
 
-    doc = {"version": 1, "revision": 1, "root": {"tag": "div", "children": [
-        {"tag": "details", "open": True, "children": [
-            {"tag": "summary", "text": "展开说明"},
-            {"tag": "p", "text": "折叠内容"},
+    doc = {"version": 1, "revision": 7, "root": {"tag": "div", "children": [
+        {"tag": "details", "control": {"kind": "disclosure", "open": True},
+         "children": [
+             {"tag": "summary", "text": "展开计算步骤"},
+             {"tag": "p", "text": "第一步：整理数据"},
+         ]},
+        {"tag": "input", "control": {
+            "kind": "checkbox", "label": "包含税费", "disabled": False, "checked": True,
+        }},
+        {"tag": "input", "control": {
+            "kind": "radio", "label": "按月统计", "disabled": False,
+            "checked": True, "group": "period",
+        }},
+        {"tag": "input", "control": {
+            "kind": "range", "label": "透明度", "disabled": False,
+            "min": 0, "max": 100, "step": 5, "value": 45,
+        }},
+        {"tag": "select", "control": {
+            "kind": "select", "label": "图表类型", "disabled": False, "selected": "bar",
+        }, "children": [
+            {"tag": "option", "text": "柱状图", "control": {
+                "kind": "option", "value": "bar", "disabled": False, "selected": True,
+            }},
+            {"tag": "option", "text": "折线图", "control": {
+                "kind": "option", "value": "line", "disabled": False, "selected": False,
+            }},
         ]},
-        {"tag": "button", "text": "复制代码", "action": "copy-text",
-         "action_value": "print('hello')"},
+        {"tag": "button", "control": {
+            "kind": "copy", "label": "复制代码", "text": "print('hello')\n",
+        }},
     ]}}
-    value = validate_native_snapshot(doc)
-    assert value["root"]["children"][0]["open"] is True
-    assert value["root"]["children"][1]["action"] == "copy-text"
-    assert value["root"]["children"][1]["action_value"] == "print('hello')"
-    store = NativeContentStore(tmp_path)
-    assert store.publish("req_interaction12345", "owner", doc)
-    assert store.persist("req_interaction12345", "owner")
-    assert NativeContentStore(tmp_path).get("req_interaction12345", "owner") == value
-
-    legacy = native_public_v1_tree(value["root"])
-    assert legacy["children"][0]["tag"] == "span"
-    assert "open" not in legacy["children"][0]
-    assert legacy["children"][1]["tag"] == "span"
-    assert "action" not in legacy["children"][1]
-    assert "action_value" not in legacy["children"][1]
+    validated = validate_native_snapshot(doc)
+    assert validated == doc
+    legacy = native_public_v1_tree(validated["root"])
+    pending = [legacy]
+    while pending:
+        item = pending.pop()
+        assert "control" not in item
+        assert item["tag"] not in {"details", "summary", "input", "select", "option", "button"}
+        pending.extend(item.get("children") or [])
+    assert legacy["children"][1] == {"tag": "span", "text": "包含税费"}
+    assert legacy["children"][4]["tag"] == "span"
+    assert legacy["children"][5] == {"tag": "span", "text": "复制代码"}
 
 
 @pytest.mark.parametrize("root", [
-    {"tag": "button", "text": "Run"},
-    {"tag": "button", "text": "Copy", "action": "execute-script", "action_value": "alert(1)"},
-    {"tag": "div", "text": "No", "action": "copy-text", "action_value": "safe"},
-    {"tag": "summary", "text": "Detached summary"},
-    {"tag": "details", "open": "true", "children": [{"tag": "summary", "text": "Bad state"}]},
-    {"tag": "details", "children": [{"tag": "p", "text": "before"}, {"tag": "summary", "text": "late"}]},
-    {"tag": "details", "children": [{"tag": "summary", "text": "one"}, {"tag": "summary", "text": "two"}]},
+    {"tag": "button", "control": {"kind": "execute", "label": "运行", "text": "code"}},
+    {"tag": "input", "control": {"kind": "text", "label": "输入密码", "disabled": False}},
+    {"tag": "input", "control": {"kind": "checkbox", "label": "勾选", "disabled": False, "checked": "yes"}},
+    {"tag": "input", "control": {"kind": "radio", "label": "选项", "disabled": False,
+                                  "checked": False, "group": "unsafe group"}},
+    {"tag": "input", "control": {"kind": "range", "label": "值", "disabled": False,
+                                  "min": 10, "max": 1, "step": 0, "value": 5}},
+    {"tag": "select", "control": {"kind": "select", "label": "选择", "disabled": False,
+                                   "selected": "missing"},
+     "children": [{"tag": "option", "text": "A", "control": {
+         "kind": "option", "value": "a", "disabled": False, "selected": True,
+     }}]},
+    {"tag": "option", "text": "A", "control": {
+        "kind": "option", "value": "a", "disabled": False, "selected": True,
+    }},
+    {"tag": "summary", "text": "孤立摘要"},
+    {"tag": "details", "control": {"kind": "disclosure", "open": True},
+     "children": [{"tag": "p", "text": "缺少 summary"}]},
+    {"tag": "button", "control": {"kind": "copy", "label": "复制", "text": "x"*150001}},
 ])
-def test_native_interaction_contract_rejects_unbounded_or_unsupported_controls(root):
+def test_native_interactive_controls_reject_unsafe_or_incomplete_shapes(root):
     with pytest.raises(ValueError):
         validate_native_snapshot({"version": 1, "revision": 1, "root": root})
+
+
+def test_native_select_enforces_option_cap_and_disclosure_summary_uniqueness():
+    options = [
+        {"tag": "option", "text": f"Option {index}", "control": {
+            "kind": "option", "value": f"v{index}", "disabled": False,
+            "selected": index == 0,
+        }}
+        for index in range(65)
+    ]
+    with pytest.raises(ValueError, match="64 option"):
+        validate_native_snapshot({"version": 1, "revision": 1, "root": {
+            "tag": "select", "control": {
+                "kind": "select", "label": "Choose", "disabled": False, "selected": "v0",
+            }, "children": options,
+        }})
+
+    with pytest.raises(ValueError, match="exactly one leading summary"):
+        validate_native_snapshot({"version": 1, "revision": 1, "root": {
+            "tag": "details", "control": {"kind": "disclosure", "open": True},
+            "children": [
+                {"tag": "summary", "text": "First"},
+                {"tag": "summary", "text": "Second"},
+                {"tag": "p", "text": "Content"},
+            ],
+        }})
+
+
+def test_svg_chart_titles_and_descriptions_survive_native_and_legacy_validation():
+    from app.native_content_v1 import native_public_v1_tree
+
+    chart = {"version": 1, "revision": 9, "root": {
+        "tag": "svg", "attrs": {"viewBox": "0 0 640 320"},
+        "children": [
+            {"tag": "title", "text": "季度收入趋势"},
+            {"tag": "desc", "text": "按季度展示收入变化"},
+            {"tag": "path", "attrs": {"d": "M0 0 L640 320", "stroke": "#123456"}},
+        ],
+    }}
+    value = validate_native_snapshot(chart)
+    assert value == chart
+    assert value["root"]["children"][0]["text"] == "季度收入趋势"
+    assert value["root"]["children"][1]["text"] == "按季度展示收入变化"
+    legacy = native_public_v1_tree(value["root"])
+    assert legacy["tag"] == "span"
+    assert legacy["children"][0] == {"tag": "span", "text": "季度收入趋势"}

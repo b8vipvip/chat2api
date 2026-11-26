@@ -165,3 +165,17 @@ The Mode 1 event journal now persists bounded Worker deltas, snapshots, citation
 For a still-running request, the authenticated SSE recovery endpoint replays missing Worker deltas from Last-Event-ID as explicitly unverified provisional text. The browser ignores duplicate event cursors, restores provisional snapshots after cursor reset, and replaces provisional text with the canonical final delivery when it arrives. Final delivery append is an atomic prefix-resume operation: a process restart after some chunks are durable appends only the missing suffix. A completed terminal marker is written only after the exact final projection is durable; if the process stops between text persistence and terminal publication, recovery repairs the terminal cursor from matching completed Telemetry and journal state. Conflicting prefixes fail closed, and first-terminal-wins remains authoritative.
 
 This is code-level durable SSE replay; it does not claim that a Worker event never received by the server can be reconstructed from nowhere. Full citation/reference-card parity, arbitrary live audio/video capture and complete ChatGPT component parity remain open acceptance items. KaTeX rendering is implemented for supported TeX expressions with a MathML/text fallback for unsupported or invalid input. Real Worker disconnect/reconnect and Broker/server restart behavior remain part of the end-to-end acceptance matrix.
+
+### W-03 — safe declarative interactive controls (2026-11-26)
+
+The first native-interaction delivery slice adds a typed control contract to the existing request-scoped native snapshot. It does not execute or transport upstream JavaScript:
+
+- Native disclosures (details / summary) preserve their open state and remain locally expandable.
+- Labeled checkbox, radio and range inputs preserve bounded state. Radio groups are re-namespaced per rendered snapshot so separate messages cannot interfere.
+- Single-select controls preserve at most 64 bounded options and the selected option.
+- SVG chart title/description nodes are preserved as native SVG metadata so browsers can expose hover tooltips and accessible descriptions.
+- A recognized code-block copy button is reconstructed as a local clipboard action only when it can be associated with exactly one nearby code block.
+- Worker capture, the Python snapshot authority and the browser renderer each validate the same typed control schema. Unsupported input types, form submission, arbitrary button actions, event handlers, inline scripts and unknown control properties are rejected or omitted.
+- The legacy /v1/native-content projection downgrades these controls to inert text so older consumers do not receive unknown interactive semantics.
+
+Checkbox/radio/range/select state is currently a local Web Chat preview; changing it does not submit a value to the upstream ChatGPT page. The renderer labels this limitation. This slice does NOT claim remote action parity for generated apps, tabs, interactive chart legends, canvas/WebGL, iframe widgets, tool buttons or arbitrary React event handlers. Those require a separately authorized, request-scoped action bridge and remain open under Issue #854. The authoritative Markdown answer remains available if a component cannot be safely represented.

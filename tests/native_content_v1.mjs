@@ -11,11 +11,9 @@ class Element {
     for(const c of children) if(c instanceof Element)c.parentElement=this;
   }
   getAttribute(name){return Object.prototype.hasOwnProperty.call(this.attributes,name)?this.attributes[name]:null;}
-  get textContent(){return this._textContent!==undefined?this._textContent:this.childNodes.map(child=>child instanceof Element?child.textContent:String(child?.nodeValue ?? child?.textContent ?? "")).join("");}
-  set textContent(value){this._textContent=String(value);this.childNodes=[];}
   getBoundingClientRect(){return {width:100,height:100};}
   matches(s){return false;}
-  closest(s){return null;}
+  closest(s){if(String(s).includes("form")){for(let node=this;node;node=node.parentElement)if(node.tagName==="FORM")return node;}return null;}
   querySelectorAll(selector){
     const out=[];
     const walk=node=>{
@@ -873,7 +871,7 @@ assert.equal(rasterActive.nativeFinalCaptureCommitted,true);
 assert.equal(rasterActive.nativeCanvasOmitted,0);
 
 // Prior Windows v1.0.3 vs Chrome comparison found three standalone
-// "\\n  " text nodes (9 characters) discarded inside pre/code. The formal
+// "\n  " text nodes (9 characters) discarded inside pre/code. The formal
 // request observer must retain them, not just the independent diagnostic.
 const codeNative=new Element("PRE",[new Element("CODE",[
   new Element("SPAN",[{nodeType:3,nodeValue:"x=1"},{nodeType:3,nodeValue:"\n  "},
@@ -1042,21 +1040,77 @@ await unsafeCitationCtx.__CHAT2API_NATIVE_CONTENT_V1__.capture({
 assert.equal(unsafeCitationSends.length,1);
 assert.equal(unsafeCitationSends[0].event.snapshot.root.children[0].href,undefined);
 
-const copyButton = new Element("BUTTON",[],{"aria-label":"Copy code"});
-const copyCode = new Element("CODE",[{nodeType:3,nodeValue:"print('native copy')"}]);
-const copyPre = new Element("PRE",[copyCode]);
-const summary = new Element("SUMMARY",[{nodeType:3,nodeValue:"展开详情"}]);
-const disclosure = new Element("DETAILS",[summary,new Element("P",[{nodeType:3,nodeValue:"更多内容"}])]);
-disclosure.open = true;
-const interactiveRoot = new Element("DIV",[copyButton,copyPre,disclosure]);
-const interactiveTree = capture.snapshot({...active,lastCandidateNode:interactiveRoot,nativeRevision:0,nativeSentRevision:0});
-assert.ok(interactiveTree);
-const capturedCopy = interactiveTree.root.children.find(item=>item.tag==="button");
-assert.equal(capturedCopy.action,"copy-text");
-assert.equal(capturedCopy.action_value,"print('native copy')");
-const capturedDisclosure = interactiveTree.root.children.find(item=>item.tag==="details");
-assert.equal(capturedDisclosure.open,true);
-assert.equal(capturedDisclosure.children[0].tag,"summary");
-const unsupportedButton = new Element("BUTTON",[{nodeType:3,nodeValue:"Run"}]);
-assert.equal(capture.snapshot({...active,lastCandidateNode:new Element("DIV",[unsupportedButton]),nativeRevision:0,nativeSentRevision:0}),null,
-  "unknown button actions are not serialized as executable controls");
+
+// Safe declarative controls: disclosure state, bounded choices, local sliders,
+// and code-copy actions are captured without carrying upstream event handlers.
+const interactiveSent=[];
+const interactiveCtx={...ctx,chrome:{runtime:{sendMessage:async message=>{
+  interactiveSent.push(message);return {ok:true,committed:true};
+}}}};
+delete interactiveCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,interactiveCtx);
+const summary=new Element("SUMMARY",[{nodeType:3,nodeValue:"展开计算步骤"}]);
+const detailBody=new Element("P",[{nodeType:3,nodeValue:"第一步：整理数据"}]);
+const details=new Element("DETAILS",[summary,detailBody]);details.open=true;
+const checkbox=new Element("INPUT");checkbox.type="checkbox";checkbox.checked=true;
+checkbox.attributes["aria-label"]="包含税费";
+const radio=new Element("INPUT");radio.type="radio";radio.name="period";
+radio.checked=true;radio.attributes["aria-label"]="按月统计";
+const range=new Element("INPUT");range.type="range";range.min="0";range.max="100";
+range.step="5";range.value="45";range.attributes["aria-label"]="透明度";
+const select=new Element("SELECT");select.value="bar";
+select.attributes["aria-label"]="图表类型";
+select.options=[
+  {value:"bar",label:"柱状图",selected:true,disabled:false},
+  {value:"line",label:"折线图",selected:false,disabled:false},
+];
+const copyButton=new Element("BUTTON");copyButton.attributes["aria-label"]="Copy code";
+const runButton=new Element("BUTTON");runButton.attributes["aria-label"]="Run";
+const textInput=new Element("INPUT");textInput.type="text";textInput.attributes["aria-label"]="自由文本";
+const formCheckbox=new Element("INPUT");formCheckbox.type="checkbox";formCheckbox.attributes["aria-label"]="表单内选项";
+const form=new Element("FORM",[formCheckbox]);
+const pre=new Element("PRE",[{nodeType:3,nodeValue:"print('hello')\n"}]);pre.textContent="print('hello')\n";
+const interactiveRoot=new Element("DIV",[details,checkbox,radio,range,select,runButton,textInput,form,copyButton,pre]);
+const interactiveActive={requestId:"req_interactive12345",submitStartedAt:Date.now(),
+  lastCandidateNode:interactiveRoot};
+const interactiveCapture=interactiveCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+await interactiveCapture.capture(interactiveActive,true);
+assert.equal(interactiveSent.length,1);
+const interactiveTree=interactiveSent[0].event.snapshot.root;
+const interactiveNodes=interactiveTree.children;
+assert.deepEqual(Array.from(interactiveNodes,node=>node.tag),
+  ["details","input","input","input","select","button","pre"]);
+assert.deepEqual(JSON.parse(JSON.stringify(interactiveNodes[0].control)),{kind:"disclosure",open:true});
+assert.equal(interactiveNodes[0].children[0].tag,"summary");
+assert.deepEqual(JSON.parse(JSON.stringify(interactiveNodes[1].control)),
+  {kind:"checkbox",label:"包含税费",disabled:false,checked:true});
+assert.deepEqual(JSON.parse(JSON.stringify(interactiveNodes[2].control)),
+  {kind:"radio",label:"按月统计",disabled:false,checked:true,group:"period"});
+assert.deepEqual(JSON.parse(JSON.stringify(interactiveNodes[3].control)),
+  {kind:"range",label:"透明度",disabled:false,min:0,max:100,step:5,value:45});
+assert.equal(interactiveNodes[4].control.selected,"bar");
+assert.equal(interactiveNodes[4].children.length,2);
+assert.equal(interactiveNodes[4].children[0].control.value,"bar");
+assert.deepEqual(JSON.parse(JSON.stringify(interactiveNodes[5].control)),
+  {kind:"copy",label:"Copy code",text:"print('hello')\n"});
+assert.ok(!JSON.stringify(interactiveSent).includes("onclick"));
+
+const svgNS="http://www.w3.org/2000/svg";
+const chartTitle=new Element("TITLE",[{nodeType:3,nodeValue:"季度收入趋势"}]);
+chartTitle.textContent="季度收入趋势";chartTitle.namespaceURI=svgNS;
+const chartDesc=new Element("DESC",[{nodeType:3,nodeValue:"按季度展示收入变化"}]);
+chartDesc.textContent="按季度展示收入变化";chartDesc.namespaceURI=svgNS;
+const chartPath=new Element("PATH");chartPath.namespaceURI=svgNS;
+chartPath.attributes.d="M0 0 L640 320";chartPath.attributes.stroke="#123456";
+const nativeInteractiveSvg=new Element("SVG",[chartTitle,chartDesc,chartPath]);nativeInteractiveSvg.namespaceURI=svgNS;
+nativeInteractiveSvg.getBoundingClientRect=()=>({width:640,height:320});
+const chartReply=capture.snapshot({
+  requestId:"req_nativecharttitle01",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[nativeInteractiveSvg]),
+});
+assert.equal(chartReply.root.children[0].tag,"svg");
+assert.equal(chartReply.root.children[0].children[0].tag,"title");
+assert.equal(chartReply.root.children[0].children[0].text,"季度收入趋势");
+assert.equal(chartReply.root.children[0].children[1].tag,"desc");
+assert.equal(chartReply.root.children[0].children[1].text,"按季度展示收入变化");
+console.log("Native interactive controls: safe disclosure, choice, select, slider and code-copy capture");
