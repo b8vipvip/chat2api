@@ -464,3 +464,54 @@ test("model chains GitHub Pull Request listing into changed-file patch retrieval
   assert.ok(messages.some(item => item.role === "tool" && item.content.includes("src/parser.py")));
   assert.ok(messages.some(item => item.role === "tool" && item.content.includes("@@ -1,2 +1,3 @@")));
 });
+
+
+
+test("GitHub issue pagination continues only when the previous page reports has_more", async () => {
+  const h = makeHarness({
+    selectedPlugins:["github"],
+    planner:[
+      '{"tool_calls":[{"name":"github.list_issues","arguments":{"repository":"acme/project","state":"open","page":1}}]}',
+      '{"tool_calls":[{"name":"github.list_issues","arguments":{"repository":"acme/project","state":"open","page":2}}]}',
+      '{"tool_calls":[]}',
+    ],
+    toolHandler:async (provider,tool,args) => {
+      assert.equal(provider,"github");
+      assert.equal(tool,"list_issues");
+      if (args.page === 1) {
+        return {
+          data:[{number:12,title:"Issue 12",state:"open",url:"https://github.com/acme/project/issues/12"}],
+          pagination:{page:1,per_page:20,has_more:true},
+        };
+      }
+      assert.equal(args.page,2);
+      return {
+        data:[{number:13,title:"Issue 13",state:"open",url:"https://github.com/acme/project/issues/13"}],
+        pagination:{page:2,per_page:20,has_more:false},
+      };
+    },
+  });
+  const messages = [{role:"user",content:"请检查 acme/project 的全部开放 Issue"}];
+  const result = await h.api.runAutonomousPluginToolLoop(
+    messages,h.assistant,"key-1",h.recoveryApi,"req-planner-1",
+  );
+  assert.equal(result.plannerRequests,3);
+  assert.equal(result.toolCalls,2);
+  assert.deepEqual(h.calls.map(row => row[2].page),[1,2]);
+  const toolMessages = messages.filter(item => item.role === "tool");
+  assert.equal(toolMessages.length,2);
+  assert.ok(toolMessages[0].content.includes('"has_more":true'));
+  assert.ok(toolMessages[1].content.includes('"has_more":false'));
+});
+
+test("GitHub pagination rejects booleans, fractional pages and pages above the cap", () => {
+  const h = makeHarness({selectedPlugins:["github"]});
+  const definition = h.api.selectedPluginToolDefinitions()
+    .find(item => item.name === "github.search_repositories");
+  for (const page of [true,1.5,101,0]) {
+    assert.throws(
+      () => h.api.validatePluginToolArguments(definition,{query:"chat2api",page}),
+      /分页页码/,
+    );
+  }
+});
