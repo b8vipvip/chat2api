@@ -534,7 +534,9 @@ def test_github_plugin_ui_prompts_for_oauth_scope_reauthorization() -> None:
     ).read_text(encoding="utf-8")
     assert 'plugin.reauthorization_required === true' in source
     assert '"重新授权并更新权限"' in source
-    assert 'await apiJson("/api/user/plugins/" + encodeURIComponent(plugin.id) + "/disconnect", {method:"POST"});' in source
+    assert 'const disconnected = await apiJson(' in source
+    assert '"/api/user/plugins/" + encodeURIComponent(plugin.id) + "/disconnect"' in source
+    assert 'body:JSON.stringify({require_provider_revocation:requireRevocation})' in source
     assert 'plugin.connected && !plugin.reauthorization_required' in source
     assert 'if (plugin.connected && plugin.enabled && plugin.configured && !needsReauthorization)' in source
 
