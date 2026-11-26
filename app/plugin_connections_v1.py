@@ -153,8 +153,15 @@ class PluginOAuthStore:
         if provider_id not in PROVIDERS:
             raise PluginConnectionError("Unsupported plugin provider")
         previous = self.provider(provider_id) or {}
-        client_id = str(client_id or previous.get("client_id") or "").strip()
-        client_secret = str(client_secret or previous.get("client_secret") or "").strip()
+        requested_client_id = str(client_id or "").strip()
+        requested_secret = str(client_secret or "").strip()
+        if (
+            requested_client_id and requested_client_id != str(previous.get("client_id") or "")
+            and not requested_secret
+        ):
+            raise PluginConnectionError("更换 OAuth Client ID 时必须同时填写新的 Client Secret")
+        client_id = requested_client_id or str(previous.get("client_id") or "").strip()
+        client_secret = requested_secret or str(previous.get("client_secret") or "").strip()
         if len(client_id) > 256 or len(client_secret) > 2048:
             raise PluginConnectionError("OAuth credentials exceed the allowed length")
         if enabled and (not client_id or not client_secret):
