@@ -453,7 +453,7 @@ def test_github_repository_issue_pull_request_commit_and_file_read_tools(tmp_pat
                         "updated_at": "2026-11-25T00:00:00Z",
                     })
                 if url == "https://api.github.com/repos/acme/project/pulls/8/files":
-                    assert kwargs["params"]["per_page"] == 20
+                    assert kwargs["params"] == {"per_page": 5, "page": 1}
                     return FakeResponse([{
                         "filename": "src/parser.py", "status": "modified",
                         "additions": 3, "deletions": 1, "changes": 4,
@@ -509,7 +509,7 @@ def test_github_repository_issue_pull_request_commit_and_file_read_tools(tmp_pat
             ("get_issue", {"repository": "acme/project", "issue_number": 7}),
             ("list_pull_requests", {"repository": "acme/project", "state": "open"}),
             ("get_pull_request", {"repository": "acme/project", "pull_number": 8}),
-            ("get_pull_request_files", {"repository": "acme/project", "pull_number": 8}),
+            ("get_pull_request_files", {"repository": "acme/project", "pull_number": 8, "page": 1}),
             ("list_commits", {"repository": "acme/project", "ref": "main"}),
             ("search_code", {"query": "repo:acme/project parser"}),
             ("get_file_contents", {"repository": "acme/project", "path": "docs/hello world.md", "ref": "main"}),
