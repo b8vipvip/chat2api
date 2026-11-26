@@ -900,3 +900,23 @@ def test_native_interactive_controls_validate_and_legacy_projection_is_inert():
 def test_native_interactive_controls_reject_unsafe_or_incomplete_shapes(root):
     with pytest.raises(ValueError):
         validate_native_snapshot({"version": 1, "revision": 1, "root": root})
+
+
+def test_svg_chart_titles_and_descriptions_survive_native_and_legacy_validation():
+    from app.native_content_v1 import native_public_v1_tree
+
+    chart = {"version": 1, "revision": 9, "root": {
+        "tag": "svg", "attrs": {"viewBox": "0 0 640 320"},
+        "children": [
+            {"tag": "title", "text": "季度收入趋势"},
+            {"tag": "desc", "text": "按季度展示收入变化"},
+            {"tag": "path", "attrs": {"d": "M0 0 L640 320", "stroke": "#123456"}},
+        ],
+    }}
+    value = validate_native_snapshot(chart)
+    assert value == chart
+    assert value["root"]["children"][0]["text"] == "季度收入趋势"
+    assert value["root"]["children"][1]["text"] == "按季度展示收入变化"
+    legacy = native_public_v1_tree(value["root"])
+    assert legacy["tag"] == "span"
+    assert legacy["children"][0] == {"tag": "span", "text": "季度收入趋势"}
