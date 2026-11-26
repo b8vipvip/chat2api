@@ -144,6 +144,9 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         assert "validatePluginToolArguments" in script.text
         assert "executePluginToolCall" in script.text
         assert "runAutonomousPluginToolLoop" in script.text
+        assert 'assistant.requestId = "";' in script.text
+        assert 'message.recoveryStatus === "tool_planning"' in script.text
+        assert "页面刷新导致工具调用中断" in script.text
         assert "maxRounds = 3" in script.text
         assert "maxToolCalls = 6" in script.text
         assert "knownGmailMessageIds" in script.text
