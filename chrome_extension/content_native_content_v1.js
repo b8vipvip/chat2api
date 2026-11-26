@@ -7,7 +7,7 @@
   "use strict";
   const KEY = "__CHAT2API_NATIVE_CONTENT_V1__";
   if (globalThis[KEY]) return;
-  const tags = new Set("div p span strong em h1 h2 h3 h4 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br a".split(" "));
+  const tags = new Set("div p span strong em h1 h2 h3 h4 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br a details summary input select option button".split(" "));
   // Do not serialize MathML as HTML div/span descendants; its parent structure
   // and unit labels require the MathML namespace through the server and UI.
   const mathTags = new Set("math semantics mrow mi mo mn msub mfrac mtext annotation mover munder munderover msup msubsup msqrt mroot mspace mstyle mtable mtr mtd mmultiscripts mphantom menclose mpadded merror ms mfenced mprescripts none mstack mlongdiv msgroup msrow mscarries mscarry msline".split(" "));
@@ -81,7 +81,7 @@
     if(key==="font-weight")return ["normal","bold","400","500","600","700"].includes(v)?v:"";
     return svgNumber.test(v)?v:"";
   }
-  const banned = "button,script,style,form,nav,header,footer,aside,input,textarea,select,iframe,canvas,[role='menu'],[contenteditable='true']";
+  const banned = "button,script,style,form,nav,header,footer,aside,textarea,iframe,canvas,[role='menu'],[contenteditable='true']";
   const styleKeys = {
     display: ["block","inline","inline-block","flex","inline-flex","grid","block math","inline math"],
     flexDirection: ["row","row-reverse","column","column-reverse"],
@@ -295,6 +295,39 @@
     }
     return found;
   }
+  function controlLabel(element) {
+    const labelled=[...(element.labels || [])]
+      .map(label=>String(label.innerText || label.textContent || "").replace(/\s+/g," ").trim())
+      .filter(Boolean).join(" ");
+    const raw=element.getAttribute?.("aria-label") || element.getAttribute?.("title")
+      || labelled || element.closest?.("label")?.textContent || "";
+    return String(raw).replace(/\s+/g," ").trim().slice(0,160);
+  }
+  function plainText(node) {
+    if (!node) return "";
+    if (typeof node.innerText==="string" && node.innerText) return node.innerText;
+    if (typeof node.textContent==="string" && node.textContent) return node.textContent;
+    return [...(node.childNodes || [])].map(child=>child.nodeType===Node.TEXT_NODE
+      ? String(child.nodeValue || "") : plainText(child)).join("");
+  }
+  function copyCodeForButton(button) {
+    let scope=button.parentElement;
+    for(let depth=0;scope && depth<4;depth++,scope=scope.parentElement) {
+      const blocks=composedFind(scope,node=>node.tagName?.toLowerCase()==="pre",3);
+      if(blocks.length>1) return "";
+      if(blocks.length===1) {
+        const code=composedFind(blocks[0],node=>node.tagName?.toLowerCase()==="code",2)[0] || blocks[0];
+        const text=plainText(code);
+        if(text && text.length<=150000) return text;
+        return "";
+      }
+    }
+    return "";
+  }
+  function safeOptionText(value,limit=128) {
+    return typeof value==="string" && value.length<=limit &&
+      !/[\u0000-\u001f\u007f]/.test(value);
+  }
   function snapshot(active) {
     if (active) { active.nativeStructuralFailure = ""; active.nativeStructuralMaxChildren = 0; active.nativeSvgChartsCaptured = 0; active.nativeGraphicsUnsupported = 0; active.nativeCanvasOmitted = 0; active.nativeCodeEditorCaptured = 0; }
     if (!active?.submitStartedAt || typeof Element === "undefined") return null;
@@ -344,6 +377,20 @@
       if (tag === "button") {
         if (element.closest?.("nav,aside,footer,header,form,[role='menu'],[role='dialog']"))
           return null;
+        const label=controlLabel(element) || plainText(element).replace(/\s+/g," ").trim().slice(0,80);
+        if (/^(?:copy(?: code)?|复制(?:代码)?)$/i.test(label)) {
+          const text=copyCodeForButton(element);
+          if(text) {
+            if(chars+text.length>textBudget) {
+              active.nativeStructuralFailure="interactive-copy-text-budget";
+              truncated=true;
+              return null;
+            }
+            chars+=text.length;nodes+=1;
+            return {tag:"button",control:{kind:"copy",
+              label:/复制/.test(label)?"复制代码":"Copy code",text}};
+          }
+        }
         const graphical = composedFind(element,node=>{
           const type=node.tagName?.toLowerCase();
           const raster=type==="img" && !node.closest?.("svg");
@@ -390,6 +437,63 @@
         return null;
       }
       if (ignore(element)) return null;
+      if (element.closest?.("form")) return null;
+      const controlStyle=getComputedStyle(element);
+      if(controlStyle.display==="none" || controlStyle.visibility==="hidden") return null;
+      if(tag==="input") {
+        const kind=String(element.type || element.getAttribute?.("type") || "text").toLowerCase();
+        const label=controlLabel(element);
+        if(!label) return null;
+        const disabled=Boolean(element.disabled);
+        let control=null;
+        if(kind==="checkbox") control={kind,label,disabled,checked:Boolean(element.checked)};
+        else if(kind==="radio") {
+          const group=String(element.name || element.getAttribute?.("name") || "");
+          if(!/^[A-Za-z0-9_-]{1,64}$/.test(group)) return null;
+          control={kind,label,disabled,checked:Boolean(element.checked),group};
+        } else if(kind==="range") {
+          const number=(property,attribute,fallback)=>{
+            const raw=element[property] ?? element.getAttribute?.(attribute);
+            return raw===null || raw===undefined || raw==="" ? fallback : Number(raw);
+          };
+          const min=number("min","min",0),max=number("max","max",100),
+            step=number("step","step",1),value=Number(element.value);
+          if(![min,max,step,value].every(Number.isFinite) ||
+             Math.abs(min)>1000000 || Math.abs(max)>1000000 ||
+             Math.abs(step)>1000000 || Math.abs(value)>1000000 ||
+             min>=max || step<=0 || value<min || value>max) return null;
+          control={kind,label,disabled,min,max,step,value};
+        } else return null;
+        nodes+=1;
+        return {tag:"input",style:safeStyle(element),control};
+      }
+      if(tag==="select") {
+        if(element.multiple || !controlLabel(element)) return null;
+        const options=[...(element.options || [])];
+        if(!options.length || options.length>64) return null;
+        const children=[];
+        for(const option of options) {
+          const value=String(option.value ?? option.getAttribute?.("value") ?? "");
+          const label=String(option.label || plainText(option)).replace(/\s+/g," ").trim();
+          if(!safeOptionText(value) || !safeOptionText(label) || !label) return null;
+          chars+=label.length;
+          children.push({tag:"option",text:label,control:{
+            kind:"option",value,disabled:Boolean(option.disabled),selected:Boolean(option.selected),
+          }});
+        }
+        const selected=String(element.value ?? "");
+        if(!safeOptionText(selected) || !options.some(option=>String(option.value ?? "")===selected)) return null;
+        nodes+=children.length+1;
+        if(chars>textBudget) {
+          active.nativeStructuralFailure="interactive-select-text-budget";
+          truncated=true;
+          return null;
+        }
+        return {tag:"select",style:safeStyle(element),control:{
+          kind:"select",label:controlLabel(element),disabled:Boolean(element.disabled),selected,
+        },children};
+      }
+      if(tag==="option") return null;
       const rect = element.getBoundingClientRect?.();
       const computed = getComputedStyle(element);
       if (computed.display === "none" || computed.visibility === "hidden") return null;
@@ -534,6 +638,7 @@
           !(svgElement && ["path","line","rect","circle","ellipse","polyline","polygon"].includes(mapped))) return null;
       nodes += 1;
       const result = {tag:mapped,style:safeStyle(element)};
+      if(mapped==="details") result.control={kind:"disclosure",open:Boolean(element.open)};
       if(mathElement){
         const mathAttrs=safeMathAttributes(element);
         if(Object.keys(mathAttrs).length)result.math_attrs=mathAttrs;
