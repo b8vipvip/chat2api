@@ -969,6 +969,28 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                             "commits": row.get("commits"), "created_at": row.get("created_at"),
                             "updated_at": row.get("updated_at"),
                         }]
+                    elif tool_name == "get_pull_request_files":
+                        repository = _github_repo_name(payload.get("repository"))
+                        pull_number = _github_resource_number(payload.get("pull_number"))
+                        response = await client.get(
+                            "https://api.github.com/repos/" + repository + "/pulls/" + str(pull_number) + "/files",
+                            params={"per_page": 20},
+                            headers=github_headers,
+                        )
+                        response.raise_for_status()
+                        data = [{
+                            "number": pull_number,
+                            "filename": str(row.get("filename") or "")[:500],
+                            "status": str(row.get("status") or "")[:40],
+                            "additions": row.get("additions"),
+                            "deletions": row.get("deletions"),
+                            "changes": row.get("changes"),
+                            "sha": str(row.get("sha") or "")[:40],
+                            "previous_filename": str(row.get("previous_filename") or "")[:500],
+                            "url": row.get("blob_url") or row.get("html_url"),
+                            "patch": str(row.get("patch") or "")[:6000],
+                            "patch_truncated": len(str(row.get("patch") or "")) > 6000,
+                        } for row in response.json()[:20] if isinstance(row, dict)]
                     elif tool_name == "list_commits":
                         repository = _github_repo_name(payload.get("repository"))
                         params = {"per_page": 20}
