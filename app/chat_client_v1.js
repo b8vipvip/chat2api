@@ -1898,6 +1898,19 @@
           closed_at:String(row.closed_at || "").slice(0,80),
         }));
       }
+      if (toolName === "get_pull_request_files") {
+        return rows.slice(0,8).map(row => ({
+          number:row.number,
+          filename:String(row.filename || "").slice(0,500),
+          status:String(row.status || "").slice(0,40),
+          additions:row.additions,deletions:row.deletions,changes:row.changes,
+          sha:String(row.sha || "").slice(0,40),
+          previous_filename:String(row.previous_filename || "").slice(0,500),
+          url:String(row.url || "").slice(0,2048),
+          patch:String(row.patch || "").slice(0,1200),
+          patch_truncated:row.patch_truncated === true,
+        }));
+      }
       if (toolName === "list_pull_requests" || toolName === "get_pull_request") {
         return rows.slice(0,20).map(row => ({
           number:row.number,title:String(row.title || "").slice(0,300),
@@ -1989,6 +2002,11 @@
         {
           name:"github.get_pull_request",provider:"github",toolName:"get_pull_request",
           description:"Read pull request details, merge status and change statistics for an exact repository and pull number. Use a number supplied in the conversation or returned by github.list_pull_requests; do not guess.",
+          parameters:{type:"object",additionalProperties:false,properties:{repository:repositorySchema,pull_number:{type:"integer",minimum:1,maximum:2147483647}},required:["repository","pull_number"]},
+        },
+        {
+          name:"github.get_pull_request_files",provider:"github",toolName:"get_pull_request_files",
+          description:"Read the changed file list and bounded unified diff patches for one pull request. Use a PR number supplied by the user or returned by github.list_pull_requests.",
           parameters:{type:"object",additionalProperties:false,properties:{repository:repositorySchema,pull_number:{type:"integer",minimum:1,maximum:2147483647}},required:["repository","pull_number"]},
         },
         {
@@ -2119,7 +2137,7 @@
     if (definition.name === "github.get_issue") {
       return {repository:repositoryValue(),issue_number:positiveNumber(args.issue_number)};
     }
-    if (definition.name === "github.get_pull_request") {
+    if (definition.name === "github.get_pull_request" || definition.name === "github.get_pull_request_files") {
       return {repository:repositoryValue(),pull_number:positiveNumber(args.pull_number)};
     }
     if (definition.name === "github.list_commits") {
@@ -2167,6 +2185,8 @@
         url = String(row.url || "");
         if (definition.toolName === "list_issues" || definition.toolName === "get_issue") {
           title = "#" + String(row.number || "") + " " + String(row.title || "GitHub Issue");
+        } else if (definition.toolName === "get_pull_request_files") {
+          title = "PR #" + String(row.number || "") + " · " + String(row.filename || "changed file");
         } else if (definition.toolName === "list_pull_requests" || definition.toolName === "get_pull_request") {
           title = "PR #" + String(row.number || "") + " " + String(row.title || "GitHub Pull Request");
         } else if (definition.toolName === "list_commits") {
@@ -2176,7 +2196,7 @@
         } else {
           title = String(row.full_name || "GitHub repository");
         }
-        snippet = String(row.description || row.body || row.message || row.content || row.state || "").slice(0,420);
+        snippet = String(row.description || row.body || row.message || row.patch || row.content || row.state || "").slice(0,420);
       } else if (definition.provider === "gmail") {
         const messageId = String(row.id || row.message_id || "");
         if (!/^[A-Za-z0-9_-]{1,256}$/.test(messageId)) return;
@@ -2244,7 +2264,7 @@
           throw new Error("必须先列出本轮 Issue，或使用用户消息中明确提供的 Issue 编号。");
         }
       }
-      if (definition.name === "github.get_pull_request") {
+      if (definition.name === "github.get_pull_request" || definition.name === "github.get_pull_request_files") {
         const key = args.repository + "#" + args.pull_number;
         const explicit = new RegExp("(?:^|[^0-9])#" + args.pull_number + "(?:$|[^0-9])").test(userPromptText)
           || new RegExp("\\b(?:pull request|pr)\\s*(?:number\\s*)?#?" + args.pull_number + "\\b","i").test(userPromptText);
