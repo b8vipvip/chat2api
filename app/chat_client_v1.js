@@ -1916,7 +1916,7 @@
           parameters:{
             type:"object",additionalProperties:false,
             properties:{
-              repository:{type:"string",pattern:"^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$",description:"Exact owner/repository"},
+              repository:{type:"string",pattern:"^(?!\\.{1,2}/)[A-Za-z0-9_.-]{1,100}/(?!\\.{1,2}$)[A-Za-z0-9_.-]{1,100}$",description:"Exact owner/repository"},
               state:{type:"string",enum:["open","closed","all"],description:"Issue state filter"},
             },
             required:["repository"],
@@ -2000,7 +2000,7 @@
     }
     if (definition.name === "github.list_issues") {
       const repository = typeof args.repository === "string" ? args.repository.trim() : "";
-      if (!/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(repository)) {
+      if (!/^(?!\.{1,2}\/)[A-Za-z0-9_.-]{1,100}\/(?!\.{1,2}$)[A-Za-z0-9_.-]{1,100}$/.test(repository)) {
         throw new Error("GitHub 仓库必须为明确的 owner/repository");
       }
       const stateValue = args.state === undefined ? "open" :
