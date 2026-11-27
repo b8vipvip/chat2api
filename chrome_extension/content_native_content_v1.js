@@ -347,6 +347,7 @@
     const controlTargets = new Map();
     let controlIndex = 0;
     const bindControl = (element, kind) => {
+      if (revision > 999999 || controlIndex >= 9999) return null;
       const id = "nc_" + revision + "_" + (++controlIndex);
       controlTargets.set(id, {element, kind});
       return id;
@@ -484,7 +485,8 @@
           control={kind,label,disabled,min,max,step,value};
         } else return null;
         nodes+=1;
-        return {tag:"input",interaction_id:bindControl(element,kind),style:safeStyle(element),control};
+        const interactionId = bindControl(element,kind);
+        return {tag:"input",...(interactionId?{interaction_id:interactionId}:{}),style:safeStyle(element),control};
       }
       if(tag==="select") {
         const selectLabel=controlLabel(element);
@@ -510,7 +512,8 @@
         }
         chars+=selectLabel.length;
         nodes+=children.length+1;
-        return {tag:"select",interaction_id:bindControl(element,"select"),style:safeStyle(element),control:{
+        const interactionId = bindControl(element,"select");
+        return {tag:"select",...(interactionId?{interaction_id:interactionId}:{}),style:safeStyle(element),control:{
           kind:"select",label:selectLabel,disabled:Boolean(element.disabled),selected,
         },children};
       }
@@ -672,7 +675,8 @@
       const result = {tag:mapped,style:safeStyle(element)};
       if(mapped==="details") {
         result.control={kind:"disclosure",open:Boolean(element.open)};
-        result.interaction_id=bindControl(element,"disclosure");
+        const interactionId = bindControl(element,"disclosure");
+        if (interactionId) result.interaction_id=interactionId;
       }
       if(mathElement){
         const mathAttrs=safeMathAttributes(element);
