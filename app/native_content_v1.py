@@ -392,13 +392,30 @@ def _validate_native_control(tag: str, control: object) -> dict:
                 or type(control.get("disabled")) is not bool
                 or type(control.get("selected")) is not bool):
             raise ValueError("Invalid option state")
+    elif tag == "div":
+        if (set(control) != {"kind", "group"} or kind != "tablist"
+                or not isinstance(control.get("group"), str)
+                or not re.fullmatch(r"tg_[1-9][0-9]{0,3}", control["group"])):
+            raise ValueError("Invalid native tablist")
     elif tag == "button":
-        if set(control) != {"kind", "label", "text"} or kind != "copy":
+        if kind == "copy":
+            if set(control) != {"kind", "label", "text"}:
+                raise ValueError("Unsupported button action")
+            if (not _control_text(control.get("label"), 80) or not control["label"].strip()
+                    or not _control_text(control.get("text"), 150_000, allow_newlines=True)
+                    or not control["text"]):
+                raise ValueError("Invalid copy action")
+        elif kind == "tab":
+            if set(control) != {"kind", "label", "disabled", "selected", "group"}:
+                raise ValueError("Unsupported tab action")
+            if (not _control_text(control.get("label"), 160) or not control["label"].strip()
+                    or type(control.get("disabled")) is not bool
+                    or type(control.get("selected")) is not bool
+                    or not isinstance(control.get("group"), str)
+                    or not re.fullmatch(r"tg_[1-9][0-9]{0,3}", control["group"])):
+                raise ValueError("Invalid native tab control")
+        else:
             raise ValueError("Unsupported button action")
-        if (not _control_text(control.get("label"), 80) or not control["label"].strip()
-                or not _control_text(control.get("text"), 150_000, allow_newlines=True)
-                or not control["text"]):
-            raise ValueError("Invalid copy action")
     else:
         raise ValueError("Control metadata on unsupported element")
     return dict(control)
@@ -414,8 +431,12 @@ def validate_native_snapshot(payload: object) -> dict:
         raise ValueError("Invalid revision")
     count, chars = 0, 0
     interaction_ids: set[str] = set()
+    tablist_groups: set[str] = set()
+    tab_control_groups: set[str] = set()
+    selected_tabs: dict[str, int] = {}
 
-    def node(value: object, depth: int, parent_tag: str | None = None) -> dict:
+    def node(value: object, depth: int, parent_tag: str | None = None,
+             parent_tab_group: str | None = None) -> dict:
         nonlocal count, chars
         if depth > MAX_DEPTH or count >= MAX_NODES or not isinstance(value, dict):
             raise ValueError("Native tree exceeds limit")
@@ -476,7 +497,7 @@ def validate_native_snapshot(payload: object) -> dict:
         result = {"tag": tag}
         if "interaction_id" in value:
             interaction_id = value["interaction_id"]
-            if (tag not in {"details", "input", "select"}
+            if (tag not in {"details", "input", "select", "button"}
                     or not isinstance(interaction_id, str)
                     or not re.fullmatch(r"nc_[1-9][0-9]{0,6}_[1-9][0-9]{0,3}", interaction_id)
                     or interaction_id in interaction_ids):
@@ -485,6 +506,7 @@ def validate_native_snapshot(payload: object) -> dict:
             result["interaction_id"] = interaction_id
         if tag in {"details", "input", "select", "option", "button"} and "control" not in value:
             raise ValueError("Interactive element is missing safe control metadata")
+        child_tab_group = parent_tab_group
         if "control" in value:
             result["control"] = _validate_native_control(tag, value["control"])
             control = result["control"]
@@ -492,6 +514,20 @@ def validate_native_snapshot(payload: object) -> dict:
             chars += len(control.get("label", ""))
             if chars > MAX_TEXT:
                 raise ValueError("Native interactive content too large")
+            if tag == "div" and control.get("kind") == "tablist":
+                group = control["group"]
+                if group in tablist_groups:
+                    raise ValueError("Duplicate native tablist group")
+                tablist_groups.add(group)
+                child_tab_group = group
+            elif tag == "button" and control.get("kind") == "tab":
+                group = control["group"]
+                if parent_tab_group != group:
+                    raise ValueError("Native tab is outside its tablist")
+                tab_control_groups.add(group)
+                selected_tabs[group] = selected_tabs.get(group, 0) + int(control["selected"])
+                if selected_tabs[group] > 1:
+                    raise ValueError("Native tablist has multiple selected tabs")
         if tag == "summary" and parent_tag != "details":
             raise ValueError("Summary must belong to a disclosure")
         if tag == "option" and parent_tag != "select":
@@ -615,7 +651,7 @@ def validate_native_snapshot(payload: object) -> dict:
             if tag in SVG_TAGS and any(not isinstance(child, dict)
                     or child.get("tag") not in SVG_TAGS for child in children):
                 raise ValueError("Invalid SVG children")
-            result["children"] = [node(child, depth + 1, tag) for child in children]
+            result["children"] = [node(child, depth + 1, tag, child_tab_group) for child in children]
         if tag == "select":
             option_controls = [child.get("control", {}) for child in result.get("children", [])]
             selected_options = [item for item in option_controls if item.get("selected") is True]
@@ -625,6 +661,8 @@ def validate_native_snapshot(payload: object) -> dict:
         return result
 
     root = node(payload["root"], 0)
+    if tab_control_groups != tablist_groups:
+        raise ValueError("Native tabs must belong to a captured tablist")
     output = {"version": 1, "revision": revision, "root": root}
     if len(json.dumps(output, ensure_ascii=False).encode("utf-8")) > MAX_BYTES:
         raise ValueError("Native snapshot byte cap")

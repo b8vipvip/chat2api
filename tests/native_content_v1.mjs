@@ -15,11 +15,22 @@ class Element {
   click(){
     if(this.type==="checkbox")this.checked=!this.checked;
     else if(this.type==="radio")this.checked=true;
+    this.dispatchEvent({type:"click"});
     this.dispatchEvent({type:"change"});
   }
   getBoundingClientRect(){return {width:100,height:100};}
   matches(s){return false;}
-  closest(s){if(String(s).includes("form")){for(let node=this;node;node=node.parentElement)if(node.tagName==="FORM")return node;}return null;}
+  closest(s){
+    const selector=String(s);
+    if(selector.includes("[role='tablist']")){
+      for(let node=this;node;node=node.parentElement)
+        if(node.getAttribute?.("role")==="tablist")return node;
+    }
+    if(selector.includes("form")){
+      for(let node=this;node;node=node.parentElement)if(node.tagName==="FORM")return node;
+    }
+    return null;
+  }
   querySelectorAll(selector){
     const out=[];
     const walk=node=>{
@@ -1220,5 +1231,26 @@ const disabledSnapshot=interactionApi.snapshot({
   lastCandidateNode:disabledRoot,
 });
 assert.equal(dispatchNativeAction("set_checked",disabledSnapshot.root.children[0].interaction_id,true,disabledSnapshot.revision,"req_nativeactionsdisabled").ok,false);
+
+const tabA=new Element("BUTTON",[],{role:"tab","aria-selected":"true","aria-label":"Overview"});
+tabA.type="button";tabA.disabled=false;
+const tabB=new Element("DIV",[],{role:"tab","aria-selected":"false","aria-label":"Details"});
+tabB.disabled=false;
+const tabList=new Element("DIV",[tabA,tabB],{role:"tablist","aria-label":"Sections"});
+const tabSnapshot=interactionApi.snapshot({
+  requestId:"req_nativetabs12345",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[tabList]),
+});
+assert.equal(tabSnapshot.root.children[0].control.kind,"tablist");
+const [capturedTabA,capturedTabB]=tabSnapshot.root.children[0].children;
+assert.equal(capturedTabA.control.kind,"tab");
+assert.equal(capturedTabA.control.group,capturedTabB.control.group);
+assert.equal(capturedTabA.control.selected,true);
+assert.equal(capturedTabB.control.selected,false);
+assert.match(capturedTabB.interaction_id,/^nc_1_2$/);
+assert.deepEqual(dispatchNativeAction("set_selected",capturedTabB.interaction_id,true,1,
+  "req_nativetabs12345"),{ok:true,revision:2});
+assert.ok(tabB.dispatchedEvents.includes("click"),
+  "tab actions must click only the captured role=tab element in its original tablist");
 console.log("native-content-request-scoped-interaction-actions-passed");
 

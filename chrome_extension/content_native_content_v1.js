@@ -347,6 +347,13 @@
     const revision = Math.max(active.nativeRevision || 0, active.nativeSentRevision || 0) + 1;
     const controlTargets = new Map();
     let controlIndex = 0;
+    const tabGroupIds = new Map();
+    let tabGroupIndex = 0;
+    const tabGroupId = tabList => {
+      if (!tabList || tabGroupIndex >= 9999) return "";
+      if (!tabGroupIds.has(tabList)) tabGroupIds.set(tabList,"tg_"+(++tabGroupIndex));
+      return tabGroupIds.get(tabList);
+    };
     const bindControl = (element, kind) => {
       if (revision > 999999 || controlIndex >= 9999) return null;
       const id = "nc_" + revision + "_" + (++controlIndex);
@@ -386,6 +393,33 @@
       // An earlier predicate matched every SVG descendant (path/g/rect), thus
       // duplicating graphics and exhausting the 40-candidate cap before a
       // later image. Apply visibility before the bounded match limit.
+      const semanticRole=String(element.getAttribute?.("role") || "").toLowerCase();
+      if (semanticRole === "tab") {
+        const tabList=element.closest?.("[role='tablist']");
+        const group=tabGroupId(tabList);
+        const selectedRaw=element.getAttribute?.("aria-selected");
+        const label=controlLabel(element) || plainText(element).replace(/\s+/g," ").trim();
+        if (!group || !label || label.length>160
+            || !["true","false"].includes(selectedRaw)
+            || element.closest?.("nav,aside,footer,header,form,[role='menu'],[role='dialog']")) return null;
+        if(chars+label.length>textBudget) {
+          active.nativeStructuralFailure="interactive-tab-label-budget";
+          truncated=true;
+          return null;
+        }
+        chars+=label.length;
+        nodes+=1;
+        const disabled=Boolean(element.disabled || element.matches?.(":disabled")
+          || element.getAttribute?.("aria-disabled")==="true");
+        const interactionId=bindControl(element,"tab");
+        if(!interactionId)return null;
+        return {
+          tag:"button",
+          interaction_id:interactionId,
+          style:safeStyle(element),
+          control:{kind:"tab",label,disabled,selected:selectedRaw==="true",group},
+        };
+      }
       if (tag === "button") {
         if (element.closest?.("nav,aside,footer,header,form,[role='menu'],[role='dialog']"))
           return null;
@@ -674,6 +708,9 @@
           !(svgElement && ["path","line","rect","circle","ellipse","polyline","polygon"].includes(mapped))) return null;
       nodes += 1;
       const result = {tag:mapped,style:safeStyle(element)};
+      if (semanticRole === "tablist" && tabGroupIds.has(element)) {
+        result.control={kind:"tablist",group:tabGroupIds.get(element)};
+      }
       if(mapped==="details") {
         result.control={kind:"disclosure",open:Boolean(element.open)};
         const interactionId = bindControl(element,"disclosure");
@@ -1227,6 +1264,14 @@
         else element.value = value;
         element.dispatchEvent(new Event("input",{bubbles:true,composed:true}));
         element.dispatchEvent(new Event("change",{bubbles:true,composed:true}));
+      } else if (target.kind === "tab" && action === "set_selected" && value === true) {
+        if (element.getAttribute?.("role") !== "tab"
+            || !element.closest?.("[role='tablist']")
+            || element.getAttribute?.("aria-disabled") === "true"
+            || element.getAttribute?.("aria-selected") === null) {
+          return {ok:false,error:"native-tab-no-longer-valid"};
+        }
+        if (element.getAttribute("aria-selected") !== "true") element.click();
       } else {
         return {ok:false,error:"native-control-action-not-allowed"};
       }

@@ -227,13 +227,21 @@
     if (tag==="option") return exact(["kind","value","disabled","selected"]) &&
       control.kind==="option" && safeControlText(control.value,128) &&
       typeof control.disabled==="boolean" && typeof control.selected==="boolean";
-    if (tag==="button") return exact(["kind","label","text"]) && control.kind==="copy" &&
-      safeControlText(control.label,80) && control.label.trim().length>0 &&
-      safeControlText(control.text,150000,true) && control.text.length>0;
+    if (tag==="div") return exact(["kind","group"]) && control.kind==="tablist" &&
+      typeof control.group==="string" && /^tg_[1-9][0-9]{0,3}$/.test(control.group);
+    if (tag==="button") {
+      if (control.kind==="copy") return exact(["kind","label","text"]) &&
+        safeControlText(control.label,80) && control.label.trim().length>0 &&
+        safeControlText(control.text,150000,true) && control.text.length>0;
+      return control.kind==="tab" && exact(["kind","label","disabled","selected","group"]) &&
+        safeControlText(control.label,160) && control.label.trim().length>0 &&
+        typeof control.disabled==="boolean" && typeof control.selected==="boolean" &&
+        typeof control.group==="string" && /^tg_[1-9][0-9]{0,3}$/.test(control.group);
+    }
     return false;
   }
   let renderSequence=0;
-  function validateNode(value,depth,parentTag,counts) {
+  function validateNode(value,depth,parentTag,counts,parentTabGroup=null) {
     if (!value || typeof value !== "object" || Array.isArray(value) || depth > 64 || counts.nodes >= MAX_NODES) return false;
     counts.nodes += 1;
     const tag = value.tag;
@@ -243,22 +251,39 @@
     const allowed = new Set(["tag","text","children","style","media_index","intrinsic_width","intrinsic_height","source_sha256","attrs","math_attrs","col_span","row_span","href","control","interaction_id"]);
     if (Object.keys(value).some(key => !allowed.has(key))) return false;
     const controlRequired=["details","input","select","option","button"].includes(tag);
-    if (controlRequired !== (value.control !== undefined)) return false;
+    if (controlRequired && value.control === undefined) return false;
     if (value.control !== undefined && !validControl(tag,value.control)) return false;
+    if (value.control !== undefined && !controlRequired
+        && !(tag==="div" && value.control.kind==="tablist")) return false;
     if (value.interaction_id !== undefined) {
       if (!(counts.interactionIds instanceof Set) || counts.interactionIds.has(value.interaction_id)) return false;
       counts.interactionIds.add(value.interaction_id);
-      if (!["details","input","select"].includes(tag)
+      if (!["details","input","select","button"].includes(tag)
           || typeof value.interaction_id !== "string"
           || !/^nc_[1-9][0-9]{0,6}_[1-9][0-9]{0,3}$/.test(value.interaction_id)) return false;
       if (tag==="details" && value.control?.kind!=="disclosure") return false;
       if (tag==="input" && !["checkbox","radio","range"].includes(value.control?.kind)) return false;
       if (tag==="select" && value.control?.kind!=="select") return false;
+      if (tag==="button" && value.control?.kind!=="tab") return false;
     }
+    let childTabGroup=parentTabGroup;
     if (value.control !== undefined) {
       // Copy text is the same adjacent code block already counted in the tree.
       counts.chars += (value.control.label || "").length;
       if (counts.chars > MAX_TEXT) return false;
+      if (tag==="div" && value.control.kind==="tablist") {
+        const group=value.control.group;
+        if (counts.tablistGroups.has(group)) return false;
+        counts.tablistGroups.add(group);
+        childTabGroup=group;
+      } else if (tag==="button" && value.control.kind==="tab") {
+        const group=value.control.group;
+        if (parentTabGroup!==group) return false;
+        counts.tabControlGroups.add(group);
+        const selected=(counts.tabSelected.get(group)||0)+(value.control.selected?1:0);
+        if (selected>1) return false;
+        counts.tabSelected.set(group,selected);
+      }
     }
     if (["details","select"].includes(tag) && !Array.isArray(value.children)) return false;
     if (["input","select","button"].includes(tag) && value.text !== undefined) return false;
@@ -300,7 +325,7 @@
       if (["img","hr","br","input","option","button"].includes(tag) || !Array.isArray(value.children) || value.children.length > 8192) return false;
       if (tag==="select" && (!value.children.length || value.children.length>64 || value.children.some(child=>child?.tag!=="option"))) return false;
       if (tag==="details" && (value.children.filter(child=>child?.tag==="summary").length>1 || (value.children.some(child=>child?.tag==="summary") && value.children[0]?.tag!=="summary"))) return false;
-      for (const child of value.children) if (!validateNode(child,depth+1,tag,counts)) return false;
+      for (const child of value.children) if (!validateNode(child,depth+1,tag,counts,childTabGroup)) return false;
       if (tag==="select") {
         const selected=value.children.filter(child=>child.control?.selected===true);
         if (selected.length!==1 || selected[0].control.value!==value.control.selected) return false;
@@ -315,7 +340,13 @@
         !Array.isArray(snapshot.assets) || snapshot.assets.length > 40 ||
         !snapshot.assets.every(item => typeof item === "string" && item.length <= 2048) ||
         !Array.isArray(snapshot.files) || snapshot.files.length > 10) return false;
-    return validateNode(snapshot.root,0,"",{nodes:0,chars:0,interactionIds:new Set()});
+    const counts={
+      nodes:0,chars:0,interactionIds:new Set(),
+      tablistGroups:new Set(),tabControlGroups:new Set(),tabSelected:new Map(),
+    };
+    if (!validateNode(snapshot.root,0,"",counts)) return false;
+    return counts.tablistGroups.size===counts.tabControlGroups.size
+      && [...counts.tablistGroups].every(group=>counts.tabControlGroups.has(group));
   }
   function bindNativeInteraction(element,value,context,eventName,action,readValue,restoreValue,onAccepted=null) {
     const interactionId = String(value?.interaction_id || "");
@@ -360,6 +391,50 @@
     return true;
   }
 
+  function bindTabInteraction(element,value,context) {
+    const interactionId=String(value?.interaction_id || "");
+    const control=value?.control || {};
+    const group=String(control.group || "");
+    if (control.selected && group) context.tabSelection.set(group,element);
+    if (!interactionId || typeof context?.onInteraction!=="function") return false;
+    let pending=false;
+    element.addEventListener("click",async()=>{
+      if (pending || element.getAttribute("aria-selected")==="true") return;
+      pending=true;
+      element.setAttribute("aria-busy","true");
+      try {
+        const result=await context.onInteraction({
+          interaction_id:interactionId,
+          revision:context.revision,
+          action:"set_selected",
+          value:true,
+        });
+        if (result?.ok!==true) throw new Error("native tab action was not acknowledged");
+        const previous=context.tabSelection.get(group);
+        if (previous && previous!==element) {
+          previous.setAttribute("aria-selected","false");
+          previous.tabIndex=-1;
+        }
+        element.setAttribute("aria-selected","true");
+        element.tabIndex=0;
+        context.tabSelection.set(group,element);
+        element.removeAttribute?.("aria-invalid");
+        if (result?.persisted===false) {
+          element.setAttribute("title","标签已同步到 Worker，但服务器尚未确认持久化");
+        } else {
+          element.removeAttribute?.("title");
+        }
+      } catch (_) {
+        element.setAttribute("aria-invalid","true");
+        element.setAttribute("title","标签切换同步失败，请重试");
+      } finally {
+        pending=false;
+        element.removeAttribute?.("aria-busy");
+      }
+    });
+    return true;
+  }
+
   function createNode(value,snapshot,depth,context) {
     if (depth > 64) throw new Error("native tree depth exceeded");
     const tag = value.tag;
@@ -386,6 +461,22 @@
           element.textContent="复制失败";
         });
       });
+      return element;
+    } else if (tag==="button" && value.control?.kind==="tab") {
+      element=document.createElement("button");
+      element.type="button";
+      element.className="native-tab-control";
+      element.disabled=value.control.disabled;
+      element.textContent=value.control.label;
+      element.setAttribute("role","tab");
+      element.setAttribute("aria-label",value.control.label);
+      element.setAttribute("aria-selected",String(value.control.selected));
+      element.setAttribute("aria-disabled",String(value.control.disabled));
+      element.tabIndex=value.control.selected?0:-1;
+      if (value.style) Object.entries(value.style).forEach(([key,item])=>{
+        if(validStyle(key,item,tag))element.style[key]=item;
+      });
+      bindTabInteraction(element,value,context);
       return element;
     } else if (tag==="input") {
       element=document.createElement("input");
@@ -465,6 +556,7 @@
     if (value.attrs) Object.entries(value.attrs).forEach(([key,item]) => { if (validSvgAttribute(key,item)) element.setAttribute(key,item); });
     if (value.math_attrs) Object.entries(value.math_attrs).forEach(([key,item]) => { if (validMathAttribute(tag,key,item)) element.setAttribute(key,item); });
     if (value.control?.kind==="disclosure") element.open=value.control.open;
+    if (value.control?.kind==="tablist") element.setAttribute("role","tablist");
     if (value.col_span !== undefined) element.colSpan = value.col_span;
     if (value.row_span !== undefined) element.rowSpan = value.row_span;
     if (tag === "img") {
@@ -498,6 +590,8 @@
       if (!node || typeof node!=="object") continue;
       if (["input","select","details"].includes(node.tag)
           && (!node.interaction_id || typeof onInteraction!=="function")) return true;
+      if (node.tag==="button" && node.control?.kind==="tab"
+          && (!node.interaction_id || typeof onInteraction!=="function")) return true;
       pending.push(...(node.children || []));
     }
     return false;
@@ -510,7 +604,7 @@
       state.textContent = (snapshot.finality === "verified-final" ? "ChatGPT 原生内容 · 已验证完成" : "ChatGPT 原生内容 · 实时更新，最终校验中") +
         (hasLocalOnlyControls(snapshot.root,onInteraction) ? " · 部分控件仅在本地预览" : "");
       const root = document.createElement("div"); root.className = "native-rich-root";
-      root.appendChild(createNode(snapshot.root,snapshot,0,{radioGroups:new Map(),radioSelection:new Map(),radioIndex:0,prefix:"native-"+(++renderSequence),onInteraction,revision:snapshot.revision}));
+      root.appendChild(createNode(snapshot.root,snapshot,0,{radioGroups:new Map(),radioSelection:new Map(),radioIndex:0,tabSelection:new Map(),prefix:"native-"+(++renderSequence),onInteraction,revision:snapshot.revision}));
       const files = document.createElement("div"); files.className = "native-generated-files";
       for (const item of snapshot.files) {
         if (!item || typeof item !== "object" || typeof item.filename !== "string") continue;

@@ -8,7 +8,10 @@ class FakeElement {
   appendChild(node) { this.childNodes.push(node); return node; }
   replaceChildren(...nodes) { this.childNodes=nodes; }
   setAttribute(name,value) { this.attributes[name]=value; }
+  getAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attributes,name)?this.attributes[name]:null; }
+  removeAttribute(name) { delete this.attributes[name]; }
   addEventListener(name,callback) { this.events??={}; this.events[name]=callback; }
+  click() { return this.events?.click?.(); }
 }
 const document = {
   createElement:(tag)=>new FakeElement(tag),
@@ -323,4 +326,49 @@ const duplicateInteractionId=structuredClone(actionable);
 duplicateInteractionId.root.children[2].interaction_id="nc_8_2";
 assert.equal(interactiveRenderer.validateSnapshot(duplicateInteractionId),false);
 console.log("native-renderer-upstream-interaction-callback-passed");
+
+const tabSnapshot={
+  version:1,revision:9,finality:"verified-final",assets:[],files:[],
+  root:{tag:"div",children:[
+    {tag:"div",control:{kind:"tablist",group:"tg_1"},children:[
+      {tag:"button",interaction_id:"nc_9_1",
+        control:{kind:"tab",label:"Overview",disabled:false,selected:true,group:"tg_1"}},
+      {tag:"button",interaction_id:"nc_9_2",
+        control:{kind:"tab",label:"Details",disabled:false,selected:false,group:"tg_1"}},
+    ]},
+  ]},
+};
+assert.equal(interactiveRenderer.validateSnapshot(tabSnapshot),true);
+const tabHost=new FakeElement("host");
+const tabCalls=[];
+assert.equal(interactiveRenderer.renderNativeSnapshot(tabHost,tabSnapshot,[],async payload=>{
+  tabCalls.push(payload);
+  return {ok:true,revision:payload.revision+1,persisted:true};
+}),true);
+assert.doesNotMatch(tabHost.childNodes[0].textContent,/本地预览/);
+const tabList=findAll(tabHost,node=>node.tagName==="div"&&node.attributes.role==="tablist")[0];
+const renderedTabs=findAll(tabHost,node=>node.tagName==="button"&&node.attributes.role==="tab");
+assert.equal(tabList.attributes.role,"tablist");
+assert.equal(renderedTabs.length,2);
+assert.equal(renderedTabs[0].attributes["aria-selected"],"true");
+assert.equal(renderedTabs[1].attributes["aria-selected"],"false");
+await renderedTabs[1].click();
+assert.deepEqual(tabCalls.map(call=>[call.interaction_id,call.action,call.value,call.revision]),[
+  ["nc_9_2","set_selected",true,9],
+]);
+assert.equal(renderedTabs[0].attributes["aria-selected"],"false");
+assert.equal(renderedTabs[0].tabIndex,-1);
+assert.equal(renderedTabs[1].attributes["aria-selected"],"true");
+assert.equal(renderedTabs[1].tabIndex,0);
+const localTabsHost=new FakeElement("host");
+assert.equal(interactiveRenderer.renderNativeSnapshot(localTabsHost,tabSnapshot),true);
+assert.match(localTabsHost.childNodes[0].textContent,/本地预览/);
+const malformedTabGroup=structuredClone(tabSnapshot);
+malformedTabGroup.root.children[0].control.group="unsafe";
+assert.equal(interactiveRenderer.validateSnapshot(malformedTabGroup),false);
+const arbitraryButton=structuredClone(tabSnapshot);
+arbitraryButton.root.children[0].children[1].control.kind="run";
+assert.equal(interactiveRenderer.validateSnapshot(arbitraryButton),false);
+console.log("native-renderer-semantic-tab-actions-passed");
+
 

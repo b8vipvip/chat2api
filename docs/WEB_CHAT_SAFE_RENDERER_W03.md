@@ -19,7 +19,7 @@ Status: the production /chat page loads the safe Markdown renderer, the native-c
 - Bounded SVG geometry/metadata and MathML presentation nodes/attributes.
 - Generated audio/video file cards using authenticated same-origin archive URLs and byte-range playback.
 - Tool/function-call activity and results as bounded, escaped, presentation-only cards; tool cards do not grant execution authority or determine request completion.
-- Typed interactive snapshots for disclosures, checkbox/radio/range/select controls and local code-copy actions. On verified-final snapshots, these controls use a narrow request-scoped action bridge to the original Worker tab; successful actions are persisted as a new native snapshot revision.
+- Typed interactive snapshots for disclosures, checkbox/radio/range/select controls, accessible tablists/tabs and local code-copy actions. On verified-final snapshots, supported controls use a narrow request-scoped action bridge to the original Worker tab; successful actions are persisted as a new native snapshot revision.
 
 ## Interaction support boundary
 
@@ -29,15 +29,16 @@ The typed controls currently have deliberately limited semantics:
 |---|---|---|
 | details/summary disclosure | User-triggered upstream state sync | Exact captured disclosure only |
 | Checkbox / radio / range / select | User-triggered upstream state sync | Exact captured control/value only |
+| Accessible tablist / tab | User-triggered upstream tab selection | Exact captured `role=tab` element in its original tablist |
 | Code-copy button | Local clipboard action | No upstream action |
 | SVG chart metadata | Browser-native title/description | No chart-legend/action bridge |
-| Arbitrary buttons, tabs, canvas/WebGL, iframe and React event handlers | Omitted or inert fallback | Not remotely executable |
+| Arbitrary buttons, chart actions, canvas/WebGL, iframe and React event handlers | Omitted or inert fallback | Not remotely executable |
 
-The implementation has a deliberately narrow remote-action bridge for typed disclosures and checkbox/radio/range/select controls. Each action is same-origin and owner-checked, bound to the verified-final snapshot revision and original Worker socket/tab, ACKed by the Worker, and committed as a new persisted snapshot revision. Stale revisions, detached controls, invalid options and out-of-range values fail closed. The bridge does not accept arbitrary JavaScript, generic DOM selectors, arbitrary button clicks or model-generated commands. Unsupported components retain the canonical Markdown answer or a safe inert fallback.
+The implementation has a deliberately narrow remote-action bridge for typed disclosures, checkbox/radio/range/select controls and accessible tab selection. A tab action is accepted only when the captured tab is nested under its validated tablist group; the Worker clicks that exact captured `role=tab` element. Each action is same-origin and owner-checked, bound to the verified-final snapshot revision and original Worker socket/tab, ACKed by the Worker, and committed as a new persisted snapshot revision. Stale revisions, detached controls, invalid options, out-of-range values, orphan tabs and ambiguous selected states fail closed. The bridge does not accept arbitrary JavaScript, generic DOM selectors, arbitrary button clicks or model-generated commands. Unsupported components retain the canonical Markdown answer or a safe inert fallback.
 
 ## Live media boundary
 
-Web Chat camera input is relayed as bounded JPEG/PNG/WebP frames (maximum 5 FPS, 300 frames and 64 MiB per session) into a synthetic WebRTC camera track in the Worker ChatGPT tab. The Worker confirms sender attachment and frame receipt; a detached sender is reported as snapshot fallback rather than being mislabeled as WebRTC delivery. This is not a direct browser-to-Worker camera track, and it does not establish frame-accurate audio/video synchronization. The active Live Voice media session is also not claimed to survive a complete Worker/browser restart.
+Web Chat camera input is relayed as bounded JPEG/PNG/WebP frames (maximum 5 FPS, 300 frames and 64 MiB per session) into a synthetic WebRTC camera track in the Worker ChatGPT tab. The Worker confirms sender attachment and frame receipt; a detached sender is reported as snapshot fallback rather than being mislabeled as WebRTC delivery. PCM input and camera frames now share a session-relative monotonic clock: the Worker schedules microphone PCM behind a bounded 160 ms jitter buffer and, when `CanvasCaptureMediaStreamTrack.requestFrame()` is available, requests each camera frame against the same AudioContext timeline. A 5 FPS timer-driven fallback remains available. Server diagnostics record local scheduling skew (`sync_skew_ms`); this is not proof of end-to-end skew at the remote WebRTC receiver. The active Live Voice media session is not claimed to survive a complete Worker/browser restart.
 
 Generated MP3/WAV/M4A/OGG/Opus/FLAC and MP4/WebM files are a separate archived-file delivery path; archived media playback is not equivalent to live A/V transport.
 
@@ -55,10 +56,9 @@ Generated MP3/WAV/M4A/OGG/Opus/FLAC and MP4/WebM files are a separate archived-f
 CI covers the schema validators, safe renderer DOM harness, native snapshot hydration, file/media integrity, citation handling, tool-state persistence and cross-device conversation merge behavior. CI does not substitute for a real signed-in Worker + ChatGPT staging session.
 
 Remaining Issue #854 work is specifically:
-1. Broader component parity remains incomplete: arbitrary buttons, app tabs, chart legends/actions, canvas/WebGL, iframe widgets and arbitrary React handlers are not remotely executable.
-2. Frame-accurate A/V synchronization across browser capture, server relay and Worker WebRTC clocks.
-3. Recovery semantics for an active Live Voice media call across a full Worker/browser restart; current text/SSE recovery must not be represented as live media continuity.
-4. Real staging acceptance for Worker reconnect, Broker/server restart, media/file integrity, usage settlement and cross-device browser behavior.
-5. Further component-by-component parity review; the allowlist intentionally does not execute arbitrary app code.
+1. Broader component parity remains incomplete: arbitrary buttons, interactive chart legends/actions, canvas/WebGL, iframe widgets and arbitrary React handlers are not remotely executable. Accessible `role=tablist` / `role=tab` selection is now supported through the typed action bridge.
+2. A full Worker/browser process restart destroys the original WebRTC PeerConnection and media tracks. The current implementation can start a new Voice session with conversation context, but cannot preserve the same active media call across process death; recovery UX must state this clearly.
+3. Real staging acceptance remains necessary for remote-end A/V timing, browser/Worker reconnect, Broker/server restart, media/file integrity, final usage settlement and cross-device browser behavior. Local `sync_skew_ms` is not remote receiver end-to-end evidence.
+4. Further component-by-component parity review; the allowlist intentionally does not execute arbitrary app code.
 
 Do not label already implemented citation, MathML/KaTeX, archive playback, sampled camera-frame relay or local typed-control rendering as absent. Equally, do not label the above remaining boundaries complete without implementation and evidence.
