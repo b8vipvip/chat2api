@@ -102,7 +102,7 @@ def _github_has_more(response: Any) -> bool:
 PROVIDERS: dict[str, dict[str, Any]] = {
     "github": {
         "name": "GitHub",
-        "description": "搜索仓库、查看 Issues 和评论、Pull Requests 和审查、分支、提交详情、目录及文件内容。仅开放读取操作。",
+        "description": "搜索仓库与 Issues、读取 Pull Requests 和 Review Threads、分支、提交、目录、文件、GitHub Actions 运行记录、Release 与 Tag。仅开放读取操作。",
         "authorize_url": "https://github.com/login/oauth/authorize",
         "token_url": "https://github.com/login/oauth/access_token",
         "api_base": "https://api.github.com",
