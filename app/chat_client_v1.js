@@ -2402,6 +2402,19 @@
       }
       return result;
     }
+    if (definition.name === "github.list_pull_review_thread_comments") {
+      const repository = repositoryValue();
+      const pull_number = positiveNumber(args.pull_number);
+      const thread_id = typeof args.thread_id === "string" ? args.thread_id.trim() : "";
+      const cursor = typeof args.cursor === "string" ? args.cursor : "";
+      if (!thread_id || thread_id.length > 200 || /[\\u0000-\\u001f\\u007f]/.test(thread_id)) {
+        throw new Error("GitHub review thread ID 无效");
+      }
+      if (!cursor || cursor.length > 1024 || /[\\u0000-\\u001f\\u007f]/.test(cursor)) {
+        throw new Error("GitHub review thread cursor 无效");
+      }
+      return {repository,pull_number,thread_id,cursor};
+    }
     if (definition.name === "github.get_file_contents") {
       const repository = repositoryValue();
       const path = typeof args.path === "string" ? args.path.trim() : "";
