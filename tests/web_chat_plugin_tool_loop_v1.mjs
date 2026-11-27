@@ -764,6 +764,8 @@ test("GitHub review thread comments can continue from the exact thread and comme
   assert.equal(result.toolCalls,3);
   assert.deepEqual(h.calls.map(row=>row[1]),["search_issues","list_pull_review_threads","list_pull_review_thread_comments"]);
   assert.equal(h.assistant.toolEvents[2].status,"completed");
+  assert.match(h.assistant.toolEvents[1].resultPreview,/PRRT_1/);
+  assert.match(h.assistant.toolEvents[1].resultPreview,/comment-cursor-1/);
   assert.ok(h.assistant.references.some(row=>row.url.includes("discussion_r45")));
 });
 
