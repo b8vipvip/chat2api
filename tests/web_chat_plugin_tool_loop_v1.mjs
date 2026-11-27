@@ -97,6 +97,7 @@ test("only selected and connected plugins are exposed to the model", () => {
     "github.get_issue","github.list_pull_requests","github.get_pull_request",
     "github.get_pull_request_files","github.list_commits","github.search_code","github.get_file_contents",
     "github.list_issue_comments","github.list_pull_reviews","github.list_pull_review_comments","github.list_pull_comments","github.list_branches","github.get_commit","github.list_directory",
+    "github.search_issues","github.list_releases","github.list_tags","github.list_workflow_runs","github.list_workflow_jobs","github.list_pull_review_threads",
   ]);
 });
 
@@ -565,4 +566,69 @@ test("GitHub comment, review and commit arguments are validated and resource-gro
   assert.equal(h.assistant.toolEvents[2].status,"failed");
   const defs=h.api.selectedPluginToolDefinitions();
   assert.throws(()=>h.api.validatePluginToolArguments(defs.find(d=>d.name==="github.list_directory"),{repository:"acme/project",path:"../secret"}),/相对路径/);
+});
+
+
+test("GitHub Actions workflow run results ground subsequent job inspection", async () => {
+  const h = makeHarness({
+    planner:[
+      JSON.stringify({tool_calls:[{name:"github.list_workflow_runs",arguments:{repository:"acme/project",branch:"main",status:"completed"}}]}),
+      JSON.stringify({tool_calls:[{name:"github.list_workflow_jobs",arguments:{repository:"acme/project",run_id:987654321}}]}),
+      '{"tool_calls":[]}',
+    ],
+    toolHandler:async (provider,tool,args) => {
+      if (tool === "list_workflow_runs") return {data:[{
+        id:987654321,name:"CI",display_title:"Build",status:"completed",conclusion:"success",
+        branch:"main",url:"https://github.com/acme/project/actions/runs/987654321",
+      }],pagination:{page:1,per_page:20,has_more:false}};
+      assert.equal(tool,"list_workflow_jobs");
+      assert.equal(args.run_id,987654321);
+      return {data:[{id:4,name:"Tests",status:"completed",conclusion:"success",
+        steps:[{name:"pytest",status:"completed",conclusion:"success"}]}]};
+    },
+  });
+  const result=await h.api.runAutonomousPluginToolLoop(
+    [{role:"user",content:"检查 acme/project main 分支最近的 GitHub Actions"}],
+    h.assistant,"key",h.recoveryApi,"req",
+  );
+  assert.equal(result.toolCalls,2);
+  assert.deepEqual(h.calls.map(row=>row[1]),["list_workflow_runs","list_workflow_jobs"]);
+  assert.match(h.assistant.toolEvents[1].resultPreview,/pytest/);
+});
+
+test("GitHub issue search grounds issue and PR references without guessing", async () => {
+  const h=makeHarness({
+    planner:[
+      JSON.stringify({tool_calls:[{name:"github.search_issues",arguments:{query:"is:open bug",repository:"acme/project"}}]}),
+      JSON.stringify({tool_calls:[{name:"github.list_pull_review_threads",arguments:{repository:"acme/project",pull_number:12}}]}),
+      JSON.stringify({tool_calls:[{name:"github.list_pull_review_threads",arguments:{repository:"acme/project",pull_number:12,cursor:"opaque-next"}}]}),
+    ],
+    toolHandler:async (provider,tool,args) => {
+      if(tool==="search_issues") return {data:[{
+        repository:"acme/project",number:12,title:"Fix regression",is_pull_request:true,
+        url:"https://github.com/acme/project/pull/12",
+      }]};
+      return {data:[{
+        repository:"acme/project",pull_number:12,thread_id:"PRRT_1",resolved:false,
+        path:"src/main.py",url:"https://github.com/acme/project/pull/12#discussion_r1",
+        comments:[{body:"Please fix",url:"https://github.com/acme/project/pull/12#discussion_r1"}],
+      }],pagination:{page:1,per_page:50,has_more:args.cursor===undefined,next_cursor:args.cursor===undefined?"opaque-next":null}};
+    },
+  });
+  const result=await h.api.runAutonomousPluginToolLoop(
+    [{role:"user",content:"查找 acme/project 中的 open bug"}],h.assistant,"key",h.recoveryApi,"req",
+  );
+  assert.equal(result.toolCalls,3);
+  assert.equal(h.calls[1][1],"list_pull_review_threads");
+  assert.equal(h.calls[2][2].cursor,"opaque-next");
+  assert.ok(h.assistant.references.some(row=>row.url.includes("discussion_r1")));
+});
+
+test("new GitHub tools reject unsafe filters, cursors and workflow IDs", () => {
+  const h=makeHarness({selectedPlugins:["github"]});
+  const defs=Object.fromEntries(h.api.selectedPluginToolDefinitions().map(item=>[item.name,item]));
+  assert.throws(()=>h.api.validatePluginToolArguments(defs["github.search_issues"],{query:"x",repository:"../bad"}),/owner\/repository/);
+  assert.throws(()=>h.api.validatePluginToolArguments(defs["github.list_workflow_runs"],{repository:"acme/project",status:"nope"}),/status/);
+  assert.throws(()=>h.api.validatePluginToolArguments(defs["github.list_workflow_jobs"],{repository:"acme/project",run_id:true}),/run ID/);
+  assert.throws(()=>h.api.validatePluginToolArguments(defs["github.list_pull_review_threads"],{repository:"acme/project",pull_number:12,cursor:"x".repeat(1025)}),/cursor/);
 });
