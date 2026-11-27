@@ -1264,6 +1264,14 @@
         else element.value = value;
         element.dispatchEvent(new Event("input",{bubbles:true,composed:true}));
         element.dispatchEvent(new Event("change",{bubbles:true,composed:true}));
+      } else if (target.kind === "tab" && action === "set_selected" && value === true) {
+        if (element.getAttribute?.("role") !== "tab"
+            || !element.closest?.("[role='tablist']")
+            || element.getAttribute?.("aria-disabled") === "true"
+            || element.getAttribute?.("aria-selected") === null) {
+          return {ok:false,error:"native-tab-no-longer-valid"};
+        }
+        if (element.getAttribute("aria-selected") !== "true") element.click();
       } else {
         return {ok:false,error:"native-control-action-not-allowed"};
       }
