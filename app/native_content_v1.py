@@ -413,6 +413,7 @@ def validate_native_snapshot(payload: object) -> dict:
     if type(revision) is not int or not 1 <= revision <= 1000000:
         raise ValueError("Invalid revision")
     count, chars = 0, 0
+    interaction_ids: set[str] = set()
 
     def node(value: object, depth: int, parent_tag: str | None = None) -> dict:
         nonlocal count, chars
@@ -469,9 +470,19 @@ def validate_native_snapshot(payload: object) -> dict:
             raise ValueError("Unscoped SVG element")
         if set(value) - {"tag", "text", "children", "style", "media_index",
                           "intrinsic_width", "intrinsic_height", "source_sha256", "attrs",
-                          "math_attrs", "col_span", "row_span", "href", "control"}:
+                          "math_attrs", "col_span", "row_span", "href", "control",
+                          "interaction_id"}:
             raise ValueError("Native element has unsafe attributes")
         result = {"tag": tag}
+        if "interaction_id" in value:
+            interaction_id = value["interaction_id"]
+            if (tag not in {"details", "input", "select"}
+                    or not isinstance(interaction_id, str)
+                    or not re.fullmatch(r"nc_[1-9][0-9]{0,6}_[1-9][0-9]{0,3}", interaction_id)
+                    or interaction_id in interaction_ids):
+                raise ValueError("Invalid or duplicate native interaction ID")
+            interaction_ids.add(interaction_id)
+            result["interaction_id"] = interaction_id
         if tag in {"details", "input", "select", "option", "button"} and "control" not in value:
             raise ValueError("Interactive element is missing safe control metadata")
         if "control" in value:
