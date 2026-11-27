@@ -9,6 +9,7 @@
   if (globalThis[KEY]) return;
   const nativeControlTargetsByRequest = new Map();
   const nativeControlLatestRevision = new Map();
+  const nativeControlAppliedActions = new Map();
   const tags = new Set("div p span strong em h1 h2 h3 h4 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br a details summary input select option button".split(" "));
   // Do not serialize MathML as HTML div/span descendants; its parent structure
   // and unit labels require the MathML namespace through the server and UI.
@@ -1174,6 +1175,16 @@
         || !/^[a-f0-9]{32}$/.test(String(message?.action_id || ""))) {
       return {ok:false,error:"invalid-interaction-envelope"};
     }
+    const actionId = String(message?.action_id || "");
+    const previousAction = nativeControlAppliedActions.get(actionId);
+    if (previousAction) {
+      if (previousAction.requestId === requestId
+          && previousAction.revision === revision
+          && previousAction.interactionId === interactionId) {
+        return {...previousAction.response,duplicate:true};
+      }
+      return {ok:false,error:"native-interaction-action-id-reused"};
+    }
     const revisions = nativeControlTargetsByRequest.get(requestId);
     if (nativeControlLatestRevision.get(requestId) !== revision) {
       return {ok:false,error:"native-interaction-revision-already-consumed"};
@@ -1224,7 +1235,14 @@
       revisions.set(revision + 1, targets);
       nativeControlLatestRevision.set(requestId, revision + 1);
       while (revisions.size > 8) revisions.delete(revisions.keys().next().value);
-      return {ok:true,revision:revision + 1};
+      const response = {ok:true,revision:revision + 1};
+      nativeControlAppliedActions.set(actionId,{
+        requestId,revision,interactionId,response,
+      });
+      while (nativeControlAppliedActions.size > 64) {
+        nativeControlAppliedActions.delete(nativeControlAppliedActions.keys().next().value);
+      }
+      return response;
     } catch (_) {
       return {ok:false,error:"native-control-action-failed"};
     }
