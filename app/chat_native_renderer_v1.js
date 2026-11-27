@@ -251,8 +251,10 @@
     const allowed = new Set(["tag","text","children","style","media_index","intrinsic_width","intrinsic_height","source_sha256","attrs","math_attrs","col_span","row_span","href","control","interaction_id"]);
     if (Object.keys(value).some(key => !allowed.has(key))) return false;
     const controlRequired=["details","input","select","option","button"].includes(tag);
-    if (controlRequired !== (value.control !== undefined)) return false;
+    if (controlRequired && value.control === undefined) return false;
     if (value.control !== undefined && !validControl(tag,value.control)) return false;
+    if (value.control !== undefined && !controlRequired
+        && !(tag==="div" && value.control.kind==="tablist")) return false;
     if (value.interaction_id !== undefined) {
       if (!(counts.interactionIds instanceof Set) || counts.interactionIds.has(value.interaction_id)) return false;
       counts.interactionIds.add(value.interaction_id);
