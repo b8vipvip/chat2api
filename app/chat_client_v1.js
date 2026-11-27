@@ -2681,7 +2681,7 @@
               resolved:row.resolved === true,outdated:row.outdated === true,
               path:String(row.path || "").slice(0,120),
               comments_truncated:row.comments_truncated === true,
-              comments_next_cursor:typeof row.comments_next_cursor === "string" ? row.comments_next_cursor.slice(0,512) : null,
+              comments_next_cursor:typeof row.comments_next_cursor === "string" ? row.comments_next_cursor.slice(0,1024) : null,
             }))
           : rawName === "github.list_pull_review_thread_comments"
             ? result.results.map(row => ({
@@ -2689,7 +2689,7 @@
                 resolved:row.resolved === true,outdated:row.outdated === true,
                 path:String(row.path || "").slice(0,200),
                 comments_truncated:row.comments_truncated === true,
-                comments_next_cursor:typeof row.comments_next_cursor === "string" ? row.comments_next_cursor.slice(0,512) : null,
+                comments_next_cursor:typeof row.comments_next_cursor === "string" ? row.comments_next_cursor.slice(0,1024) : null,
                 comments:Array.isArray(row.comments) ? row.comments.slice(0,2).map(comment => ({
                   id:comment.id,author:String(comment.author || "").slice(0,100),
                   body:String(comment.body || "").slice(0,240),url:String(comment.url || "").slice(0,2048),
@@ -2702,7 +2702,7 @@
           ...(result.results_truncated ? {results_truncated:true,omitted_results_count:result.omitted_results_count} : {}),
           ...(result.single_result_truncated ? {single_result_truncated:true} : {}),
         };
-        const previewLimit = rawName === "github.list_pull_review_threads" ? 3000 : 2000;
+        const previewLimit = rawName === "github.list_pull_review_threads" ? 6000 : 2000;
         while (JSON.stringify(preview).length > previewLimit && preview.results.length > 1) {
           preview.results.pop();
           preview.preview_truncated = true;
@@ -2785,7 +2785,7 @@
           message_created_at:String(message.createdAt || ""),
           toolName:String(event.toolName || "GitHub plugin").slice(0,100),
           arguments:String(event.arguments || "").slice(0,600),
-          resultPreview:event.resultPreview.slice(0,3000),
+          resultPreview:event.resultPreview.slice(0,6000),
           references:normalizeToolReferences(event.references).slice(0,4),
         };
         const weight = JSON.stringify(evidence).length;
