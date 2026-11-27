@@ -13,6 +13,7 @@ function makeHarness({selectedPlugins = ["github"], catalog = null, planner = []
   let nextId = 0;
   let nextRequest = 0;
   const calls = [];
+  const requests = [];
   const state = {
     selectedPlugins,
     pluginCatalog:catalog || [
@@ -23,6 +24,7 @@ function makeHarness({selectedPlugins = ["github"], catalog = null, planner = []
     abortController:null,
     selectedModel:"gpt-6",
     user:{user_id:"test-user-1"},
+    conversations:[],activeConversationId:"conversation-1",
   };
   const context = {
     state,
@@ -57,6 +59,7 @@ function makeHarness({selectedPlugins = ["github"], catalog = null, planner = []
     fetch:async (url, options) => {
       assert.equal(url, "/api/user/chat/completions");
       const body = JSON.parse(options.body);
+      requests.push(body);
       assert.equal(body.stream, false);
       assert.ok(body.messages.some(row =>
         row.role === "system" && String(row.content).includes("可用工具定义")
@@ -75,7 +78,7 @@ function makeHarness({selectedPlugins = ["github"], catalog = null, planner = []
     context,
   );
   return {
-    api,state,calls,
+    api,state,calls,requests,
     assistant:{id:"assistant-1",requestId:"req-visible",pending:true,toolEvents:[],lastEventId:0},
     recoveryApi:{createRequestId:() => "req-plan-" + (++nextRequest)},
   };
@@ -631,4 +634,28 @@ test("new GitHub tools reject unsafe filters, cursors and workflow IDs", () => {
   assert.throws(()=>h.api.validatePluginToolArguments(defs["github.list_workflow_runs"],{repository:"acme/project",status:"nope"}),/status/);
   assert.throws(()=>h.api.validatePluginToolArguments(defs["github.list_workflow_jobs"],{repository:"acme/project",run_id:true}),/run ID/);
   assert.throws(()=>h.api.validatePluginToolArguments(defs["github.list_pull_review_threads"],{repository:"acme/project",pull_number:12,cursor:"x".repeat(1025)}),/cursor/);
+});
+
+
+test("completed GitHub plugin evidence is available to later turns with stale-data warnings", async () => {
+  const h=makeHarness({planner:['{"tool_calls":[]}']});
+  h.state.conversations=[{
+    id:"conversation-1",
+    messages:[{
+      id:"assistant-previous",role:"assistant",createdAt:"2026-11-27T09:00:00Z",
+      toolEvents:[{
+        toolName:"GitHub · list_issues",callId:"plugin_old",resultId:"plugin_old_result",
+        status:"completed",arguments:'{"repository":"acme/project"}',output:"完成",
+        resultPreview:'{"tool":"github.list_issues","results":[{"number":9,"title":"Previously found issue"}]}',
+        references:[{url:"https://github.com/acme/project/issues/9",title:"Issue #9",snippet:"Earlier result"}],
+      }],
+    }],
+  }];
+  await h.api.runAutonomousPluginToolLoop(
+    [{role:"user",content:"根据刚才查到的 issue 继续分析"}],h.assistant,"key",h.recoveryApi,"req",
+  );
+  const context=h.requests[0].messages.find(row=>row.role==="system" && String(row.content).includes("历史插件证据"));
+  assert.ok(context,"previous completed plugin evidence must be included in planner context");
+  assert.match(context.content,/Previously found issue/);
+  assert.match(context.content,/旧结果|最新状态|重新查询/);
 });
