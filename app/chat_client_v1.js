@@ -2453,7 +2453,7 @@
         } else {
           title = String(row.full_name || "GitHub repository");
         }
-        snippet = String(row.description || row.body || row.message || row.patch || row.content || row.state || "").slice(0,420);
+        snippet = String(row.description || row.body || row.message || row.patch || row.content || row.state || (Array.isArray(row.comments) ? row.comments[0]?.body : "") || "").slice(0,420);
       } else if (definition.provider === "gmail") {
         const messageId = String(row.id || row.message_id || "");
         if (!/^[A-Za-z0-9_-]{1,256}$/.test(messageId)) return;
