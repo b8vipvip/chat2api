@@ -102,6 +102,7 @@ test("only selected and connected plugins are exposed to the model", () => {
     "github.get_pull_request_files","github.list_commits","github.search_code","github.get_file_contents",
     "github.list_issue_comments","github.list_pull_reviews","github.list_pull_review_comments","github.list_pull_comments","github.list_branches","github.get_commit","github.list_directory",
     "github.search_issues","github.list_releases","github.list_tags","github.list_workflow_runs","github.list_workflow_jobs","github.list_pull_review_threads",
+    "github.list_pull_review_thread_comments",
   ]);
 });
 
@@ -635,6 +636,12 @@ test("new GitHub tools reject unsafe filters, cursors and workflow IDs", () => {
   assert.throws(()=>h.api.validatePluginToolArguments(defs["github.list_workflow_runs"],{repository:"acme/project",status:"nope"}),/status/);
   assert.throws(()=>h.api.validatePluginToolArguments(defs["github.list_workflow_jobs"],{repository:"acme/project",run_id:true}),/run ID/);
   assert.throws(()=>h.api.validatePluginToolArguments(defs["github.list_pull_review_threads"],{repository:"acme/project",pull_number:12,cursor:"x".repeat(1025)}),/cursor/);
+  assert.throws(()=>h.api.validatePluginToolArguments(defs["github.list_pull_review_thread_comments"],{
+    repository:"acme/project",pull_number:12,thread_id:"PRRT_1",
+  }),/cursor/);
+  assert.throws(()=>h.api.validatePluginToolArguments(defs["github.list_pull_review_thread_comments"],{
+    repository:"acme/project",pull_number:12,thread_id:"bad\\nthread",cursor:"opaque",
+  }),/thread ID/);
 });
 
 
@@ -681,10 +688,11 @@ test("completed GitHub plugin evidence is available to later turns with stale-da
   await h.api.runAutonomousPluginToolLoop(
     [{role:"user",content:"根据刚才查到的 issue 和 CI 结果继续分析"}],h.assistant,"key",h.recoveryApi,"req",
   );
-  const context=h.requests[0].messages.find(row=>row.role==="system" && String(row.content).includes("历史插件证据"));
+  const context=h.requests[0].messages.find(row=>row.role==="user" && String(row.content).includes("历史插件查询证据"));
   assert.ok(context,"previous completed plugin evidence must be included in planner context");
   assert.match(context.content,/Previously found issue/);
   assert.match(context.content,/旧结果|最新状态|重新查询/);
+  assert.match(context.content,/外部不可信数据/);
   assert.equal(h.calls.length,2,"prior workflow and code-search evidence should authorize only their exact follow-up reads");
   assert.deepEqual(h.calls.map(row=>row[1]),["list_workflow_jobs","get_file_contents"]);
 });
@@ -702,4 +710,59 @@ test("GitHub Issue search cannot invent a repository qualifier", async () => {
   assert.equal(h.calls.length,0);
   assert.equal(h.assistant.toolEvents[0].status,"failed");
   assert.match(h.assistant.toolEvents[0].output,/repo: 必须来自用户消息或已发现的仓库/);
+});
+
+
+test("GitHub code search cannot invent a repository qualifier", async () => {
+  const h=makeHarness({
+    planner:[JSON.stringify({tool_calls:[{
+      name:"github.search_code",arguments:{query:"repo:unmentioned/secret token"},
+    }]})],
+  });
+  await h.api.runAutonomousPluginToolLoop(
+    [{role:"user",content:"搜索 GitHub 代码中的配置问题"}],h.assistant,"key",h.recoveryApi,"req",
+  );
+  assert.equal(h.calls.length,0);
+  assert.equal(h.assistant.toolEvents[0].status,"failed");
+  assert.match(h.assistant.toolEvents[0].output,/GitHub 搜索中的 repo:/);
+});
+
+test("GitHub review thread comments can continue from the exact thread and comment cursor", async () => {
+  const h=makeHarness({
+    planner:[
+      JSON.stringify({tool_calls:[{name:"github.search_issues",arguments:{query:"is:open review",repository:"acme/project"}}]}),
+      JSON.stringify({tool_calls:[{name:"github.list_pull_review_threads",arguments:{repository:"acme/project",pull_number:12}}]}),
+      JSON.stringify({tool_calls:[{name:"github.list_pull_review_thread_comments",arguments:{
+        repository:"acme/project",pull_number:12,thread_id:"PRRT_1",cursor:"comment-cursor-1",
+      }}]}),
+    ],
+    toolHandler:async (provider,tool,args) => {
+      if (tool === "search_issues") return {data:[{
+        repository:"acme/project",number:12,title:"Review issue",is_pull_request:true,
+        url:"https://github.com/acme/project/pull/12",
+      }]};
+      if (tool === "list_pull_review_threads") return {data:[{
+        repository:"acme/project",pull_number:12,thread_id:"PRRT_1",resolved:false,
+        path:"src/main.py",comments_truncated:true,comments_next_cursor:"comment-cursor-1",
+        comments:[{id:44,body:"Please fix",url:"https://github.com/acme/project/pull/12#discussion_r44"}],
+        url:"https://github.com/acme/project/pull/12#discussion_r44",
+      }]};
+      assert.equal(tool,"list_pull_review_thread_comments");
+      assert.equal(args.thread_id,"PRRT_1");
+      assert.equal(args.cursor,"comment-cursor-1");
+      return {data:[{
+        repository:"acme/project",pull_number:12,thread_id:"PRRT_1",resolved:false,
+        path:"src/main.py",comments_truncated:false,comments_next_cursor:null,
+        comments:[{id:45,body:"Fixed in the next commit",in_reply_to_id:44,url:"https://github.com/acme/project/pull/12#discussion_r45"}],
+        url:"https://github.com/acme/project/pull/12#discussion_r45",
+      }],pagination:{page:1,per_page:50,has_more:false,next_cursor:null}};
+    },
+  });
+  const result=await h.api.runAutonomousPluginToolLoop(
+    [{role:"user",content:"检查 acme/project 的 PR #12 审查讨论"}],h.assistant,"key",h.recoveryApi,"req",
+  );
+  assert.equal(result.toolCalls,3);
+  assert.deepEqual(h.calls.map(row=>row[1]),["search_issues","list_pull_review_threads","list_pull_review_thread_comments"]);
+  assert.equal(h.assistant.toolEvents[2].status,"completed");
+  assert.ok(h.assistant.references.some(row=>row.url.includes("discussion_r45")));
 });
