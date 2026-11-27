@@ -241,7 +241,7 @@
     return false;
   }
   let renderSequence=0;
-  function validateNode(value,depth,parentTag,counts) {
+  function validateNode(value,depth,parentTag,counts,parentTabGroup=null) {
     if (!value || typeof value !== "object" || Array.isArray(value) || depth > 64 || counts.nodes >= MAX_NODES) return false;
     counts.nodes += 1;
     const tag = value.tag;
@@ -266,10 +266,24 @@
       if (tag==="select" && value.control?.kind!=="select") return false;
       if (tag==="button" && value.control?.kind!=="tab") return false;
     }
+    let childTabGroup=parentTabGroup;
     if (value.control !== undefined) {
       // Copy text is the same adjacent code block already counted in the tree.
       counts.chars += (value.control.label || "").length;
       if (counts.chars > MAX_TEXT) return false;
+      if (tag==="div" && value.control.kind==="tablist") {
+        const group=value.control.group;
+        if (counts.tablistGroups.has(group)) return false;
+        counts.tablistGroups.add(group);
+        childTabGroup=group;
+      } else if (tag==="button" && value.control.kind==="tab") {
+        const group=value.control.group;
+        if (parentTabGroup!==group) return false;
+        counts.tabControlGroups.add(group);
+        const selected=(counts.tabSelected.get(group)||0)+(value.control.selected?1:0);
+        if (selected>1) return false;
+        counts.tabSelected.set(group,selected);
+      }
     }
     if (["details","select"].includes(tag) && !Array.isArray(value.children)) return false;
     if (["input","select","button"].includes(tag) && value.text !== undefined) return false;
@@ -311,7 +325,7 @@
       if (["img","hr","br","input","option","button"].includes(tag) || !Array.isArray(value.children) || value.children.length > 8192) return false;
       if (tag==="select" && (!value.children.length || value.children.length>64 || value.children.some(child=>child?.tag!=="option"))) return false;
       if (tag==="details" && (value.children.filter(child=>child?.tag==="summary").length>1 || (value.children.some(child=>child?.tag==="summary") && value.children[0]?.tag!=="summary"))) return false;
-      for (const child of value.children) if (!validateNode(child,depth+1,tag,counts)) return false;
+      for (const child of value.children) if (!validateNode(child,depth+1,tag,counts,childTabGroup)) return false;
       if (tag==="select") {
         const selected=value.children.filter(child=>child.control?.selected===true);
         if (selected.length!==1 || selected[0].control.value!==value.control.selected) return false;
@@ -326,7 +340,13 @@
         !Array.isArray(snapshot.assets) || snapshot.assets.length > 40 ||
         !snapshot.assets.every(item => typeof item === "string" && item.length <= 2048) ||
         !Array.isArray(snapshot.files) || snapshot.files.length > 10) return false;
-    return validateNode(snapshot.root,0,"",{nodes:0,chars:0,interactionIds:new Set()});
+    const counts={
+      nodes:0,chars:0,interactionIds:new Set(),
+      tablistGroups:new Set(),tabControlGroups:new Set(),tabSelected:new Map(),
+    };
+    if (!validateNode(snapshot.root,0,"",counts)) return false;
+    return counts.tablistGroups.size===counts.tabControlGroups.size
+      && [...counts.tablistGroups].every(group=>counts.tabControlGroups.has(group));
   }
   function bindNativeInteraction(element,value,context,eventName,action,readValue,restoreValue,onAccepted=null) {
     const interactionId = String(value?.interaction_id || "");
