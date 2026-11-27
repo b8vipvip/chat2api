@@ -62,6 +62,26 @@ def test_v145_worker_model_library_runtime_owners_are_registered():
     # actually activate the Worker catalog and reset it on reconnect.
 
 
+def test_worker_native_app_tool_isolation_v49_is_required_before_dispatch():
+    manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
+    scripts = manifest["content_scripts"][1]["js"]
+    contract = (ROOT / "chrome_extension" / "content_runtime_contract_v71.js").read_text(encoding="utf-8")
+    preflight = (ROOT / "chrome_extension" / "background_runtime_preflight_v48.js").read_text(encoding="utf-8")
+    bootstrap = (ROOT / "chrome_extension" / "content_bootstrap.js").read_text(encoding="utf-8")
+    background = (ROOT / "chrome_extension" / "background_entry.js").read_text(encoding="utf-8")
+    payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
+    assert "content_tool_isolation_v49.js" in scripts
+    assert "tool_isolation_v49:" in contract
+    assert "native_tool_stream_v63: Number(nativeTool?.revision || 0) >= 64" in contract
+    assert "result?.modules?.tool_isolation_v49" in preflight
+    assert "worker_tool_isolation_preflight_failed" in preflight
+    assert "safe_to_dispatch === true" in preflight
+    assert "content_tool_isolation_v49.js" in bootstrap
+    assert "background_tool_isolation_v49.js" in background
+    assert payload["features"]["external_account_tool_isolation_fail_closed_v49"] is True
+    assert "tool-isolation-v49-runtime-preflight-v49" in payload["server"]["feature_revision"]
+
+
 def test_native_content_compatibility_hotfix_features_are_advertised():
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
     assert payload["features"]["native_interactive_control_label_budget_v1"] is True
