@@ -50,7 +50,7 @@
       network_stream_recovery_v55: Number(networkRecovery?.version || 0) >= 55,
       network_stream_main_v55: document.documentElement?.getAttribute?.("data-chat2api-network-stream-main-v55") === "55",
       network_stream_parser_v63: document.documentElement?.getAttribute?.("data-chat2api-network-stream-parser") === "63",
-      native_tool_stream_v63: Number(nativeTool?.revision || 0) === 63,
+      native_tool_stream_v63: Number(nativeTool?.revision || 0) >= 64,
       native_tool_stream_main_v63: document.documentElement?.getAttribute?.("data-chat2api-native-tool-stream") === "63",
       response_semantic_recovery_v51: Number(semanticHelper?.version || 0) === 51 && semanticHelper?.timer == null,
       transient_retry_v50: Number(globalThis.__CHAT2API_TRANSIENT_RETRY_V50__?.version || 0) === 50,
