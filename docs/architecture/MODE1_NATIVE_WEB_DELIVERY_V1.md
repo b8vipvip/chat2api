@@ -179,7 +179,7 @@ The first native-interaction delivery slice adds a typed control contract to the
 - The legacy /v1/native-content projection downgrades these controls to inert text so older consumers do not receive unknown interactive semantics.
 - During rolling upgrades, the server normalizes persisted/older-Worker `details.open` and `button.action/action_value` snapshots into the typed control contract; older disclosure snapshots without a `summary` remain renderable.
 
-Checkbox/radio/range/select state is currently a local Web Chat preview; changing it does not submit a value to the upstream ChatGPT page. The renderer labels this limitation. This slice does NOT claim remote action parity for generated apps, tabs, interactive chart legends, canvas/WebGL, iframe widgets, tool buttons or arbitrary React event handlers. Those require a separately authorized, request-scoped action bridge and remain open under Issue #854. The authoritative Markdown answer remains available if a component cannot be safely represented.
+Checkbox/radio/range/select controls now use a narrow user-initiated upstream action bridge: each action is bound to the owner, completed request, verified snapshot revision, exact captured control and original Worker socket/tab; the Worker must ACK before the server commits a new persisted snapshot revision. Disclosures, checkbox/radio, range and select are supported. This does NOT claim remote action parity for arbitrary buttons, app tabs, interactive chart legends, canvas/WebGL, iframe widgets, tool buttons or arbitrary React event handlers. Those remain open under Issue #854. The authoritative Markdown answer remains available if a component cannot be safely represented.
 
 ## 9. Current implementation status — 2026-11-27
 
