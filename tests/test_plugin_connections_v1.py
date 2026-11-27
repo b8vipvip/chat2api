@@ -1056,3 +1056,74 @@ def test_github_read_tools_support_bounded_pagination_and_report_has_more(
         )
         assert invalid.status_code == 422
         assert len(calls) == 5
+
+
+def test_github_extended_read_tools_are_bounded_and_use_connected_user(tmp_path: Path, monkeypatch):
+    app = make_app(tmp_path)
+    store = app.state.plugin_oauth_store
+    store.save_provider("github", enabled=True, client_id="gh-client",
+                        client_secret="gh-secret", private_repos=False)
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self.payload = payload
+            self.headers = {}
+        def raise_for_status(self):
+            pass
+        def json(self):
+            return self.payload
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return False
+        async def get(self, url, **kwargs):
+            assert kwargs["headers"]["Authorization"] == "Bearer own-token"
+            calls.append((url, kwargs.get("params")))
+            if url.endswith("/branches"):
+                return FakeResponse([{"name": "feature/a", "commit": {"sha": "a" * 40}, "protected": True}])
+            if url.endswith("/commits/" + "a" * 40):
+                return FakeResponse({"sha": "a" * 40, "commit": {"message": "Fix"}, "files": [{"filename": "main.py", "patch": "+fix"}]})
+            if url.endswith("/contents/src"):
+                return FakeResponse([{"name": "main.py", "path": "src/main.py", "type": "file", "sha": "b" * 40}])
+            return FakeResponse([{"id": 42, "user": {"login": "reviewer"}, "body": "review",
+                                  "state": "APPROVED", "path": "main.py", "line": 7,
+                                  "html_url": "https://github.com/acme/project/pull/12#discussion_r42"}])
+
+    with TestClient(app) as client:
+        user = register(client, "extended-github@example.com")
+        store.save_connection(user["user_id"], "github", "42", "octocat",
+                              "own-token", "", ["read:user"], None)
+        assert client.post("/api/user/login", json={"email": "extended-github@example.com", "password": PASSWORD}, headers=ORIGIN).status_code == 200
+        monkeypatch.setattr("app.plugin_connections_v1.httpx.AsyncClient", FakeAsyncClient)
+        cases = [
+            ("list_issue_comments", {"issue_number": 11}, "/issues/11/comments", "body", "review"),
+            ("list_pull_reviews", {"pull_number": 12}, "/pulls/12/reviews", "state", "APPROVED"),
+            ("list_pull_review_comments", {"pull_number": 12}, "/pulls/12/comments", "line", 7),
+            ("list_pull_comments", {"pull_number": 12}, "/issues/12/comments", "author", "reviewer"),
+            ("list_branches", {}, "/branches", "name", "feature/a"),
+            ("get_commit", {"sha": "a" * 40}, "/commits/" + "a" * 40, "message", "Fix"),
+            ("list_directory", {"path": "src", "ref": "main"}, "/contents/src", "path", "src/main.py"),
+        ]
+        for tool, args, suffix, field, value in cases:
+            response = client.post("/api/user/plugins/github/tools/" + tool, headers=ORIGIN,
+                                   json={"repository": "acme/project", **args})
+            assert response.status_code == 200, response.text
+            assert response.json()["data"][0][field] == value
+            assert response.json()["pagination"]["page"] == 1
+            assert calls[-1][0] == "https://api.github.com/repos/acme/project" + suffix
+        assert calls[-1][1] == {"ref": "main"}
+        for tool, args in [
+            ("list_directory", {"path": "../secret"}),
+            ("get_commit", {"sha": "main"}),
+            ("list_issue_comments", {"issue_number": True}),
+            ("list_branches", {"page": 101}),
+        ]:
+            response = client.post("/api/user/plugins/github/tools/" + tool, headers=ORIGIN,
+                                   json={"repository": "acme/project", **args})
+            assert response.status_code == 422, response.text
+        assert len(calls) == len(cases)
