@@ -2493,7 +2493,7 @@
     call, definitions, assistant, knownGmailMessageIds = new Set(),
     knownGithubFileRefs = new Set(), knownGithubRepos = new Set(),
     knownGithubIssueRefs = new Set(), knownGithubPrRefs = new Set(), userPromptText = "",
-    knownGithubDirectoryRefs = new Set(), knownGithubCommitRefs = new Set(), knownGithubRunRefs = new Set(),
+    knownGithubDirectoryRefs = new Set(), knownGithubCommitRefs = new Set(), knownGithubRunRefs = new Set(), knownGithubRefs = new Set(),
   ) {
     const rawName = String(call?.name || call?.function?.name || "").slice(0,120);
     const definition = definitions.find(item => item.name === rawName);
@@ -2529,6 +2529,10 @@
         if (!knownGithubPrRefs.has(key) && !explicit) {
           throw new Error("必须先列出本轮 Pull Request，或使用用户消息中明确提供的 PR 编号。");
         }
+      }
+      if (args.ref && ["github.list_commits","github.list_directory","github.get_file_contents"].includes(definition.name)
+          && !knownGithubRefs.has(args.repository + ":" + args.ref) && !userPromptText.includes(args.ref)) {
+        throw new Error("必须使用用户明确提供或本轮 GitHub 分支、Tag、Commit 结果返回的 ref。");
       }
       if (definition.name === "github.list_workflow_jobs") {
         const key = args.repository + ":" + args.run_id;
@@ -2666,6 +2670,7 @@
     const knownGithubDirectoryRefs = new Set();
     const knownGithubCommitRefs = new Set();
     const knownGithubRunRefs = new Set();
+    const knownGithubRefs = new Set();
     const activeConversation = (state.conversations || []).find(row => row?.id === state.activeConversationId);
     const priorPluginEvidence = [];
     let evidenceBudget = 8000;
@@ -2727,6 +2732,12 @@
             if (args.repository && Number.isSafeInteger(number) && number > 0) knownGithubPrRefs.add(args.repository + "#" + number);
           });
         }
+        if (tool === "github.list_branches" || tool === "github.list_tags") {
+          rows.forEach(row => { if (args.repository && row.name) knownGithubRefs.add(args.repository + ":" + String(row.name)); });
+        }
+        if (tool === "github.list_commits" && args.repository && args.ref) knownGithubRefs.add(args.repository + ":" + args.ref);
+        if (tool === "github.list_directory" && args.repository && args.ref) knownGithubRefs.add(args.repository + ":" + args.ref);
+        if (tool === "github.get_commit" && args.repository && args.sha) knownGithubRefs.add(args.repository + ":" + String(args.sha).toLowerCase());
         if (tool === "github.list_workflow_runs") {
           rows.forEach(row => {
             const runId = Number(row.id);
@@ -2742,6 +2753,7 @@
           });
         }
         if (tool === "github.list_directory") {
+          if (args.ref) knownGithubRefs.add(args.repository + ":" + args.ref);
           rows.forEach(row => {
             if (!args.repository || !row.path) return;
             const key = JSON.stringify([args.repository,args.ref || "",row.path]);
@@ -2754,10 +2766,13 @@
           knownGithubFileRefs.add(JSON.stringify([args.repository,args.ref || "",args.path]));
         }
         if (["github.list_commits","github.list_branches","github.get_commit"].includes(tool)) {
+          if (args.ref) knownGithubRefs.add(args.repository + ":" + args.ref);
+          if (tool === "github.get_commit" && args.sha) knownGithubRefs.add(args.repository + ":" + String(args.sha).toLowerCase());
           rows.forEach(row => {
             for (const sha of [row.sha,...(Array.isArray(row.parents) ? row.parents : [])]) {
               if (args.repository && /^[0-9a-fA-F]{7,40}$/.test(String(sha || ""))) {
                 knownGithubCommitRefs.add(args.repository + ":" + String(sha).toLowerCase());
+                knownGithubRefs.add(args.repository + ":" + String(sha).toLowerCase());
               }
             }
           });
@@ -2867,7 +2882,7 @@
         const outcome = await executePluginToolCall(
           call,definitions,assistant,knownGmailMessageIds,knownGithubFileRefs,
           knownGithubRepos,knownGithubIssueRefs,knownGithubPrRefs,userPromptText,
-          knownGithubDirectoryRefs,knownGithubCommitRefs,knownGithubRunRefs,
+          knownGithubDirectoryRefs,knownGithubCommitRefs,knownGithubRunRefs,knownGithubRefs,
         );
         if (outcome.result?.ok && outcome.tool === "github.search_issues") {
           (outcome.result.results || []).forEach(row => {
@@ -2894,6 +2909,7 @@
           });
         }
         if (outcome.result?.ok && outcome.tool === "github.list_workflow_runs") {
+          if (outcome.result.arguments.branch) knownGithubRefs.add(outcome.result.arguments.repository + ":" + outcome.result.arguments.branch);
           (outcome.result.results || []).forEach(row => {
             const runId = Number(row?.id);
             if (Number.isSafeInteger(runId) && runId > 0) knownGithubRunRefs.add(String(outcome.result.arguments.repository) + ":" + runId);
@@ -2916,6 +2932,8 @@
           });
         }
         if (outcome.result?.ok && ["github.list_commits","github.list_branches","github.get_commit"].includes(outcome.tool)) {
+          if (outcome.result.arguments.ref) knownGithubRefs.add(outcome.result.arguments.repository + ":" + outcome.result.arguments.ref);
+          if (outcome.tool === "github.get_commit" && outcome.result.arguments.sha) knownGithubRefs.add(outcome.result.arguments.repository + ":" + String(outcome.result.arguments.sha).toLowerCase());
           const repo = outcome.result.arguments.repository;
           (outcome.result.results || []).forEach(row => {
             for (const sha of [row.sha,...(Array.isArray(row.parents) ? row.parents : [])]) {
@@ -2924,6 +2942,7 @@
           });
         }
         if (outcome.result?.ok && outcome.tool === "github.list_directory") {
+          if (outcome.result.arguments.ref) knownGithubRefs.add(outcome.result.arguments.repository + ":" + outcome.result.arguments.ref);
           const {repository,ref} = outcome.result.arguments;
           (outcome.result.results || []).forEach(row => {
             if (!row.path) return;
