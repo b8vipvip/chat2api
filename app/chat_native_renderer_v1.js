@@ -339,6 +339,11 @@
         if (result?.ok !== true) throw new Error("native interaction was not acknowledged");
         accepted = next;
         element.removeAttribute?.("aria-invalid");
+        if (result?.persisted === false) {
+          element.setAttribute("title","操作已同步到 Worker，但服务器尚未确认持久化");
+        } else {
+          element.removeAttribute?.("title");
+        }
       } catch (_) {
         try { restoreValue(previous); } catch {}
         element.setAttribute("aria-invalid","true");
