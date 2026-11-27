@@ -1242,7 +1242,7 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                         repository_value = payload.get("repository")
                         if repository_value is not None:
                             repository = _github_repo_name(repository_value)
-                            if re.search(r"(?:^|\\s)repo:", query, re.IGNORECASE):
+                            if re.search(r"(?:^|\s)repo:", query, re.IGNORECASE):
                                 raise HTTPException(422, "Do not combine repository with a repo: search qualifier", headers=_PRIVATE_HEADERS)
                             query = "repo:" + repository + " " + query
                         page = _github_page(payload.get("page"))
