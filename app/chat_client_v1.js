@@ -1960,6 +1960,7 @@
           path:String(row.path || "").slice(0,500),
           url:String(row.url || "").slice(0,2048),
           sha:String(row.sha || "").slice(0,40),
+          ref:String(row.ref || "").slice(0,255),
         }));
       }
       if (["list_issue_comments","list_pull_reviews","list_pull_review_comments","list_pull_comments"].includes(toolName)) {
@@ -2914,6 +2915,10 @@
             const path = String(row?.path || "");
             if (repository) knownGithubRepos.add(repository);
             if (repository && path) knownGithubFileRefs.add(repository + ":" + path);
+            if (repository && path && row.ref) {
+              knownGithubRefs.add(repository + ":" + String(row.ref));
+              knownGithubFileRefs.add(JSON.stringify([repository,String(row.ref),path]));
+            }
           });
         }
         if (outcome.result?.ok && outcome.tool === "github.list_workflow_runs") {
