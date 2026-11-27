@@ -62,8 +62,9 @@
     const requestId = activeRequestId();
     const diagnostics = {
       tool_isolation: "tool-isolation-v49",
-      external_account_tools_disabled: true,
-      native_github_tool_disabled: true,
+      external_account_tools_policy: "deny",
+      native_github_tool_policy: "deny",
+      native_account_authorization_state: "not-inspected-by-worker-ui",
       tool_surface_blocked: true,
       tool_surface_category: category,
       tool_surface_action: action,
@@ -246,8 +247,9 @@
       sendResponse({
         ok: true,
         version: 49,
-        external_account_tools_disabled: true,
-        native_github_tool_disabled: true,
+        external_account_tools_policy: "deny",
+        native_github_tool_policy: "deny",
+        native_account_authorization_state: "not-inspected-by-worker-ui",
         blocked,
         removed_app_chips: state.removed_app_chips,
         ...surfaces,
