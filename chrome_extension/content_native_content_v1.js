@@ -1218,7 +1218,7 @@
     }
   }
 
-  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  chrome.runtime.onMessage?.addListener?.((message, _sender, sendResponse) => {
     if (message?.type !== "chat2api.native.interaction") return false;
     sendResponse(applyNativeInteraction(message));
     return false;
