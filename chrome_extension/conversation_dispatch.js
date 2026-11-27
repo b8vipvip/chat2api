@@ -61,8 +61,8 @@
           }
           await chrome.storage.local.set({
             boundTabId: live.id, autoBind: false, modelsUpdatedAt: 0,
-            nativeRequestTabsV1: [...state.nativeRequestTabs.entries()],
           });
+          await persistNativeRequestTabs();
           return live;
         }
         if (attempt === 0 && requestId) {
