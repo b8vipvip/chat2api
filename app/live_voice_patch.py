@@ -1086,29 +1086,29 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         discard_input_audio_payloads -= 1
                         continue
                     audio_clock = pending_input_audio_clock
-                        pending_input_audio_clock = None
-                        if len(payload) > MAX_LIVE_PCM_FRAME_BYTES or len(payload) % 2:
-                            await send_json({
-                                "type": "error", "code": "INVALID_INPUT_AUDIO_FRAME",
-                                "message": "Input must be an even-length PCM16 frame no larger than 64 KiB",
-                                "retryable": False,
-                            })
-                            continue
-                        observed_input_audio_bytes += len(payload)
-                        await registry.send(
-                            selected_client,
-                            {
-                                "type": "voice.live.audio",
-                                "request_id": request_id,
-                                "session_id": session_id,
-                                "pcm_base64": base64.b64encode(payload).decode("ascii"),
-                                "sample_rate": 16000,
-                                **({
-                                    "sequence": audio_clock[0],
-                                    "timestamp_ms": audio_clock[1],
-                                } if audio_clock else {}),
-                            },
-                        )
+                    pending_input_audio_clock = None
+                    if len(payload) > MAX_LIVE_PCM_FRAME_BYTES or len(payload) % 2:
+                        await send_json({
+                            "type": "error", "code": "INVALID_INPUT_AUDIO_FRAME",
+                            "message": "Input must be an even-length PCM16 frame no larger than 64 KiB",
+                            "retryable": False,
+                        })
+                        continue
+                    observed_input_audio_bytes += len(payload)
+                    await registry.send(
+                        selected_client,
+                        {
+                            "type": "voice.live.audio",
+                            "request_id": request_id,
+                            "session_id": session_id,
+                            "pcm_base64": base64.b64encode(payload).decode("ascii"),
+                            "sample_rate": 16000,
+                            **({
+                                "sequence": audio_clock[0],
+                                "timestamp_ms": audio_clock[1],
+                            } if audio_clock else {}),
+                        },
+                    )
                     continue
                 text = message.get("text")
                 if not text:
