@@ -38,6 +38,7 @@ function makeHarness({selectedPlugins = ["github"], catalog = null, planner = []
     setConnection(){},
     recordClientDiagnostic(){},
     id:() => "call-" + (++nextId),
+    normalizeToolReferences(value) { return Array.isArray(value) ? value.slice(0,8) : []; },
     pluginContextRows(provider, toolName, rows) {
       if (provider === "gmail") {
         return rows.slice(0,3).map(row => ({
