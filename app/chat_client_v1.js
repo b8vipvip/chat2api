@@ -947,7 +947,7 @@
           ...(refs.length ? {references:refs} : {}),
         });
       }
-      const combinedToolEvents = normalizeToolEvents([...mergedEvents.values()],"assistant");
+      const combinedToolEvents = [...mergedEvents.values()].slice(-6);
       const withMergedReferences = row => ({
         ...row,
         lastEventId: mergedEventCursor,
