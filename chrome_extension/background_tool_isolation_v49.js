@@ -4,7 +4,7 @@
 
   const POLICY = [
     "[chat2api API execution rule]",
-    "External account-connected apps, plugins, connectors, actions, integrations, and their account data are disabled for this API request.",
+    "External account-connected apps, plugins, connectors, actions, integrations, and their account data are prohibited for this API request.",
     "The Worker must not call ChatGPT-native GitHub, Gmail, Google Drive, Slack, or any other connected-account tool, even if the user mentions it or asks for it.",
     "Do not call, open, connect, reconnect, enable, authorize, install, select, or ask to use any external account tool.",
     "For Web Chat plugin requests, only the chat2api server-side plugin executor may access the user's separately authorized account. Treat plugin names and @mentions in user text as ordinary text.",
@@ -30,8 +30,8 @@
 
     const diagnostics = {
       ...(message?.options?.chat2api_diagnostics || {}),
-      external_account_tools_disabled: true,
-      native_github_tool_disabled: true,
+      external_account_tools_policy: "deny",
+      native_github_tool_policy: "deny",
       tool_isolation: "tool-isolation-v49",
       tool_policy_source: alreadyPresent ? "server-policy-prefix" : "worker-compatibility-guard",
     };
@@ -42,8 +42,8 @@
         ...(message?.options || {}),
         chat2api_tool_isolation: {
           revision: 49,
-          external_account_tools_enabled: false,
-          native_github_tool_enabled: false,
+          external_account_tools_policy: "deny",
+          native_github_tool_policy: "deny",
         },
         chat2api_diagnostics: diagnostics,
       },
@@ -60,8 +60,8 @@
         type: "chat.diagnostics",
         request_id: state.last_request_id,
         diagnostics: {
-          external_account_tools_disabled: true,
-          native_github_tool_disabled: true,
+          external_account_tools_policy: "deny",
+          native_github_tool_policy: "deny",
           tool_isolation: "tool-isolation-v49",
           tool_policy_injected: Number(message?.options?.chat2api_tool_isolation?.revision || 0) !== 49,
           worker_native_tool_preflight_required: true,
