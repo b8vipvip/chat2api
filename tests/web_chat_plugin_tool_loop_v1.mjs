@@ -639,24 +639,36 @@ test("new GitHub tools reject unsafe filters, cursors and workflow IDs", () => {
 
 
 test("completed GitHub plugin evidence is available to later turns with stale-data warnings", async () => {
-  const h=makeHarness({planner:['{"tool_calls":[]}']});
+  const h=makeHarness({planner:[
+    JSON.stringify({tool_calls:[{name:"github.list_workflow_jobs",arguments:{repository:"acme/project",run_id:987654321}}]}),
+    '{"tool_calls":[]}',
+  ]});
   h.state.conversations=[{
     id:"conversation-1",
     messages:[{
       id:"assistant-previous",role:"assistant",createdAt:"2026-11-27T09:00:00Z",
-      toolEvents:[{
-        toolName:"GitHub · list_issues",callId:"plugin_old",resultId:"plugin_old_result",
-        status:"completed",arguments:'{"repository":"acme/project"}',output:"完成",
-        resultPreview:'{"tool":"github.list_issues","results":[{"number":9,"title":"Previously found issue"}]}',
-        references:[{url:"https://github.com/acme/project/issues/9",title:"Issue #9",snippet:"Earlier result"}],
-      }],
+      toolEvents:[
+        {
+          toolName:"GitHub · list_issues",callId:"plugin_old",resultId:"plugin_old_result",
+          status:"completed",arguments:'{"repository":"acme/project"}',output:"完成",
+          resultPreview:'{"tool":"github.list_issues","results":[{"number":9,"title":"Previously found issue"}]}',
+          references:[{url:"https://github.com/acme/project/issues/9",title:"Issue #9",snippet:"Earlier result"}],
+        },
+        {
+          toolName:"GitHub · list_workflow_runs",callId:"plugin_run",resultId:"plugin_run_result",
+          status:"completed",arguments:'{"repository":"acme/project"}',output:"完成",
+          resultPreview:'{"tool":"github.list_workflow_runs","results":[{"id":987654321,"branch":"main"}]}',
+        },
+      ],
     }],
   }];
   await h.api.runAutonomousPluginToolLoop(
-    [{role:"user",content:"根据刚才查到的 issue 继续分析"}],h.assistant,"key",h.recoveryApi,"req",
+    [{role:"user",content:"根据刚才查到的 issue 和 CI 结果继续分析"}],h.assistant,"key",h.recoveryApi,"req",
   );
   const context=h.requests[0].messages.find(row=>row.role==="system" && String(row.content).includes("历史插件证据"));
   assert.ok(context,"previous completed plugin evidence must be included in planner context");
   assert.match(context.content,/Previously found issue/);
   assert.match(context.content,/旧结果|最新状态|重新查询/);
+  assert.equal(h.calls.length,1,"a run ID discovered in a prior turn should remain provenance-checked and reusable");
+  assert.equal(h.calls[0][1],"list_workflow_jobs");
 });
