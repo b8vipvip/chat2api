@@ -371,4 +371,36 @@ arbitraryButton.root.children[0].children[1].control.kind="run";
 assert.equal(interactiveRenderer.validateSnapshot(arbitraryButton),false);
 console.log("native-renderer-semantic-tab-actions-passed");
 
+const toggleSnapshot={
+  version:1,revision:10,finality:"verified-final",assets:[],files:[],
+  root:{tag:"div",children:[
+    {tag:"button",interaction_id:"nc_10_1",
+      control:{kind:"toggle",label:"Revenue series",disabled:false,pressed:false}},
+  ]},
+};
+assert.equal(interactiveRenderer.validateSnapshot(toggleSnapshot),true);
+const toggleHost=new FakeElement("host");
+const toggleCalls=[];
+assert.equal(interactiveRenderer.renderNativeSnapshot(toggleHost,toggleSnapshot,[],async payload=>{
+  toggleCalls.push(payload);
+  return {ok:true,revision:payload.revision+1,persisted:true};
+}),true);
+assert.doesNotMatch(toggleHost.childNodes[0].textContent,/本地预览/);
+const renderedToggle=findTag(toggleHost,"button");
+assert.equal(renderedToggle.attributes["aria-pressed"],"false");
+assert.equal(renderedToggle.attributes["aria-label"],"Revenue series");
+await renderedToggle.click();
+assert.deepEqual(toggleCalls.map(call=>[call.interaction_id,call.action,call.value,call.revision]),[
+  ["nc_10_1","set_pressed",true,10],
+]);
+assert.equal(renderedToggle.attributes["aria-pressed"],"true");
+const localToggleHost=new FakeElement("host");
+assert.equal(interactiveRenderer.renderNativeSnapshot(localToggleHost,toggleSnapshot),true);
+assert.match(localToggleHost.childNodes[0].textContent,/本地预览/);
+const malformedToggle=structuredClone(toggleSnapshot);
+malformedToggle.root.children[0].control.pressed="false";
+assert.equal(interactiveRenderer.validateSnapshot(malformedToggle),false);
+
+console.log("native-renderer-semantic-toggle-actions-passed");
+
 

@@ -286,6 +286,9 @@ def test_owner_scoped_native_interaction_applies_to_original_worker_and_persists
                       "control": {"kind": "tab", "label": "Details", "disabled": False,
                                   "selected": False, "group": "tg_1"}},
                  ]},
+                {"tag": "button", "interaction_id": "nc_1_5",
+                 "control": {"kind": "toggle", "label": "Revenue series",
+                             "disabled": False, "pressed": False}},
             ]},
         }
         assert app.state.native_content.publish(request_id, owner_key, initial)
@@ -334,6 +337,16 @@ def test_owner_scoped_native_interaction_applies_to_original_worker_and_persists
         tabs = updated["root"]["children"][2]["children"]
         assert [tab["control"]["selected"] for tab in tabs] == [False, True]
 
+        pressed_toggle = client.post(
+            f"/api/user/chat/requests/{request_id}/native-content/interactions",
+            headers=headers,
+            json={"revision": 3, "interaction_id": "nc_1_5", "action": "set_pressed", "value": True},
+        )
+        assert pressed_toggle.status_code == 200, pressed_toggle.text
+        assert pressed_toggle.json() == {"ok": True, "revision": 4, "persisted": True}
+        updated = app.state.native_content.get(request_id, owner_key)
+        assert updated["root"]["children"][3]["control"]["pressed"] is True
+
         stale = client.post(
             f"/api/user/chat/requests/{request_id}/native-content/interactions",
             headers=headers,
@@ -343,10 +356,10 @@ def test_owner_scoped_native_interaction_applies_to_original_worker_and_persists
         invalid = client.post(
             f"/api/user/chat/requests/{request_id}/native-content/interactions",
             headers=headers,
-            json={"revision": 3, "interaction_id": "nc_1_1", "action": "set_value", "value": 50},
+            json={"revision": 4, "interaction_id": "nc_1_1", "action": "set_value", "value": 50},
         )
         assert invalid.status_code == 422
-        assert len(socket.sent) == 2
+        assert len(socket.sent) == 3
 
         client.cookies.clear()
         other = client.post(
@@ -358,7 +371,7 @@ def test_owner_scoped_native_interaction_applies_to_original_worker_and_persists
         cross_owner = client.post(
             f"/api/user/chat/requests/{request_id}/native-content/interactions",
             headers=headers,
-            json={"revision": 3, "interaction_id": "nc_1_2", "action": "set_value", "value": 50},
+            json={"revision": 4, "interaction_id": "nc_1_2", "action": "set_value", "value": 50},
         )
         assert cross_owner.status_code == 404
 

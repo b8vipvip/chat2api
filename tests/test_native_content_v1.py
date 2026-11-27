@@ -109,6 +109,36 @@ def test_native_semantic_tabs_are_typed_and_private_to_web_chat():
         validate_native_snapshot(invalid)
 
 
+def test_native_semantic_toggles_are_typed_and_private_to_web_chat():
+    from app.native_content_v1 import native_public_v1_tree
+
+    payload = {
+        "version": 1, "revision": 10,
+        "root": {"tag": "div", "children": [
+            {"tag": "button", "interaction_id": "nc_10_1",
+             "control": {"kind": "toggle", "label": "Revenue series",
+                         "disabled": False, "pressed": False}},
+        ]},
+    }
+    validated = validate_native_snapshot(payload)
+    control = validated["root"]["children"][0]["control"]
+    assert control["kind"] == "toggle"
+    assert control["pressed"] is False
+    public = native_public_v1_tree(validated["root"])
+    assert "interaction_id" not in json.dumps(public)
+    assert "toggle" not in json.dumps(public)
+
+    invalid = json.loads(json.dumps(payload))
+    invalid["root"]["children"][0]["control"]["pressed"] = "false"
+    with pytest.raises(ValueError):
+        validate_native_snapshot(invalid)
+
+    invalid = json.loads(json.dumps(payload))
+    invalid["root"]["children"][0]["control"]["kind"] = "run"
+    with pytest.raises(ValueError):
+        validate_native_snapshot(invalid)
+
+
 def test_native_sidecar_is_versioned_and_owner_isolated(tmp_path):
     store = NativeContentStore(tmp_path)
     assert store.publish("req_12345678", "key_a", snapshot())
