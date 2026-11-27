@@ -71,7 +71,7 @@
     return baseHandleServerMessage(isolated);
   };
 
-  globalThis.__CHAT2API_EXTERNAL_ACCOUNT_TOOLS_DISABLED__ = Object.freeze({
+  globalThis.__CHAT2API_EXTERNAL_ACCOUNT_TOOL_POLICY_V49__ = Object.freeze({
     version: 49,
     policy: POLICY,
   });
