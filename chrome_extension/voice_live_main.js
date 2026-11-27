@@ -3,6 +3,8 @@
   if (globalThis[KEY]) return;
 
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const LIVE_AV_SYNC_BUFFER_SECONDS = 0.16;
+  const LIVE_AV_SYNC_REBASE_SECONDS = 0.25;
   const live = {
     requestId: null,
     sessionId: null,
@@ -165,7 +167,7 @@
     throw new Error("ChatGPT Voice synthetic microphone did not become ready");
   }
 
-  async function pushInput(encoded, sourceRate = 16000) {
+  async function pushInput(encoded, sourceRate = 16000, sequence = null, timestampMs = null) {
     if (!live.prepared || !encoded) return;
     const ownerRequestId = live.requestId;
     const state = await waitForSyntheticMic();
@@ -182,7 +184,44 @@
     source.buffer = buffer;
     source.connect(state.micDestination);
     const earliest = context.currentTime + 0.025;
-    const startAt = Math.max(earliest, live.inputNextAt || earliest);
+    let startAt;
+    const hasClock = Number.isSafeInteger(sequence) && sequence >= 0
+      && Number.isSafeInteger(timestampMs) && timestampMs >= 0;
+    if (hasClock) {
+      let clock = state.liveAVClock;
+      if (!clock || clock.requestId !== ownerRequestId) {
+        clock = {
+          requestId:ownerRequestId,
+          clientOriginMs:timestampMs,
+          audioOriginSec:context.currentTime + LIVE_AV_SYNC_BUFFER_SECONDS,
+          lastAudioSequence:-1,
+          lastAudioTimestampMs:-1,
+          audioScheduledUntil:0,
+          rebaseCount:0,
+        };
+        state.liveAVClock = clock;
+      }
+      if (sequence <= clock.lastAudioSequence || timestampMs <= clock.lastAudioTimestampMs) {
+        return; // Duplicate/out-of-order PCM must not move the shared media clock.
+      }
+      const targetStart = clock.audioOriginSec + (timestampMs - clock.clientOriginMs) / 1000;
+      startAt = Math.max(earliest,live.inputNextAt || earliest,targetStart);
+      const lateBy = startAt - targetStart;
+      if (lateBy > LIVE_AV_SYNC_REBASE_SECONDS) {
+        // Network jitter can make a frame arrive after its ideal playback slot.
+        // Rebase both tracks together instead of building an ever-growing queue.
+        clock.audioOriginSec += lateBy;
+        clock.rebaseCount += 1;
+        startAt = Math.max(earliest,live.inputNextAt || startAt);
+      }
+      clock.lastAudioSequence = sequence;
+      clock.lastAudioTimestampMs = timestampMs;
+      clock.audioScheduledUntil = startAt + buffer.duration;
+    } else {
+      // Backward-compatible fallback for older Workers that do not forward
+      // the audio frame clock. New clients always use the shared-clock path.
+      startAt = Math.max(earliest,live.inputNextAt || earliest);
+    }
     live.inputNextAt = startAt + buffer.duration;
     live.inputSources.add(source);
     source.onended = () => live.inputSources.delete(source);
@@ -325,6 +364,11 @@
   }
 
   function reset() {
+    const previousRequestId = live.requestId;
+    const previousVoiceState = base();
+    if (previousVoiceState?.liveAVClock?.requestId === previousRequestId) {
+      previousVoiceState.liveAVClock = null;
+    }
     live.prepared = false;
     live.suppressed = false;
     live.inputNextAt = 0;
@@ -365,7 +409,7 @@
       live.inputQueued += 1;
       live.inputQueue = live.inputQueue
         .then(() => live.prepared && live.requestId === ownerRequestId
-          ? pushInput(message.pcm_base64, Number(message.sample_rate || 16000))
+          ? pushInput(message.pcm_base64, Number(message.sample_rate || 16000), message.sequence, message.timestamp_ms)
           : undefined)
         .catch(error => post("voice.live.error", { error: String(error?.message || error) }))
         .finally(() => { if (live.requestId === ownerRequestId) live.inputQueued -= 1; });
