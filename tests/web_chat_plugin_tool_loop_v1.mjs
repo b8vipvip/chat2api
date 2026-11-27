@@ -861,3 +861,28 @@ test("GitHub review comment cursors cannot be guessed even after the thread is k
   assert.equal(h.assistant.toolEvents[2].status,"failed");
   assert.match(h.assistant.toolEvents[2].output,/comments_next_cursor/);
 });
+
+
+test("GitHub tool results explicitly report bounded or omitted records", async () => {
+  const h=makeHarness({
+    planner:[
+      JSON.stringify({tool_calls:[{name:"github.search_repositories",arguments:{query:"chat2api"}}]}),
+      '{"tool_calls":[]}',
+    ],
+    toolHandler:async () => ({data:Array.from({length:10},(_,i)=>({
+      full_name:"acme/project-" + i,
+      description:"x".repeat(1200),
+      url:"https://github.com/acme/project-" + i,
+    }))}),
+  });
+  const messages=[{role:"user",content:"搜索 chat2api 相关仓库"}];
+  await h.api.runAutonomousPluginToolLoop(
+    messages,h.assistant,"key",h.recoveryApi,"req",
+  );
+  const toolMessage=messages.find(row=>row.role==="tool");
+  assert.ok(toolMessage);
+  const result=JSON.parse(toolMessage.content);
+  assert.equal(result.result.results_truncated,true);
+  assert.ok(result.result.omitted_results_count > 0);
+  assert.equal(h.assistant.toolEvents[0].status,"completed");
+});
