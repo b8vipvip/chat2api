@@ -1268,6 +1268,7 @@ def test_github_actions_releases_tags_issue_search_and_review_threads(tmp_path: 
         assert comment_page["data"][0]["comments"][0]["id"] == 45
         assert comment_page["data"][0]["comments"][0]["in_reply_to_id"] == 44
         assert comment_page["pagination"]["has_more"] is False
+        assert comment_page["pagination"]["per_page"] == 10
         wrong_parent = client.post(
             "/api/user/plugins/github/tools/list_pull_review_thread_comments",
             headers=ORIGIN,
