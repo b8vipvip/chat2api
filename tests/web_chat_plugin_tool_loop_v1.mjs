@@ -640,7 +640,7 @@ test("new GitHub tools reject unsafe filters, cursors and workflow IDs", () => {
     repository:"acme/project",pull_number:12,thread_id:"PRRT_1",
   }),/cursor/);
   assert.throws(()=>h.api.validatePluginToolArguments(defs["github.list_pull_review_thread_comments"],{
-    repository:"acme/project",pull_number:12,thread_id:"bad\\nthread",cursor:"opaque",
+    repository:"acme/project",pull_number:12,thread_id:"bad\nthread",cursor:"opaque",
   }),/thread ID/);
 });
 
@@ -717,7 +717,7 @@ test("GitHub code search cannot invent a repository qualifier", async () => {
   const h=makeHarness({
     planner:[JSON.stringify({tool_calls:[{
       name:"github.search_code",arguments:{query:"repo:unmentioned/secret token"},
-    }]})],
+    }]}),'{"tool_calls":[]}'],
   });
   await h.api.runAutonomousPluginToolLoop(
     [{role:"user",content:"搜索 GitHub 代码中的配置问题"}],h.assistant,"key",h.recoveryApi,"req",
@@ -765,4 +765,37 @@ test("GitHub review thread comments can continue from the exact thread and comme
   assert.deepEqual(h.calls.map(row=>row[1]),["search_issues","list_pull_review_threads","list_pull_review_thread_comments"]);
   assert.equal(h.assistant.toolEvents[2].status,"completed");
   assert.ok(h.assistant.references.some(row=>row.url.includes("discussion_r45")));
+});
+
+
+test("a prior review thread result authorizes only its own comment continuation", async () => {
+  const h=makeHarness({
+    planner:[JSON.stringify({tool_calls:[{name:"github.list_pull_review_thread_comments",arguments:{
+      repository:"acme/project",pull_number:12,thread_id:"PRRT_1",cursor:"comment-cursor",
+    }}]})],
+    toolHandler:async (provider,tool,args) => {
+      assert.equal(tool,"list_pull_review_thread_comments");
+      assert.equal(args.thread_id,"PRRT_1");
+      return {data:[{repository:"acme/project",pull_number:12,thread_id:"PRRT_1",
+        comments:[{id:45,body:"Follow-up",url:"https://github.com/acme/project/pull/12#discussion_r45"}],
+        url:"https://github.com/acme/project/pull/12#discussion_r45"}]};
+    },
+  });
+  h.state.conversations=[{
+    id:"conversation-1",
+    messages:[{
+      id:"assistant-previous",role:"assistant",createdAt:"2026-11-27T09:00:00Z",
+      toolEvents:[{
+        toolName:"GitHub · list_pull_review_threads",callId:"plugin_thread",resultId:"plugin_thread_result",
+        status:"completed",arguments:'{"repository":"acme/project","pull_number":12}',output:"完成",
+        resultPreview:'{"tool":"github.list_pull_review_threads","results":[{"repository":"acme/project","pull_number":12,"thread_id":"PRRT_1","comments_truncated":true,"comments_next_cursor":"comment-cursor"}]}',
+      }],
+    }],
+  }];
+  const result=await h.api.runAutonomousPluginToolLoop(
+    [{role:"user",content:"继续读取刚才的 PR 审查讨论"}],h.assistant,"key",h.recoveryApi,"req",
+  );
+  assert.equal(result.toolCalls,1);
+  assert.equal(h.calls.length,1);
+  assert.equal(h.assistant.toolEvents[0].status,"completed");
 });
