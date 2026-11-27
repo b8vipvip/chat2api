@@ -1192,7 +1192,7 @@ function dispatchNativeAction(action,interactionId,value,revision=interactionSna
     action,
     value,
   },{},value=>{response=value;});
-  return response;
+  return response === null ? null : JSON.parse(JSON.stringify(response));
 }
 assert.deepEqual(dispatchNativeAction("set_checked",checkboxNode.interaction_id,true),{ok:true,revision:2});
 assert.equal(interactionCheckbox.checked,true);
