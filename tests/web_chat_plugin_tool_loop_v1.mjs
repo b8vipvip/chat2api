@@ -236,7 +236,7 @@ test("model chains GitHub code search into a grounded file read", async () => {
     selectedPlugins:["github"],
     planner:[
       '{"tool_calls":[{"name":"github.search_code","arguments":{"query":"repo:acme/project README.md"}}]}',
-      '{"tool_calls":[{"name":"github.get_file_contents","arguments":{"repository":"acme/project","path":"README.md","ref":"main"}}]}',
+      '{"tool_calls":[{"name":"github.get_file_contents","arguments":{"repository":"acme/project","path":"README.md","ref":"feature/parser-fix"}}]}',
       '{"tool_calls":[]}',
     ],
     toolHandler:async (provider,tool,args) => {
@@ -244,17 +244,17 @@ test("model chains GitHub code search into a grounded file read", async () => {
       if (tool === "search_code") {
         assert.deepEqual(JSON.parse(JSON.stringify(args)),{query:"repo:acme/project README.md"});
         return {data:[{
-          repository:"acme/project",path:"README.md",ref:"main",
-          url:"https://github.com/acme/project/blob/main/README.md",sha:"a".repeat(40),
+          repository:"acme/project",path:"README.md",ref:"feature/parser-fix",
+          url:"https://github.com/acme/project/blob/feature/parser-fix/README.md",sha:"a".repeat(40),
         }]};
       }
       assert.equal(tool,"get_file_contents");
       assert.deepEqual(JSON.parse(JSON.stringify(args)),{
-        repository:"acme/project",path:"README.md",ref:"main",
+        repository:"acme/project",path:"README.md",ref:"feature/parser-fix",
       });
       return {data:[{
         repository:"acme/project",path:"README.md",
-        url:"https://github.com/acme/project/blob/main/README.md",
+        url:"https://github.com/acme/project/blob/feature/parser-fix/README.md",
         content:"# Project\n\nThis is the readme.",
         truncated:false,
       }]};
