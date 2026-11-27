@@ -19,7 +19,7 @@ Status: the production /chat page loads the safe Markdown renderer, the native-c
 - Bounded SVG geometry/metadata and MathML presentation nodes/attributes.
 - Generated audio/video file cards using authenticated same-origin archive URLs and byte-range playback.
 - Tool/function-call activity and results as bounded, escaped, presentation-only cards; tool cards do not grant execution authority or determine request completion.
-- Typed interactive snapshots for disclosures, checkbox/radio/range/select controls, accessible tablists/tabs and local code-copy actions. On verified-final snapshots, supported controls use a narrow request-scoped action bridge to the original Worker tab; successful actions are persisted as a new native snapshot revision.
+- Typed interactive snapshots for disclosures, checkbox/radio/range/select controls, accessible tablists/tabs, semantic `aria-pressed` toggle buttons and local code-copy actions. On verified-final snapshots, supported controls use a narrow request-scoped action bridge to the original Worker tab; successful actions are persisted as a new native snapshot revision.
 
 ## Interaction support boundary
 
@@ -30,11 +30,12 @@ The typed controls currently have deliberately limited semantics:
 | details/summary disclosure | User-triggered upstream state sync | Exact captured disclosure only |
 | Checkbox / radio / range / select | User-triggered upstream state sync | Exact captured control/value only |
 | Accessible tablist / tab | User-triggered upstream tab selection | Exact captured `role=tab` element in its original tablist |
+| `aria-pressed` toggle button | User-triggered upstream pressed-state sync | Exact captured semantic toggle; useful for supported chart-series toggles |
 | Code-copy button | Local clipboard action | No upstream action |
-| SVG chart metadata | Browser-native title/description | No chart-legend/action bridge |
-| Arbitrary buttons, chart actions, canvas/WebGL, iframe and React event handlers | Omitted or inert fallback | Not remotely executable |
+| SVG chart metadata | Browser-native title/description | No generic SVG/chart event bridge |
+| Arbitrary buttons, non-semantic chart actions, canvas/WebGL, iframe and React event handlers | Omitted or inert fallback | Not remotely executable |
 
-The implementation has a deliberately narrow remote-action bridge for typed disclosures, checkbox/radio/range/select controls and accessible tab selection. A tab action is accepted only when the captured tab is nested under its validated tablist group; the Worker clicks that exact captured `role=tab` element. Each action is same-origin and owner-checked, bound to the verified-final snapshot revision and original Worker socket/tab, ACKed by the Worker, and committed as a new persisted snapshot revision. Stale revisions, detached controls, invalid options, out-of-range values, orphan tabs and ambiguous selected states fail closed. The bridge does not accept arbitrary JavaScript, generic DOM selectors, arbitrary button clicks or model-generated commands. Unsupported components retain the canonical Markdown answer or a safe inert fallback.
+The implementation has a deliberately narrow remote-action bridge for typed disclosures, checkbox/radio/range/select controls, accessible tab selection and `aria-pressed` toggle buttons. A tab action is accepted only when the captured tab is nested under its validated tablist group; the Worker clicks that exact captured `role=tab` element. Each action is same-origin and owner-checked, bound to the verified-final snapshot revision and original Worker socket/tab, ACKed by the Worker, and committed as a new persisted snapshot revision. Stale revisions, detached controls, invalid options, out-of-range values, orphan tabs and ambiguous selected states fail closed. The bridge does not accept arbitrary JavaScript, generic DOM selectors, arbitrary button clicks or model-generated commands. Unsupported components retain the canonical Markdown answer or a safe inert fallback.
 
 ## Live media boundary
 
@@ -56,7 +57,7 @@ Generated MP3/WAV/M4A/OGG/Opus/FLAC and MP4/WebM files are a separate archived-f
 CI covers the schema validators, safe renderer DOM harness, native snapshot hydration, file/media integrity, citation handling, tool-state persistence and cross-device conversation merge behavior. CI does not substitute for a real signed-in Worker + ChatGPT staging session.
 
 Remaining Issue #854 work is specifically:
-1. Broader component parity remains incomplete: arbitrary buttons, interactive chart legends/actions, canvas/WebGL, iframe widgets and arbitrary React handlers are not remotely executable. Accessible `role=tablist` / `role=tab` selection is now supported through the typed action bridge.
+1. Broader component parity remains incomplete: arbitrary buttons, chart legends/actions without supported ARIA semantics, canvas/WebGL, iframe widgets and arbitrary React handlers are not remotely executable. Accessible `role=tablist` / `role=tab` selection and exact `aria-pressed` toggle buttons are supported through the typed action bridge.
 2. A full Worker/browser process restart destroys the original WebRTC PeerConnection and media tracks. The current implementation can start a new Voice session with conversation context, but cannot preserve the same active media call across process death; recovery UX must state this clearly.
 3. Real staging acceptance remains necessary for remote-end A/V timing, browser/Worker reconnect, Broker/server restart, media/file integrity, final usage settlement and cross-device browser behavior. Local `sync_skew_ms` is not remote receiver end-to-end evidence.
 4. Further component-by-component parity review; the allowlist intentionally does not execute arbitrary app code.
