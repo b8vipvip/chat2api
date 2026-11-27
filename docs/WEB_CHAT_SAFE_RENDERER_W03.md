@@ -1,93 +1,63 @@
-# W-03 — Web Chat safe renderer v2
+# W-03 — Web Chat safe native renderer
 
-Status: **safe renderer is loaded by the production Web Chat page; KaTeX
-0.19.1 is now self-hosted for bounded TeX rendering**. The structured rich-block
-API remains an allowlisted UI contract and is not yet fully bound to every
-native-content sidecar.
+Status: the production /chat page loads the safe Markdown renderer, the native-content renderer, stream recovery, attachment support and locally hosted KaTeX 0.19.1 before the Web Chat client. The renderer consumes the owner-checked native-content sidecar produced by the existing Worker capture and server validation pipeline. This is substantial native-content delivery, not a claim of complete ChatGPT 1:1 component parity.
 
-## Implementation
+## Production path
 
-- `app/chat_renderer_v2.js` contains the standalone allowlist renderer.
-- This PR deliberately does not modify `chat_client_v1.js`, `chat_client_v1.html`,
-  `user_console_v104_patch.py`, or `app.entry:app`: those shared integration
-  points are concurrently owned by the image attachment and storage work.
-- The production `/chat` page loads pinned KaTeX CSS/JS, the safe renderer, the
-  native renderer, stream recovery, attachment support and the chat client in
-  deferred document order under the existing CSP. The client is loaded after
-  the renderers so the renderer API is available before message delivery.
-- All output is built with explicit, fixed DOM constructors and `textContent`.
-  Raw upstream text is never interpreted as HTML. Links allow only HTTP(S)
-  without embedded credentials, use `noopener noreferrer` and disable referrers.
-- Safe Markdown subset: headings, paragraphs, emphasis, inline code, fenced
-  code and copy, lists, tables, blockquotes, horizontal rules and links.
-- TeX math is rendered by the pinned KaTeX 0.19.1 browser engine, hosted
-  locally by the Chat2API server with its own CSS and font files. No third-party
-  CDN is contacted at runtime. The renderer supports inline `$...# W-03 — Web Chat safe renderer v2
+- app/web_chat_integration_v1.py serves the versioned renderer assets and the owner-scoped native-content GET/SSE endpoints.
+- app/native_content_v1.py validates the bounded native snapshot schema, media references, SVG/MathML attributes, typed control metadata and integrity/finality evidence.
+- chrome_extension/content_native_content_v1.js captures only the verified assistant reply scope. It does not export raw HTML, JavaScript, arbitrary CSS, event handlers, iframe contents or untrusted media URLs.
+- app/chat_native_renderer_v1.js builds fixed DOM elements from the validated schema. It does not use innerHTML for upstream content.
+- app/chat_client_v1.js loads the selected request's native snapshot, subscribes to native snapshot SSE updates and falls back to safe Markdown when a snapshot is unavailable or rejected.
+- KaTeX 0.19.1 is self-hosted with pinned assets and bounded rendering settings (trust: false); unsupported/invalid TeX falls back to visible text. Native MathML remains a separate allowlisted rendering path.
 
-Status: **safe renderer is loaded by the production Web Chat page; KaTeX
-0.19.1 is now self-hosted for bounded TeX rendering**. The structured rich-block
-API remains an allowlisted UI contract and is not yet fully bound to every
-native-content sidecar.
+## Supported native delivery
 
-## Implementation
+- Text layout: headings, paragraphs, emphasis, lists, blockquotes, tables, code and copy-code controls.
+- Verified raster images and owner-scoped archived generated files.
+- Safe public HTTPS citation anchors and source cards, with title/domain/snippet previews.
+- Bounded SVG geometry/metadata and MathML presentation nodes/attributes.
+- Generated audio/video file cards using authenticated same-origin archive URLs and byte-range playback.
+- Tool/function-call activity and results as bounded, escaped, presentation-only cards; tool cards do not grant execution authority or determine request completion.
+- Typed interactive snapshots for disclosures, checkbox/radio/range/select controls and local code-copy actions.
 
-- `app/chat_renderer_v2.js` contains the standalone allowlist renderer.
-- This PR deliberately does not modify `chat_client_v1.js`, `chat_client_v1.html`,
-  `user_console_v104_patch.py`, or `app.entry:app`: those shared integration
-  points are concurrently owned by the image attachment and storage work.
-- A later integration PR must load the renderer before the client under the
-  existing CSP and fail closed to plain text if the asset cannot load.
-- All output is built with explicit, fixed DOM constructors and `textContent`.
-  Raw upstream text is never interpreted as HTML. Links allow only HTTP(S)
-  without embedded credentials, use `noopener noreferrer` and disable referrers.
-- Safe Markdown subset: headings, paragraphs, emphasis, inline code, fenced
-  code and copy, lists, tables, blockquotes, horizontal rules and links.
- and
-  `\\(...\\)`, plus display `$...$` and `\\[...\\]` delimiters and
-  structured `math` rich blocks. KaTeX runs with `trust: false`, bounded
-  expansion/size settings and a text-only fallback when its asset is absent.
-  Native MathML snapshots continue through the separate allowlisted MathML
-  renderer; KaTeX is not claimed to cover every LaTeX package or reproduce all
-  ChatGPT-specific UI components.
-- The MIT license is retained with the generated vendor distribution. Docker
-  builds and CI obtain the exact pinned npm package; source checkouts can run
-  `sh scripts/vendor_katex.sh` to generate the same local assets.
-- Inline citation markers of the form `citeturn0search0` are resolved
-  only against bounded Worker tool-reference metadata. Validated reference IDs
-  survive Broker forwarding, server conversation persistence and the durable
-  event journal. Matched markers become numbered HTTPS links; the same numbers
-  appear on the source cards in the tool activity panel. Missing or untrusted
-  references render as an unavailable-source marker rather than a guessed link.
-- `renderRichBlocks(host, blocks)` supports safely named presentation types:
-  text, code, math, citation, image, file, tool state, and unknown blocks.
-  File blocks with a strictly validated `file_...` ID render a same-origin
-  download card pointing to the W-05A owner-checked download endpoint; the
-  endpoint rechecks the session and FileStore owner and returns 404 for
-  non-owned IDs. Image blocks with a strictly validated `file_...` ID render
-  only through W-01's same-origin image-content endpoint, which rechecks the
-  session, owner key and raster MIME allowlist. Neither block accepts a
-  caller-supplied URL or filesystem path; invalid IDs render inert fallbacks.
-- Tool-state cards are read-only; they are neither tool execution permission
-  nor proof of Worker completion. Citations are labeled unverified links.
+## Interaction support boundary
 
-## Excluded from this PR
+The typed controls currently have deliberately limited semantics:
 
-Complete ChatGPT 1:1 component parity, full coverage of every LaTeX
-package, arbitrary HTML, third-party runtime CDN/script loading, tool execution,
-plugins, and any change to Mode 2/Broker/Worker request semantics. Native
-snapshot finality and durable SSE replay remain separate release gates.
+| Control | Web Chat behavior | Upstream ChatGPT behavior |
+|---|---|---|
+| details/summary disclosure | Locally expandable | State is not sent back |
+| Checkbox / radio / range / select | Local preview | State is not submitted |
+| Code-copy button | Local clipboard action | No upstream action |
+| SVG chart metadata | Browser-native title/description | No chart-legend/action bridge |
+| Arbitrary buttons, tabs, canvas/WebGL, iframe and React event handlers | Omitted or inert fallback | Not remotely executable |
 
-## Validation
+The current implementation has no general remote-action bridge from a Web Chat control to the original ChatGPT DOM. Do not imply that changing a local preview changes the upstream generated app. Unsupported components retain the canonical Markdown answer or a safe inert fallback. A future action bridge must be request-scoped, owner-checked, revision-bound, allowlisted by control type and explicitly user-triggered; it must not forward arbitrary JavaScript or click arbitrary DOM nodes.
 
-`pytest -q tests/test_web_chat_renderer_v2.py tests/test_web_chat_client_v1.py`
+## Live media boundary
 
-The Node VM DOM harness asserts that malicious SVG/script/iframe/image markup
-is never constructed, unsafe schemes cannot create active links, and math,
-table, code, citation and tool-fallback data are rendered as text-only nodes.
+Web Chat camera input is relayed as bounded JPEG/PNG/WebP frames (maximum 5 FPS, 300 frames and 64 MiB per session) into a synthetic WebRTC camera track in the Worker ChatGPT tab. The Worker confirms sender attachment and frame receipt; a detached sender is reported as snapshot fallback rather than being mislabeled as WebRTC delivery. This is not a direct browser-to-Worker camera track, and it does not establish frame-accurate audio/video synchronization. The active Live Voice media session is also not claimed to survive a complete Worker/browser restart.
 
-The renderer and pinned KaTeX assets are loaded by the production `/chat` page.
-The Node VM DOM harness covers renderer safety and formatting contracts, but
-real desktop/mobile browser fixtures and end-to-end Worker native-sidecar
-presentation remain separate acceptance gates. Image previews use W-01's
-owner-checked image-content route and file cards use W-05A's download route.
-Do not claim ChatGPT 1:1 parity or full coverage of every native sidecar.
+Generated MP3/WAV/M4A/OGG/Opus/FLAC and MP4/WebM files are a separate archived-file delivery path; archived media playback is not equivalent to live A/V transport.
+
+## Security invariants
+
+- Raw upstream HTML, scripts, event handlers, inline style text and arbitrary URLs are never inserted into the Web Chat DOM.
+- Media and generated-file URLs are server-issued, same-origin and owner-checked.
+- Citation anchors are restricted to validated public HTTPS destinations and open with noopener/noreferrer/nofollow and no-referrer.
+- Native tool activity is presentation-only. The server-side plugin executor remains the only route for user-authorized GitHub/Gmail operations in Web Chat.
+- Mode 2 public native-content projection remains a compatibility projection and downgrades unsupported native controls to inert content.
+
+## Validation and remaining acceptance
+
+CI covers the schema validators, safe renderer DOM harness, native snapshot hydration, file/media integrity, citation handling, tool-state persistence and cross-device conversation merge behavior. CI does not substitute for a real signed-in Worker + ChatGPT staging session.
+
+Remaining Issue #854 work is specifically:
+1. A request-scoped, safe action bridge for supported generated-app controls if product parity requires upstream state changes.
+2. Frame-accurate A/V synchronization across browser capture, server relay and Worker WebRTC clocks.
+3. Recovery semantics for an active Live Voice media call across a full Worker/browser restart; current text/SSE recovery must not be represented as live media continuity.
+4. Real staging acceptance for Worker reconnect, Broker/server restart, media/file integrity, usage settlement and cross-device browser behavior.
+5. Further component-by-component parity review; the current allowlist intentionally does not execute arbitrary app code.
+
+Do not label already implemented citation, MathML/KaTeX, archive playback, sampled camera-frame relay or local typed-control rendering as absent. Equally, do not label the above remaining boundaries complete without implementation and evidence.
