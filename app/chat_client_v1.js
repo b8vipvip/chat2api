@@ -2817,7 +2817,6 @@
             if (!row.repository || !row.path) return;
             const repository = String(row.repository), filePath = String(row.path);
             knownGithubRepos.add(repository);
-            knownGithubFileRefs.add(repository + ":" + filePath);
             if (row.ref) {
               const ref = String(row.ref);
               knownGithubRefs.add(repository + ":" + ref);
@@ -2979,7 +2978,6 @@
             const repository = String(row?.repository || "");
             const path = String(row?.path || "");
             if (repository) knownGithubRepos.add(repository);
-            if (repository && path) knownGithubFileRefs.add(repository + ":" + path);
             if (repository && path && row.ref) {
               knownGithubRefs.add(repository + ":" + String(row.ref));
               knownGithubFileRefs.add(JSON.stringify([repository,String(row.ref),path]));
