@@ -160,6 +160,7 @@
     const sent = await trySendSocket(event);
     state.requestTabs.delete(requestId);
     state.nativeRequestTabs.delete(requestId);
+    await persistNativeRequestTabs();
     if (!sent) throw error;
     return null;
   }
@@ -250,7 +251,10 @@
     const interactionId = String(message?.interaction_id || "");
     let result = {ok:false,error:"native-interaction-route-unavailable"};
     const target = state.nativeRequestTabs.get(requestId);
-    if (target && target.expiresAt <= Date.now()) state.nativeRequestTabs.delete(requestId);
+    if (target && target.expiresAt <= Date.now()) {
+      state.nativeRequestTabs.delete(requestId);
+      await persistNativeRequestTabs();
+    }
     if (
       target && target.expiresAt > Date.now()
       && /^[a-f0-9]{32}$/.test(actionId)
