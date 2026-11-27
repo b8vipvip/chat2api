@@ -394,9 +394,9 @@
   function bindTabInteraction(element,value,context) {
     const interactionId=String(value?.interaction_id || "");
     const control=value?.control || {};
-    if (!interactionId || typeof context?.onInteraction!=="function") return false;
     const group=String(control.group || "");
-    if (control.selected) context.tabSelection.set(group,element);
+    if (control.selected && group) context.tabSelection.set(group,element);
+    if (!interactionId || typeof context?.onInteraction!=="function") return false;
     let pending=false;
     element.addEventListener("click",async()=>{
       if (pending || element.getAttribute("aria-selected")==="true") return;
