@@ -88,7 +88,7 @@ def _github_has_more(response: Any) -> bool:
 PROVIDERS: dict[str, dict[str, Any]] = {
     "github": {
         "name": "GitHub",
-        "description": "搜索仓库、查看仓库信息、Issues、Pull Requests、提交记录和文件内容。仅开放读取操作。",
+        "description": "搜索仓库、查看 Issues 和评论、Pull Requests 和审查、分支、提交详情、目录及文件内容。仅开放读取操作。",
         "authorize_url": "https://github.com/login/oauth/authorize",
         "token_url": "https://github.com/login/oauth/access_token",
         "api_base": "https://api.github.com",
@@ -1111,6 +1111,114 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                             "page": page, "per_page": 10, "has_more": _github_has_more(response),
                             "total_count": raw.get("total_count") if type(raw.get("total_count")) is int else None,
                             "incomplete_results": bool(raw.get("incomplete_results")),
+                        }
+                    elif tool_name in {"list_issue_comments", "list_pull_reviews", "list_pull_review_comments", "list_pull_comments", "list_branches"}:
+                        repository = _github_repo_name(payload.get("repository"))
+                        page = _github_page(payload.get("page"))
+                        if tool_name == "list_branches":
+                            suffix = "/branches"
+                        elif tool_name == "list_issue_comments":
+                            number = _github_resource_number(payload.get("issue_number"))
+                            suffix = f"/issues/{number}/comments"
+                        else:
+                            number = _github_resource_number(payload.get("pull_number"))
+                            if tool_name == "list_pull_comments":
+                                suffix = f"/issues/{number}/comments"
+                            else:
+                                suffix = f"/pulls/{number}/" + ("reviews" if tool_name == "list_pull_reviews" else "comments")
+                        response = await client.get(
+                            "https://api.github.com/repos/" + repository + suffix,
+                            params={"per_page": 20, "page": page}, headers=github_headers,
+                        )
+                        response.raise_for_status()
+                        raw = response.json()
+                        if not isinstance(raw, list):
+                            raise HTTPException(502, "Invalid GitHub list response", headers=_PRIVATE_HEADERS)
+                        if tool_name == "list_branches":
+                            data = [{
+                                "repository": repository, "name": str(row.get("name") or "")[:255],
+                                "sha": str((row.get("commit") or {}).get("sha") or "")[:40],
+                                "protected": row.get("protected") is True,
+                                "url": "https://github.com/" + repository + "/tree/" + quote(str(row.get("name") or ""), safe=""),
+                            } for row in raw[:20] if isinstance(row, dict)]
+                        else:
+                            data = [{
+                                "id": row.get("id"), "number": number,
+                                "author": str((row.get("user") or {}).get("login") or "")[:100],
+                                "body": str(row.get("body") or "")[:4000],
+                                "body_truncated": len(str(row.get("body") or "")) > 4000,
+                                "state": row.get("state"), "created_at": row.get("created_at") or row.get("submitted_at"),
+                                "updated_at": row.get("updated_at"), "url": row.get("html_url"),
+                                "path": str(row.get("path") or "")[:500],
+                                "line": row.get("line"), "original_line": row.get("original_line"),
+                                "side": row.get("side"), "review_id": row.get("pull_request_review_id"),
+                                "in_reply_to_id": row.get("in_reply_to_id"),
+                                "commit_id": str(row.get("commit_id") or "")[:40],
+                                "diff_hunk": str(row.get("diff_hunk") or "")[:2000],
+                                "diff_hunk_truncated": len(str(row.get("diff_hunk") or "")) > 2000,
+                            } for row in raw[:20] if isinstance(row, dict)]
+                        pagination = {"page": page, "per_page": 20, "has_more": _github_has_more(response)}
+                    elif tool_name == "get_commit":
+                        repository = _github_repo_name(payload.get("repository"))
+                        sha = payload.get("sha")
+                        if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-fA-F]{7,40}", sha):
+                            raise HTTPException(422, "sha must be a 7-40 character hexadecimal commit SHA", headers=_PRIVATE_HEADERS)
+                        page = _github_page(payload.get("page"))
+                        response = await client.get(
+                            "https://api.github.com/repos/" + repository + "/commits/" + sha,
+                            params={"per_page": 5, "page": page}, headers=github_headers,
+                        )
+                        response.raise_for_status()
+                        raw = response.json()
+                        if not isinstance(raw, dict) or not isinstance(raw.get("commit"), dict):
+                            raise HTTPException(502, "Invalid GitHub commit response", headers=_PRIVATE_HEADERS)
+                        commit = raw["commit"]
+                        data = [{
+                            "repository": repository, "sha": str(raw.get("sha") or "")[:40],
+                            "message": str(commit.get("message") or "")[:3000],
+                            "author": str((commit.get("author") or {}).get("name") or "")[:200],
+                            "date": (commit.get("author") or {}).get("date"),
+                            "url": raw.get("html_url"), "stats": raw.get("stats"),
+                            "parents": [str(parent.get("sha") or "")[:40] for parent in (raw.get("parents") or [])[:10] if isinstance(parent, dict)],
+                            "files": [{
+                                "filename": str(row.get("filename") or "")[:500],
+                                "status": str(row.get("status") or "")[:40],
+                                "additions": row.get("additions"), "deletions": row.get("deletions"),
+                                "url": row.get("blob_url"),
+                                "patch": str(row.get("patch") or "")[:1000],
+                                "patch_available": isinstance(row.get("patch"), str),
+                                "patch_truncated": len(str(row.get("patch") or "")) > 1000,
+                            } for row in (raw.get("files") or [])[:5] if isinstance(row, dict)],
+                        }]
+                        pagination = {"page": page, "per_page": 5, "has_more": _github_has_more(response)}
+                    elif tool_name == "list_directory":
+                        repository = _github_repo_name(payload.get("repository"))
+                        path_value = payload.get("path", "")
+                        if path_value == "":
+                            directory, encoded_path = "", ""
+                        else:
+                            directory, encoded_path = _github_file_path(path_value)
+                        ref = _github_ref(payload.get("ref"))
+                        page = _github_page(payload.get("page"))
+                        response = await client.get(
+                            "https://api.github.com/repos/" + repository + "/contents" + ("/" + encoded_path if encoded_path else ""),
+                            params={"ref": ref} if ref else None, headers=github_headers,
+                        )
+                        response.raise_for_status()
+                        raw = response.json()
+                        if not isinstance(raw, list):
+                            raise HTTPException(422, "path must identify a repository directory", headers=_PRIVATE_HEADERS)
+                        offset = (page - 1) * 20
+                        data = [{
+                            "repository": repository, "path": str(row.get("path") or "")[:500],
+                            "name": str(row.get("name") or "")[:255],
+                            "type": "submodule" if row.get("submodule_git_url") else row.get("type"),
+                            "sha": str(row.get("sha") or "")[:40], "size": row.get("size"),
+                            "url": row.get("html_url"), "ref": ref,
+                        } for row in raw[offset:offset + 20] if isinstance(row, dict)]
+                        pagination = {
+                            "page": page, "per_page": 20, "has_more": offset + 20 < len(raw),
+                            "total_count": len(raw), "incomplete_results": len(raw) >= 1000,
                         }
                     elif tool_name == "get_file_contents":
                         repository = _github_repo_name(payload.get("repository"))
