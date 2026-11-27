@@ -830,3 +830,34 @@ test("GitHub code search requires preserving the exact result branch when readin
   assert.equal(h.assistant.toolEvents[1].status,"failed");
   assert.match(h.assistant.toolEvents[1].output,/准确的 repository\/path/);
 });
+
+
+test("GitHub review comment cursors cannot be guessed even after the thread is known", async () => {
+  const h=makeHarness({
+    planner:[
+      JSON.stringify({tool_calls:[{name:"github.search_issues",arguments:{query:"is:open review",repository:"acme/project"}}]}),
+      JSON.stringify({tool_calls:[{name:"github.list_pull_review_threads",arguments:{repository:"acme/project",pull_number:12}}]}),
+      JSON.stringify({tool_calls:[{name:"github.list_pull_review_thread_comments",arguments:{
+        repository:"acme/project",pull_number:12,thread_id:"PRRT_1",cursor:"guessed-cursor",
+      }}]}),
+    ],
+    toolHandler:async (provider,tool,args) => {
+      if (tool === "search_issues") return {data:[{
+        repository:"acme/project",number:12,title:"Review issue",is_pull_request:true,
+        url:"https://github.com/acme/project/pull/12",
+      }]};
+      if (tool === "list_pull_review_threads") return {data:[{
+        repository:"acme/project",pull_number:12,thread_id:"PRRT_1",
+        comments_truncated:true,comments_next_cursor:"real-cursor",
+        url:"https://github.com/acme/project/pull/12",
+      }]};
+      assert.fail("a guessed review comment cursor must never reach the API");
+    },
+  });
+  await h.api.runAutonomousPluginToolLoop(
+    [{role:"user",content:"检查 acme/project 的 PR #12 审查讨论"}],h.assistant,"key",h.recoveryApi,"req",
+  );
+  assert.equal(h.calls.length,2);
+  assert.equal(h.assistant.toolEvents[2].status,"failed");
+  assert.match(h.assistant.toolEvents[2].output,/comments_next_cursor/);
+});
