@@ -1088,7 +1088,11 @@ def test_github_extended_read_tools_are_bounded_and_use_connected_user(tmp_path:
             if url.endswith("/branches"):
                 return FakeResponse([{"name": "feature/a", "commit": {"sha": "a" * 40}, "protected": True}])
             if url.endswith("/commits/" + "a" * 40):
-                return FakeResponse({"sha": "a" * 40, "commit": {"message": "Fix"}, "files": [{"filename": "main.py", "patch": "+fix"}]})
+                assert kwargs.get("params") is None, "commit detail must not pretend to support pagination"
+                return FakeResponse({"sha": "a" * 40, "commit": {"message": "Fix"}, "files": [
+                    {"filename": f"src/module-{index}.py", "patch": "+fix"}
+                    for index in range(6)
+                ]})
             if url.endswith("/contents/src"):
                 return FakeResponse([{"name": "main.py", "path": "src/main.py", "type": "file", "sha": "b" * 40}])
             return FakeResponse([{"id": 42, "user": {"login": "reviewer"}, "body": "review",
@@ -1116,6 +1120,12 @@ def test_github_extended_read_tools_are_bounded_and_use_connected_user(tmp_path:
             assert response.status_code == 200, response.text
             assert response.json()["data"][0][field] == value
             assert response.json()["pagination"]["page"] == 1
+            if tool == "get_commit":
+                commit_row = response.json()["data"][0]
+                assert commit_row["files_returned_by_github"] == 6
+                assert commit_row["files_included"] == 6
+                assert commit_row["files_truncated"] is False
+                assert len(commit_row["files"]) == 6
             assert calls[-1][0] == "https://api.github.com/repos/acme/project" + suffix
         assert calls[-1][1] == {"ref": "main"}
         for tool, args in [
