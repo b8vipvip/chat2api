@@ -265,7 +265,8 @@ def install_web_chat_features_v1(app: Any) -> Any:
     async def receive_native_interaction_ack(client_id: str, websocket: Any, message: dict[str, Any]) -> None:
         action_id = str(message.get("action_id") or "")
         pending = pending_native_interactions.get(action_id)
-        if not pending or pending.get("client_id") != client_id:
+        if (not pending or pending.get("client_id") != client_id
+                or pending.get("websocket") is not websocket):
             return
         if (
             pending.get("request_id") != str(message.get("request_id") or "")
@@ -412,6 +413,7 @@ def install_web_chat_features_v1(app: Any) -> Any:
             future = asyncio.get_running_loop().create_future()
             pending_native_interactions[action_id] = {
                 "client_id": client_id,
+                "websocket": request.app.state.registry.sockets.get(client_id),
                 "request_id": request_id,
                 "revision": revision,
                 "interaction_id": interaction_id,
