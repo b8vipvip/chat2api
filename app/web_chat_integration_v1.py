@@ -337,6 +337,11 @@ def install_web_chat_features_v1(app: Any) -> Any:
             ):
                 return
             raise HTTPException(status_code=422, detail="select option is not allowed", headers=_PRIVATE_HEADERS)
+        if tag == "button" and kind == "tab" and action == "set_selected" and value is True:
+            group = control.get("group")
+            if isinstance(group, str) and re.fullmatch(r"tg_[1-9][0-9]{0,3}", group):
+                return
+            raise HTTPException(status_code=422, detail="native tab group is invalid", headers=_PRIVATE_HEADERS)
         raise HTTPException(status_code=422, detail="native control action is not allowed", headers=_PRIVATE_HEADERS)
 
     def apply_native_interaction(snapshot: dict[str, Any], interaction_id: str, action: str, value: object) -> None:
@@ -373,6 +378,20 @@ def install_web_chat_features_v1(app: Any) -> Any:
                 option_control = option.get("control") if isinstance(option, dict) else None
                 if isinstance(option_control, dict) and option_control.get("kind") == "option":
                     option_control["selected"] = option_control.get("value") == value
+        elif node.get("tag") == "button" and control.get("kind") == "tab":
+            group = control.get("group")
+            stack = [snapshot.get("root")]
+            while stack:
+                current = stack.pop()
+                if not isinstance(current, dict):
+                    continue
+                other = current.get("control")
+                if (current.get("tag") == "button" and isinstance(other, dict)
+                        and other.get("kind") == "tab" and other.get("group") == group):
+                    other["selected"] = current is node
+                children = current.get("children")
+                if isinstance(children, list):
+                    stack.extend(children)
 
     @app.post("/api/user/chat/requests/{request_id}/native-content/interactions")
     async def user_chat_native_content_interaction(request_id: str, request: Request) -> Response:
@@ -393,7 +412,7 @@ def install_web_chat_features_v1(app: Any) -> Any:
             type(revision) is not int or not 1 <= revision < 1000000
             or not isinstance(interaction_id, str)
             or not re.fullmatch(r"nc_[1-9][0-9]{0,6}_[1-9][0-9]{0,3}", interaction_id)
-            or not isinstance(action, str) or action not in {"set_open", "set_checked", "set_value"}
+            or not isinstance(action, str) or action not in {"set_open", "set_checked", "set_value", "set_selected"}
         ):
             raise HTTPException(status_code=422, detail="invalid interaction envelope", headers=_PRIVATE_HEADERS)
 
