@@ -1260,8 +1260,8 @@ const formTabSnapshot=interactionApi.snapshot({
   requestId:"req_nativeformtabs1",submitStartedAt:Date.now(),
   lastCandidateNode:new Element("DIV",[formTabList]),
 });
-assert.equal((formTabSnapshot.root.children[0].children || []).some(node=>node.tag==="button"),false,
-  "form-associated tabs must not enter the remote action surface");
+assert.equal(formTabSnapshot,null,
+  "a tablist containing only form-associated tabs must not produce an executable native snapshot");
 
 const lateFormTab=new Element("BUTTON",[],{role:"tab","aria-selected":"false","aria-label":"Late form tab"});
 lateFormTab.type="button";
@@ -1299,8 +1299,8 @@ const formToggleSnapshot=interactionApi.snapshot({
   requestId:"req_nativeformtoggle1",submitStartedAt:Date.now(),
   lastCandidateNode:new Element("DIV",[formAssociatedToggle]),
 });
-assert.equal((formToggleSnapshot.root.children || []).some(node=>node.tag==="button"),false,
-  "form-associated toggle buttons must not enter the remote action surface");
+assert.equal(formToggleSnapshot,null,
+  "a region containing only form-associated toggles must not produce an executable native snapshot");
 
 const lateFormToggle=new Element("BUTTON",[],{"aria-label":"Late form toggle","aria-pressed":"false"});
 lateFormToggle.type="button";lateFormToggle.disabled=false;
