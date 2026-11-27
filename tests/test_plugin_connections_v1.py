@@ -484,17 +484,17 @@ def test_github_repository_issue_pull_request_commit_and_file_read_tools(tmp_pat
                     return FakeResponse({"items": [{
                         "repository": {"full_name": "acme/project"},
                         "path": "docs/hello world.md",
-                        "html_url": "https://github.com/acme/project/blob/main/docs/hello%20world.md",
+                        "html_url": "https://github.com/acme/project/blob/feature/parser-fix/docs/hello%20world.md",
                         "sha": "b" * 40,
                     }]})
                 if url == "https://api.github.com/repos/acme/project/contents/docs/hello%20world.md":
-                    assert kwargs["params"] == {"ref": "main"}
+                    assert kwargs["params"] == {"ref": "feature/parser-fix"}
                     raw = b"print('hello')\n"
                     return FakeResponse({
                         "type": "file", "size": len(raw),
                         "content": base64.b64encode(raw).decode("ascii"),
                         "encoding": "base64", "sha": "c" * 40,
-                        "html_url": "https://github.com/acme/project/blob/main/docs/hello%20world.md",
+                        "html_url": "https://github.com/acme/project/blob/feature/parser-fix/docs/hello%20world.md",
                     })
                 raise AssertionError("unexpected GitHub URL: " + url)
 
@@ -521,7 +521,7 @@ def test_github_repository_issue_pull_request_commit_and_file_read_tools(tmp_pat
             ("get_pull_request_files", {"repository": "acme/project", "pull_number": 8, "page": 2}),
             ("list_commits", {"repository": "acme/project", "ref": "main"}),
             ("search_code", {"query": "repo:acme/project parser"}),
-            ("get_file_contents", {"repository": "acme/project", "path": "docs/hello world.md", "ref": "main"}),
+            ("get_file_contents", {"repository": "acme/project", "path": "docs/hello world.md", "ref": "feature/parser-fix"}),
         ]
         responses = []
         response_payloads = []
@@ -550,7 +550,7 @@ def test_github_repository_issue_pull_request_commit_and_file_read_tools(tmp_pat
         assert responses[4][0]["patch"].startswith("@@ -1 +1 @@")
         assert responses[5][0]["sha"] == "a" * 40
         assert responses[6][0]["path"] == "docs/hello world.md"
-        assert responses[6][0]["ref"] == "main"
+        assert responses[6][0]["ref"] == "feature/parser-fix"
         assert responses[7][0]["content"] == "print('hello')\n"
         assert len(fake_clients) == 8
 
@@ -1185,6 +1185,23 @@ def test_github_actions_releases_tags_issue_search_and_review_threads(tmp_path: 
         async def post(self, url, **kwargs):
             assert kwargs["headers"]["Authorization"] == "Bearer own-token"
             calls.append(("POST", url, kwargs.get("json")))
+            if "node(id: $threadId)" in kwargs["json"]["query"]:
+                variables = kwargs["json"]["variables"]
+                assert variables["threadId"] == "PRRT_kw123"
+                assert variables["after"] == "comment-next-cursor"
+                return FakeResponse({"data": {"node": {
+                    "id": "PRRT_kw123", "isResolved": False, "isOutdated": True,
+                    "path": "src/main.py", "line": 17, "originalLine": 16,
+                    "pullRequest": {"number": 12, "repository": {"nameWithOwner": "acme/project"}},
+                    "comments": {
+                        "nodes": [{
+                            "databaseId": 45, "author": {"login": "maintainer"}, "body": "Fixed in the next commit",
+                            "url": "https://github.com/acme/project/pull/12#discussion_r45",
+                            "diffHunk": "@@ -1 +1 @@", "replyTo": {"databaseId": 44},
+                        }],
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    },
+                }}})
             variables = kwargs["json"]["variables"]
             assert variables["owner"] == "acme" and variables["name"] == "project"
             assert variables["number"] == 12
@@ -1201,7 +1218,7 @@ def test_github_actions_releases_tags_issue_search_and_review_threads(tmp_path: 
                         "databaseId": 44, "author": {"login": "reviewer"}, "body": "Please fix",
                         "url": "https://github.com/acme/project/pull/12#discussion_r44",
                         "diffHunk": "@@ -1 +1 @@", "replyTo": None,
-                    }], "pageInfo": {"hasNextPage": True}},
+                    }], "pageInfo": {"hasNextPage": True, "endCursor": "comment-next-cursor"}},
                 }],
                 "pageInfo": {"hasNextPage": True, "endCursor": "opaque-next-cursor"},
             }}}}})
@@ -1236,12 +1253,30 @@ def test_github_actions_releases_tags_issue_search_and_review_threads(tmp_path: 
         assert threads["data"][0]["resolved"] is False
         assert threads["data"][0]["comments"][0]["id"] == 44
         assert threads["data"][0]["comments_truncated"] is True
+        assert threads["data"][0]["comments_next_cursor"] == "comment-next-cursor"
         assert threads["pagination"]["next_cursor"] == "opaque-next-cursor"
+        assert threads["pagination"]["per_page"] == 10
         threads_next = call("list_pull_review_threads", {
             "repository": "acme/project", "pull_number": 12, "cursor": "opaque-next-cursor",
         })
         assert threads_next["pagination"]["has_more"] is False
         assert calls[-1][2]["variables"]["after"] == "opaque-next-cursor"
+        comment_page = call("list_pull_review_thread_comments", {
+            "repository": "acme/project", "pull_number": 12,
+            "thread_id": threads["data"][0]["thread_id"],
+            "cursor": threads["data"][0]["comments_next_cursor"],
+        })
+        assert comment_page["data"][0]["comments"][0]["id"] == 45
+        assert comment_page["data"][0]["comments"][0]["in_reply_to_id"] == 44
+        assert comment_page["pagination"]["has_more"] is False
+        assert comment_page["pagination"]["per_page"] == 8
+        wrong_parent = client.post(
+            "/api/user/plugins/github/tools/list_pull_review_thread_comments",
+            headers=ORIGIN,
+            json={"repository": "acme/project", "pull_number": 13,
+                  "thread_id": "PRRT_kw123", "cursor": "comment-next-cursor"},
+        )
+        assert wrong_parent.status_code == 404
 
         for tool, payload in [
             ("search_issues", {"query": "is:open bug repo:other/project", "repository": "acme/project"}),
@@ -1249,7 +1284,9 @@ def test_github_actions_releases_tags_issue_search_and_review_threads(tmp_path: 
             ("list_workflow_runs", {"repository": "acme/project", "status": []}),
             ("list_workflow_jobs", {"repository": "acme/project", "run_id": True}),
             ("list_pull_review_threads", {"repository": "acme/project", "pull_number": 12, "cursor": "bad\nvalue"}),
+            ("list_pull_review_thread_comments", {"repository": "acme/project", "pull_number": 12, "thread_id": "PRRT_kw123"}),
+            ("list_pull_review_thread_comments", {"repository": "acme/project", "pull_number": 12, "thread_id": "bad\nthread", "cursor": "cursor"}),
         ]:
             response = client.post("/api/user/plugins/github/tools/" + tool, headers=ORIGIN, json=payload)
             assert response.status_code == 422, response.text
-        assert len(calls) == 7
+        assert len(calls) == 9

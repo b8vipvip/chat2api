@@ -62,6 +62,13 @@ def _github_cursor(value: Any) -> str | None:
     return value
 
 
+def _github_node_id(value: Any) -> str:
+    if (not isinstance(value, str) or not value.strip() or len(value) > 200
+        or any(ord(char) < 32 or ord(char) == 127 for char in value)):
+        raise HTTPException(422, "thread_id must be a valid GitHub node ID", headers=_PRIVATE_HEADERS)
+    return value.strip()
+
+
 def _github_file_path(value: Any) -> tuple[str, str]:
     path = value.strip() if isinstance(value, str) else ""
     parts = path.split("/")
@@ -1393,15 +1400,15 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                             query($owner: String!, $name: String!, $number: Int!, $after: String) {
                               repository(owner: $owner, name: $name) {
                                 pullRequest(number: $number) {
-                                  reviewThreads(first: 50, after: $after) {
+                                  reviewThreads(first: 10, after: $after) {
                                     nodes {
                                       id isResolved isOutdated path line originalLine
-                                      comments(first: 20) {
+                                      comments(first: 1) {
                                         nodes {
                                           databaseId author { login } body createdAt url diffHunk
                                           replyTo { databaseId }
                                         }
-                                        pageInfo { hasNextPage }
+                                        pageInfo { hasNextPage endCursor }
                                       }
                                     }
                                     pageInfo { hasNextPage endCursor }
@@ -1438,13 +1445,87 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                                 "created_at": comment.get("createdAt"), "url": comment.get("url"),
                                 "diff_hunk": str(comment.get("diffHunk") or "")[:800],
                                 "in_reply_to_id": (comment.get("replyTo") or {}).get("databaseId"),
-                            } for comment in ((row.get("comments") or {}).get("nodes") or [])[:20] if isinstance(comment, dict)],
+                            } for comment in ((row.get("comments") or {}).get("nodes") or [])[:1] if isinstance(comment, dict)],
                             "comments_truncated": ((row.get("comments") or {}).get("pageInfo") or {}).get("hasNextPage") is True,
+                            "comments_next_cursor": (((row.get("comments") or {}).get("pageInfo") or {}).get("endCursor")
+                                if ((row.get("comments") or {}).get("pageInfo") or {}).get("hasNextPage") is True else None),
                             "url": next((comment.get("url") for comment in ((row.get("comments") or {}).get("nodes") or []) if isinstance(comment, dict) and comment.get("url")), "https://github.com/" + repository + "/pull/" + str(pull_number)),
                         } for row in threads.get("nodes", [])[:50] if isinstance(row, dict)]
                         page_info = threads.get("pageInfo") or {}
                         pagination = {
-                            "page": 1, "per_page": 50, "has_more": page_info.get("hasNextPage") is True,
+                            "page": 1, "per_page": 10, "has_more": page_info.get("hasNextPage") is True,
+                            "next_cursor": page_info.get("endCursor") if page_info.get("hasNextPage") is True else None,
+                        }
+                    elif tool_name == "list_pull_review_thread_comments":
+                        repository = _github_repo_name(payload.get("repository"))
+                        pull_number = _github_resource_number(payload.get("pull_number"))
+                        thread_id = _github_node_id(payload.get("thread_id"))
+                        cursor = _github_cursor(payload.get("cursor"))
+                        if cursor is None:
+                            raise HTTPException(422, "cursor is required to continue a review thread", headers=_PRIVATE_HEADERS)
+                        graphql_query = """
+                            query($threadId: ID!, $after: String) {
+                              node(id: $threadId) {
+                                ... on PullRequestReviewThread {
+                                  id isResolved isOutdated path line originalLine
+                                  pullRequest { number repository { nameWithOwner } }
+                                  comments(first: 8, after: $after) {
+                                    nodes {
+                                      databaseId author { login } body createdAt url diffHunk
+                                      replyTo { databaseId }
+                                    }
+                                    pageInfo { hasNextPage endCursor }
+                                  }
+                                }
+                              }
+                            }
+                        """
+                        response = await client.post(
+                            "https://api.github.com/graphql",
+                            json={"query": graphql_query, "variables": {
+                                "threadId": thread_id, "after": cursor,
+                            }},
+                            headers=github_headers,
+                        )
+                        response.raise_for_status()
+                        raw = response.json()
+                        if not isinstance(raw, dict) or raw.get("errors"):
+                            raise HTTPException(502, "GitHub review thread comments query failed", headers=_PRIVATE_HEADERS)
+                        thread = (raw.get("data") or {}).get("node")
+                        parent = (thread or {}).get("pullRequest") or {}
+                        parent_repository = ((parent.get("repository") or {}).get("nameWithOwner") or "")
+                        if (not isinstance(thread, dict) or thread.get("id") != thread_id
+                            or parent_repository.lower() != repository.lower()
+                            or parent.get("number") != pull_number):
+                            raise HTTPException(404, "GitHub review thread not found in this Pull Request", headers=_PRIVATE_HEADERS)
+                        comments_page = thread.get("comments") or {}
+                        comments = comments_page.get("nodes") or []
+                        if not isinstance(comments, list):
+                            raise HTTPException(502, "Invalid GitHub review thread comments response", headers=_PRIVATE_HEADERS)
+                        data = [{
+                            "repository": repository, "pull_number": pull_number,
+                            "thread_id": thread_id,
+                            "resolved": thread.get("isResolved") is True,
+                            "outdated": thread.get("isOutdated") is True,
+                            "path": str(thread.get("path") or "")[:500],
+                            "line": thread.get("line"), "original_line": thread.get("originalLine"),
+                            "comments": [{
+                                "id": comment.get("databaseId"),
+                                "author": str((comment.get("author") or {}).get("login") or "")[:100],
+                                "body": str(comment.get("body") or "")[:1800],
+                                "created_at": comment.get("createdAt"), "url": comment.get("url"),
+                                "diff_hunk": str(comment.get("diffHunk") or "")[:800],
+                                "in_reply_to_id": (comment.get("replyTo") or {}).get("databaseId"),
+                            } for comment in comments[:8] if isinstance(comment, dict)],
+                            "comments_truncated": (comments_page.get("pageInfo") or {}).get("hasNextPage") is True,
+                            "comments_next_cursor": ((comments_page.get("pageInfo") or {}).get("endCursor")
+                                if (comments_page.get("pageInfo") or {}).get("hasNextPage") is True else None),
+                            "url": next((comment.get("url") for comment in comments if isinstance(comment, dict) and comment.get("url")),
+                                "https://github.com/" + repository + "/pull/" + str(pull_number)),
+                        }]
+                        page_info = comments_page.get("pageInfo") or {}
+                        pagination = {
+                            "page": 1, "per_page": 8, "has_more": page_info.get("hasNextPage") is True,
                             "next_cursor": page_info.get("endCursor") if page_info.get("hasNextPage") is True else None,
                         }
                     elif tool_name == "get_file_contents":
