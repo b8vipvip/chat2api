@@ -2630,18 +2630,37 @@
       };
       // Keep one tool result bounded so a malicious or unusually large provider
       // response cannot inflate the next model-planning request indefinitely.
+      let omittedResultsCount = 0;
       while (JSON.stringify(result).length > 10000 && result.results.length > 1) {
         result.results.pop();
+        omittedResultsCount += 1;
+      }
+      if (omittedResultsCount > 0) {
+        result.results_truncated = true;
+        result.omitted_results_count = omittedResultsCount;
       }
       if (JSON.stringify(result).length > 10000) {
         result.results = result.results.map(row => {
           const copy = {...row};
-          if (typeof copy.body_text === "string") copy.body_text = copy.body_text.slice(0,1800);
-          if (typeof copy.body === "string") copy.body = copy.body.slice(0,1800);
-          if (typeof copy.snippet === "string") copy.snippet = copy.snippet.slice(0,700);
-          if (typeof copy.content === "string") copy.content = copy.content.slice(0,7000);
+          if (typeof copy.body_text === "string" && copy.body_text.length > 1800) {
+            copy.body_text = copy.body_text.slice(0,1800);
+            copy.body_text_truncated = true;
+          }
+          if (typeof copy.body === "string" && copy.body.length > 1800) {
+            copy.body = copy.body.slice(0,1800);
+            copy.body_truncated = true;
+          }
+          if (typeof copy.snippet === "string" && copy.snippet.length > 700) {
+            copy.snippet = copy.snippet.slice(0,700);
+            copy.snippet_truncated = true;
+          }
+          if (typeof copy.content === "string" && copy.content.length > 7000) {
+            copy.content = copy.content.slice(0,7000);
+            copy.content_truncated = true;
+          }
           return copy;
         });
+        result.single_result_truncated = true;
       }
       if (definition.provider === "github") {
         const previewRows = ["github.list_pull_review_threads","github.list_pull_review_thread_comments"].includes(rawName)
@@ -2661,7 +2680,11 @@
               url:String(row.url || "").slice(0,2048),
             }))
           : [...result.results];
-        const preview = {tool:rawName,results:previewRows,pagination:result.pagination,preview_truncated:false};
+        const preview = {
+          tool:rawName,results:previewRows,pagination:result.pagination,preview_truncated:false,
+          ...(result.results_truncated ? {results_truncated:true,omitted_results_count:result.omitted_results_count} : {}),
+          ...(result.single_result_truncated ? {single_result_truncated:true} : {}),
+        };
         while (JSON.stringify(preview).length > 2000 && preview.results.length > 1) {
           preview.results.pop();
           preview.preview_truncated = true;
