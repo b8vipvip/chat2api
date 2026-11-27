@@ -1245,6 +1245,7 @@ def test_github_actions_releases_tags_issue_search_and_review_threads(tmp_path: 
         for tool, payload in [
             ("search_issues", {"query": "is:open bug repo:other/project", "repository": "acme/project"}),
             ("list_workflow_runs", {"repository": "acme/project", "status": "invalid"}),
+            ("list_workflow_runs", {"repository": "acme/project", "status": []}),
             ("list_workflow_jobs", {"repository": "acme/project", "run_id": True}),
             ("list_pull_review_threads", {"repository": "acme/project", "pull_number": 12, "cursor": "bad\nvalue"}),
         ]:
