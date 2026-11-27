@@ -17,21 +17,15 @@
     wrapped_requests: 0,
     last_request_id: "",
     policy_injections: 0,
-    server_policy_reuses: 0,
+    already_isolated_reuses: 0,
   };
   globalThis[KEY] = state;
   const baseHandleServerMessage = handleServerMessage;
 
-  function hasSystemPolicy(prompt) {
-    const value = String(prompt || "").trimStart();
-    return value.startsWith("[chat2api API execution rule]")
-      && value.includes("ChatGPT-native GitHub");
-  }
-
   function isolatedChatMessage(message) {
     const original = String(message?.prompt || "");
-    const alreadyPresent = hasSystemPolicy(original);
-    if (alreadyPresent) state.server_policy_reuses += 1;
+    const alreadyPresent = Number(message?.options?.chat2api_tool_isolation?.revision || 0) === 49;
+    if (alreadyPresent) state.already_isolated_reuses += 1;
     else state.policy_injections += 1;
 
     const diagnostics = {
@@ -69,7 +63,7 @@
           external_account_tools_disabled: true,
           native_github_tool_disabled: true,
           tool_isolation: "tool-isolation-v49",
-          tool_policy_injected: !hasSystemPolicy(String(message?.prompt || "")),
+          tool_policy_injected: Number(message?.options?.chat2api_tool_isolation?.revision || 0) !== 49,
           worker_native_tool_preflight_required: true,
         },
       });
