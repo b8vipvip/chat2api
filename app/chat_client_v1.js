@@ -2534,6 +2534,12 @@
           && !knownGithubRefs.has(args.repository + ":" + args.ref) && !userPromptText.includes(args.ref)) {
         throw new Error("必须使用用户明确提供或本轮 GitHub 分支、Tag、Commit 结果返回的 ref。");
       }
+      if (definition.name === "github.search_issues") {
+        const qualifier = args.query.match(/(?:^|\\s)repo:([A-Za-z0-9_.-]{1,100}\\/[A-Za-z0-9_.-]{1,100})(?=\\s|$)/i);
+        if (qualifier && !knownGithubRepos.has(qualifier[1]) && !userPromptText.includes(qualifier[1])) {
+          throw new Error("GitHub Issue 搜索中的 repo: 必须来自用户消息或已发现的仓库。");
+        }
+      }
       if (definition.name === "github.list_workflow_jobs") {
         const key = args.repository + ":" + args.run_id;
         if (!knownGithubRunRefs.has(key) && !userPromptText.includes(String(args.run_id))) {
@@ -2933,9 +2939,10 @@
             }
           });
         }
-        if (outcome.result?.ok && ["github.list_commits","github.list_branches","github.get_commit"].includes(outcome.tool)) {
+        if (outcome.result?.ok && ["github.list_commits","github.list_branches","github.list_tags","github.get_commit"].includes(outcome.tool)) {
           if (outcome.result.arguments.ref) knownGithubRefs.add(outcome.result.arguments.repository + ":" + outcome.result.arguments.ref);
           if (outcome.tool === "github.get_commit" && outcome.result.arguments.sha) knownGithubRefs.add(outcome.result.arguments.repository + ":" + String(outcome.result.arguments.sha).toLowerCase());
+          if (["github.list_branches","github.list_tags"].includes(outcome.tool)) (outcome.result.results || []).forEach(row => { if (row.name) knownGithubRefs.add(outcome.result.arguments.repository + ":" + String(row.name)); });
           const repo = outcome.result.arguments.repository;
           (outcome.result.results || []).forEach(row => {
             for (const sha of [row.sha,...(Array.isArray(row.parents) ? row.parents : [])]) {
