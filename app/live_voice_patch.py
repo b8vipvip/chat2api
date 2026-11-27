@@ -743,7 +743,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         )
                         if video_track_attached:
                             sync_mode = str(event.get("av_sync_mode") or "")
-                            if sync_mode in {"shared_audio_context", "arrival_fallback"}:
+                            if sync_mode in {"shared_audio_context_manual", "shared_audio_context_timed_5fps", "arrival_fallback"}:
                                 ack["av_sync_mode"] = sync_mode
                             sync_skew = event.get("sync_skew_ms")
                             if type(sync_skew) is int and -10000 <= sync_skew <= 10000:
