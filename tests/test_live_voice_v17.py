@@ -251,11 +251,14 @@ def test_live_voice_stream_relays_pcm_both_directions(tmp_path: Path) -> None:
                 assert ready["output_audio_format"] == "pcm16le-24000-mono"
 
                 microphone_pcm = b"\x01\x02" * 320
+                live.send_json({"type": "input_audio.timestamp", "sequence": 0, "timestamp_ms": 0})
                 live.send_bytes(microphone_pcm)
                 inbound = extension.receive_json()
                 assert inbound["type"] == "voice.live.audio"
                 assert base64.b64decode(inbound["pcm_base64"]) == microphone_pcm
                 assert inbound["sample_rate"] == 16000
+                assert inbound["sequence"] == 0
+                assert inbound["timestamp_ms"] == 0
 
                 extension.send_json({
                     "type": "image.progress", "kind": "voice-live", "request_id": request_id,
