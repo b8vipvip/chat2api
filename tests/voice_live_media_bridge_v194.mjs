@@ -44,7 +44,7 @@ const avClockState={
   micContext:{currentTime:1.1},
 };
 const avClockWait=vm.runInNewContext(
-  voiceMain.slice(avClockStart,avClockEnd)+"\\nwaitForLiveAVFrameClock",
+  voiceMain.slice(avClockStart,avClockEnd)+"\nwaitForLiveAVFrameClock",
   {state:avClockState,delay:async ms=>{avClockState.micContext.currentTime+=ms/1000;}},
 );
 const alignedFrame=JSON.parse(JSON.stringify(await avClockWait("av-clock-test",500)));
@@ -53,7 +53,7 @@ assert.equal(alignedFrame.syncSkewMs,0,
   "video drawing must wait for the timestamp-matched synthetic microphone clock");
 const fallbackClockState={requestId:"av-fallback-test",liveAVClock:null,micContext:null};
 const avClockFallback=vm.runInNewContext(
-  voiceMain.slice(avClockStart,avClockEnd)+"\\nwaitForLiveAVFrameClock",
+  voiceMain.slice(avClockStart,avClockEnd)+"\nwaitForLiveAVFrameClock",
   {state:fallbackClockState,delay:async()=>{}},
 );
 assert.deepEqual(JSON.parse(JSON.stringify(await avClockFallback("av-fallback-test",500))),
