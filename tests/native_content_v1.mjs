@@ -1274,7 +1274,7 @@ const formToggleSnapshot=interactionApi.snapshot({
   requestId:"req_nativeformtoggle1",submitStartedAt:Date.now(),
   lastCandidateNode:new Element("DIV",[formAssociatedToggle]),
 });
-assert.equal(formToggleSnapshot.root.children.some(node=>node.tag==="button"),false,
+assert.equal((formToggleSnapshot.root.children || []).some(node=>node.tag==="button"),false,
   "form-associated toggle buttons must not enter the remote action surface");
 
 const lateFormToggle=new Element("BUTTON",[],{"aria-label":"Late form toggle","aria-pressed":"false"});
