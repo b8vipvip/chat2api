@@ -928,9 +928,30 @@
         Number.isSafeInteger(existing.lastEventId) ? existing.lastEventId : 0,
         Number.isSafeInteger(message.lastEventId) ? message.lastEventId : 0,
       );
+      // Merge per-call evidence rather than selecting an entire device snapshot by size.
+      const mergedEvents = new Map();
+      for (const event of [...(existing.toolEvents || []),...(message.toolEvents || [])]) {
+        const key = event.callId || event.resultId;
+        if (!key) continue;
+        const old = mergedEvents.get(key);
+        if (!old) { mergedEvents.set(key,event); continue; }
+        const terminal = item => ["completed","failed","cancelled"].includes(item.status);
+        const preferred = terminal(old) && !terminal(event) ? old :
+          terminal(event) && !terminal(old) ? event :
+          toolActivityWeight([event]) > toolActivityWeight([old]) ? event : old;
+        const other = preferred === old ? event : old;
+        const refs = normalizeToolReferences([...(old.references || []),...(event.references || [])]);
+        mergedEvents.set(key,{
+          ...preferred,
+          ...(preferred.resultPreview || other.resultPreview ? {resultPreview:preferred.resultPreview || other.resultPreview} : {}),
+          ...(refs.length ? {references:refs} : {}),
+        });
+      }
+      const combinedToolEvents = normalizeToolEvents([...mergedEvents.values()],"assistant");
       const withMergedReferences = row => ({
         ...row,
         lastEventId: mergedEventCursor,
+        ...(combinedToolEvents.length ? {toolEvents:combinedToolEvents} : {}),
         ...(mergedReferences.length ? {references:mergedReferences} : {}),
       });
 
@@ -961,7 +982,7 @@
         // Preserve newer call/result state without replacing an authoritative
         // completed answer with a stale local text snapshot.
         messages.set(message.id, withMergedReferences({...existing,toolEvents:message.toolEvents}));
-      } else if (mergedReferences.length) {
+      } else if (mergedReferences.length || combinedToolEvents.length) {
         // A newer text snapshot must not erase server-side citations.
         messages.set(message.id, withMergedReferences(existing));
       }
