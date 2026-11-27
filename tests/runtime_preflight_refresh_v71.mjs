@@ -31,6 +31,7 @@ function currentContract(nativeGate = true, nativeIdentity = true) {
       terminal_prompt_v88: true,
       conversation_quota_failover_v95: true,
       ui_hygiene_v101: true,
+      tool_isolation_v49: true,
     },
   };
 }
@@ -55,7 +56,15 @@ async function runScenario({ hotHealWorks, staleScopeGate = false }) {
     },
     tabs: {
       async sendMessage(_tabId, message) {
-        if (message?.type === "chat2api.tool-isolation.preflight") return { ok: true };
+        if (message?.type === "chat2api.tool-isolation.preflight") return {
+          ok: true,
+          version: 49,
+          external_account_tools_policy: "deny",
+          native_github_tool_policy: "deny",
+          safe_to_dispatch: true,
+          selected_app_controls: 0,
+          unresolved_connection_dialogs: 0,
+        };
         if (message?.type !== "chat2api.runtime.contract.v71") return null;
         // An old request-v6 one-shot controller can coexist with a fresh
         // v287 bundle marker and a freshly injected contract script.

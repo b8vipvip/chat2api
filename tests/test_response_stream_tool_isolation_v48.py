@@ -9,14 +9,14 @@ ROOT = Path(__file__).resolve().parents[1]
 
 NEW_JS = [
     "chrome_extension/content_bundle_marker_v48.js", "chrome_extension/content_bundle_marker_v71.js",
-    "chrome_extension/content_rate_limit_guard_v52.js", "chrome_extension/content_tool_isolation_v48.js",
+    "chrome_extension/content_rate_limit_guard_v52.js", "chrome_extension/content_tool_isolation_v49.js",
     "chrome_extension/content_request_lifecycle_v50.js", "chrome_extension/content_rich_response_v69.js",
     "chrome_extension/content_request_v6.js", "chrome_extension/content_network_stream_recovery_v55.js",
     "chrome_extension/content_native_tool_stream_v63.js", "chrome_extension/native_tool_stream_main_v63.js",
     "chrome_extension/content_response_semantic_recovery_v51.js", "chrome_extension/content_transient_retry_v50.js",
     "chrome_extension/content_generation_liveness_v49.js", "chrome_extension/content_runtime_contract_v48.js",
     "chrome_extension/content_runtime_contract_v71.js", "chrome_extension/network_stream_main_v55.js",
-    "chrome_extension/background_rate_limit_guard_v52.js", "chrome_extension/background_tool_isolation_v48.js",
+    "chrome_extension/background_rate_limit_guard_v52.js", "chrome_extension/background_tool_isolation_v49.js",
     "chrome_extension/background_runtime_preflight_v48.js", "chrome_extension/background_route_close_terminal_v91.js",
 ]
 
@@ -35,6 +35,8 @@ def test_manifest_requires_request_v6_terminal_owner_and_passive_recovery():
     assert "network_stream_main_v55.js" in main_scripts
     assert "native_tool_stream_main_v63.js" in main_scripts
     assert main_scripts.index("network_stream_main_v55.js") < main_scripts.index("native_tool_stream_main_v63.js")
+    assert "content_tool_isolation_v49.js" in scripts
+    assert "content_tool_isolation_v48.js" not in scripts
     assert scripts.index("content_request_v5.js") < scripts.index("content_rich_response_v69.js") < scripts.index("content_request_v6.js") < scripts.index("content_request_lifecycle_v50.js")
     assert scripts.index("content_response_capture_v41.js") < scripts.index("content_network_stream_recovery_v55.js") < scripts.index("content_native_tool_stream_v63.js") < scripts.index("content_response_semantic_recovery_v51.js") < scripts.index("content_transient_retry_v50.js")
     for retired in ("content_response_stream_recovery_v49.js", "content_response_stream_recovery_v69.js", "content_terminal_integrity_v89.js"):
@@ -46,7 +48,7 @@ def test_manifest_requires_request_v6_terminal_owner_and_passive_recovery():
 def test_dynamic_bootstrap_cannot_resurrect_retired_terminal_owners():
     bootstrap = (ROOT / "chrome_extension" / "content_bootstrap.js").read_text(encoding="utf-8")
     assert "content_bundle_marker_v48.js" not in bootstrap
-    for token in ("network_stream_main_v55.js","native_tool_stream_main_v63.js","content_rate_limit_guard_v52.js","content_tool_isolation_v48.js","content_draft_managed_recovery_v55.js","content_rich_response_v69.js","content_request_v6.js","content_network_stream_recovery_v55.js","content_native_tool_stream_v63.js","content_generation_liveness_v49.js","content_runtime_contract_v48.js","content_runtime_contract_v71.js"):
+    for token in ("network_stream_main_v55.js","native_tool_stream_main_v63.js","content_rate_limit_guard_v52.js","content_tool_isolation_v49.js","content_draft_managed_recovery_v55.js","content_rich_response_v69.js","content_request_v6.js","content_network_stream_recovery_v55.js","content_native_tool_stream_v63.js","content_generation_liveness_v49.js","content_runtime_contract_v48.js","content_runtime_contract_v71.js"):
         assert token in bootstrap
     for retired in ("content_response_stream_recovery_v49.js", "content_response_stream_recovery_v69.js", "content_terminal_integrity_v89.js"):
         assert retired not in bootstrap
@@ -57,6 +59,9 @@ def test_background_preflight_requires_canonical_terminal_path_only():
     legacy_contract = (ROOT / "chrome_extension" / "content_runtime_contract_v48.js").read_text(encoding="utf-8")
     contract = (ROOT / "chrome_extension" / "content_runtime_contract_v71.js").read_text(encoding="utf-8")
     assert 'REQUIRED_BUNDLE = "0.22.302"' in preflight
+    assert "tool_isolation_v49" in preflight
+    assert "worker_tool_isolation_preflight_failed" in preflight
+    assert "safe_to_dispatch === true" in preflight
     for token in ('"content_request_v6.js"','"content_network_stream_recovery_v55.js"','"content_response_semantic_recovery_v51.js"','"content_runtime_contract_v71.js"'):
         assert token in preflight
     assert '"content_response_stream_recovery_v49.js"' not in preflight
@@ -68,6 +73,39 @@ def test_background_preflight_requires_canonical_terminal_path_only():
     assert "__CHAT2API_NETWORK_STREAM_RECOVERY_V55__" in contract
     assert "__CHAT2API_RESPONSE_STREAM_RECOVERY_V49__" not in contract
     assert "__CHAT2API_RESPONSE_STREAM_RECOVERY_V69__" not in contract
+
+
+def test_native_github_tool_event_aborts_active_worker_turn():
+    result = subprocess.run(
+        ["node", "--test", str(ROOT / "tests" / "native_tool_isolation_v49.mjs")],
+        cwd=ROOT, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_worker_native_connected_app_isolation_is_fail_closed_and_audited():
+    content = (ROOT / "chrome_extension" / "content_tool_isolation_v49.js").read_text(encoding="utf-8")
+    background = (ROOT / "chrome_extension" / "background_tool_isolation_v49.js").read_text(encoding="utf-8")
+    bridge = (ROOT / "chrome_extension" / "content_native_tool_stream_v63.js").read_text(encoding="utf-8")
+    request = (ROOT / "chrome_extension" / "content_request_v6.js").read_text(encoding="utf-8")
+    manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
+    entry = (ROOT / "chrome_extension" / "background_entry.js").read_text(encoding="utf-8")
+    contract = (ROOT / "chrome_extension" / "content_runtime_contract_v71.js").read_text(encoding="utf-8")
+    assert "safe_to_dispatch: selected.length === 0 && unresolvedDialogs === 0" in content
+    assert 'native_github_tool_policy: "deny"' in content
+    assert 'native_account_authorization_state: "not-inspected-by-worker-ui"' in content
+    assert "const protectedAuth = authDanger.test(context);" in content
+    assert "match.protectedAuth" in content
+    assert 'native_github_tool_policy: "deny"' in background
+    assert "tool-isolation-v49" in background
+    assert "tool_isolation_v49:" in contract
+    assert "native_tool_stream_v63: Number(nativeTool?.revision || 0) >= 64" in contract
+    assert "background_tool_isolation_v49.js" in entry
+    assert "content_tool_isolation_v49.js" in manifest["content_scripts"][1]["js"]
+    assert "blockNativeExternalAccountTool" in bridge
+    assert "native_external_tool_abort_requested: true" in bridge
+    assert "native_external_tool_prevented_before_execution: false" in bridge
+    assert 'String(active.cancelReason || "Cancelled by API client")' in request
 
 
 def test_network_stream_recovery_is_evidence_only():
@@ -90,4 +128,5 @@ def test_runtime_contract_still_exposes_supported_features():
     assert payload["chrome_bridge"]["bundle_version"] == "0.22.302"
     assert payload["features"]["network_response_recovery"] is True
     assert payload["features"]["single_response_observer"] is True
+    assert payload["features"]["external_account_tool_isolation_fail_closed_v49"] is True
     assert payload["features"]["worker_content_runtime_epoch_v71"] is True

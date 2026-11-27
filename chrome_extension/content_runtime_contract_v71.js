@@ -42,7 +42,7 @@
       response_capture_v41: Number(globalThis.__CHAT2API_RESPONSE_CAPTURE_V41__?.version || 0) === 41,
       completion_recovery_v6: Boolean(globalThis.__CHAT2API_COMPLETION_RECOVERY_V6__),
       rate_limit_guard_v52: Boolean(globalThis.__CHAT2API_RATE_LIMIT_CONTENT_V52__),
-      tool_isolation_v48: Number(globalThis.__CHAT2API_TOOL_ISOLATION_V48__?.version || 0) === 48,
+      tool_isolation_v49: Number(globalThis.__CHAT2API_TOOL_ISOLATION_V49__?.version || 0) === 49,
       draft_managed_recovery_v55: Number(globalThis.__CHAT2API_DRAFT_MANAGED_RECOVERY_V55__?.version || 0) === 55,
       // The v55 module identifier is a compatibility family. The current
       // implementation reports version 57 (evidence-only terminal ownership),
@@ -50,7 +50,7 @@
       network_stream_recovery_v55: Number(networkRecovery?.version || 0) >= 55,
       network_stream_main_v55: document.documentElement?.getAttribute?.("data-chat2api-network-stream-main-v55") === "55",
       network_stream_parser_v63: document.documentElement?.getAttribute?.("data-chat2api-network-stream-parser") === "63",
-      native_tool_stream_v63: Number(nativeTool?.revision || 0) === 63,
+      native_tool_stream_v63: Number(nativeTool?.revision || 0) >= 64,
       native_tool_stream_main_v63: document.documentElement?.getAttribute?.("data-chat2api-native-tool-stream") === "63",
       response_semantic_recovery_v51: Number(semanticHelper?.version || 0) === 51 && semanticHelper?.timer == null,
       transient_retry_v50: Number(globalThis.__CHAT2API_TRANSIENT_RETRY_V50__?.version || 0) === 50,

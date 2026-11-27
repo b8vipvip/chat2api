@@ -40,7 +40,7 @@ def test_bundle_0831_load_order_and_runtime_contract_include_rate_limit_guard() 
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
     assert manifest["version"] == "0.22.302"
     content_scripts = manifest["content_scripts"][1]["js"]
-    assert content_scripts.index("content_ui_hygiene_v31.js") < content_scripts.index("content_rate_limit_guard_v52.js") < content_scripts.index("content_tool_isolation_v48.js")
+    assert content_scripts.index("content_ui_hygiene_v31.js") < content_scripts.index("content_rate_limit_guard_v52.js") < content_scripts.index("content_tool_isolation_v49.js")
     assert entry.index('"browser_tabs.js"') < entry.index('"background_rate_limit_guard_v52.js"') < entry.index('"conversation_routing.js"')
     assert '"background_tab_supervisor_v32.js"' not in entry
     assert '"content_rate_limit_guard_v52.js"' in bootstrap

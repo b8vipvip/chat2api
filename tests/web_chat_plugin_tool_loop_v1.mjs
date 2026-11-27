@@ -75,7 +75,7 @@ function makeHarness({selectedPlugins = ["github"], catalog = null, planner = []
   const api = vm.runInNewContext(
     "(() => { " + helperSource + "\nreturn {" +
       "selectedPluginToolDefinitions,parsePluginToolPlan,validatePluginToolArguments," +
-      "executePluginToolCall,runAutonomousPluginToolLoop}; })()",
+      "executePluginToolCall,runAutonomousPluginToolLoop,buildPluginPlannerPrompt}; })()",
     context,
   );
   return {
@@ -104,6 +104,16 @@ test("only selected and connected plugins are exposed to the model", () => {
     "github.search_issues","github.list_releases","github.list_tags","github.list_workflow_runs","github.list_workflow_jobs","github.list_pull_review_threads",
     "github.list_pull_review_thread_comments",
   ]);
+});
+
+test("plugin planner explicitly forbids Worker-native GitHub and connected apps", () => {
+  const h = makeHarness({selectedPlugins:["github"]});
+  const prompt = h.api.buildPluginPlannerPrompt(
+    h.api.selectedPluginToolDefinitions(), 1, 0,
+  );
+  assert.ok(prompt.includes("Worker 当前 ChatGPT 页面显示原生 Apps、GitHub 或其他连接器"));
+  assert.ok(prompt.includes("所有 GitHub/Gmail 访问必须且只能通过本轮明确列出的 chat2api 工具"));
+  assert.ok(prompt.includes("可用工具定义"));
 });
 
 test("model autonomously chooses GitHub search, receives tool results, then stops", async () => {

@@ -55,7 +55,7 @@ importScripts(
   "conversation_persistent_pool_guard_v133.js",
   "conversation_dispatch.js",
 
-  "background_tool_isolation_v48.js",
+  "background_tool_isolation_v49.js",
   "background_runtime_preflight_v48.js",
   "background_request_hygiene_v42.js",
   "background_transport_recovery_v47.js",
