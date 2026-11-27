@@ -550,6 +550,7 @@ def test_github_repository_issue_pull_request_commit_and_file_read_tools(tmp_pat
         assert responses[4][0]["patch"].startswith("@@ -1 +1 @@")
         assert responses[5][0]["sha"] == "a" * 40
         assert responses[6][0]["path"] == "docs/hello world.md"
+        assert responses[6][0]["ref"] == "main"
         assert responses[7][0]["content"] == "print('hello')\n"
         assert len(fake_clients) == 8
 
