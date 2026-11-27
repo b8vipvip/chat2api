@@ -444,7 +444,9 @@
   }
 
   async function waitForLiveAVFrameClock(ownerRequestId,timestampMs) {
-    if (!state.micContext) return {mode:"arrival_fallback",syncSkewMs:null};
+    if (!state.micContext || !Number.isFinite(state.micContext.currentTime)) {
+      return {mode:"arrival_fallback",syncSkewMs:null};
+    }
     const hasClock = () => {
       const current = state.liveAVClock;
       return current?.requestId === ownerRequestId
