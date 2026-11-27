@@ -1156,6 +1156,7 @@ const interactionCtx={
     onMessage:{addListener:listener=>{nativeInteractionListener=listener;}},
   }},
 };
+delete interactionCtx.__CHAT2API_NATIVE_CONTENT_V1__;
 runInNewContext(code,interactionCtx);
 const interactionCheckbox=new Element("INPUT",[],{"aria-label":"Enable"});
 interactionCheckbox.type="checkbox";interactionCheckbox.checked=false;interactionCheckbox.disabled=false;
