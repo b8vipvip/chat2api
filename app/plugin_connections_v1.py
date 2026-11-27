@@ -1403,7 +1403,7 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                                   reviewThreads(first: 50, after: $after) {
                                     nodes {
                                       id isResolved isOutdated path line originalLine
-                                      comments(first: 10) {
+                                      comments(first: 8) {
                                         nodes {
                                           databaseId author { login } body createdAt url diffHunk
                                           replyTo { databaseId }
@@ -1445,7 +1445,7 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                                 "created_at": comment.get("createdAt"), "url": comment.get("url"),
                                 "diff_hunk": str(comment.get("diffHunk") or "")[:800],
                                 "in_reply_to_id": (comment.get("replyTo") or {}).get("databaseId"),
-                            } for comment in ((row.get("comments") or {}).get("nodes") or [])[:10] if isinstance(comment, dict)],
+                            } for comment in ((row.get("comments") or {}).get("nodes") or [])[:8] if isinstance(comment, dict)],
                             "comments_truncated": ((row.get("comments") or {}).get("pageInfo") or {}).get("hasNextPage") is True,
                             "comments_next_cursor": (((row.get("comments") or {}).get("pageInfo") or {}).get("endCursor")
                                 if ((row.get("comments") or {}).get("pageInfo") or {}).get("hasNextPage") is True else None),
@@ -1469,7 +1469,7 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                                 ... on PullRequestReviewThread {
                                   id isResolved isOutdated path line originalLine
                                   pullRequest { number repository { nameWithOwner } }
-                                  comments(first: 10, after: $after) {
+                                  comments(first: 8, after: $after) {
                                     nodes {
                                       databaseId author { login } body createdAt url diffHunk
                                       replyTo { databaseId }
@@ -1516,7 +1516,7 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                                 "created_at": comment.get("createdAt"), "url": comment.get("url"),
                                 "diff_hunk": str(comment.get("diffHunk") or "")[:800],
                                 "in_reply_to_id": (comment.get("replyTo") or {}).get("databaseId"),
-                            } for comment in comments[:10] if isinstance(comment, dict)],
+                            } for comment in comments[:8] if isinstance(comment, dict)],
                             "comments_truncated": (comments_page.get("pageInfo") or {}).get("hasNextPage") is True,
                             "comments_next_cursor": ((comments_page.get("pageInfo") or {}).get("endCursor")
                                 if (comments_page.get("pageInfo") or {}).get("hasNextPage") is True else None),
@@ -1525,7 +1525,7 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                         }]
                         page_info = comments_page.get("pageInfo") or {}
                         pagination = {
-                            "page": 1, "per_page": 10, "has_more": page_info.get("hasNextPage") is True,
+                            "page": 1, "per_page": 8, "has_more": page_info.get("hasNextPage") is True,
                             "next_cursor": page_info.get("endCursor") if page_info.get("hasNextPage") is True else None,
                         }
                     elif tool_name == "get_file_contents":
