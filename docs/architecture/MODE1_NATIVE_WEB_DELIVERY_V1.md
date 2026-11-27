@@ -194,7 +194,7 @@ The following updates supersede earlier progress notes in this document and Issu
 ### Remaining substantive work
 
 1. Broader component parity beyond the typed-control bridge: arbitrary buttons, app tabs, chart legend/action handlers, canvas/WebGL, iframe widgets and arbitrary React handlers remain unsupported. Any future bridge must remain allowlisted, request-scoped and explicitly user-triggered.
-2. Implement and test a shared audio/video media clock if frame-accurate A/V synchronization is required. The current camera frame timestamp is diagnostic metadata; it is not proof of frame-accurate synchronization with the synthetic microphone's WebRTC audio clock.
+2. A shared browser audio/video scheduling clock is now implemented: PCM blocks carry session-relative monotonic timestamps, the Worker schedules synthetic microphone playback behind a bounded 160 ms jitter buffer, and manual Canvas `requestFrame()` capture schedules video against the same AudioContext clock. The server records per-frame `sync_skew_ms` plus aggregate absolute-skew diagnostics. This measures local scheduling skew, not end-to-end WebRTC encoder/network/remote-receiver synchronization; manual capture fallback and real-browser timing still require staging measurement.
 3. Define recovery behavior for a full Worker/browser restart during an active Voice call. Existing text/SSE recovery does not resume the original WebRTC media session.
 4. Complete staging acceptance with a real authenticated Worker + ChatGPT session for Worker reconnect, Broker/server restart, media/file integrity, final usage settlement and cross-device browser behavior.
 

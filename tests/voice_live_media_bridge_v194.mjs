@@ -2,12 +2,16 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
+const liveClient = readFileSync("app/chat_voice_client_v1.js", "utf8");
 const liveMain = readFileSync("chrome_extension/voice_live_main.js", "utf8");
 const liveContent = readFileSync("chrome_extension/content_voice_live.js", "utf8");
 const liveText = readFileSync("chrome_extension/content_voice_live_text_v24.js", "utf8");
 const voiceMain = readFileSync("chrome_extension/voice_main.js", "utf8");
 const liveRouting = readFileSync("chrome_extension/audio_routing_live.js", "utf8");
-for (const src of [liveMain, liveContent, liveText, voiceMain, liveRouting]) new vm.Script(src);
+for (const src of [liveClient, liveMain, liveContent, liveText, voiceMain, liveRouting]) new vm.Script(src);
+assert.ok(liveClient.includes('type:"input_audio.timestamp"'), "PCM blocks must carry the browser session clock");
+assert.ok(liveClient.includes("frameStartMs"), "PCM timestamps must refer to the first sample in the block");
+assert.ok(liveClient.indexOf('sendJson({type:"input_audio.timestamp"') < liveClient.indexOf("socket.send(frame)"), "the audio clock control must precede its paired binary PCM frame");
 assert.ok(liveMain.includes("state.remoteTrack"), "stream from actual WebRTC track");
 assert.ok(!liveMain.includes("state?.recorder?.stream"), "never wait on an unarmed MediaRecorder");
 assert.ok(!liveMain.includes("recorderChunks.splice"), "live stream cannot mutate batch recording");
@@ -24,13 +28,42 @@ assert.ok(liveText.includes('video_track_mode: "web_rtc"'), "the Worker must ide
 assert.ok(liveText.includes('video_track_mode: "snapshot_fallback"'), "unsupported camera controls must be explicitly reported as snapshot fallback");
 assert.ok(liveText.includes("active.videoTrackMode = \"snapshot_fallback\""), "unsupported upstream camera controls must retain the safe snapshot fallback");
 assert.ok(voiceMain.includes("LIVE_VIDEO_FRAME_RATE = 5"), "the synthetic camera must use a bounded 5 FPS capture rate");
-assert.ok(voiceMain.includes("canvas.captureStream(LIVE_VIDEO_FRAME_RATE)"), "ChatGPT must receive a continuous synthetic camera MediaStreamTrack");
+assert.ok(voiceMain.includes("canvas.captureStream(0)"), "the synthetic camera must support timestamp-driven manual frame requests");
+assert.ok(voiceMain.includes("state.liveVideoTrack.requestFrame()"), "each camera frame must be captured on the shared audio clock when supported");
+assert.ok(liveMain.includes("LIVE_AV_SYNC_BUFFER_SECONDS"), "input PCM must use a bounded A/V jitter buffer");
+assert.ok(liveContent.includes("timestamp_ms: message.timestampMs"), "audio clock metadata must reach the MAIN-world audio graph");
+assert.ok(liveRouting.includes("timestampMs: message.timestamp_ms"), "the Worker router must preserve audio timestamps");
+assert.ok(liveText.includes("received.sync_skew_ms !== null"), "arrival fallback must not be misreported as a measured zero-skew frame");
 assert.ok(voiceMain.includes('voice.live.video.sender.attached'), "the bridge must verify that the upstream PeerConnection attached the video track");
 assert.ok(voiceMain.includes('voice.live.video.sender.detached'), "replacing the synthetic sender must be observable");
 assert.ok(voiceMain.includes('voice.live.video.track.ended'), "an ended synthetic track must be observable");
 assert.ok(liveText.includes('item.type === "voice.live.video.sender.detached"'), "a replaced sender must trigger explicit snapshot fallback");
 assert.ok(liveText.includes('item.type === "voice.live.video.track.ended"'), "an ended sender must trigger explicit snapshot fallback");
 assert.ok(voiceMain.includes("voice.live.video.frame.received"), "the exact frame sequence must be acknowledged after rendering");
+const avClockStart=voiceMain.indexOf("  async function waitForLiveAVFrameClock(");
+const avClockEnd=voiceMain.indexOf("  async function drawLiveVideoFrame(",avClockStart);
+assert.ok(avClockStart>=0 && avClockEnd>avClockStart);
+const avClockState={
+  requestId:"av-clock-test",
+  liveAVClock:{requestId:"av-clock-test",clientOriginMs:100,audioOriginSec:1.0},
+  micContext:{currentTime:1.1},
+};
+const avClockWait=vm.runInNewContext(
+  voiceMain.slice(avClockStart,avClockEnd)+"\nwaitForLiveAVFrameClock",
+  {state:avClockState,delay:async ms=>{avClockState.micContext.currentTime+=ms/1000;}},
+);
+const alignedFrame=JSON.parse(JSON.stringify(await avClockWait("av-clock-test",500)));
+assert.equal(alignedFrame.mode,"shared_audio_context");
+assert.equal(alignedFrame.syncSkewMs,0,
+  "video drawing must wait for the timestamp-matched synthetic microphone clock");
+const fallbackClockState={requestId:"av-fallback-test",liveAVClock:null,micContext:null};
+const avClockFallback=vm.runInNewContext(
+  voiceMain.slice(avClockStart,avClockEnd)+"\nwaitForLiveAVFrameClock",
+  {state:fallbackClockState,delay:async()=>{}},
+);
+assert.deepEqual(JSON.parse(JSON.stringify(await avClockFallback("av-fallback-test",500))),
+  {mode:"arrival_fallback",syncSkewMs:null});
+
 assert.ok(liveText.includes("videoSenderUnavailable(active)"),
   "sender removal during frame upload or rendering must be rechecked before a positive WebRTC ACK");
 assert.ok(liveText.includes("videoFrameMayHaveBeenRendered = true"),
@@ -665,12 +698,15 @@ assert.ok(Math.abs(longRunSamples - expectedLongRunSamples) <= 2,
 const pcm=Buffer.alloc(640);
 pcm.writeInt16LE(4200,0);
 const encoded=pcm.toString("base64");
-send("voice.live.audio.push",{pcm_base64:encoded,sample_rate:16000});
+send("voice.live.audio.push",{pcm_base64:encoded,sample_rate:16000,sequence:0,timestamp_ms:100});
 send("voice.live.audio.push",{pcm_base64:encoded,sample_rate:16000});
 send("voice.live.audio.push",{pcm_base64:encoded,sample_rate:16000});
 await flush();await flush();await flush();
 assert.equal(sources.length,3);
 assert.ok(sources[0]<sources[1] && sources[1]<sources[2], "PCM frames in same order as received");
+assert.ok(Math.abs(sources[0]-0.16)<1e-6, "the first timestamped PCM frame must start at the shared-clock jitter-buffer origin");
+assert.equal(currentVoiceState.liveAVClock.clientOriginMs,100);
+assert.equal(currentVoiceState.liveAVClock.lastAudioSequence,0);
 assert.equal(currentVoiceState.recorder,null, "live mode must not start batch recorder");
 assert.deepEqual(currentVoiceState.recorderChunks,[], "live stream must not touch recorder chunks");
 const stopEventStart = posted.length;
@@ -683,4 +719,5 @@ assert.ok(stoppedResponseIndex >= 0 && stopAckIndex > stoppedResponseIndex,
   "main-world stop acknowledgement must follow the final response.stopped snapshot");
 assert.equal(stopEvents[stopAckIndex].request_id,"live-v194");
 assert.equal(stopEvents[stopAckIndex].session_id,"session-v194");
+assert.equal(currentVoiceState.liveAVClock,null,"stopping a Voice session must clear its shared A/V clock");
 console.log("Live Voice binds WebRTC track directly, streams PCM and preserves ordered microphone input");

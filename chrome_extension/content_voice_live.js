@@ -659,6 +659,8 @@
       postMain("voice.live.audio.push", active, {
         pcm_base64: message.pcmBase64 || "",
         sample_rate: message.sampleRate || 16000,
+        sequence: message.sequence,
+        timestamp_ms: message.timestampMs,
       });
       sendResponse({ ok: true });
       return false;

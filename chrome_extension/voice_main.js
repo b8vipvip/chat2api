@@ -45,6 +45,8 @@
     liveVideoLastTimestamp: -1,
     liveVideoLastSequence: -1,
     liveVideoFrameCount: 0,
+    liveVideoFrameRequestMode: "",
+    liveAVClockWaitedRequestId: null,
   };
   globalThis[KEY] = state;
 
@@ -398,8 +400,22 @@
     }
     context.fillStyle = "#000";
     context.fillRect(0, 0, canvas.width, canvas.height);
-    const stream = canvas.captureStream(LIVE_VIDEO_FRAME_RATE);
-    const track = stream?.getVideoTracks?.()[0];
+    let stream = null;
+    let track = null;
+    try {
+      // Manual frame requests let the camera track use the same audio clock
+      // as synthetic microphone PCM. Older implementations fall back to the
+      // bounded 5 FPS timer-driven canvas capture.
+      stream = canvas.captureStream(0);
+      track = stream?.getVideoTracks?.()[0] || null;
+    } catch (_) {}
+    if (!track || typeof track.requestFrame !== "function") {
+      for (const item of stream?.getTracks?.() || []) {
+        try { item.stop(); } catch (_) {}
+      }
+      stream = canvas.captureStream(LIVE_VIDEO_FRAME_RATE);
+      track = stream?.getVideoTracks?.()[0] || null;
+    }
     if (!track || track.readyState === "ended") {
       for (const item of stream?.getTracks?.() || []) {
         try { item.stop(); } catch (_) {}
@@ -422,7 +438,47 @@
     state.liveVideoLastTimestamp = -1;
     state.liveVideoLastSequence = -1;
     state.liveVideoFrameCount = 0;
+    state.liveVideoFrameRequestMode = typeof track.requestFrame === "function" ? "manual" : "timed_5fps";
+    state.liveAVClockWaitedRequestId = null;
     return track;
+  }
+
+  async function waitForLiveAVFrameClock(ownerRequestId,timestampMs) {
+    if (!state.micContext || !Number.isFinite(state.micContext.currentTime)) {
+      return {mode:"arrival_fallback",syncSkewMs:null};
+    }
+    const hasClock = () => {
+      const current = state.liveAVClock;
+      return current?.requestId === ownerRequestId
+        && Number.isFinite(current.clientOriginMs)
+        && Number.isFinite(current.audioOriginSec);
+    };
+    if (!hasClock() && state.liveAVClockWaitedRequestId !== ownerRequestId) {
+      state.liveAVClockWaitedRequestId = ownerRequestId;
+      for (let attempt = 0; attempt < 12 && !hasClock(); attempt += 1) {
+        await delay(20);
+        if (state.requestId !== ownerRequestId) {
+          throw new Error("Live video session ended while waiting for the shared media clock");
+        }
+      }
+    }
+    const clock = state.liveAVClock;
+    const audioContext = state.micContext;
+    if (!(clock?.requestId === ownerRequestId && audioContext &&
+          Number.isFinite(clock.clientOriginMs) && Number.isFinite(clock.audioOriginSec) &&
+          Number.isFinite(audioContext.currentTime))) {
+      return {mode:"arrival_fallback",syncSkewMs:null};
+    }
+    const targetAudioTime = clock.audioOriginSec + (timestampMs - clock.clientOriginMs) / 1000;
+    const waitMs = Math.max(0,(targetAudioTime - audioContext.currentTime) * 1000);
+    if (waitMs > 0) await delay(Math.min(waitMs,750));
+    if (state.requestId !== ownerRequestId) {
+      throw new Error("Live video session ended before the synchronized frame was rendered");
+    }
+    return {
+      mode:"shared_audio_context",
+      syncSkewMs:Math.round((audioContext.currentTime - targetAudioTime) * 1000),
+    };
   }
 
   async function drawLiveVideoFrame(message) {
@@ -455,6 +511,12 @@
           !state.liveVideoTrack || state.liveVideoTrack.readyState === "ended") {
         throw new Error("Live video session ended before the frame could be rendered");
       }
+      const avSync = await waitForLiveAVFrameClock(ownerRequestId,timestampMs);
+      const avSyncMode = avSync.mode === "shared_audio_context"
+        ? (state.liveVideoFrameRequestMode === "manual"
+          ? "shared_audio_context_manual" : "shared_audio_context_timed_5fps")
+        : avSync.mode;
+      const syncSkewMs = avSync.syncSkewMs;
       const context = state.liveVideoContext;
       const canvas = state.liveVideoCanvas;
       const scale = Math.min(canvas.width / bitmap.width, canvas.height / bitmap.height);
@@ -465,11 +527,16 @@
       context.fillStyle = "#000";
       context.fillRect(0, 0, canvas.width, canvas.height);
       context.drawImage(bitmap, left, top, width, height);
+      if (typeof state.liveVideoTrack.requestFrame === "function") {
+        state.liveVideoTrack.requestFrame();
+      }
       state.liveVideoLastTimestamp = timestampMs;
       state.liveVideoLastSequence = sequence;
       state.liveVideoFrameCount += 1;
       post("voice.live.video.frame.received", {
         sequence, timestamp_ms: timestampMs, frame_count: state.liveVideoFrameCount,
+        av_sync_mode: avSyncMode,
+        sync_skew_ms: syncSkewMs,
       }, ownerRequestId);
     } finally {
       try { bitmap.close?.(); } catch (_) {}
