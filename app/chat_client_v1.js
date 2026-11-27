@@ -2036,6 +2036,7 @@
           repository:row.repository,pull_number:row.pull_number,thread_id:String(row.thread_id || "").slice(0,200),
           resolved:row.resolved === true,outdated:row.outdated === true,path:String(row.path || "").slice(0,500),
           line:row.line,original_line:row.original_line,
+          comments_truncated:row.comments_truncated === true,
           comments:Array.isArray(row.comments) ? row.comments.slice(0,20).map(comment => ({
             id:comment.id,author:String(comment.author || "").slice(0,100),
             body:String(comment.body || "").slice(0,1800),created_at:comment.created_at,
