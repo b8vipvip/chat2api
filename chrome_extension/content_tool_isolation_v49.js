@@ -47,7 +47,7 @@
   const negativeAction = /^(not now|maybe later|later|cancel|close|dismiss|skip|no thanks|don't connect|暂不|以后再说|取消|关闭|跳过|不用了|不连接|拒绝)$/i;
   const removeAction = /^(remove|clear|disconnect|移除|清除|断开)(?:\s|$)/i;
   const integrationContext = /(plugin|plugins|connector|connectors|connected app|connected apps|integration|integrations|app connection|connection has expired|reconnect .* connection|use this connection|插件|连接器|已连接应用|应用连接|集成|连接已过期|重新连接|使用该连接)/i;
-  const providerLabel = /^(github|gmail|google drive|google calendar|google docs|google sheets|slack|notion|linear|outlook|microsoft teams|onedrive|sharepoint|dropbox|box|salesforce|hubspot|jira|confluence|figma)(?:\s+(?:app|plugin|connector))?$/i;
+  const providerLabel = /\b(github|gmail|google drive|google calendar|google docs|google sheets|slack|notion|linear|outlook|microsoft teams|onedrive|sharepoint|dropbox|box|salesforce|hubspot|jira|confluence|figma)\b/i;
   const authDanger = /(captcha|verify you are human|security check|two[- ]?factor|2fa|authenticator|passkey|password|payment|billing|subscription|identity verification|人机验证|安全验证|两步验证|双重验证|密码|付款|账单|订阅|身份验证)/i;
 
   function activeRequestId() {
