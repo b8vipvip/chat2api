@@ -1179,12 +1179,13 @@ assert.match(detailsNode.interaction_id,/^nc_1_1$/);
 assert.match(checkboxNode.interaction_id,/^nc_1_2$/);
 assert.match(rangeNode.interaction_id,/^nc_1_3$/);
 assert.match(selectNode.interaction_id,/^nc_1_4$/);
+let actionSequence=0;
 function dispatchNativeAction(action,interactionId,value,revision=interactionSnapshot.revision,requestId="req_nativeactions12345"){
   let response=null;
   nativeInteractionListener({
     type:"chat2api.native.interaction",
     request_id:requestId,
-    action_id:"a".repeat(32),
+    action_id:(++actionSequence).toString(16).padStart(32,"0"),
     revision,
     interaction_id:interactionId,
     action,
