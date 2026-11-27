@@ -7,6 +7,7 @@ const sent = [];
 class Element {
   constructor(tagName, children=[], attributes={}) { this.tagName=tagName; this.childNodes=children;
     this.attributes=attributes;
+    this.dispatchedEvents=[];
     this.isConnected=true; this.parentElement=null;
     for(const c of children) if(c instanceof Element)c.parentElement=this;
   }
