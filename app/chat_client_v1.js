@@ -2675,23 +2675,28 @@
         event.output += " 单条结果内容已截断。";
       }
       if (definition.provider === "github") {
-        const previewRows = ["github.list_pull_review_threads","github.list_pull_review_thread_comments"].includes(rawName)
+        const previewRows = rawName === "github.list_pull_review_threads"
           ? result.results.map(row => ({
-              repository:String(row.repository || "").slice(0,240),
-              pull_number:row.pull_number,
               thread_id:String(row.thread_id || "").slice(0,200),
               resolved:row.resolved === true,outdated:row.outdated === true,
-              path:String(row.path || "").slice(0,500),
+              path:String(row.path || "").slice(0,120),
               comments_truncated:row.comments_truncated === true,
-              comments_next_cursor:typeof row.comments_next_cursor === "string" ? row.comments_next_cursor.slice(0,1024) : null,
-              comments:Array.isArray(row.comments) ? row.comments.slice(0,2).map(comment => ({
-                id:comment.id,author:String(comment.author || "").slice(0,100),
-                body:String(comment.body || "").slice(0,240),url:String(comment.url || "").slice(0,2048),
-                in_reply_to_id:comment.in_reply_to_id,
-              })) : [],
-              url:String(row.url || "").slice(0,2048),
+              comments_next_cursor:typeof row.comments_next_cursor === "string" ? row.comments_next_cursor.slice(0,512) : null,
             }))
-          : [...result.results];
+          : rawName === "github.list_pull_review_thread_comments"
+            ? result.results.map(row => ({
+                thread_id:String(row.thread_id || "").slice(0,200),
+                resolved:row.resolved === true,outdated:row.outdated === true,
+                path:String(row.path || "").slice(0,200),
+                comments_truncated:row.comments_truncated === true,
+                comments_next_cursor:typeof row.comments_next_cursor === "string" ? row.comments_next_cursor.slice(0,512) : null,
+                comments:Array.isArray(row.comments) ? row.comments.slice(0,2).map(comment => ({
+                  id:comment.id,author:String(comment.author || "").slice(0,100),
+                  body:String(comment.body || "").slice(0,240),url:String(comment.url || "").slice(0,2048),
+                  in_reply_to_id:comment.in_reply_to_id,
+                })) : [],
+              }))
+            : [...result.results];
         const preview = {
           tool:rawName,results:previewRows,pagination:result.pagination,preview_truncated:false,
           ...(result.results_truncated ? {results_truncated:true,omitted_results_count:result.omitted_results_count} : {}),
