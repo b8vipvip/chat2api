@@ -8,6 +8,7 @@
   const KEY = "__CHAT2API_NATIVE_CONTENT_V1__";
   if (globalThis[KEY]) return;
   const nativeControlTargetsByRequest = new Map();
+  const nativeControlLatestRevision = new Map();
   const tags = new Set("div p span strong em h1 h2 h3 h4 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br a details summary input select option button".split(" "));
   // Do not serialize MathML as HTML div/span descendants; its parent structure
   // and unit labels require the MathML namespace through the server and UI.
@@ -752,8 +753,11 @@
     revisions.set(revision, controlTargets);
     while (revisions.size > 8) revisions.delete(revisions.keys().next().value);
     nativeControlTargetsByRequest.set(active.requestId, revisions);
+    nativeControlLatestRevision.set(active.requestId, revision);
     while (nativeControlTargetsByRequest.size > 24) {
-      nativeControlTargetsByRequest.delete(nativeControlTargetsByRequest.keys().next().value);
+      const oldest = nativeControlTargetsByRequest.keys().next().value;
+      nativeControlTargetsByRequest.delete(oldest);
+      nativeControlLatestRevision.delete(oldest);
     }
     return {version:1, revision, root};
   }
@@ -1167,6 +1171,9 @@
       return {ok:false,error:"invalid-interaction-envelope"};
     }
     const revisions = nativeControlTargetsByRequest.get(requestId);
+    if (nativeControlLatestRevision.get(requestId) !== revision) {
+      return {ok:false,error:"native-interaction-revision-already-consumed"};
+    }
     const targets = revisions?.get(revision);
     const target = targets?.get(interactionId);
     const element = target?.element;
@@ -1211,6 +1218,7 @@
       // The server publishes revision+1 after this exact action is ACKed.
       // Keep the same live DOM target map available for the next serialized action.
       revisions.set(revision + 1, targets);
+      nativeControlLatestRevision.set(requestId, revision + 1);
       while (revisions.size > 8) revisions.delete(revisions.keys().next().value);
       return {ok:true,revision:revision + 1};
     } catch (_) {
