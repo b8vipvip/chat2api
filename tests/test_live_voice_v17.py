@@ -1193,7 +1193,8 @@ def test_live_video_frame_relays_owned_image_and_correlated_ack(monkeypatch, tmp
     )
     monkeypatch.setattr(live_voice_module, "validate_image_file", lambda *_args: None)
 
-    with TestClient(app_live(tmp_path)) as client:
+    app = app_live(tmp_path)
+    with TestClient(app) as client:
         managed_key = create_managed_key(client)
         client_id, extension_token = pair_extension(client)
         with client.websocket_connect(f"/ws/extensions/{client_id}?token={extension_token}") as extension:
