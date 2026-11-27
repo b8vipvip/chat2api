@@ -259,7 +259,6 @@ def test_owner_scoped_native_interaction_applies_to_original_worker_and_persists
             await app.state.telemetry.upsert({
                 "request_id": request_id,
                 "api_key_id": owner_key,
-                "shared_api_key_id": app.state.control_plane.client_api_key_id(),
                 "web_chat_mode": True,
                 "client_id": "worker-native-action",
                 "status": "completed",
