@@ -510,7 +510,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
         pending_input_audio_clock: tuple[int, int] | None = None
         last_input_audio_sequence = -1
         last_input_audio_timestamp_ms = -1
-        discard_next_input_audio_payload = False
+        discard_input_audio_payloads = 0
         last_video_dispatch_mono = 0.0
         video_frame_count = 0
         video_frame_bytes = 0
@@ -1072,11 +1072,11 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 payload = message.get("bytes")
                 if payload is not None:
                     if payload:
+                        if discard_input_audio_payloads > 0:
+                            discard_input_audio_payloads -= 1
+                            continue
                         audio_clock = pending_input_audio_clock
                         pending_input_audio_clock = None
-                        if discard_next_input_audio_payload:
-                            discard_next_input_audio_payload = False
-                            continue
                         if len(payload) > MAX_LIVE_PCM_FRAME_BYTES or len(payload) % 2:
                             await send_json({
                                 "type": "error", "code": "INVALID_INPUT_AUDIO_FRAME",
@@ -1136,9 +1136,12 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         and sequence > last_input_audio_sequence
                         and timestamp_ms > last_input_audio_timestamp_ms
                     )
-                    if pending_input_audio_clock is not None or not valid_clock:
+                    if not valid_clock:
+                        # Drop the PCM frame for this invalid control and, if
+                        # a prior timestamp was still pending, its unmatched
+                        # PCM frame too. Never forward either block as untimed.
+                        discard_input_audio_payloads += 1 + int(pending_input_audio_clock is not None)
                         pending_input_audio_clock = None
-                        discard_next_input_audio_payload = True
                         await send_json({
                             "type": "error",
                             "code": "INVALID_INPUT_AUDIO_TIMESTAMP",
@@ -1146,6 +1149,17 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                             "retryable": True,
                         })
                         continue
+                    if pending_input_audio_clock is not None:
+                        # The prior control was not followed by a binary frame.
+                        # Discard that next binary, but keep this valid control
+                        # paired with the subsequent binary frame.
+                        discard_input_audio_payloads += 1
+                        await send_json({
+                            "type": "error",
+                            "code": "INVALID_INPUT_AUDIO_TIMESTAMP",
+                            "message": "Previous audio timestamp was not paired with a PCM frame; its audio block will be discarded",
+                            "retryable": True,
+                        })
                     pending_input_audio_clock = (sequence, timestamp_ms)
                     last_input_audio_sequence = sequence
                     last_input_audio_timestamp_ms = timestamp_ms
