@@ -1,4 +1,8 @@
 import json
+import shutil
+import subprocess
+from pathlib import Path
+
 import pytest
 from app.native_content_v1 import NativeContentStore, validate_native_snapshot
 
@@ -9,6 +13,20 @@ def snapshot(revision=1):
                      "children": [{"tag": "img", "media_index": 0},
                                   {"tag": "img", "media_index": 1},
                                   {"tag": "p", "text": "example"}]}}
+
+
+def test_native_content_worker_interaction_vm():
+    node = shutil.which("node")
+    if node is None:
+        return
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [node, "tests/native_content_v1.mjs"],
+        cwd=root, check=False, capture_output=True, text=True, timeout=20,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "native-content-request-scoped-interaction-actions-passed" in result.stdout
+
 
 def test_native_interaction_ids_are_unique_typed_and_private_to_web_chat():
     from app.native_content_v1 import native_public_v1_tree
