@@ -414,6 +414,13 @@ def _validate_native_control(tag: str, control: object) -> dict:
                     or not isinstance(control.get("group"), str)
                     or not re.fullmatch(r"tg_[1-9][0-9]{0,3}", control["group"])):
                 raise ValueError("Invalid native tab control")
+        elif kind == "toggle":
+            if set(control) != {"kind", "label", "disabled", "pressed"}:
+                raise ValueError("Unsupported toggle action")
+            if (not _control_text(control.get("label"), 160) or not control["label"].strip()
+                    or type(control.get("disabled")) is not bool
+                    or type(control.get("pressed")) is not bool):
+                raise ValueError("Invalid native toggle control")
         else:
             raise ValueError("Unsupported button action")
     else:
