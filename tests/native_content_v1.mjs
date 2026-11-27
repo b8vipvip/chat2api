@@ -1157,17 +1157,17 @@ const interactionCtx={
   }},
 };
 runInNewContext(code,interactionCtx);
-const checkbox=new Element("INPUT",[],{"aria-label":"Enable"});
-checkbox.type="checkbox";checkbox.checked=false;checkbox.disabled=false;
-const range=new Element("INPUT",[],{"aria-label":"Opacity"});
-range.type="range";range.min="0";range.max="100";range.step="5";range.value="25";range.disabled=false;
-const optionA=new Element("OPTION",[],{});optionA.value="a";optionA.label="Option A";optionA.textContent="Option A";optionA.disabled=false;optionA.selected=true;
-const optionB=new Element("OPTION",[],{});optionB.value="b";optionB.label="Option B";optionB.textContent="Option B";optionB.disabled=false;optionB.selected=false;
-const select=new Element("SELECT",[optionA,optionB],{"aria-label":"Mode"});
-select.options=[optionA,optionB];select.value="a";select.multiple=false;select.disabled=false;
-const details=new Element("DETAILS",[new Element("SUMMARY",[{nodeType:3,nodeValue:"Details"}])]);
-details.open=false;
-const interactionRoot=new Element("DIV",[details,checkbox,range,select]);
+const interactionCheckbox=new Element("INPUT",[],{"aria-label":"Enable"});
+interactionCheckbox.type="checkbox";interactionCheckbox.checked=false;interactionCheckbox.disabled=false;
+const interactionRange=new Element("INPUT",[],{"aria-label":"Opacity"});
+interactionRange.type="range";interactionRange.min="0";interactionRange.max="100";interactionRange.step="5";interactionRange.value="25";interactionRange.disabled=false;
+const interactionOptionA=new Element("OPTION",[],{});interactionOptionA.value="a";interactionOptionA.label="Option A";interactionOptionA.textContent="Option A";interactionOptionA.disabled=false;interactionOptionA.selected=true;
+const interactionOptionB=new Element("OPTION",[],{});interactionOptionB.value="b";interactionOptionB.label="Option B";interactionOptionB.textContent="Option B";interactionOptionB.disabled=false;interactionOptionB.selected=false;
+const interactionSelect=new Element("SELECT",[interactionOptionA,interactionOptionB],{"aria-label":"Mode"});
+interactionSelect.options=[interactionOptionA,interactionOptionB];interactionSelect.value="a";interactionSelect.multiple=false;interactionSelect.disabled=false;
+const interactionDetails=new Element("DETAILS",[new Element("SUMMARY",[{nodeType:3,nodeValue:"Details"}])]);
+interactionDetails.open=false;
+const interactionRoot=new Element("DIV",[interactionDetails,interactionCheckbox,interactionRange,interactionSelect]);
 const interactionApi=interactionCtx.__CHAT2API_NATIVE_CONTENT_V1__;
 const interactionSnapshot=interactionApi.snapshot({
   requestId:"req_nativeactions12345",submitStartedAt:Date.now(),
@@ -1194,13 +1194,13 @@ function dispatchNativeAction(action,interactionId,value,revision=interactionSna
   return response;
 }
 assert.deepEqual(dispatchNativeAction("set_checked",checkboxNode.interaction_id,true),{ok:true,revision:2});
-assert.equal(checkbox.checked,true);
+assert.equal(interactionCheckbox.checked,true);
 assert.deepEqual(dispatchNativeAction("set_value",rangeNode.interaction_id,50,2),{ok:true,revision:3});
-assert.equal(range.value,"50");
+assert.equal(interactionRange.value,"50");
 assert.deepEqual(dispatchNativeAction("set_value",selectNode.interaction_id,"b",3),{ok:true,revision:4});
-assert.equal(select.value,"b");
+assert.equal(interactionSelect.value,"b");
 assert.deepEqual(dispatchNativeAction("set_open",detailsNode.interaction_id,true,4),{ok:true,revision:5});
-assert.equal(details.open,true);
+assert.equal(interactionDetails.open,true);
 assert.equal(dispatchNativeAction("set_checked",checkboxNode.interaction_id,false,1).ok,false,
   "a consumed native revision must not be replayed");
 const duplicateActionId="f".repeat(32);
@@ -1211,9 +1211,9 @@ const duplicateDelivery=dispatchNativeAction("set_checked",checkboxNode.interact
   "req_nativeactions12345",duplicateActionId);
 assert.deepEqual(duplicateDelivery,{ok:true,revision:6,duplicate:true},
   "a retried action ID returns the prior result without applying twice");
-const disabledCheckbox=new Element("INPUT",[],{"aria-label":"Disabled"});
-disabledCheckbox.type="checkbox";disabledCheckbox.checked=false;disabledCheckbox.disabled=true;
-const disabledRoot=new Element("DIV",[disabledCheckbox]);
+const interactionDisabledCheckbox=new Element("INPUT",[],{"aria-label":"Disabled"});
+interactionDisabledCheckbox.type="checkbox";interactionDisabledCheckbox.checked=false;interactionDisabledCheckbox.disabled=true;
+const disabledRoot=new Element("DIV",[interactionDisabledCheckbox]);
 const disabledSnapshot=interactionApi.snapshot({
   requestId:"req_nativeactionsdisabled",submitStartedAt:Date.now(),
   lastCandidateNode:disabledRoot,
