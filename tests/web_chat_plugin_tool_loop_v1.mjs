@@ -770,9 +770,12 @@ test("GitHub review thread comments can continue from the exact thread and comme
 
 test("a prior review thread result authorizes only its own comment continuation", async () => {
   const h=makeHarness({
-    planner:[JSON.stringify({tool_calls:[{name:"github.list_pull_review_thread_comments",arguments:{
-      repository:"acme/project",pull_number:12,thread_id:"PRRT_1",cursor:"comment-cursor",
-    }}]})],
+    planner:[
+      JSON.stringify({tool_calls:[{name:"github.list_pull_review_thread_comments",arguments:{
+        repository:"acme/project",pull_number:12,thread_id:"PRRT_1",cursor:"comment-cursor",
+      }}]}),
+      '{"tool_calls":[]}',
+    ],
     toolHandler:async (provider,tool,args) => {
       assert.equal(tool,"list_pull_review_thread_comments");
       assert.equal(args.thread_id,"PRRT_1");
