@@ -392,13 +392,30 @@ def _validate_native_control(tag: str, control: object) -> dict:
                 or type(control.get("disabled")) is not bool
                 or type(control.get("selected")) is not bool):
             raise ValueError("Invalid option state")
+    elif tag == "div":
+        if (set(control) != {"kind", "group"} or kind != "tablist"
+                or not isinstance(control.get("group"), str)
+                or not re.fullmatch(r"tg_[1-9][0-9]{0,3}", control["group"])):
+            raise ValueError("Invalid native tablist")
     elif tag == "button":
-        if set(control) != {"kind", "label", "text"} or kind != "copy":
+        if kind == "copy":
+            if set(control) != {"kind", "label", "text"}:
+                raise ValueError("Unsupported button action")
+            if (not _control_text(control.get("label"), 80) or not control["label"].strip()
+                    or not _control_text(control.get("text"), 150_000, allow_newlines=True)
+                    or not control["text"]):
+                raise ValueError("Invalid copy action")
+        elif kind == "tab":
+            if set(control) != {"kind", "label", "disabled", "selected", "group"}:
+                raise ValueError("Unsupported tab action")
+            if (not _control_text(control.get("label"), 160) or not control["label"].strip()
+                    or type(control.get("disabled")) is not bool
+                    or type(control.get("selected")) is not bool
+                    or not isinstance(control.get("group"), str)
+                    or not re.fullmatch(r"tg_[1-9][0-9]{0,3}", control["group"])):
+                raise ValueError("Invalid native tab control")
+        else:
             raise ValueError("Unsupported button action")
-        if (not _control_text(control.get("label"), 80) or not control["label"].strip()
-                or not _control_text(control.get("text"), 150_000, allow_newlines=True)
-                or not control["text"]):
-            raise ValueError("Invalid copy action")
     else:
         raise ValueError("Control metadata on unsupported element")
     return dict(control)
@@ -476,7 +493,7 @@ def validate_native_snapshot(payload: object) -> dict:
         result = {"tag": tag}
         if "interaction_id" in value:
             interaction_id = value["interaction_id"]
-            if (tag not in {"details", "input", "select"}
+            if (tag not in {"details", "input", "select", "button"}
                     or not isinstance(interaction_id, str)
                     or not re.fullmatch(r"nc_[1-9][0-9]{0,6}_[1-9][0-9]{0,3}", interaction_id)
                     or interaction_id in interaction_ids):
