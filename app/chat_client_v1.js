@@ -1729,7 +1729,12 @@
         const nativeSnapshot = message.requestId ? state.nativeSnapshots.get(message.requestId) : null;
         const messageReferences = referencesForMessage(message);
         nativeRendered = Boolean(nativeRenderer && typeof nativeRenderer.renderNativeSnapshot === "function" &&
-          nativeSnapshot && nativeRenderer.renderNativeSnapshot(body,nativeSnapshot,messageReferences));
+          nativeSnapshot && nativeRenderer.renderNativeSnapshot(
+            body,nativeSnapshot,messageReferences,
+            message.requestId
+              ? interaction => submitNativeInteraction(message.requestId,interaction)
+              : null,
+          ));
         if (!nativeRendered) {
           const renderer = window.Chat2APISafeRenderer;
           if (renderer && typeof renderer.renderMarkdown === "function") {
@@ -4374,6 +4379,35 @@
       return applyNativeSnapshot(requestId,snapshot);
     } catch (_) { return false; }
   }
+  async function submitNativeInteraction(requestId, interaction) {
+    if (!requestId || !interaction || typeof interaction !== "object") {
+      throw new Error("无效的原生控件操作");
+    }
+    const response = await fetch(
+      "/api/user/chat/requests/" + encodeURIComponent(requestId) + "/native-content/interactions",
+      {
+        method:"POST",
+        credentials:"same-origin",
+        cache:"no-store",
+        headers:{"Content-Type":"application/json","Accept":"application/json"},
+        body:JSON.stringify({
+          revision:interaction.revision,
+          interaction_id:interaction.interaction_id,
+          action:interaction.action,
+          value:interaction.value,
+        }),
+      },
+    );
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || result?.ok !== true) {
+      throw new Error(String(result?.detail || result?.error || "原生控件同步失败").slice(0,180));
+    }
+    // The server publishes the acknowledged state as a new immutable native
+    // snapshot revision. Refresh immediately; SSE remains the reconnect path.
+    await refreshNativeSnapshot(requestId);
+    return {ok:true,revision:Number(result.revision || 0),persisted:result.persisted === true};
+  }
+
   function consumeNativeSseFrame(frame,requestId) {
     const lines = frame.split(/\r?\n/);
     let eventName = "message";
