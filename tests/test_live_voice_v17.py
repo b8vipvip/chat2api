@@ -1039,7 +1039,8 @@ def test_live_voice_drops_pcm_frame_queued_before_terminal_close():
 
 def test_voice_worker_event_ack_is_a_server_broker_ack_not_local_socket_send(tmp_path: Path) -> None:
     """Voice ACK is emitted only after the authenticated Broker accepts the event."""
-    with TestClient(app_live(tmp_path)) as client:
+    app = app_live(tmp_path)
+    with TestClient(app) as client:
         managed_key = create_managed_key(client)
         client_id, extension_token = pair_extension(client)
         with client.websocket_connect(f"/ws/extensions/{client_id}?token={extension_token}") as extension:
@@ -1257,9 +1258,11 @@ def test_live_video_frame_relays_owned_image_and_correlated_ack(monkeypatch, tmp
                 # completed assistant response must not be mislabeled idle.
                 assert events[-1]["status"] == "error"
                 assert events[-1]["error"] == "GPT-Live session ended without a completed response"
-                assert events[-1]["diagnostics"]["video_av_sync_samples"] == 1
-                assert events[-1]["diagnostics"]["video_av_sync_max_abs_skew_ms"] == 12
-                assert events[-1]["diagnostics"]["video_av_sync_avg_abs_skew_ms"] == 12.0
+
+    row = app.state.telemetry.get(request_id)
+    assert row["diagnostics"]["video_av_sync_samples"] == 1
+    assert row["diagnostics"]["video_av_sync_max_abs_skew_ms"] == 12
+    assert row["diagnostics"]["video_av_sync_avg_abs_skew_ms"] == 12.0
 
 
 def test_live_voice_rejects_unapproved_attachment_mime(monkeypatch, tmp_path: Path) -> None:
