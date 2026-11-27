@@ -103,12 +103,13 @@
     const context = labelOf(root).slice(0, 2200);
     const hasIntegrationContext = integrationContext.test(context);
     const hasProvider = providerLabel.test(context);
-    if (!context || authDanger.test(context) || (!hasIntegrationContext && !hasProvider)) return null;
+    const protectedAuth = authDanger.test(context);
+    if (!context || (!hasIntegrationContext && !hasProvider)) return null;
     const buttons = actionButtons(root);
     const positive = buttons.find(item => positiveAction.test(item.label));
     const negative = buttons.find(item => negativeAction.test(item.label));
-    if (!positive && !hasProvider) return null;
-    return { context, buttons, positive, negative, category: "external-account-tool" };
+    if (!positive && !hasProvider && !protectedAuth) return null;
+    return { context, buttons, positive, negative, protectedAuth, category: "external-account-tool" };
   }
 
   function integrationRootForAction(node) {
@@ -137,7 +138,7 @@
   }
 
   function dismissRoot(root, match) {
-    if (!match?.negative || handled.has(root)) return false;
+    if (!match?.negative || match.protectedAuth || handled.has(root)) return false;
     handled.add(root);
     try {
       match.negative.node.click();
