@@ -464,7 +464,7 @@
           return null;
         }
         chars+=label.length;
-        const disabled=Boolean(element.disabled);
+        const disabled=Boolean(element.disabled || element.matches?.(":disabled"));
         let control=null;
         if(kind==="checkbox") control={kind,label,disabled,checked:Boolean(element.checked)};
         else if(kind==="radio") {
@@ -500,7 +500,7 @@
           if(!safeOptionText(value) || !safeOptionText(label) || !label) return null;
           chars+=label.length;
           children.push({tag:"option",text:label,control:{
-            kind:"option",value,disabled:Boolean(option.disabled),selected:Boolean(option.selected),
+            kind:"option",value,disabled:Boolean(option.disabled || option.matches?.(":disabled")),selected:Boolean(option.selected),
           }});
         }
         const selected=String(element.value ?? "");
@@ -514,7 +514,7 @@
         nodes+=children.length+1;
         const interactionId = bindControl(element,"select");
         return {tag:"select",...(interactionId?{interaction_id:interactionId}:{}),style:safeStyle(element),control:{
-          kind:"select",label:selectLabel,disabled:Boolean(element.disabled),selected,
+          kind:"select",label:selectLabel,disabled:Boolean(element.disabled || element.matches?.(":disabled")),selected,
         },children};
       }
       if(tag==="option") return null;
@@ -1182,7 +1182,7 @@
     const target = targets?.get(interactionId);
     const element = target?.element;
     if (!element || !element.isConnected) return {ok:false,error:"native-control-no-longer-connected"};
-    if (element.disabled) return {ok:false,error:"native-control-disabled"};
+    if (element.disabled || element.matches?.(":disabled")) return {ok:false,error:"native-control-disabled"};
     const action = String(message?.action || "");
     const value = message?.value;
     try {
