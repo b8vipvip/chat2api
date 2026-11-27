@@ -1339,6 +1339,8 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                                 "url": row.get("html_url"),
                             } for row in runs[:20] if isinstance(row, dict)]
                         pagination = {"page": page, "per_page": 20, "has_more": _github_has_more(response)}
+                        if tool_name == "list_workflow_runs" and type(raw.get("total_count")) is int:
+                            pagination["total_count"] = raw["total_count"]
                     elif tool_name == "list_workflow_jobs":
                         repository = _github_repo_name(payload.get("repository"))
                         run_id = _github_run_id(payload.get("run_id"))
