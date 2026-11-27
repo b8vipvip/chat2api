@@ -1221,7 +1221,7 @@ def native_public_v1_tree(root: dict) -> dict:
     """
     result = {key: value for key,value in root.items()
               if key not in ("intrinsic_width", "intrinsic_height", "source_sha256",
-                             "attrs", "math_attrs", "children", "col_span", "row_span", "control")}
+                             "attrs", "math_attrs", "children", "col_span", "row_span", "control", "interaction_id")}
     # Older native-v1 clients do not know these newer table layout styles.
     # Keep them only in the authenticated admin native preview.
     if "style" in result:
