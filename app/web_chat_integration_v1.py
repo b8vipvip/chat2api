@@ -389,6 +389,15 @@ def install_web_chat_features_v1(app: Any) -> Any:
         ):
             raise HTTPException(status_code=422, detail="invalid interaction envelope", headers=_PRIVATE_HEADERS)
 
+        if request_id not in native_interaction_locks and len(native_interaction_locks) >= 128:
+            for stale_request_id, stale_lock in list(native_interaction_locks.items()):
+                if not stale_lock.locked():
+                    native_interaction_locks.pop(stale_request_id, None)
+                    if len(native_interaction_locks) < 128:
+                        break
+        if request_id not in native_interaction_locks and len(native_interaction_locks) >= 128:
+            raise HTTPException(status_code=429, detail="native interaction lock capacity reached",
+                                headers=_PRIVATE_HEADERS)
         lock = native_interaction_locks.setdefault(request_id, asyncio.Lock())
         async with lock:
             row = request.app.state.telemetry.get(request_id) or {}
