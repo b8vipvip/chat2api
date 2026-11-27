@@ -216,6 +216,8 @@
           requestId,
           pcmBase64: message.pcm_base64 || "",
           sampleRate: message.sample_rate || 16000,
+          sequence: message.sequence,
+          timestampMs: message.timestamp_ms,
         });
         if (!response?.ok) throw new Error(response?.error || "Live audio chunk was rejected");
       } else if (type === "voice.live.text" || type === "voice.live.multimodal") {
