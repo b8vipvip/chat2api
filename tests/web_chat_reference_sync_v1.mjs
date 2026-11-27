@@ -154,3 +154,21 @@ assert.equal(enriched.length,1);
 assert.equal(enriched[0].title,"Detailed API reference");
 assert.equal(enriched[0].snippet,"Updated source description",
   "a later citation event must enrich an existing reference instead of being discarded");
+
+
+const persistedPluginEvent = {
+  toolName:"GitHub · list_issue_comments",callId:"plugin_1",resultId:"plugin_1_result",
+  status:"completed",arguments:"{}",output:"完成",resultPreview:'{"results":[{"body":"review"}]}',
+  references:[sourceRef],
+};
+const eventServerRow = {...serverRow,messages:[{...serverRow.messages[0],pending:false,recoveryStatus:"completed",toolEvents:[persistedPluginEvent]}]};
+const eventLocalRow = {...newerLocalRow,messages:[{...newerLocalRow.messages[0],toolEvents:[
+  {...persistedPluginEvent,status:"running",resultId:"",output:"",resultPreview:"",references:[]},
+  {toolName:"GitHub · list_branches",callId:"plugin_2",resultId:"plugin_2_result",status:"completed",output:"完成"},
+]}]};
+const combined = mergeConversation(eventServerRow,eventLocalRow).messages[0].toolEvents;
+assert.equal(combined.length,2);
+assert.equal(combined[0].status,"completed");
+assert.equal(combined[0].resultPreview,persistedPluginEvent.resultPreview);
+assert.equal(combined[0].references[0].url,sourceRef.url);
+assert.equal(combined[1].callId,"plugin_2");

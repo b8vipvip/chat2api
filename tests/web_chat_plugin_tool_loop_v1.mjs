@@ -96,6 +96,7 @@ test("only selected and connected plugins are exposed to the model", () => {
     "github.search_repositories","github.get_repository","github.list_issues",
     "github.get_issue","github.list_pull_requests","github.get_pull_request",
     "github.get_pull_request_files","github.list_commits","github.search_code","github.get_file_contents",
+    "github.list_issue_comments","github.list_pull_reviews","github.list_pull_review_comments","github.list_pull_comments","github.list_branches","github.get_commit","github.list_directory",
   ]);
 });
 
@@ -514,4 +515,54 @@ test("GitHub pagination rejects booleans, fractional pages and pages above the c
       /分页页码/,
     );
   }
+});
+
+
+test("GitHub directory traversal provides evidence for reading a file with the same ref", async () => {
+  const h = makeHarness({
+    planner:[
+      JSON.stringify({tool_calls:[{name:"github.list_directory",arguments:{repository:"acme/project",ref:"main"}}]}),
+      JSON.stringify({tool_calls:[{name:"github.list_directory",arguments:{repository:"acme/project",path:"src",ref:"main"}}]}),
+      JSON.stringify({tool_calls:[{name:"github.get_file_contents",arguments:{repository:"acme/project",path:"src/main.py",ref:"main"}}]}),
+    ],
+    toolHandler:async (provider, tool, args) => {
+      if (tool === "list_directory") return {data:args.path ? [
+        {type:"file",path:"src/main.py",name:"main.py",url:"https://github.com/acme/project/blob/main/src/main.py"},
+      ] : [{type:"dir",path:"src",name:"src",url:"https://github.com/acme/project/tree/main/src"}]};
+      assert.equal(tool,"get_file_contents");
+      assert.equal(args.ref,"main");
+      return {data:[{repository:"acme/project",path:"src/main.py",content:"print(123)",url:"https://github.com/acme/project/blob/main/src/main.py"}]};
+    },
+  });
+  const result = await h.api.runAutonomousPluginToolLoop(
+    [{role:"user",content:"检查 acme/project main 分支"}],h.assistant,"key",h.recoveryApi,"req",
+  );
+  assert.equal(result.toolCalls,3);
+  assert.equal(h.calls.length,3);
+  assert.match(h.assistant.toolEvents[2].resultPreview,/print\(123\)/);
+  assert.equal(h.assistant.references.length,2);
+});
+
+test("GitHub comment, review and commit arguments are validated and resource-grounded", async () => {
+  const h = makeHarness({
+    planner:[
+      JSON.stringify({tool_calls:[
+        {name:"github.list_issue_comments",arguments:{repository:"acme/project",issue_number:17}},
+        {name:"github.list_pull_review_comments",arguments:{repository:"acme/project",pull_number:18}},
+        {name:"github.get_commit",arguments:{repository:"acme/project",sha:"abcdef1234567"}},
+      ]}),
+      '{"tool_calls":[]}',
+    ],
+    toolHandler:async (provider,tool,args) => ({data:[{id:123,number:17,body:"Discussion",url:"https://github.com/acme/project/issues/17#issuecomment-123"}]}),
+  });
+  await h.api.runAutonomousPluginToolLoop(
+    [{role:"user",content:"查看 acme/project Issue #17 的评论"}],h.assistant,"key",h.recoveryApi,"req",
+  );
+  assert.equal(h.calls.length,1);
+  assert.equal(h.calls[0][1],"list_issue_comments");
+  assert.equal(h.assistant.toolEvents[0].status,"completed");
+  assert.equal(h.assistant.toolEvents[1].status,"failed");
+  assert.equal(h.assistant.toolEvents[2].status,"failed");
+  const defs=h.api.selectedPluginToolDefinitions();
+  assert.throws(()=>h.api.validatePluginToolArguments(defs.find(d=>d.name==="github.list_directory"),{repository:"acme/project",path:"../secret"}),/相对路径/);
 });

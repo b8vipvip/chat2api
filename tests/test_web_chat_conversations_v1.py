@@ -138,6 +138,7 @@ def test_web_chat_conversation_api_auth_ownership_sync_and_conflicts(tmp_path: P
             "resultId": "result-123", "status": "completed",
             "arguments": '{"query":"Mode 1"}',
             "output": "Found two relevant pages.",
+            "resultPreview": '{"tool":"github.list_issues","results":[{"number":42}]}',
             "references": [{
                 "id": "turn0search0",
                 "url": "https://docs.python.org/3/library/",
@@ -153,6 +154,7 @@ def test_web_chat_conversation_api_auth_ownership_sync_and_conflicts(tmp_path: P
         assert created.json()["conversation"]["revision"] == 1
         assert created.json()["conversation"]["messages"][1]["toolEvents"][0]["toolName"] == "browser.search"
         assert created.json()["conversation"]["messages"][1]["toolEvents"][0]["output"] == "Found two relevant pages."
+        assert created.json()["conversation"]["messages"][1]["toolEvents"][0]["resultPreview"] == conversation["messages"][1]["toolEvents"][0]["resultPreview"]
         assert created.json()["conversation"]["messages"][1]["toolEvents"][0]["references"][0]["id"] == "turn0search0"
         assert created.json()["conversation"]["messages"][1]["toolEvents"][0]["references"][0]["url"] == "https://docs.python.org/3/library/"
         assert created.json()["conversation"]["messages"][1]["lastEventId"] == 42
