@@ -2519,7 +2519,7 @@
     knownGithubFileRefs = new Set(), knownGithubRepos = new Set(),
     knownGithubIssueRefs = new Set(), knownGithubPrRefs = new Set(), userPromptText = "",
     knownGithubDirectoryRefs = new Set(), knownGithubCommitRefs = new Set(), knownGithubRunRefs = new Set(), knownGithubRefs = new Set(),
-    knownGithubReviewThreadRefs = new Set(),
+    knownGithubReviewThreadRefs = new Set(), knownGithubReviewThreadCursorRefs = new Set(),
   ) {
     const rawName = String(call?.name || call?.function?.name || "").slice(0,120);
     const definition = definitions.find(item => item.name === rawName);
@@ -2571,6 +2571,10 @@
         const threadKey = JSON.stringify([args.repository,args.pull_number,args.thread_id]);
         if (!knownGithubReviewThreadRefs.has(threadKey)) {
           throw new Error("必须使用此前 GitHub Review Thread 查询返回的 thread_id，不能猜测线程标识。");
+        }
+        const cursorKey = JSON.stringify([args.repository,args.pull_number,args.thread_id,args.cursor]);
+        if (!knownGithubReviewThreadCursorRefs.has(cursorKey)) {
+          throw new Error("必须使用该 Review Thread 上一次结果返回的 comments_next_cursor，不能猜测评论游标。");
         }
       }
       if (definition.name === "github.list_workflow_jobs") {
@@ -2728,6 +2732,7 @@
     const knownGithubRunRefs = new Set();
     const knownGithubRefs = new Set();
     const knownGithubReviewThreadRefs = new Set();
+    const knownGithubReviewThreadCursorRefs = new Set();
     const activeConversation = (state.conversations || []).find(row => row?.id === state.activeConversationId);
     const priorPluginEvidence = [];
     let evidenceBudget = 8000;
@@ -2807,8 +2812,11 @@
         }
         if (tool === "github.list_pull_review_threads" || tool === "github.list_pull_review_thread_comments") {
           rows.forEach(row => {
-            if (args.repository && Number.isSafeInteger(Number(args.pull_number)) && row.thread_id) {
-              knownGithubReviewThreadRefs.add(JSON.stringify([args.repository,Number(args.pull_number),String(row.thread_id)]));
+            if (!args.repository || !Number.isSafeInteger(Number(args.pull_number)) || !row.thread_id) return;
+            const threadId = String(row.thread_id), pullNumber = Number(args.pull_number);
+            knownGithubReviewThreadRefs.add(JSON.stringify([args.repository,pullNumber,threadId]));
+            if (row.comments_truncated === true && typeof row.comments_next_cursor === "string") {
+              knownGithubReviewThreadCursorRefs.add(JSON.stringify([args.repository,pullNumber,threadId,row.comments_next_cursor]));
             }
           });
         }
@@ -2959,7 +2967,7 @@
           call,definitions,assistant,knownGmailMessageIds,knownGithubFileRefs,
           knownGithubRepos,knownGithubIssueRefs,knownGithubPrRefs,userPromptText,
           knownGithubDirectoryRefs,knownGithubCommitRefs,knownGithubRunRefs,knownGithubRefs,
-          knownGithubReviewThreadRefs,
+          knownGithubReviewThreadRefs,knownGithubReviewThreadCursorRefs,
         );
         if (outcome.result?.ok && outcome.tool === "github.search_issues") {
           (outcome.result.results || []).forEach(row => {
@@ -2990,9 +2998,14 @@
         }
         if (outcome.result?.ok && ["github.list_pull_review_threads","github.list_pull_review_thread_comments"].includes(outcome.tool)) {
           (outcome.result.results || []).forEach(row => {
-            if (row.thread_id) knownGithubReviewThreadRefs.add(JSON.stringify([
-              outcome.result.arguments.repository,Number(outcome.result.arguments.pull_number),String(row.thread_id),
-            ]));
+            if (!row.thread_id) return;
+            const repository = outcome.result.arguments.repository;
+            const pullNumber = Number(outcome.result.arguments.pull_number);
+            const threadId = String(row.thread_id);
+            knownGithubReviewThreadRefs.add(JSON.stringify([repository,pullNumber,threadId]));
+            if (row.comments_truncated === true && typeof row.comments_next_cursor === "string") {
+              knownGithubReviewThreadCursorRefs.add(JSON.stringify([repository,pullNumber,threadId,row.comments_next_cursor]));
+            }
           });
         }
         if (outcome.result?.ok && outcome.tool === "github.list_workflow_runs") {
