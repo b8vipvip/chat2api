@@ -246,6 +246,8 @@
     if (controlRequired !== (value.control !== undefined)) return false;
     if (value.control !== undefined && !validControl(tag,value.control)) return false;
     if (value.interaction_id !== undefined) {
+      if (!(counts.interactionIds instanceof Set) || counts.interactionIds.has(value.interaction_id)) return false;
+      counts.interactionIds.add(value.interaction_id);
       if (!["details","input","select"].includes(tag)
           || typeof value.interaction_id !== "string"
           || !/^nc_[1-9][0-9]{0,6}_[1-9][0-9]{0,3}$/.test(value.interaction_id)) return false;
@@ -313,7 +315,7 @@
         !Array.isArray(snapshot.assets) || snapshot.assets.length > 40 ||
         !snapshot.assets.every(item => typeof item === "string" && item.length <= 2048) ||
         !Array.isArray(snapshot.files) || snapshot.files.length > 10) return false;
-    return validateNode(snapshot.root,0,"",{nodes:0,chars:0});
+    return validateNode(snapshot.root,0,"",{nodes:0,chars:0,interactionIds:new Set()});
   }
   function bindNativeInteraction(element,value,context,eventName,action,readValue,restoreValue) {
     const interactionId = String(value?.interaction_id || "");
