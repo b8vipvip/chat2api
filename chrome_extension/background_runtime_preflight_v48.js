@@ -14,7 +14,7 @@
   const NATIVE_MAIN_FILES = ["native_tool_stream_main_v63.js", "native_file_main_v210.js"];
   const CURRENT_MAIN_FILES = [MAIN_FILES[0], MAIN_FILES[1], ...NATIVE_MAIN_FILES, MAIN_FILES[2]];
   const OVERLAY_FILES = [
-    "content_model_evidence_v144.js", "content_ui_hygiene_v31.js", "content_rate_limit_guard_v52.js", "content_tool_isolation_v48.js",
+    "content_model_evidence_v144.js", "content_ui_hygiene_v31.js", "content_rate_limit_guard_v52.js", "content_tool_isolation_v49.js",
     "content_multimodal_v78.js", "content_multimodal_settle_v84.js", "content_multimodal_settle_v85.js",
     "content_request_lifecycle_v50.js", "content_conversation_quota_failover_v95.js", "content_request_hygiene_v42.js",
     "content_draft_managed_recovery_v55.js", "content_rich_response_v69.js", "content_native_message_identity_v291.js", "content_native_file_v210.js", "content_request_v6.js",
@@ -28,6 +28,7 @@
     response_terminal_owner: "request-v6", native_tool_stream_revision: 63, multimodal_revision: 85,
     terminal_prompt_revision: 88, conversation_quota_failover_revision: 95, ui_hygiene_revision: 101,
     checks: 0, fast_path_hits: 0, contract_timeouts: 0, preflight_budget_exhausted: 0,
+    tool_isolation_failures: 0,
     hot_heals: 0, reloads: 0, reload_timeouts: 0, failures: 0, last: null,
   };
   globalThis[KEY] = state;
@@ -65,7 +66,7 @@
       result?.modules?.rich_response_v69 && result?.modules?.model_evidence_v144 && result?.modules?.model_evidence_main_v144 &&
       result?.modules?.network_stream_recovery_v55 &&
       result?.modules?.native_tool_stream_v63 && result?.modules?.native_tool_stream_main_v63 &&
-      result?.modules?.multimodal_v78 && result?.modules?.multimodal_v84 && result?.modules?.multimodal_v85 &&
+      result?.modules?.tool_isolation_v49 && result?.modules?.multimodal_v78 && result?.modules?.multimodal_v84 && result?.modules?.multimodal_v85 &&
       result?.modules?.multimodal_main_v78 && result?.modules?.terminal_prompt_v88 &&
       result?.modules?.conversation_quota_failover_v95 && result?.modules?.ui_hygiene_v101);
   }
@@ -112,7 +113,45 @@
     await chrome.storage.local.set({chat2apiRuntimePreflightV71: state.last}).catch(() => {});
   }
   async function toolIsolationPreflight(tabId) {
-    return sendMessageBounded(tabId, {type: "chat2api.tool-isolation.preflight"});
+    const result = await sendMessageBounded(
+      tabId, {type: "chat2api.tool-isolation.preflight"}, 1000,
+    );
+    const safe = Boolean(
+      result?.ok === true
+      && Number(result?.version || 0) === 49
+      && result?.external_account_tools_disabled === true
+      && result?.native_github_tool_disabled === true
+      && result?.safe_to_dispatch === true
+      && Number(result?.selected_app_controls || 0) === 0
+      && Number(result?.unresolved_connection_dialogs || 0) === 0
+    );
+    if (!safe) {
+      state.tool_isolation_failures += 1;
+      const details = {
+        received_response: Boolean(result),
+        response_version: Number(result?.version || 0),
+        response_ok: result?.ok === true,
+        external_account_tools_disabled: result?.external_account_tools_disabled === true,
+        native_github_tool_disabled: result?.native_github_tool_disabled === true,
+        safe_to_dispatch: result?.safe_to_dispatch === true,
+        selected_app_controls: Number(result?.selected_app_controls || 0),
+        unresolved_connection_dialogs: Number(result?.unresolved_connection_dialogs || 0),
+      };
+      await recordLast({
+        tab_id: tabId,
+        ok: false,
+        mode: "native-app-tool-isolation-blocked-v49",
+        tool_preflight: details,
+        at_ms: Date.now(),
+      });
+      const error = new Error(
+        "Worker native connected-app isolation could not be verified; ChatGPT request was blocked before submission",
+      );
+      error.code = "worker_tool_isolation_preflight_failed";
+      error.routingDiagnostics = {worker_tool_isolation_preflight_v49: details};
+      throw error;
+    }
+    return result;
   }
   async function preflight(tabId) {
     state.checks += 1; const started = Date.now(); let result = await contract(tabId);
