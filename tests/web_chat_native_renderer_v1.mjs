@@ -346,7 +346,7 @@ assert.equal(interactiveRenderer.renderNativeSnapshot(tabHost,tabSnapshot,[],asy
   return {ok:true,revision:payload.revision+1,persisted:true};
 }),true);
 assert.doesNotMatch(tabHost.childNodes[0].textContent,/本地预览/);
-const tabList=findTag(tabHost,"div");
+const tabList=findAll(tabHost,node=>node.tagName==="div"&&node.attributes.role==="tablist")[0];
 const renderedTabs=findAll(tabHost,node=>node.tagName==="button"&&node.attributes.role==="tab");
 assert.equal(tabList.attributes.role,"tablist");
 assert.equal(renderedTabs.length,2);
