@@ -80,7 +80,7 @@ def test_v71_contract_preserves_runtime_checks_with_request_v6_terminal_owner() 
     for token in ("__CHAT2API_REQUEST_CONTENT_V6__", "__CHAT2API_RICH_RESPONSE_V69__", "__CHAT2API_MULTIMODAL_V4__",
                   "__CHAT2API_REQUEST_TERMINAL_PROMPT_V88__", "terminal_prompt_v88", "multimodal_v78",
                   "data-chat2api-multimodal-main-v78", "__CHAT2API_NETWORK_STREAM_RECOVERY_V55__",
-                  "data-chat2api-network-stream-parser", "__CHAT2API_TOOL_ISOLATION_V48__",
+                  "data-chat2api-network-stream-parser", "__CHAT2API_TOOL_ISOLATION_V49__",
                   "__CHAT2API_RATE_LIMIT_CONTENT_V52__", "removeListener(prior.listener)"):
         assert token in contract
     assert "__CHAT2API_RESPONSE_STREAM_RECOVERY_V69__" not in contract
