@@ -222,7 +222,7 @@ def test_owner_scoped_native_interaction_applies_to_original_worker_and_persists
         return {**stored, "assets": [], "files": [], "finality": "verified-final"}
 
     app.state.native_response_snapshot = snapshot_loader
-    _install_shared_web_chat(app)
+    shared_key = _install_shared_web_chat(app)
 
     class AckSocket:
         def __init__(self):
@@ -259,6 +259,7 @@ def test_owner_scoped_native_interaction_applies_to_original_worker_and_persists
             await app.state.telemetry.upsert({
                 "request_id": request_id,
                 "api_key_id": owner_key,
+                "shared_api_key_id": shared_key["key_id"],
                 "web_chat_mode": True,
                 "client_id": "worker-native-action",
                 "status": "completed",
