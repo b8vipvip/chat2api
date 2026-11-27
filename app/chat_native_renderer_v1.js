@@ -400,10 +400,15 @@
       } else {
         element.checked=value.control.checked;
         if (value.control.kind==="radio") {
-          const groupKey=value.control.group;
-          if (!context.radioGroups.has(groupKey))
-            context.radioGroups.set(groupKey,context.prefix+"-"+groupKey);
-          element.name=context.radioGroups.get(groupKey);
+          const groupKey=String(value.control.group || "");
+          if (groupKey) {
+            if (!context.radioGroups.has(groupKey))
+              context.radioGroups.set(groupKey,context.prefix+"-"+groupKey);
+            element.name=context.radioGroups.get(groupKey);
+          } else {
+            context.radioIndex=(context.radioIndex || 0)+1;
+            element.name=context.prefix+"-radio-"+context.radioIndex;
+          }
           if (element.checked) context.radioSelection.set(element.name,element);
         }
       }
@@ -505,7 +510,7 @@
       state.textContent = (snapshot.finality === "verified-final" ? "ChatGPT 原生内容 · 已验证完成" : "ChatGPT 原生内容 · 实时更新，最终校验中") +
         (hasLocalOnlyControls(snapshot.root,onInteraction) ? " · 部分控件仅在本地预览" : "");
       const root = document.createElement("div"); root.className = "native-rich-root";
-      root.appendChild(createNode(snapshot.root,snapshot,0,{radioGroups:new Map(),radioSelection:new Map(),prefix:"native-"+(++renderSequence),onInteraction,revision:snapshot.revision}));
+      root.appendChild(createNode(snapshot.root,snapshot,0,{radioGroups:new Map(),radioSelection:new Map(),radioIndex:0,prefix:"native-"+(++renderSequence),onInteraction,revision:snapshot.revision}));
       const files = document.createElement("div"); files.className = "native-generated-files";
       for (const item of snapshot.files) {
         if (!item || typeof item !== "object" || typeof item.filename !== "string") continue;
