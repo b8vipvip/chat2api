@@ -7,6 +7,9 @@
   "use strict";
   const KEY = "__CHAT2API_NATIVE_CONTENT_V1__";
   if (globalThis[KEY]) return;
+  const nativeControlTargetsByRequest = new Map();
+  const nativeControlLatestRevision = new Map();
+  const nativeControlAppliedActions = new Map();
   const tags = new Set("div p span strong em h1 h2 h3 h4 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br a details summary input select option button".split(" "));
   // Do not serialize MathML as HTML div/span descendants; its parent structure
   // and unit labels require the MathML namespace through the server and UI.
@@ -341,6 +344,15 @@
     if (reply.matches?.("[data-message-author-role='user']") || reply.closest?.("nav,aside")) return null;
     let nodes = 0, chars = 0, images = 0;
     let truncated = false;
+    const revision = Math.max(active.nativeRevision || 0, active.nativeSentRevision || 0) + 1;
+    const controlTargets = new Map();
+    let controlIndex = 0;
+    const bindControl = (element, kind) => {
+      if (revision > 999999 || controlIndex >= 9999) return null;
+      const id = "nc_" + revision + "_" + (++controlIndex);
+      controlTargets.set(id, {element, kind});
+      return id;
+    };
     // 17b4 exceeded the previous 3,200-node budget while the rich reply
     // was still growing; the hard byte/depth/text budgets remain unchanged.
     const textBudget = 300000;
@@ -453,7 +465,7 @@
           return null;
         }
         chars+=label.length;
-        const disabled=Boolean(element.disabled);
+        const disabled=Boolean(element.disabled || element.matches?.(":disabled"));
         let control=null;
         if(kind==="checkbox") control={kind,label,disabled,checked:Boolean(element.checked)};
         else if(kind==="radio") {
@@ -474,7 +486,8 @@
           control={kind,label,disabled,min,max,step,value};
         } else return null;
         nodes+=1;
-        return {tag:"input",style:safeStyle(element),control};
+        const interactionId = bindControl(element,kind);
+        return {tag:"input",...(interactionId?{interaction_id:interactionId}:{}),style:safeStyle(element),control};
       }
       if(tag==="select") {
         const selectLabel=controlLabel(element);
@@ -488,7 +501,7 @@
           if(!safeOptionText(value) || !safeOptionText(label) || !label) return null;
           chars+=label.length;
           children.push({tag:"option",text:label,control:{
-            kind:"option",value,disabled:Boolean(option.disabled),selected:Boolean(option.selected),
+            kind:"option",value,disabled:Boolean(option.disabled || option.matches?.(":disabled")),selected:Boolean(option.selected),
           }});
         }
         const selected=String(element.value ?? "");
@@ -500,8 +513,9 @@
         }
         chars+=selectLabel.length;
         nodes+=children.length+1;
-        return {tag:"select",style:safeStyle(element),control:{
-          kind:"select",label:selectLabel,disabled:Boolean(element.disabled),selected,
+        const interactionId = bindControl(element,"select");
+        return {tag:"select",...(interactionId?{interaction_id:interactionId}:{}),style:safeStyle(element),control:{
+          kind:"select",label:selectLabel,disabled:Boolean(element.disabled || element.matches?.(":disabled")),selected,
         },children};
       }
       if(tag==="option") return null;
@@ -660,7 +674,11 @@
           !(svgElement && ["path","line","rect","circle","ellipse","polyline","polygon"].includes(mapped))) return null;
       nodes += 1;
       const result = {tag:mapped,style:safeStyle(element)};
-      if(mapped==="details") result.control={kind:"disclosure",open:Boolean(element.open)};
+      if(mapped==="details") {
+        result.control={kind:"disclosure",open:Boolean(element.open)};
+        const interactionId = bindControl(element,"disclosure");
+        if (interactionId) result.interaction_id=interactionId;
+      }
       if(mathElement){
         const mathAttrs=safeMathAttributes(element);
         if(Object.keys(mathAttrs).length)result.math_attrs=mathAttrs;
@@ -736,7 +754,16 @@
         active.nativeStructuralFailure = "no-safe-complete-reply-root";
       return null;
     }
-    const revision = Math.max(active.nativeRevision || 0, active.nativeSentRevision || 0) + 1;
+    const revisions = nativeControlTargetsByRequest.get(active.requestId) || new Map();
+    revisions.set(revision, controlTargets);
+    while (revisions.size > 8) revisions.delete(revisions.keys().next().value);
+    nativeControlTargetsByRequest.set(active.requestId, revisions);
+    nativeControlLatestRevision.set(active.requestId, revision);
+    while (nativeControlTargetsByRequest.size > 24) {
+      const oldest = nativeControlTargetsByRequest.keys().next().value;
+      nativeControlTargetsByRequest.delete(oldest);
+      nativeControlLatestRevision.delete(oldest);
+    }
     return {version:1, revision, root};
   }
 
@@ -1137,5 +1164,95 @@
       if (active.nativeTransferInFlight === transfer) active.nativeTransferInFlight = null;
     }
   }
+
+  function applyNativeInteraction(message) {
+    const requestId = String(message?.request_id || "");
+    const revision = Number(message?.revision);
+    const interactionId = String(message?.interaction_id || "");
+    if (!/^req_[A-Za-z0-9_-]{8,120}$/.test(requestId)
+        || !Number.isInteger(revision) || revision < 1
+        || !/^nc_[1-9][0-9]{0,6}_[1-9][0-9]{0,3}$/.test(interactionId)
+        || !/^[a-f0-9]{32}$/.test(String(message?.action_id || ""))) {
+      return {ok:false,error:"invalid-interaction-envelope"};
+    }
+    const actionId = String(message?.action_id || "");
+    const previousAction = nativeControlAppliedActions.get(actionId);
+    if (previousAction) {
+      if (previousAction.requestId === requestId
+          && previousAction.revision === revision
+          && previousAction.interactionId === interactionId) {
+        return {...previousAction.response,duplicate:true};
+      }
+      return {ok:false,error:"native-interaction-action-id-reused"};
+    }
+    const revisions = nativeControlTargetsByRequest.get(requestId);
+    if (nativeControlLatestRevision.get(requestId) !== revision) {
+      return {ok:false,error:"native-interaction-revision-already-consumed"};
+    }
+    const targets = revisions?.get(revision);
+    const target = targets?.get(interactionId);
+    const element = target?.element;
+    if (!element || !element.isConnected) return {ok:false,error:"native-control-no-longer-connected"};
+    if (element.disabled || element.matches?.(":disabled")) return {ok:false,error:"native-control-disabled"};
+    const action = String(message?.action || "");
+    const value = message?.value;
+    try {
+      if (target.kind === "disclosure" && action === "set_open" && typeof value === "boolean") {
+        element.open = value;
+      } else if (target.kind === "checkbox" && action === "set_checked" && typeof value === "boolean") {
+        if (Boolean(element.checked) !== value) element.click();
+      } else if (target.kind === "radio" && action === "set_checked" && value === true) {
+        if (!element.checked) element.click();
+      } else if (target.kind === "range" && action === "set_value"
+          && typeof value === "number" && Number.isFinite(value)) {
+        const min = Number(element.min || 0), max = Number(element.max || 100);
+        const step = Number(element.step || 1);
+        const units = (value - min) / step;
+        if (!Number.isFinite(min) || !Number.isFinite(max) || !Number.isFinite(step)
+            || min >= max || step <= 0 || value < min || value > max
+            || Math.abs(units - Math.round(units)) > 1e-6) {
+          return {ok:false,error:"native-range-value-out-of-bounds"};
+        }
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+        if (setter) setter.call(element, String(value));
+        else element.value = String(value);
+        element.dispatchEvent(new Event("input",{bubbles:true,composed:true}));
+        element.dispatchEvent(new Event("change",{bubbles:true,composed:true}));
+      } else if (target.kind === "select" && action === "set_value" && typeof value === "string") {
+        const option = [...(element.options || [])].find(item =>
+          String(item.value) === value && !item.disabled);
+        if (!option) return {ok:false,error:"native-select-option-not-allowed"};
+        const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
+        if (setter) setter.call(element, value);
+        else element.value = value;
+        element.dispatchEvent(new Event("input",{bubbles:true,composed:true}));
+        element.dispatchEvent(new Event("change",{bubbles:true,composed:true}));
+      } else {
+        return {ok:false,error:"native-control-action-not-allowed"};
+      }
+      // The server publishes revision+1 after this exact action is ACKed.
+      // Keep the same live DOM target map available for the next serialized action.
+      revisions.set(revision + 1, targets);
+      nativeControlLatestRevision.set(requestId, revision + 1);
+      while (revisions.size > 8) revisions.delete(revisions.keys().next().value);
+      const response = {ok:true,revision:revision + 1};
+      nativeControlAppliedActions.set(actionId,{
+        requestId,revision,interactionId,response,
+      });
+      while (nativeControlAppliedActions.size > 64) {
+        nativeControlAppliedActions.delete(nativeControlAppliedActions.keys().next().value);
+      }
+      return response;
+    } catch (_) {
+      return {ok:false,error:"native-control-action-failed"};
+    }
+  }
+
+  chrome.runtime.onMessage?.addListener?.((message, _sender, sendResponse) => {
+    if (message?.type !== "chat2api.native.interaction") return false;
+    sendResponse(applyNativeInteraction(message));
+    return false;
+  });
+
   globalThis[KEY] = Object.freeze({capture,snapshot});
 })();

@@ -84,6 +84,8 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         assert "/api/user/chat/completions" in script.text
         assert "/v1/chat/completions" not in script.text
         assert "streamNativeContent" in script.text
+        assert "/native-content/interactions" in script.text
+        assert "submitNativeInteraction" in script.text
         assert "MAX_USER_MESSAGE_CHARS = 8000" in script.text
         assert "MAX_ASSISTANT_MESSAGE_CHARS = 32000" in script.text
         assert "MAX_LOCAL_MESSAGE_CHARS = 8000" in script.text

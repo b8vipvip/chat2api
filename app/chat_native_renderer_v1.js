@@ -240,11 +240,21 @@
     if (typeof tag !== "string" || !SAFE_TAGS.has(tag)) return false;
     if (SVG_TAGS.has(parentTag) && !SVG_TAGS.has(tag)) return false;
     if (SVG_TAGS.has(tag) && !SVG_TAGS.has(parentTag) && tag !== "svg") return false;
-    const allowed = new Set(["tag","text","children","style","media_index","intrinsic_width","intrinsic_height","source_sha256","attrs","math_attrs","col_span","row_span","href","control"]);
+    const allowed = new Set(["tag","text","children","style","media_index","intrinsic_width","intrinsic_height","source_sha256","attrs","math_attrs","col_span","row_span","href","control","interaction_id"]);
     if (Object.keys(value).some(key => !allowed.has(key))) return false;
     const controlRequired=["details","input","select","option","button"].includes(tag);
     if (controlRequired !== (value.control !== undefined)) return false;
     if (value.control !== undefined && !validControl(tag,value.control)) return false;
+    if (value.interaction_id !== undefined) {
+      if (!(counts.interactionIds instanceof Set) || counts.interactionIds.has(value.interaction_id)) return false;
+      counts.interactionIds.add(value.interaction_id);
+      if (!["details","input","select"].includes(tag)
+          || typeof value.interaction_id !== "string"
+          || !/^nc_[1-9][0-9]{0,6}_[1-9][0-9]{0,3}$/.test(value.interaction_id)) return false;
+      if (tag==="details" && value.control?.kind!=="disclosure") return false;
+      if (tag==="input" && !["checkbox","radio","range"].includes(value.control?.kind)) return false;
+      if (tag==="select" && value.control?.kind!=="select") return false;
+    }
     if (value.control !== undefined) {
       // Copy text is the same adjacent code block already counted in the tree.
       counts.chars += (value.control.label || "").length;
@@ -305,8 +315,51 @@
         !Array.isArray(snapshot.assets) || snapshot.assets.length > 40 ||
         !snapshot.assets.every(item => typeof item === "string" && item.length <= 2048) ||
         !Array.isArray(snapshot.files) || snapshot.files.length > 10) return false;
-    return validateNode(snapshot.root,0,"",{nodes:0,chars:0});
+    return validateNode(snapshot.root,0,"",{nodes:0,chars:0,interactionIds:new Set()});
   }
+  function bindNativeInteraction(element,value,context,eventName,action,readValue,restoreValue,onAccepted=null) {
+    const interactionId = String(value?.interaction_id || "");
+    if (!interactionId || typeof context?.onInteraction !== "function") return false;
+    let accepted = readValue();
+    let pending = false;
+    element.addEventListener(eventName, async () => {
+      if (pending) {
+        try { restoreValue(accepted); } catch {}
+        return;
+      }
+      const next = readValue();
+      if (Object.is(next,accepted)) return;
+      const previous = accepted;
+      pending = true;
+      element.setAttribute("aria-busy","true");
+      try {
+        const result = await context.onInteraction({
+          interaction_id:interactionId,
+          revision:context.revision,
+          action,
+          value:next,
+        });
+        if (result?.ok !== true) throw new Error("native interaction was not acknowledged");
+        accepted = next;
+        if (typeof onAccepted==="function") onAccepted(next);
+        element.removeAttribute?.("aria-invalid");
+        if (result?.persisted === false) {
+          element.setAttribute("title","操作已同步到 Worker，但服务器尚未确认持久化");
+        } else {
+          element.removeAttribute?.("title");
+        }
+      } catch (_) {
+        try { restoreValue(previous); } catch {}
+        element.setAttribute("aria-invalid","true");
+        element.setAttribute("title","同步失败，请重试");
+      } finally {
+        pending = false;
+        element.removeAttribute?.("aria-busy");
+      }
+    });
+    return true;
+  }
+
   function createNode(value,snapshot,depth,context) {
     if (depth > 64) throw new Error("native tree depth exceeded");
     const tag = value.tag;
@@ -347,10 +400,16 @@
       } else {
         element.checked=value.control.checked;
         if (value.control.kind==="radio") {
-          const groupKey=value.control.group;
-          if (!context.radioGroups.has(groupKey))
-            context.radioGroups.set(groupKey,context.prefix+"-"+groupKey);
-          element.name=context.radioGroups.get(groupKey);
+          const groupKey=String(value.control.group || "");
+          if (groupKey) {
+            if (!context.radioGroups.has(groupKey))
+              context.radioGroups.set(groupKey,context.prefix+"-"+groupKey);
+            element.name=context.radioGroups.get(groupKey);
+          } else {
+            context.radioIndex=(context.radioIndex || 0)+1;
+            element.name=context.prefix+"-radio-"+context.radioIndex;
+          }
+          if (element.checked) context.radioSelection.set(element.name,element);
         }
       }
       // Input controls return early, so apply their validated captured styles
@@ -358,6 +417,28 @@
       if (value.style) Object.entries(value.style).forEach(([key,item]) => {
         if (validStyle(key,item,tag)) element.style[key] = item;
       });
+      if (value.control.kind==="range") {
+        bindNativeInteraction(element,value,context,"change","set_value",
+          ()=>Number(element.value),previous=>{element.value=String(previous);});
+      } else if (value.control.kind==="radio") {
+        const groupName = element.name;
+        bindNativeInteraction(element,value,context,"change","set_checked",
+          ()=>Boolean(element.checked),
+          previous=>{
+            if (previous) {
+              element.checked=true;
+              context.radioSelection.set(groupName,element);
+            } else {
+              const acceptedRadio=context.radioSelection.get(groupName);
+              if (acceptedRadio && acceptedRadio!==element) acceptedRadio.checked=true;
+              element.checked=false;
+            }
+          },
+          next=>{if(next) context.radioSelection.set(groupName,element);});
+      } else {
+        bindNativeInteraction(element,value,context,"change","set_checked",
+          ()=>Boolean(element.checked),previous=>{element.checked=Boolean(previous);});
+      }
       return element;
     } else if (tag==="select") {
       element=document.createElement("select");
@@ -400,28 +481,36 @@
     }
     if (typeof value.text === "string") element.appendChild(document.createTextNode(value.text));
     for (const child of value.children || []) element.appendChild(createNode(child,snapshot,depth+1,context));
-    if (tag==="select") element.value=value.control.selected;
+    if (tag==="select") {
+      element.value=value.control.selected;
+      bindNativeInteraction(element,value,context,"change","set_value",
+        ()=>String(element.value),previous=>{element.value=String(previous);});
+    } else if (tag==="details") {
+      bindNativeInteraction(element,value,context,"toggle","set_open",
+        ()=>Boolean(element.open),previous=>{element.open=Boolean(previous);});
+    }
     return element;
   }
-  function hasLocalOnlyControls(root) {
+  function hasLocalOnlyControls(root,onInteraction=null) {
     const pending=[root];
     while(pending.length) {
       const node=pending.pop();
       if (!node || typeof node!=="object") continue;
-      if (["input","select"].includes(node.tag)) return true;
+      if (["input","select","details"].includes(node.tag)
+          && (!node.interaction_id || typeof onInteraction!=="function")) return true;
       pending.push(...(node.children || []));
     }
     return false;
   }
-  function renderNativeSnapshot(host,snapshot,sourceReferences=[]) {
+  function renderNativeSnapshot(host,snapshot,sourceReferences=[],onInteraction=null) {
     if (!host || !validateSnapshot(snapshot)) return false;
     try {
       const state = document.createElement("div");
       state.className = "native-delivery-state";
       state.textContent = (snapshot.finality === "verified-final" ? "ChatGPT 原生内容 · 已验证完成" : "ChatGPT 原生内容 · 实时更新，最终校验中") +
-        (hasLocalOnlyControls(snapshot.root) ? " · 表单控件仅在本地预览，不会提交到 ChatGPT" : "");
+        (hasLocalOnlyControls(snapshot.root,onInteraction) ? " · 部分控件仅在本地预览" : "");
       const root = document.createElement("div"); root.className = "native-rich-root";
-      root.appendChild(createNode(snapshot.root,snapshot,0,{radioGroups:new Map(),prefix:"native-"+(++renderSequence)}));
+      root.appendChild(createNode(snapshot.root,snapshot,0,{radioGroups:new Map(),radioSelection:new Map(),radioIndex:0,prefix:"native-"+(++renderSequence),onInteraction,revision:snapshot.revision}));
       const files = document.createElement("div"); files.className = "native-generated-files";
       for (const item of snapshot.files) {
         if (!item || typeof item !== "object" || typeof item.filename !== "string") continue;

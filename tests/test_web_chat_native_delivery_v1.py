@@ -37,6 +37,20 @@ def test_native_renderer_rejects_active_nodes_and_untrusted_urls() -> None:
     assert "native-renderer-validation-passed" in result.stdout
 
 
+
+def test_native_interaction_worker_dispatch_uses_original_tab():
+    node = shutil.which("node")
+    if node is None:
+        return
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [node, "tests/native_interaction_dispatch_v1.mjs"],
+        cwd=root, check=False, capture_output=True, text=True, timeout=20,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "native-interaction-original-worker-tab-dispatch-passed" in result.stdout
+
+
 def test_user_native_content_adapter_enforces_key_owner_and_preserves_validated_svg(tmp_path: Path) -> None:
     settings = Settings(
         CHAT2API_API_KEY="web-chat-native-test-master-key",
@@ -190,3 +204,141 @@ def test_mode1_chat_ingress_uses_session_and_server_shared_key(tmp_path: Path) -
             "mode1": True,
             "model": "gpt-5.6-sol",
         }]
+
+def test_owner_scoped_native_interaction_applies_to_original_worker_and_persists(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+    import time
+
+    settings = Settings(
+        CHAT2API_API_KEY="web-chat-native-action-master-key",
+        CHAT2API_DATA_DIR=str(tmp_path),
+    )
+    app = create_app(settings)
+
+    async def snapshot_loader(request_id, owner, **_kwargs):
+        stored = app.state.native_content.get(request_id, owner)
+        if not stored:
+            return None
+        return {**stored, "assets": [], "files": [], "finality": "verified-final"}
+
+    app.state.native_response_snapshot = snapshot_loader
+    shared_key = _install_shared_web_chat(app)
+
+    class AckSocket:
+        def __init__(self):
+            self.sent = []
+
+        async def send_json(self, payload):
+            self.sent.append(dict(payload))
+            if payload.get("type") == "chat.native.interaction":
+                await app.state.native_interaction_ack_receiver(
+                    "worker-native-action", self, {
+                        "type": "chat.native.interaction.ack",
+                        "request_id": payload["request_id"],
+                        "action_id": payload["action_id"],
+                        "revision": payload["revision"],
+                        "interaction_id": payload["interaction_id"],
+                        "ok": True,
+                    },
+                )
+
+    with TestClient(app) as client:
+        registered = client.post(
+            "/api/user/register",
+            headers={"Origin": "http://testserver"},
+            json={"email": "native-action-owner@example.test", "password": "native-action-owner-password"},
+        )
+        assert registered.status_code == 200, registered.text
+        owner_cookie = client.cookies.get(USER_SESSION_COOKIE)
+        session = client.get("/api/user/chat/session")
+        assert session.status_code == 200, session.text
+        owner_key = session.json()["key_id"]
+        request_id = "req_native_action_12345"
+
+        async def record():
+            await app.state.telemetry.upsert({
+                "request_id": request_id,
+                "api_key_id": owner_key,
+                "shared_api_key_id": shared_key["key_id"],
+                "web_chat_mode": True,
+                "client_id": "worker-native-action",
+                "status": "completed",
+                "response_media": [],
+                "response_generated_files": [],
+            })
+        asyncio.run(record())
+
+        initial = {
+            "version": 1,
+            "revision": 1,
+            "root": {"tag": "div", "children": [
+                {"tag": "input", "interaction_id": "nc_1_1",
+                 "control": {"kind": "checkbox", "label": "Enable", "disabled": False, "checked": False}},
+                {"tag": "input", "interaction_id": "nc_1_2",
+                 "control": {"kind": "range", "label": "Opacity", "disabled": False,
+                             "min": 0, "max": 100, "step": 5, "value": 25}},
+            ]},
+        }
+        assert app.state.native_content.publish(request_id, owner_key, initial)
+        assert app.state.native_content.persist(request_id, owner_key)
+
+        socket = AckSocket()
+        registry = app.state.registry
+        registry.clients["worker-native-action"] = SimpleNamespace(connection_enabled=True)
+        registry.sockets["worker-native-action"] = socket
+        registry.native_interaction_routes[request_id] = {
+            "client_id": "worker-native-action",
+            "websocket": socket,
+            "expires_mono": time.monotonic() + 300,
+        }
+
+        headers = {"Origin": "http://testserver"}
+        client.cookies.set(USER_SESSION_COOKIE, owner_cookie)
+        no_origin = client.post(
+            f"/api/user/chat/requests/{request_id}/native-content/interactions",
+            json={"revision": 1, "interaction_id": "nc_1_1", "action": "set_checked", "value": True},
+        )
+        assert no_origin.status_code == 403
+
+        response = client.post(
+            f"/api/user/chat/requests/{request_id}/native-content/interactions",
+            headers=headers,
+            json={"revision": 1, "interaction_id": "nc_1_1", "action": "set_checked", "value": True},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json() == {"ok": True, "revision": 2, "persisted": True}
+        assert socket.sent[-1]["type"] == "chat.native.interaction"
+        assert socket.sent[-1]["request_id"] == request_id
+        assert socket.sent[-1]["revision"] == 1
+        updated = app.state.native_content.get(request_id, owner_key)
+        assert updated["revision"] == 2
+        assert updated["root"]["children"][0]["control"]["checked"] is True
+
+        stale = client.post(
+            f"/api/user/chat/requests/{request_id}/native-content/interactions",
+            headers=headers,
+            json={"revision": 1, "interaction_id": "nc_1_2", "action": "set_value", "value": 50},
+        )
+        assert stale.status_code == 409
+        invalid = client.post(
+            f"/api/user/chat/requests/{request_id}/native-content/interactions",
+            headers=headers,
+            json={"revision": 2, "interaction_id": "nc_1_1", "action": "set_value", "value": 50},
+        )
+        assert invalid.status_code == 422
+        assert len(socket.sent) == 1
+
+        client.cookies.clear()
+        other = client.post(
+            "/api/user/register",
+            headers={"Origin": "http://testserver"},
+            json={"email": "native-action-other@example.test", "password": "native-action-other-password"},
+        )
+        assert other.status_code == 200
+        cross_owner = client.post(
+            f"/api/user/chat/requests/{request_id}/native-content/interactions",
+            headers=headers,
+            json={"revision": 2, "interaction_id": "nc_1_2", "action": "set_value", "value": 50},
+        )
+        assert cross_owner.status_code == 404
+

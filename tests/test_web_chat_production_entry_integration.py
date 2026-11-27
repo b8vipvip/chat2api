@@ -38,6 +38,7 @@ expected = {
     ("POST", "/api/user/chat/completions"),
     ("GET", "/api/user/chat/requests/{request_id}/native-content"),
     ("GET", "/api/user/chat/requests/{request_id}/native-content/events"),
+    ("POST", "/api/user/chat/requests/{request_id}/native-content/interactions"),
     ("POST", "/api/user/chat/requests/{request_id}/cancel"),
     ("GET", "/api/user/chat/files/{file_id}/download"),
     ("GET", "/api/user/files/{file_id}/content"),

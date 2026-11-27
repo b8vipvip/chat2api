@@ -1,4 +1,8 @@
 import json
+import shutil
+import subprocess
+from pathlib import Path
+
 import pytest
 from app.native_content_v1 import NativeContentStore, validate_native_snapshot
 
@@ -9,6 +13,63 @@ def snapshot(revision=1):
                      "children": [{"tag": "img", "media_index": 0},
                                   {"tag": "img", "media_index": 1},
                                   {"tag": "p", "text": "example"}]}}
+
+
+def test_native_content_worker_interaction_vm():
+    node = shutil.which("node")
+    if node is None:
+        return
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [node, "tests/native_content_v1.mjs"],
+        cwd=root, check=False, capture_output=True, text=True, timeout=20,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "native-content-request-scoped-interaction-actions-passed" in result.stdout
+
+
+def test_native_interaction_ids_are_unique_typed_and_private_to_web_chat():
+    from app.native_content_v1 import native_public_v1_tree
+
+    payload = {
+        "version": 1, "revision": 8,
+        "root": {"tag": "div", "children": [
+            {"tag": "input", "interaction_id": "nc_8_1",
+             "control": {"kind": "checkbox", "label": "Enable", "disabled": False, "checked": False}},
+            {"tag": "details", "interaction_id": "nc_8_2",
+             "control": {"kind": "disclosure", "open": False},
+             "children": [{"tag": "summary", "text": "More"}]},
+            {"tag": "select", "interaction_id": "nc_8_3",
+             "control": {"kind": "select", "label": "Mode", "disabled": False, "selected": "a"},
+             "children": [
+                 {"tag": "option", "text": "A", "control": {"kind": "option", "value": "a", "disabled": False, "selected": True}},
+                 {"tag": "option", "text": "B", "control": {"kind": "option", "value": "b", "disabled": False, "selected": False}},
+             ]},
+        ]},
+    }
+    validated = validate_native_snapshot(payload)
+    assert validated["root"]["children"][0]["interaction_id"] == "nc_8_1"
+    assert validated["root"]["children"][1]["interaction_id"] == "nc_8_2"
+    assert validated["root"]["children"][2]["interaction_id"] == "nc_8_3"
+    legacy = native_public_v1_tree(validated["root"])
+    assert "interaction_id" not in json.dumps(legacy)
+
+    duplicate = json.loads(json.dumps(payload))
+    duplicate["root"]["children"][1]["interaction_id"] = "nc_8_1"
+    with pytest.raises(ValueError):
+        validate_native_snapshot(duplicate)
+
+    unsafe = json.loads(json.dumps(payload))
+    unsafe["root"]["children"][0]["interaction_id"] = "nc_8_1;alert(1)"
+    with pytest.raises(ValueError):
+        validate_native_snapshot(unsafe)
+
+    wrong_tag = json.loads(json.dumps(payload))
+    wrong_tag["root"]["children"][0]["tag"] = "div"
+    with pytest.raises(ValueError):
+        validate_native_snapshot(wrong_tag)
+
+
 
 def test_native_sidecar_is_versioned_and_owner_isolated(tmp_path):
     store = NativeContentStore(tmp_path)
