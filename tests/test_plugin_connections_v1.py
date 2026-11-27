@@ -1228,6 +1228,7 @@ def test_github_actions_releases_tags_issue_search_and_review_threads(tmp_path: 
         runs = call("list_workflow_runs", {"repository": "acme/project", "branch": "main", "status": "completed"})
         assert runs["data"][0]["conclusion"] == "success"
         assert runs["pagination"]["has_more"] is True
+        assert runs["pagination"]["total_count"] == 1
         jobs = call("list_workflow_jobs", {"repository": "acme/project", "run_id": 987654321})
         assert jobs["data"][0]["steps"][0]["name"] == "pytest"
         threads = call("list_pull_review_threads", {"repository": "acme/project", "pull_number": 12})
