@@ -1325,6 +1325,8 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                             } for row in raw[:20] if isinstance(row, dict)]
                         else:
                             runs = raw.get("workflow_runs", []) if isinstance(raw, dict) else []
+                            if not isinstance(runs, list):
+                                raise HTTPException(502, "Invalid GitHub workflow runs response", headers=_PRIVATE_HEADERS)
                             data = [{
                                 "repository": repository, "id": row.get("id"), "name": str(row.get("name") or "")[:200],
                                 "display_title": str(row.get("display_title") or row.get("name") or "")[:250],
@@ -1379,6 +1381,7 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                                           databaseId author { login } body createdAt url diffHunk
                                           replyTo { databaseId }
                                         }
+                                        pageInfo { hasNextPage }
                                       }
                                     }
                                     pageInfo { hasNextPage endCursor }
@@ -1416,6 +1419,7 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                                 "diff_hunk": str(comment.get("diffHunk") or "")[:800],
                                 "in_reply_to_id": (comment.get("replyTo") or {}).get("databaseId"),
                             } for comment in ((row.get("comments") or {}).get("nodes") or [])[:20] if isinstance(comment, dict)],
+                            "comments_truncated": ((row.get("comments") or {}).get("pageInfo") or {}).get("hasNextPage") is True,
                             "url": next((comment.get("url") for comment in ((row.get("comments") or {}).get("nodes") or []) if isinstance(comment, dict) and comment.get("url")), "https://github.com/" + repository + "/pull/" + str(pull_number)),
                         } for row in threads.get("nodes", [])[:50] if isinstance(row, dict)]
                         page_info = threads.get("pageInfo") or {}
