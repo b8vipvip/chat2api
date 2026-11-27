@@ -1179,11 +1179,11 @@ assert.match(detailsNode.interaction_id,/^nc_1_1$/);
 assert.match(checkboxNode.interaction_id,/^nc_1_2$/);
 assert.match(rangeNode.interaction_id,/^nc_1_3$/);
 assert.match(selectNode.interaction_id,/^nc_1_4$/);
-function dispatchNativeAction(action,interactionId,value,revision=interactionSnapshot.revision){
+function dispatchNativeAction(action,interactionId,value,revision=interactionSnapshot.revision,requestId="req_nativeactions12345"){
   let response=null;
   nativeInteractionListener({
     type:"chat2api.native.interaction",
-    request_id:"req_nativeactions12345",
+    request_id:requestId,
     action_id:"a".repeat(32),
     revision,
     interaction_id:interactionId,
@@ -1194,11 +1194,11 @@ function dispatchNativeAction(action,interactionId,value,revision=interactionSna
 }
 assert.deepEqual(dispatchNativeAction("set_checked",checkboxNode.interaction_id,true),{ok:true,revision:2});
 assert.equal(checkbox.checked,true);
-assert.deepEqual(dispatchNativeAction("set_value",rangeNode.interaction_id,50),{ok:true,revision:2});
+assert.deepEqual(dispatchNativeAction("set_value",rangeNode.interaction_id,50,2),{ok:true,revision:3});
 assert.equal(range.value,"50");
-assert.deepEqual(dispatchNativeAction("set_value",selectNode.interaction_id,"b"),{ok:true,revision:2});
+assert.deepEqual(dispatchNativeAction("set_value",selectNode.interaction_id,"b",3),{ok:true,revision:4});
 assert.equal(select.value,"b");
-assert.deepEqual(dispatchNativeAction("set_open",detailsNode.interaction_id,true),{ok:true,revision:2});
+assert.deepEqual(dispatchNativeAction("set_open",detailsNode.interaction_id,true,4),{ok:true,revision:5});
 assert.equal(details.open,true);
 assert.equal(dispatchNativeAction("set_checked",checkboxNode.interaction_id,false,1).ok,false,
   "a consumed native revision must not be replayed");
@@ -1209,6 +1209,6 @@ const disabledSnapshot=interactionApi.snapshot({
   requestId:"req_nativeactionsdisabled",submitStartedAt:Date.now(),
   lastCandidateNode:disabledRoot,
 });
-assert.equal(dispatchNativeAction("set_checked",disabledSnapshot.root.children[0].interaction_id,true,disabledSnapshot.revision).ok,false);
+assert.equal(dispatchNativeAction("set_checked",disabledSnapshot.root.children[0].interaction_id,true,disabledSnapshot.revision,"req_nativeactionsdisabled").ok,false);
 console.log("native-content-request-scoped-interaction-actions-passed");
 
