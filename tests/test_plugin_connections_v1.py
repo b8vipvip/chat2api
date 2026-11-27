@@ -1187,6 +1187,11 @@ def test_github_actions_releases_tags_issue_search_and_review_threads(tmp_path: 
             variables = kwargs["json"]["variables"]
             assert variables["owner"] == "acme" and variables["name"] == "project"
             assert variables["number"] == 12
+            if variables.get("after"):
+                assert variables["after"] == "opaque-next-cursor"
+                return FakeResponse({"data": {"repository": {"pullRequest": {"reviewThreads": {
+                    "nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None},
+                }}}}})
             return FakeResponse({"data": {"repository": {"pullRequest": {"reviewThreads": {
                 "nodes": [{
                     "id": "PRRT_kw123", "isResolved": False, "isOutdated": True,
@@ -1229,6 +1234,11 @@ def test_github_actions_releases_tags_issue_search_and_review_threads(tmp_path: 
         assert threads["data"][0]["resolved"] is False
         assert threads["data"][0]["comments"][0]["id"] == 44
         assert threads["pagination"]["next_cursor"] == "opaque-next-cursor"
+        threads_next = call("list_pull_review_threads", {
+            "repository": "acme/project", "pull_number": 12, "cursor": "opaque-next-cursor",
+        })
+        assert threads_next["pagination"]["has_more"] is False
+        assert calls[-1][2]["variables"]["after"] == "opaque-next-cursor"
 
         for tool, payload in [
             ("search_issues", {"query": "is:open bug repo:other/project", "repository": "acme/project"}),
@@ -1238,4 +1248,4 @@ def test_github_actions_releases_tags_issue_search_and_review_threads(tmp_path: 
         ]:
             response = client.post("/api/user/plugins/github/tools/" + tool, headers=ORIGIN, json=payload)
             assert response.status_code == 422, response.text
-        assert len(calls) == 6
+        assert len(calls) == 7
