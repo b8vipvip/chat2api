@@ -101,11 +101,13 @@
 
   function classify(root) {
     const context = labelOf(root).slice(0, 2200);
-    if (!context || authDanger.test(context) || !integrationContext.test(context)) return null;
+    const hasIntegrationContext = integrationContext.test(context);
+    const hasProvider = providerLabel.test(context);
+    if (!context || authDanger.test(context) || (!hasIntegrationContext && !hasProvider)) return null;
     const buttons = actionButtons(root);
     const positive = buttons.find(item => positiveAction.test(item.label));
     const negative = buttons.find(item => negativeAction.test(item.label));
-    if (!positive) return null;
+    if (!positive && !hasProvider) return null;
     return { context, buttons, positive, negative, category: "external-account-tool" };
   }
 
