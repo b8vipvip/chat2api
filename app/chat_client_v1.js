@@ -2758,7 +2758,15 @@
         }
         if (tool === "github.search_code") {
           rows.forEach(row => {
-            if (row.repository && row.path) knownGithubFileRefs.add(String(row.repository) + ":" + String(row.path));
+            if (!row.repository || !row.path) return;
+            const repository = String(row.repository), filePath = String(row.path);
+            knownGithubRepos.add(repository);
+            knownGithubFileRefs.add(repository + ":" + filePath);
+            if (row.ref) {
+              const ref = String(row.ref);
+              knownGithubRefs.add(repository + ":" + ref);
+              knownGithubFileRefs.add(JSON.stringify([repository,ref,filePath]));
+            }
           });
         }
         if (tool === "github.list_directory") {
