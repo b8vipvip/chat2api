@@ -4,7 +4,7 @@
 
   const baseHandleServerMessage = handleServerMessage;
   const baseResolveTargetTab = resolveTargetTab;
-  const state = { currentTab: null, chain: Promise.resolve(), requestTabs: new Map(), nativeRequestTabs: new Map() };
+  const state = { currentTab: null, chain: Promise.resolve(), requestTabs: new Map(), nativeRequestTabs: new Map(), nativeRequestTabsHydrated: false };
   globalThis[KEY] = state;
   const monotonicNow = () => globalThis.performance?.now?.() ?? Date.now();
   const elapsedMs = started => Math.max(0, Math.round((monotonicNow() - started) * 10) / 10);
@@ -59,7 +59,10 @@
               }
             }
           }
-          await chrome.storage.local.set({ boundTabId: live.id, autoBind: false, modelsUpdatedAt: 0 });
+          await chrome.storage.local.set({
+            boundTabId: live.id, autoBind: false, modelsUpdatedAt: 0,
+            nativeRequestTabsV1: [...state.nativeRequestTabs.entries()],
+          });
           return live;
         }
         if (attempt === 0 && requestId) {
@@ -83,6 +86,36 @@
     const task = state.chain.then(taskFactory);
     state.chain = task.catch(() => {});
     return task;
+  }
+
+  async function hydrateNativeRequestTabs() {
+    if (state.nativeRequestTabsHydrated) return;
+    state.nativeRequestTabsHydrated = true;
+    try {
+      const stored = await chrome.storage.local.get("nativeRequestTabsV1");
+      const rows = Array.isArray(stored?.nativeRequestTabsV1) ? stored.nativeRequestTabsV1 : [];
+      for (const row of rows) {
+        if (!Array.isArray(row) || row.length !== 2) continue;
+        const [requestId,target] = row;
+        if (!/^req_[A-Za-z0-9_-]{8,120}$/.test(String(requestId || ""))
+            || !target || !Number.isInteger(target.tabId) || !Number.isInteger(target.windowId)
+            || !Number.isFinite(target.expiresAt) || target.expiresAt <= Date.now()) continue;
+        state.nativeRequestTabs.set(String(requestId), {
+          tabId:target.tabId, windowId:target.windowId, expiresAt:target.expiresAt,
+        });
+      }
+      while (state.nativeRequestTabs.size > 64) {
+        state.nativeRequestTabs.delete(state.nativeRequestTabs.keys().next().value);
+      }
+    } catch (_) {}
+  }
+
+  async function persistNativeRequestTabs() {
+    try {
+      await chrome.storage.local.set({
+        nativeRequestTabsV1:[...state.nativeRequestTabs.entries()],
+      });
+    } catch (_) {}
   }
 
   function terminalTypeFor(message) {
@@ -210,12 +243,14 @@
   }
 
   async function dispatchNativeInteraction(message) {
+    await hydrateNativeRequestTabs();
     const requestId = String(message?.request_id || "");
     const actionId = String(message?.action_id || "");
     const revision = Number(message?.revision);
     const interactionId = String(message?.interaction_id || "");
     let result = {ok:false,error:"native-interaction-route-unavailable"};
     const target = state.nativeRequestTabs.get(requestId);
+    if (target && target.expiresAt <= Date.now()) state.nativeRequestTabs.delete(requestId);
     if (
       target && target.expiresAt > Date.now()
       && /^[a-f0-9]{32}$/.test(actionId)
@@ -237,10 +272,12 @@
           });
         } else {
           state.nativeRequestTabs.delete(requestId);
+          await persistNativeRequestTabs();
           result = {ok:false,error:"original-Worker-tab-no-longer-available"};
         }
       } catch (_) {
         state.nativeRequestTabs.delete(requestId);
+        await persistNativeRequestTabs();
         result = {ok:false,error:"original-Worker-tab-no-longer-available"};
       }
     }
@@ -289,12 +326,16 @@
     if (!["chat.completed", "chat.error", "chat.cancelled", "image.completed", "image.error", "image.cancelled", "voice.error", "voice.cancelled"].includes(event.type)) return false;
     const requestId = String(event.request_id || "");
     if (requestId) state.requestTabs.delete(requestId);
-    if (requestId && event.type !== "chat.completed") state.nativeRequestTabs.delete(requestId);
+    if (requestId && event.type !== "chat.completed") {
+      state.nativeRequestTabs.delete(requestId);
+      persistNativeRequestTabs();
+    }
     return false;
   });
   chrome.tabs.onRemoved?.addListener?.(tabId => {
     for (const [requestId, target] of state.nativeRequestTabs) {
       if (target?.tabId === tabId) state.nativeRequestTabs.delete(requestId);
     }
+    persistNativeRequestTabs();
   });
 })();
