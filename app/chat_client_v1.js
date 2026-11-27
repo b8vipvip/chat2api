@@ -2742,6 +2742,7 @@
           rows.forEach(row => {
             const runId = Number(row.id);
             if (args.repository && Number.isSafeInteger(runId) && runId > 0) knownGithubRunRefs.add(args.repository + ":" + runId);
+            if (args.repository && row.branch) knownGithubRefs.add(args.repository + ":" + String(row.branch));
           });
         }
         if (tool === "github.list_workflow_jobs" && args.repository && Number.isSafeInteger(args.run_id)) {
@@ -2913,6 +2914,7 @@
           (outcome.result.results || []).forEach(row => {
             const runId = Number(row?.id);
             if (Number.isSafeInteger(runId) && runId > 0) knownGithubRunRefs.add(String(outcome.result.arguments.repository) + ":" + runId);
+            if (row.branch) knownGithubRefs.add(String(outcome.result.arguments.repository) + ":" + String(row.branch));
           });
         }
         if (outcome.result?.ok && outcome.tool === "github.list_issues") {
