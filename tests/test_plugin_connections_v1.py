@@ -1268,6 +1268,13 @@ def test_github_actions_releases_tags_issue_search_and_review_threads(tmp_path: 
         assert comment_page["data"][0]["comments"][0]["id"] == 45
         assert comment_page["data"][0]["comments"][0]["in_reply_to_id"] == 44
         assert comment_page["pagination"]["has_more"] is False
+        wrong_parent = client.post(
+            "/api/user/plugins/github/tools/list_pull_review_thread_comments",
+            headers=ORIGIN,
+            json={"repository": "acme/project", "pull_number": 13,
+                  "thread_id": "PRRT_kw123", "cursor": "comment-next-cursor"},
+        )
+        assert wrong_parent.status_code == 404
 
         for tool, payload in [
             ("search_issues", {"query": "is:open bug repo:other/project", "repository": "acme/project"}),
@@ -1276,8 +1283,8 @@ def test_github_actions_releases_tags_issue_search_and_review_threads(tmp_path: 
             ("list_workflow_jobs", {"repository": "acme/project", "run_id": True}),
             ("list_pull_review_threads", {"repository": "acme/project", "pull_number": 12, "cursor": "bad\nvalue"}),
             ("list_pull_review_thread_comments", {"repository": "acme/project", "pull_number": 12, "thread_id": "PRRT_kw123"}),
-            ("list_pull_review_thread_comments", {"repository": "acme/project", "pull_number": 12, "thread_id": "bad\\nthread", "cursor": "cursor"}),
+            ("list_pull_review_thread_comments", {"repository": "acme/project", "pull_number": 12, "thread_id": "bad\nthread", "cursor": "cursor"}),
         ]:
             response = client.post("/api/user/plugins/github/tools/" + tool, headers=ORIGIN, json=payload)
             assert response.status_code == 422, response.text
-        assert len(calls) == 8
+        assert len(calls) == 9
