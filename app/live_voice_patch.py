@@ -514,6 +514,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
         last_video_dispatch_mono = 0.0
         video_frame_count = 0
         video_frame_bytes = 0
+        video_av_sync_skews: list[int] = []
         confirmed_media_ids: set[str] = set()
         confirmed_media_item_ids: set[str] = set()
         confirmed_input_ids: set[str] = set()
@@ -740,6 +741,16 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         ack["video_track_mode"] = (
                             "web_rtc" if video_track_attached else "snapshot_fallback"
                         )
+                        if video_track_attached:
+                            sync_mode = str(event.get("av_sync_mode") or "")
+                            if sync_mode in {"shared_audio_context", "arrival_fallback"}:
+                                ack["av_sync_mode"] = sync_mode
+                            sync_skew = event.get("sync_skew_ms")
+                            if type(sync_skew) is int and -10000 <= sync_skew <= 10000:
+                                video_av_sync_skews.append(sync_skew)
+                                if len(video_av_sync_skews) > 300:
+                                    del video_av_sync_skews[:-300]
+                                ack["sync_skew_ms"] = sync_skew
                         if not video_track_attached:
                             video_track_error = str(event.get("video_track_error") or "").strip()
                             if video_track_error:
@@ -1523,6 +1534,12 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         "session_ready": session_ready, "audio_bytes": observed_audio_bytes,
                         "input_audio_bytes": observed_input_audio_bytes,
                         "completed_responses": observed_response_count,
+                        "video_av_sync_samples": len(video_av_sync_skews),
+                        "video_av_sync_max_abs_skew_ms": max((abs(value) for value in video_av_sync_skews), default=None),
+                        "video_av_sync_avg_abs_skew_ms": (
+                            round(sum(abs(value) for value in video_av_sync_skews) / len(video_av_sync_skews), 2)
+                            if video_av_sync_skews else None
+                        ),
                         "input_confirmed_turns": input_confirmed,
                         "attachments_confirmed": observed_media_count,
                         "audio_usage_provider_verified": False,
