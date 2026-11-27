@@ -77,7 +77,7 @@ def test_background_preflight_requires_canonical_terminal_path_only():
 
 def test_native_github_tool_event_aborts_active_worker_turn():
     result = subprocess.run(
-        ["node", str(ROOT / "tests" / "native_tool_isolation_v49.mjs")],
+        ["node", "--test", str(ROOT / "tests" / "native_tool_isolation_v49.mjs")],
         cwd=ROOT, capture_output=True, text=True, check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
