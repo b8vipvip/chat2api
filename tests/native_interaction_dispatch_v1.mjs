@@ -10,6 +10,7 @@ const listeners=[];
 const sent=[];
 const socketEvents=[];
 const removed=[];
+const storageData={};
 const tab={id:17,windowId:4,url:"https://chatgpt.com/"};
 const context={
   chrome:{
@@ -22,7 +23,7 @@ const context={
       onRemoved:{addListener:fn=>removed.push(fn)},
     },
     runtime:{onMessage:{addListener:fn=>listeners.push(fn)}},
-    storage:{local:{set:async()=>{}}},
+    storage:{local:{set:async value=>Object.assign(storageData,value),get:async()=>({nativeRequestTabsV1:storageData.nativeRequestTabsV1})}},
   },
   isChatGptUrl:url=>String(url).startsWith("https://chatgpt.com/"),
   trySendSocket:async event=>{socketEvents.push(event);return true;},
@@ -51,8 +52,39 @@ assert.equal(state.requestTabs.has(requestId),false);
 assert.equal(state.nativeRequestTabs.has(requestId),true,
   "completed requests retain a bounded native action route");
 
+assert.ok(Array.isArray(storageData.nativeRequestTabsV1));
+assert.equal(storageData.nativeRequestTabsV1[0][0],requestId);
+
+// Simulate an MV3 service-worker restart: the new background context has no
+// in-memory route map, so it must restore only the bounded local tab binding.
+const sentAfterRestart=[];
+const socketEventsAfterRestart=[];
+const removedAfterRestart=[];
+const restartedContext={
+  chrome:{
+    tabs:{
+      get:async id=>id===tab.id?tab:null,
+      sendMessage:async (id,message)=>{
+        sentAfterRestart.push({id,message});
+        return {ok:true,revision:Number(message.revision)+1};
+      },
+      onRemoved:{addListener:fn=>removedAfterRestart.push(fn)},
+    },
+    runtime:{onMessage:{addListener:fn=>listeners.push(fn)}},
+    storage:{local:{set:async value=>Object.assign(storageData,value),get:async()=>({nativeRequestTabsV1:storageData.nativeRequestTabsV1})}},
+  },
+  isChatGptUrl:url=>String(url).startsWith("https://chatgpt.com/"),
+  trySendSocket:async event=>{socketEventsAfterRestart.push(event);return true;},
+  resolveTargetTab:async()=>tab,
+  resolveTargetTabForRequest:async()=>tab,
+  handleServerMessage:async message=>({handled:true,type:message.type}),
+};
+vm.createContext(restartedContext);
+vm.runInContext(source,restartedContext,{filename:"conversation_dispatch-restarted.js"});
+const restartedState=restartedContext.__CHAT2API_CONVERSATION_DISPATCH_V1__;
+assert.equal(restartedState.nativeRequestTabs.size,0);
 const actionId="a".repeat(32);
-const result=await context.handleServerMessage({
+const result=await restartedContext.handleServerMessage({
   type:"chat.native.interaction",
   request_id:requestId,
   action_id:actionId,
@@ -62,16 +94,18 @@ const result=await context.handleServerMessage({
   value:true,
 });
 assert.equal(result.ok,true);
-assert.equal(sent.length,1);
-assert.equal(sent[0].id,tab.id);
-assert.equal(sent[0].message.type,"chat2api.native.interaction");
-assert.equal(socketEvents.length,1);
-assert.equal(socketEvents[0].type,"chat.native.interaction.ack");
-assert.equal(socketEvents[0].request_id,requestId);
-assert.equal(socketEvents[0].action_id,actionId);
-assert.equal(socketEvents[0].revision,3);
-assert.equal(socketEvents[0].ok,true);
+assert.equal(restartedState.nativeRequestTabs.get(requestId).tabId,tab.id);
+assert.equal(sentAfterRestart.length,1);
+assert.equal(sentAfterRestart[0].id,tab.id);
+assert.equal(sentAfterRestart[0].message.type,"chat2api.native.interaction");
+assert.equal(socketEventsAfterRestart.length,1);
+assert.equal(socketEventsAfterRestart[0].type,"chat.native.interaction.ack");
+assert.equal(socketEventsAfterRestart[0].request_id,requestId);
+assert.equal(socketEventsAfterRestart[0].action_id,actionId);
+assert.equal(socketEventsAfterRestart[0].revision,3);
+assert.equal(socketEventsAfterRestart[0].ok,true);
 
-removed[0](tab.id);
-assert.equal(state.nativeRequestTabs.has(requestId),false);
+removedAfterRestart[0](tab.id);
+assert.equal(restartedState.nativeRequestTabs.has(requestId),false);
+assert.equal(storageData.nativeRequestTabsV1.length,0);
 console.log("native-interaction-original-worker-tab-dispatch-passed");
