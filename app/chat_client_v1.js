@@ -2662,6 +2662,12 @@
         });
         result.single_result_truncated = true;
       }
+      if (omittedResultsCount > 0) {
+        event.output += " 为控制上下文，另有 " + omittedResultsCount + " 条记录未传给模型。";
+      }
+      if (result.single_result_truncated) {
+        event.output += " 单条结果内容已截断。";
+      }
       if (definition.provider === "github") {
         const previewRows = ["github.list_pull_review_threads","github.list_pull_review_thread_comments"].includes(rawName)
           ? result.results.map(row => ({
