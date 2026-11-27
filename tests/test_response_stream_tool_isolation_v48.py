@@ -76,6 +76,14 @@ def test_background_preflight_requires_canonical_terminal_path_only():
     assert "__CHAT2API_RESPONSE_STREAM_RECOVERY_V69__" not in contract
 
 
+def test_native_github_tool_event_aborts_active_worker_turn():
+    result = subprocess.run(
+        ["node", str(ROOT / "tests" / "native_tool_isolation_v49.mjs")],
+        cwd=ROOT, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_worker_native_connected_app_isolation_is_fail_closed_and_audited():
     content = (ROOT / "chrome_extension" / "content_tool_isolation_v49.js").read_text(encoding="utf-8")
     background = (ROOT / "chrome_extension" / "background_tool_isolation_v49.js").read_text(encoding="utf-8")
