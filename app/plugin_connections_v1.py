@@ -1129,9 +1129,9 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                                 suffix = "/" + path_value
                                 if (parsed_url.scheme == "https" and parsed_url.netloc.lower() == "github.com"
                                     and marker in parsed_url.path):
-                                    ref_path = parsed_url.path.split(marker, 1)[1]
+                                    ref_path = unquote(parsed_url.path.split(marker, 1)[1])
                                     if ref_path.endswith(suffix):
-                                        candidate = unquote(ref_path[:-len(suffix)])
+                                        candidate = ref_path[:-len(suffix)]
                                         if candidate and len(candidate) <= 255 and not any(ord(char) < 32 or ord(char) == 127 for char in candidate):
                                             ref_value = candidate
                             data.append({
