@@ -1400,10 +1400,10 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                             query($owner: String!, $name: String!, $number: Int!, $after: String) {
                               repository(owner: $owner, name: $name) {
                                 pullRequest(number: $number) {
-                                  reviewThreads(first: 50, after: $after) {
+                                  reviewThreads(first: 10, after: $after) {
                                     nodes {
                                       id isResolved isOutdated path line originalLine
-                                      comments(first: 8) {
+                                      comments(first: 1) {
                                         nodes {
                                           databaseId author { login } body createdAt url diffHunk
                                           replyTo { databaseId }
@@ -1445,7 +1445,7 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                                 "created_at": comment.get("createdAt"), "url": comment.get("url"),
                                 "diff_hunk": str(comment.get("diffHunk") or "")[:800],
                                 "in_reply_to_id": (comment.get("replyTo") or {}).get("databaseId"),
-                            } for comment in ((row.get("comments") or {}).get("nodes") or [])[:8] if isinstance(comment, dict)],
+                            } for comment in ((row.get("comments") or {}).get("nodes") or [])[:1] if isinstance(comment, dict)],
                             "comments_truncated": ((row.get("comments") or {}).get("pageInfo") or {}).get("hasNextPage") is True,
                             "comments_next_cursor": (((row.get("comments") or {}).get("pageInfo") or {}).get("endCursor")
                                 if ((row.get("comments") or {}).get("pageInfo") or {}).get("hasNextPage") is True else None),
@@ -1453,7 +1453,7 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                         } for row in threads.get("nodes", [])[:50] if isinstance(row, dict)]
                         page_info = threads.get("pageInfo") or {}
                         pagination = {
-                            "page": 1, "per_page": 50, "has_more": page_info.get("hasNextPage") is True,
+                            "page": 1, "per_page": 10, "has_more": page_info.get("hasNextPage") is True,
                             "next_cursor": page_info.get("endCursor") if page_info.get("hasNextPage") is True else None,
                         }
                     elif tool_name == "list_pull_review_thread_comments":
