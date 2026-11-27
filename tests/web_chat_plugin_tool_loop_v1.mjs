@@ -243,7 +243,7 @@ test("model chains GitHub code search into a grounded file read", async () => {
       if (tool === "search_code") {
         assert.deepEqual(JSON.parse(JSON.stringify(args)),{query:"repo:acme/project README.md"});
         return {data:[{
-          repository:"acme/project",path:"README.md",
+          repository:"acme/project",path:"README.md",ref:"main",
           url:"https://github.com/acme/project/blob/main/README.md",sha:"a".repeat(40),
         }]};
       }
