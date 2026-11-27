@@ -6,6 +6,7 @@
   const state = {
     revision: 64, calls: 0, results: 0, final_snapshots: 0,
     final_completions: 0, completions: 0, ignored: 0,
+    native_external_tool_violations: 0,
     finalReferenceSignatures: new Map(),
   };
   globalThis[KEY] = state;
@@ -89,6 +90,49 @@
     });
   }
 
+  function externalAccountProvider(toolName) {
+    const normalized = String(toolName || "").replace(/[^a-z0-9]+/gi, " ").trim();
+    const match = normalized.match(/\b(github|gmail|google drive|google calendar|google docs|google sheets|slack|notion|linear|outlook|microsoft teams|onedrive|sharepoint|dropbox|box|salesforce|hubspot|jira|confluence|figma)\b/i);
+    return match ? String(match[1]).toLowerCase().replace(/\s+/g, "_") : "";
+  }
+
+  async function blockNativeExternalAccountTool(detail, active) {
+    const toolName = String(detail?.tool_name || "tool").slice(0, 160);
+    const provider = externalAccountProvider(toolName);
+    if (!provider) return false;
+    if (active.nativeExternalToolViolation) return true;
+
+    active.nativeExternalToolViolation = {
+      provider,
+      toolName,
+      at_ms: Date.now(),
+    };
+    active.cancelReason = "Blocked native connected-account tool invocation by chat2api isolation guard";
+    active.cancelled = true;
+    state.native_external_tool_violations += 1;
+
+    try {
+      const stop = document.querySelector(
+        "button[data-testid='stop-button'],button[aria-label='Stop streaming'],button[aria-label='Stop generating']",
+      );
+      if (stop && !stop.disabled && stop.getAttribute("aria-disabled") !== "true") stop.click();
+    } catch (_) {}
+
+    await emit({
+      type: "chat.diagnostics",
+      request_id: String(active.requestId),
+      diagnostics: {
+        tool_isolation: "tool-isolation-v49",
+        native_external_tool_violation: true,
+        native_external_tool_abort_requested: true,
+        native_external_tool_prevented_before_execution: false,
+        native_external_tool_provider: provider,
+        native_external_tool_name: toolName,
+      },
+    });
+    return true;
+  }
+
   async function handle(detail) {
     const phase = String(detail?.phase || "");
     if (["topic-subscribe", "topic-unsubscribe"].includes(phase)) return;
@@ -128,6 +172,7 @@
     }
 
     if (phase === "tool-call") {
+      if (await blockNativeExternalAccountTool(detail, active)) return;
       state.calls += 1;
       await emit({
         type: "chat.tool.call",
