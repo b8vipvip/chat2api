@@ -154,6 +154,8 @@
     let videoFrameBytes = 0;
     let videoModeNoticeSent = false;
     let sessionStartedAt = 0;
+    let audioFrameSequence = 0;
+    let lastAudioTimestampMs = -1;
     let lastVideoTimestampMs = -1;
     let lastVideoCaptureAt = -Infinity;
     let supportsVideoFrames = false;
@@ -233,7 +235,20 @@
         if (!channel || !channel.length) return;
         try {
           const frame = resamplePcm16Stream(channel, audioContext.sampleRate, resamplerState, INPUT_RATE);
-          if (frame.byteLength && frame.byteLength <= 64 * 1024) socket.send(frame);
+          if (frame.byteLength && frame.byteLength <= 64 * 1024) {
+            // Audio and camera frames share the same monotonic session clock.
+            // Timestamp the first sample in this PCM block, not the callback
+            // completion time, so the Worker can schedule both tracks together.
+            const frameStartMs = Math.max(0, Math.floor(
+              monotonicNow() - sessionStartedAt -
+              channel.length / Math.max(1,audioContext.sampleRate) * 1000,
+            ));
+            const timestampMs = Math.max(lastAudioTimestampMs + 1, frameStartMs);
+            const sequence = audioFrameSequence++;
+            if (!sendJson({type:"input_audio.timestamp",sequence,timestamp_ms:timestampMs})) return;
+            socket.send(frame);
+            lastAudioTimestampMs = timestampMs;
+          }
         } catch (error) {
           event({type:"client.error",message:String(error?.message || error)});
         }
@@ -332,6 +347,8 @@
         ready = true;
         supportsVideoFrames = Array.isArray(payload.supports) && payload.supports.includes("input_video.frame");
         sessionStartedAt = monotonicNow();
+        audioFrameSequence = 0;
+        lastAudioTimestampMs = -1;
         if (readyResolve) readyResolve(payload);
         readyResolve = null;
         readyReject = null;
