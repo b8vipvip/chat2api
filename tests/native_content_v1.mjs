@@ -1268,5 +1268,28 @@ assert.deepEqual(dispatchNativeAction("set_pressed",toggleNode.interaction_id,tr
 assert.ok(chartLegendToggle.dispatchedEvents.includes("click"),
   "pressed toggles must click only the captured semantic button in the original Worker tab");
 
+const formAssociatedToggle=new Element("BUTTON",[],{"aria-label":"Unsafe submit toggle","aria-pressed":"false"});
+formAssociatedToggle.type="button";formAssociatedToggle.disabled=false;formAssociatedToggle.form={};
+const formToggleSnapshot=interactionApi.snapshot({
+  requestId:"req_nativeformtoggle1",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[formAssociatedToggle]),
+});
+assert.equal(formToggleSnapshot.root.children.some(node=>node.tag==="button"),false,
+  "form-associated toggle buttons must not enter the remote action surface");
+
+const lateFormToggle=new Element("BUTTON",[],{"aria-label":"Late form toggle","aria-pressed":"false"});
+lateFormToggle.type="button";lateFormToggle.disabled=false;
+const lateFormToggleSnapshot=interactionApi.snapshot({
+  requestId:"req_nativelateform1",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[lateFormToggle]),
+});
+lateFormToggle.form={};
+const lateFormToggleNode=lateFormToggleSnapshot.root.children[0];
+assert.equal(dispatchNativeAction("set_pressed",lateFormToggleNode.interaction_id,true,1,
+  "req_nativelateform1").ok,false,
+  "Worker must revalidate form association at action time");
+assert.equal(lateFormToggle.dispatchedEvents.includes("click"),false);
+
+
 console.log("native-content-request-scoped-interaction-actions-passed");
 
