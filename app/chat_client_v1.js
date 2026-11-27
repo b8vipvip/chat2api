@@ -2636,7 +2636,24 @@
         });
       }
       if (definition.provider === "github") {
-        const preview = {tool:rawName,results:[...result.results],pagination:result.pagination,preview_truncated:false};
+        const previewRows = ["github.list_pull_review_threads","github.list_pull_review_thread_comments"].includes(rawName)
+          ? result.results.map(row => ({
+              repository:String(row.repository || "").slice(0,240),
+              pull_number:row.pull_number,
+              thread_id:String(row.thread_id || "").slice(0,200),
+              resolved:row.resolved === true,outdated:row.outdated === true,
+              path:String(row.path || "").slice(0,500),
+              comments_truncated:row.comments_truncated === true,
+              comments_next_cursor:typeof row.comments_next_cursor === "string" ? row.comments_next_cursor.slice(0,1024) : null,
+              comments:Array.isArray(row.comments) ? row.comments.slice(0,2).map(comment => ({
+                id:comment.id,author:String(comment.author || "").slice(0,100),
+                body:String(comment.body || "").slice(0,240),url:String(comment.url || "").slice(0,2048),
+                in_reply_to_id:comment.in_reply_to_id,
+              })) : [],
+              url:String(row.url || "").slice(0,2048),
+            }))
+          : [...result.results];
+        const preview = {tool:rawName,results:previewRows,pagination:result.pagination,preview_truncated:false};
         while (JSON.stringify(preview).length > 2000 && preview.results.length > 1) {
           preview.results.pop();
           preview.preview_truncated = true;
@@ -2644,7 +2661,7 @@
         if (JSON.stringify(preview).length > 2000) {
           preview.results = [];
           preview.preview_truncated = true;
-          preview.excerpt = JSON.stringify(result.results[0] || {}).slice(0,700);
+          preview.excerpt = JSON.stringify(previewRows[0] || {}).slice(0,700);
         }
         if (preview.results.length !== rows.length) preview.preview_truncated = true;
         event.resultPreview = JSON.stringify(preview);
