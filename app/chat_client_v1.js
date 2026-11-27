@@ -2039,10 +2039,14 @@
           line:row.line,original_line:row.original_line,
           comments_truncated:row.comments_truncated === true,
           comments_next_cursor:typeof row.comments_next_cursor === "string" ? row.comments_next_cursor.slice(0,1024) : null,
-          comments:Array.isArray(row.comments) ? row.comments.slice(0,50).map(comment => ({
+          comments:Array.isArray(row.comments) ? row.comments.slice(0,10).map(comment => ({
             id:comment.id,author:String(comment.author || "").slice(0,100),
-            body:String(comment.body || "").slice(0,1800),created_at:comment.created_at,
-            url:String(comment.url || "").slice(0,2048),diff_hunk:String(comment.diff_hunk || "").slice(0,800),
+            body:String(comment.body || "").slice(0,500),
+            body_truncated:comment.body_truncated === true || String(comment.body || "").length > 500,
+            created_at:comment.created_at,
+            url:String(comment.url || "").slice(0,2048),
+            diff_hunk:String(comment.diff_hunk || "").slice(0,200),
+            diff_hunk_truncated:comment.diff_hunk_truncated === true || String(comment.diff_hunk || "").length > 200,
             in_reply_to_id:comment.in_reply_to_id,
           })) : [],
           url:String(row.url || "").slice(0,2048),
@@ -2200,7 +2204,7 @@
         },
         {
           name:"github.list_pull_review_thread_comments",provider:"github",toolName:"list_pull_review_thread_comments",
-          description:"Read the next page of comments for one exact PR review thread. thread_id and cursor must come from a previous github.list_pull_review_threads result; use comments_next_cursor only when comments_truncated=true. Returns up to 50 comments and pagination.next_cursor for further pages.",
+          description:"Read the next page of comments for one exact PR review thread. thread_id and cursor must come from a previous github.list_pull_review_threads result; use comments_next_cursor only when comments_truncated=true. Returns up to 10 bounded comments and pagination.next_cursor for further pages.",
           parameters:{type:"object",additionalProperties:false,properties:{repository:repositorySchema,pull_number:{type:"integer",minimum:1,maximum:2147483647},thread_id:{type:"string",minLength:1,maxLength:200},cursor:{type:"string",minLength:1,maxLength:1024}},required:["repository","pull_number","thread_id","cursor"]},
         },
       );
