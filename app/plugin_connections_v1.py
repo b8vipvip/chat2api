@@ -17,7 +17,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urlencode, urlsplit
+from urllib.parse import quote, unquote, urlencode, urlsplit
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -1115,12 +1115,30 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                         )
                         response.raise_for_status()
                         raw = response.json()
-                        data = [{
-                            "repository": str(((row.get("repository") or {}).get("full_name")) or "")[:240],
-                            "path": str(row.get("path") or "")[:500],
-                            "url": row.get("html_url"),
-                            "sha": str(row.get("sha") or "")[:40],
-                        } for row in raw.get("items", [])[:10] if isinstance(row, dict)]
+                        data = []
+                        for row in raw.get("items", [])[:10]:
+                            if not isinstance(row, dict):
+                                continue
+                            repository = str(((row.get("repository") or {}).get("full_name")) or "")[:240]
+                            path_value = str(row.get("path") or "")[:500]
+                            html_url = row.get("html_url")
+                            ref_value = None
+                            if isinstance(html_url, str) and path_value:
+                                parsed_url = urlsplit(html_url)
+                                marker = "/blob/"
+                                suffix = "/" + path_value
+                                if (parsed_url.scheme == "https" and parsed_url.netloc.lower() == "github.com"
+                                    and marker in parsed_url.path):
+                                    ref_path = parsed_url.path.split(marker, 1)[1]
+                                    if ref_path.endswith(suffix):
+                                        candidate = unquote(ref_path[:-len(suffix)])
+                                        if candidate and len(candidate) <= 255 and not any(ord(char) < 32 or ord(char) == 127 for char in candidate):
+                                            ref_value = candidate
+                            data.append({
+                                "repository": repository, "path": path_value,
+                                "url": html_url, "sha": str(row.get("sha") or "")[:40],
+                                "ref": ref_value,
+                            })
                         pagination = {
                             "page": page, "per_page": 10, "has_more": _github_has_more(response),
                             "total_count": raw.get("total_count") if type(raw.get("total_count")) is int else None,
