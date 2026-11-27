@@ -1233,6 +1233,10 @@ def test_live_video_frame_relays_owned_image_and_correlated_ack(monkeypatch, tmp
                     "live_event": "input.media.sent",
                     "item_id": "camera-frame-0",
                     "attachment_count": 1,
+                    "video_track": True,
+                    "video_track_mode": "web_rtc",
+                    "av_sync_mode": "shared_audio_context",
+                    "sync_skew_ms": 12,
                 })
                 acknowledged = live.receive_json()
                 assert acknowledged == {
@@ -1241,8 +1245,10 @@ def test_live_video_frame_relays_owned_image_and_correlated_ack(monkeypatch, tmp
                     "attachment_count": 1,
                     "sequence": 0,
                     "timestamp_ms": 250,
-                    "video_track": False,
-                    "video_track_mode": "snapshot_fallback",
+                    "video_track": True,
+                    "video_track_mode": "web_rtc",
+                    "av_sync_mode": "shared_audio_context",
+                    "sync_skew_ms": 12,
                 }
 
                 live.send_json({"type": "session.finish"})
@@ -1251,6 +1257,9 @@ def test_live_video_frame_relays_owned_image_and_correlated_ack(monkeypatch, tmp
                 # completed assistant response must not be mislabeled idle.
                 assert events[-1]["status"] == "error"
                 assert events[-1]["error"] == "GPT-Live session ended without a completed response"
+                assert events[-1]["diagnostics"]["video_av_sync_samples"] == 1
+                assert events[-1]["diagnostics"]["video_av_sync_max_abs_skew_ms"] == 12
+                assert events[-1]["diagnostics"]["video_av_sync_avg_abs_skew_ms"] == 12.0
 
 
 def test_live_voice_rejects_unapproved_attachment_mime(monkeypatch, tmp_path: Path) -> None:
