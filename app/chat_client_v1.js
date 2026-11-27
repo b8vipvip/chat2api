@@ -2033,24 +2033,30 @@
         }));
       }
       if (toolName === "list_pull_review_threads" || toolName === "list_pull_review_thread_comments") {
-        return rows.slice(0,50).map(row => ({
-          repository:row.repository,pull_number:row.pull_number,thread_id:String(row.thread_id || "").slice(0,200),
-          resolved:row.resolved === true,outdated:row.outdated === true,path:String(row.path || "").slice(0,500),
-          line:row.line,original_line:row.original_line,
-          comments_truncated:row.comments_truncated === true,
-          comments_next_cursor:typeof row.comments_next_cursor === "string" ? row.comments_next_cursor.slice(0,1024) : null,
-          comments:Array.isArray(row.comments) ? row.comments.slice(0,8).map(comment => ({
-            id:comment.id,author:String(comment.author || "").slice(0,100),
-            body:String(comment.body || "").slice(0,700),
-            body_truncated:comment.body_truncated === true || String(comment.body || "").length > 700,
-            created_at:comment.created_at,
-            url:String(comment.url || "").slice(0,2048),
-            diff_hunk:String(comment.diff_hunk || "").slice(0,200),
-            diff_hunk_truncated:comment.diff_hunk_truncated === true || String(comment.diff_hunk || "").length > 200,
-            in_reply_to_id:comment.in_reply_to_id,
-          })) : [],
-          url:String(row.url || "").slice(0,2048),
-        }));
+        return rows.slice(0,10).map(row => {
+          const summaryOnly = toolName === "list_pull_review_threads";
+          const commentLimit = summaryOnly ? 1 : 8;
+          const bodyLimit = summaryOnly ? 300 : 700;
+          const diffLimit = summaryOnly ? 120 : 200;
+          return {
+            repository:row.repository,pull_number:row.pull_number,thread_id:String(row.thread_id || "").slice(0,200),
+            resolved:row.resolved === true,outdated:row.outdated === true,path:String(row.path || "").slice(0,500),
+            line:row.line,original_line:row.original_line,
+            comments_truncated:row.comments_truncated === true,
+            comments_next_cursor:typeof row.comments_next_cursor === "string" ? row.comments_next_cursor.slice(0,1024) : null,
+            comments:Array.isArray(row.comments) ? row.comments.slice(0,commentLimit).map(comment => ({
+              id:comment.id,author:String(comment.author || "").slice(0,100),
+              body:String(comment.body || "").slice(0,bodyLimit),
+              body_truncated:comment.body_truncated === true || String(comment.body || "").length > bodyLimit,
+              created_at:comment.created_at,
+              url:String(comment.url || "").slice(0,2048),
+              diff_hunk:String(comment.diff_hunk || "").slice(0,diffLimit),
+              diff_hunk_truncated:comment.diff_hunk_truncated === true || String(comment.diff_hunk || "").length > diffLimit,
+              in_reply_to_id:comment.in_reply_to_id,
+            })) : [],
+            url:String(row.url || "").slice(0,2048),
+          };
+        });
       }
       if (toolName === "get_file_contents") {
         return rows.slice(0,1).map(row => ({
@@ -2199,7 +2205,7 @@
         },
         {
           name:"github.list_pull_review_threads",provider:"github",toolName:"list_pull_review_threads",
-          description:"Read PR review threads including resolved/outdated status, file and line locations, replies and diff context. If a thread has comments_truncated=true, continue its comments with github.list_pull_review_thread_comments using comments_next_cursor.",
+          description:"Read up to 10 PR review-thread summaries with resolved/outdated status, file and line locations, and a first-comment preview. If a thread has comments_truncated=true, continue its comments with github.list_pull_review_thread_comments using comments_next_cursor.",
           parameters:{type:"object",additionalProperties:false,properties:{repository:repositorySchema,pull_number:{type:"integer",minimum:1,maximum:2147483647},cursor:{type:"string",minLength:1,maxLength:1024}},required:["repository","pull_number"]},
         },
         {
