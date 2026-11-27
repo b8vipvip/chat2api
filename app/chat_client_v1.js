@@ -2407,10 +2407,10 @@
       const pull_number = positiveNumber(args.pull_number);
       const thread_id = typeof args.thread_id === "string" ? args.thread_id.trim() : "";
       const cursor = typeof args.cursor === "string" ? args.cursor : "";
-      if (!thread_id || thread_id.length > 200 || /[\\u0000-\\u001f\\u007f]/.test(thread_id)) {
+      if (!thread_id || thread_id.length > 200 || /[\u0000-\u001f\u007f]/.test(thread_id)) {
         throw new Error("GitHub review thread ID 无效");
       }
-      if (!cursor || cursor.length > 1024 || /[\\u0000-\\u001f\\u007f]/.test(cursor)) {
+      if (!cursor || cursor.length > 1024 || /[\u0000-\u001f\u007f]/.test(cursor)) {
         throw new Error("GitHub review thread cursor 无效");
       }
       return {repository,pull_number,thread_id,cursor};
