@@ -678,7 +678,7 @@ test("GitHub Issue search cannot invent a repository qualifier", async () => {
   const h=makeHarness({
     planner:[JSON.stringify({tool_calls:[{
       name:"github.search_issues",arguments:{query:"repo:unmentioned/secret is:open"},
-    }]})],
+    }]}),'{"tool_calls":[]}'],
   });
   await h.api.runAutonomousPluginToolLoop(
     [{role:"user",content:"搜索我有权限访问的 GitHub issue"}],h.assistant,"key",h.recoveryApi,"req",
