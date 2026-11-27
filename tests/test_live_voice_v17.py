@@ -1236,7 +1236,7 @@ def test_live_video_frame_relays_owned_image_and_correlated_ack(monkeypatch, tmp
                     "attachment_count": 1,
                     "video_track": True,
                     "video_track_mode": "web_rtc",
-                    "av_sync_mode": "shared_audio_context",
+                    "av_sync_mode": "shared_audio_context_manual",
                     "sync_skew_ms": 12,
                 })
                 acknowledged = live.receive_json()
@@ -1248,7 +1248,7 @@ def test_live_video_frame_relays_owned_image_and_correlated_ack(monkeypatch, tmp
                     "timestamp_ms": 250,
                     "video_track": True,
                     "video_track_mode": "web_rtc",
-                    "av_sync_mode": "shared_audio_context",
+                    "av_sync_mode": "shared_audio_context_manual",
                     "sync_skew_ms": 12,
                 }
 
