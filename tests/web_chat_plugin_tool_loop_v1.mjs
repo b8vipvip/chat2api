@@ -804,3 +804,29 @@ test("a prior review thread result authorizes only its own comment continuation"
   assert.equal(h.calls.length,1);
   assert.equal(h.assistant.toolEvents[0].status,"completed");
 });
+
+
+test("GitHub code search requires preserving the exact result branch when reading a file", async () => {
+  const h=makeHarness({
+    planner:[
+      JSON.stringify({tool_calls:[{name:"github.search_code",arguments:{query:"repo:acme/project README.md"}}]}),
+      JSON.stringify({tool_calls:[{name:"github.get_file_contents",arguments:{
+        repository:"acme/project",path:"README.md",
+      }}]}),
+      '{"tool_calls":[]}',
+    ],
+    toolHandler:async (provider,tool,args) => {
+      assert.equal(tool,"search_code");
+      return {data:[{
+        repository:"acme/project",path:"README.md",ref:"feature/review-fix",
+        url:"https://github.com/acme/project/blob/feature/review-fix/README.md",
+      }]};
+    },
+  });
+  await h.api.runAutonomousPluginToolLoop(
+    [{role:"user",content:"检查 acme/project 的 README 文件"}],h.assistant,"key",h.recoveryApi,"req",
+  );
+  assert.equal(h.calls.length,1,"a search result on a feature branch must not silently read the default branch");
+  assert.equal(h.assistant.toolEvents[1].status,"failed");
+  assert.match(h.assistant.toolEvents[1].output,/准确的 repository\/path/);
+});
