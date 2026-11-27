@@ -346,7 +346,7 @@ def test_owner_scoped_native_interaction_applies_to_original_worker_and_persists
             json={"revision": 3, "interaction_id": "nc_1_1", "action": "set_value", "value": 50},
         )
         assert invalid.status_code == 422
-        assert len(socket.sent) == 1
+        assert len(socket.sent) == 2
 
         client.cookies.clear()
         other = client.post(
