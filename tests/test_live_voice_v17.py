@@ -251,11 +251,14 @@ def test_live_voice_stream_relays_pcm_both_directions(tmp_path: Path) -> None:
                 assert ready["output_audio_format"] == "pcm16le-24000-mono"
 
                 microphone_pcm = b"\x01\x02" * 320
+                live.send_json({"type": "input_audio.timestamp", "sequence": 0, "timestamp_ms": 0})
                 live.send_bytes(microphone_pcm)
                 inbound = extension.receive_json()
                 assert inbound["type"] == "voice.live.audio"
                 assert base64.b64decode(inbound["pcm_base64"]) == microphone_pcm
                 assert inbound["sample_rate"] == 16000
+                assert inbound["sequence"] == 0
+                assert inbound["timestamp_ms"] == 0
 
                 extension.send_json({
                     "type": "image.progress", "kind": "voice-live", "request_id": request_id,
@@ -686,10 +689,18 @@ def test_live_voice_bounds_pcm16_frames_and_keeps_session_after_bad_input(tmp_pa
                 assert oversized["code"] == "INVALID_INPUT_AUDIO_FRAME"
 
                 valid_pcm = b"\x01\x02" * 320
+                live.send_json({"type":"input_audio.timestamp","sequence":0,"timestamp_ms":50})
+                live.send_json({"type":"input_audio.timestamp","sequence":1,"timestamp_ms":60})
+                timestamp_error = live.receive_json()
+                assert timestamp_error["code"] == "INVALID_INPUT_AUDIO_TIMESTAMP"
+                live.send_bytes(valid_pcm)  # discard the PCM paired with the invalid timestamp
+                live.send_json({"type":"input_audio.timestamp","sequence":1,"timestamp_ms":60})
                 live.send_bytes(valid_pcm)
                 forwarded = extension.receive_json()
                 assert forwarded["type"] == "voice.live.audio"
                 assert base64.b64decode(forwarded["pcm_base64"]) == valid_pcm
+                assert forwarded["sequence"] == 1
+                assert forwarded["timestamp_ms"] == 60
 
                 response_id = "voice-pcm-bounded-response"
                 extension.send_json({
@@ -1036,7 +1047,8 @@ def test_live_voice_drops_pcm_frame_queued_before_terminal_close():
 
 def test_voice_worker_event_ack_is_a_server_broker_ack_not_local_socket_send(tmp_path: Path) -> None:
     """Voice ACK is emitted only after the authenticated Broker accepts the event."""
-    with TestClient(app_live(tmp_path)) as client:
+    app = app_live(tmp_path)
+    with TestClient(app) as client:
         managed_key = create_managed_key(client)
         client_id, extension_token = pair_extension(client)
         with client.websocket_connect(f"/ws/extensions/{client_id}?token={extension_token}") as extension:
@@ -1230,6 +1242,10 @@ def test_live_video_frame_relays_owned_image_and_correlated_ack(monkeypatch, tmp
                     "live_event": "input.media.sent",
                     "item_id": "camera-frame-0",
                     "attachment_count": 1,
+                    "video_track": True,
+                    "video_track_mode": "web_rtc",
+                    "av_sync_mode": "shared_audio_context_manual",
+                    "sync_skew_ms": 12,
                 })
                 acknowledged = live.receive_json()
                 assert acknowledged == {
@@ -1238,8 +1254,10 @@ def test_live_video_frame_relays_owned_image_and_correlated_ack(monkeypatch, tmp
                     "attachment_count": 1,
                     "sequence": 0,
                     "timestamp_ms": 250,
-                    "video_track": False,
-                    "video_track_mode": "snapshot_fallback",
+                    "video_track": True,
+                    "video_track_mode": "web_rtc",
+                    "av_sync_mode": "shared_audio_context_manual",
+                    "sync_skew_ms": 12,
                 }
 
                 live.send_json({"type": "session.finish"})
@@ -1248,6 +1266,11 @@ def test_live_video_frame_relays_owned_image_and_correlated_ack(monkeypatch, tmp
                 # completed assistant response must not be mislabeled idle.
                 assert events[-1]["status"] == "error"
                 assert events[-1]["error"] == "GPT-Live session ended without a completed response"
+
+    row = app.state.telemetry.get(request_id)
+    assert row["diagnostics"]["video_av_sync_samples"] == 1
+    assert row["diagnostics"]["video_av_sync_max_abs_skew_ms"] == 12
+    assert row["diagnostics"]["video_av_sync_avg_abs_skew_ms"] == 12.0
 
 
 def test_live_voice_rejects_unapproved_attachment_mime(monkeypatch, tmp_path: Path) -> None:

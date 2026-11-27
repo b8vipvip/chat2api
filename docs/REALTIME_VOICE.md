@@ -62,6 +62,14 @@ WebSocket 建立后，第一帧必须是 JSON：
 
 建议每帧 20–100 ms，避免一次发送很大的音频块。
 
+新版本 Worker 客户端会在每个 PCM binary frame 前发送一条配对时钟控制帧：
+
+```json
+{"type":"input_audio.timestamp","sequence":12,"timestamp_ms":1040}
+```
+
+`sequence` 和 `timestamp_ms` 必须严格递增；控制帧必须紧邻且只对应下一条 PCM binary frame。服务端校验配对关系后才转发时钟元数据。旧客户端仍可发送不带时钟控制帧的 PCM，Worker 会退回到按到达顺序播放。
+
 ## 下行音频
 
 服务端将 ChatGPT Voice 的远端 WebRTC 音频重采样为：
@@ -190,7 +198,11 @@ Web Chat 启动 GPT-Live 时，会在打开 ChatGPT Voice UI 之前，先向该�
 5. 每帧必须是当前 API Key 所有的单张 JPEG/PNG/WebP 图片，单帧不超过 2 MiB。序号和时间戳必须严格递增；每个会话最多 64 帧、最长时间轴 6 小时。重复、乱序、超速、跨 Key 或不支持的图片会被拒绝。
 6. 为避免在 ChatGPT 页面上传尚未完成时堆积视频帧，客户端必须等待当前帧的 `input_video.frame.sent` 确认后再发送下一帧。
 
-**重要边界：这不是原生 WebRTC 视频轨道透传。** 每个采样帧会成为同一 Voice 会话中的独立图像输入，因此模型看到的是有时间戳的连续快照，而不是连续视频像素流；帧率、清晰度和同步精度由客户端采样策略及上传延迟决定。当前不支持 MP4/任意视频文件上传、音视频帧级同步或将摄像头轨道直接桥接进 ChatGPT WebRTC。原生视频轨道仍需单独开发和真实浏览器验收。
+**Worker 交付方式：** 上传的帧由 Worker 从 FileStore 按授权 `file_id` 取回，再绘制到 MAIN world 的合成 Canvas camera track；该 track 会挂接到 ChatGPT Voice 的上游 WebRTC PeerConnection。浏览器支持 `CanvasCaptureMediaStreamTrack.requestFrame()` 时采用手动逐帧采集；否则退回定时 5 FPS capture。若 sender 丢失或未能挂接，才退回同一 Voice 会话的图片/文字快照路径。成功的 `input_video.frame.sent` 会回传 `video_track`、`video_track_mode`、`av_sync_mode` 和可用时的 `sync_skew_ms`。
+
+**音视频时钟：** 新版客户端为 PCM 块和视频帧使用同一个 session-relative monotonic timestamp。Worker 为上行 PCM 建立 160 ms 有界抖动缓冲，并将合成音频播放时间作为视频帧的调度时钟；手动模式会在目标 AudioContext 时间点请求 Canvas track 采帧。服务端记录 `video_av_sync_samples`、最大绝对调度偏差和平均绝对调度偏差。这里的 `sync_skew_ms` 是浏览器本地 AudioContext 调度偏差，不是上游 WebRTC 编码、网络传输或模型接收端的端到端同步证明。
+
+**仍然存在的边界：** 这不是 30/60 FPS 的原始摄像头轨道直通，也不接受 MP4/任意视频文件。采样上限仍为 5 FPS，实际清晰度与实时性受文件上传延迟影响；定时采集 fallback 的同步精度低于手动 requestFrame 模式。上游 PeerConnection 是否持续保留该 sender、服务端重启后的活动通话恢复，以及真实浏览器中的端到端 A/V 偏差仍需 staging/实机验收。
 
 补充：ChatGPT 页面自身发起的 `getUserMedia({audio, video})` 仍由 MAIN-world Voice Hook 保留真实视频约束和原生 camera track；麦克风替换只替换音频轨道，不应丢弃视频轨道。`tests/voice_camera_track_passthrough_v1.mjs` 对此边界做了独立回归。它不代表 Web Chat API 已自动采集摄像头，也不把 `input_video.frame` 采样帧协议描述成 WebRTC 视频轨道。
 ### 测试场

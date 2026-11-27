@@ -407,6 +407,9 @@
         video_track_mode: "web_rtc",
         sequence: Number(videoFrame.sequence),
         timestamp_ms: Number(videoFrame.timestamp_ms),
+        av_sync_mode: String(received.av_sync_mode || "arrival_fallback"),
+        ...(Number.isFinite(Number(received.sync_skew_ms))
+          ? {sync_skew_ms:Number(received.sync_skew_ms)} : {}),
       });
       return true;
     } catch (error) {
