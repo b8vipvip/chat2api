@@ -882,8 +882,8 @@ test("GitHub tool results explicitly report bounded or omitted records", async (
   const toolMessage=messages.find(row=>row.role==="tool");
   assert.ok(toolMessage);
   const result=JSON.parse(toolMessage.content);
-  assert.equal(result.result.results_truncated,true);
-  assert.ok(result.result.omitted_results_count > 0);
+  assert.equal(result.results_truncated,true);
+  assert.ok(result.omitted_results_count > 0);
   assert.equal(h.assistant.toolEvents[0].status,"completed");
   assert.match(h.assistant.toolEvents[0].output,/未传给模型/);
 });
