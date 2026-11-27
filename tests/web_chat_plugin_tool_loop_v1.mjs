@@ -887,3 +887,27 @@ test("GitHub tool results explicitly report bounded or omitted records", async (
   assert.equal(h.assistant.toolEvents[0].status,"completed");
   assert.match(h.assistant.toolEvents[0].output,/未传给模型/);
 });
+
+
+test("GitHub review thread history previews retain every thread and its cursor", async () => {
+  const h=makeHarness({
+    planner:[
+      JSON.stringify({tool_calls:[{name:"github.list_pull_review_threads",arguments:{
+        repository:"acme/project",pull_number:12,
+      }}]}),
+      '{"tool_calls":[]}',
+    ],
+    toolHandler:async () => ({data:Array.from({length:10},(_,i)=>({
+      repository:"acme/project",pull_number:12,thread_id:"PRRT_" + i,
+      path:"src/file-" + i + ".py",resolved:false,outdated:false,
+      comments_truncated:true,comments_next_cursor:"cursor-" + i,
+    })),pagination:{page:1,per_page:10,has_more:false,next_cursor:null}}),
+  });
+  await h.api.runAutonomousPluginToolLoop(
+    [{role:"user",content:"检查 acme/project 的 PR #12 全部审查线程"}],h.assistant,"key",h.recoveryApi,"req",
+  );
+  const preview=JSON.parse(h.assistant.toolEvents[0].resultPreview);
+  assert.equal(preview.results.length,10);
+  assert.equal(preview.results[9].thread_id,"PRRT_9");
+  assert.equal(preview.results[9].comments_next_cursor,"cursor-9");
+});
