@@ -550,6 +550,7 @@ def test_github_repository_issue_pull_request_commit_and_file_read_tools(tmp_pat
         assert responses[4][0]["patch"].startswith("@@ -1 +1 @@")
         assert responses[5][0]["sha"] == "a" * 40
         assert responses[6][0]["path"] == "docs/hello world.md"
+        assert responses[6][0]["ref"] == "main"
         assert responses[7][0]["content"] == "print('hello')\n"
         assert len(fake_clients) == 8
 
@@ -1127,3 +1128,128 @@ def test_github_extended_read_tools_are_bounded_and_use_connected_user(tmp_path:
                                    json={"repository": "acme/project", **args})
             assert response.status_code == 422, response.text
         assert len(calls) == len(cases)
+
+
+def test_github_actions_releases_tags_issue_search_and_review_threads(tmp_path: Path, monkeypatch):
+    app = make_app(tmp_path)
+    store = app.state.plugin_oauth_store
+    store.save_provider("github", enabled=True, client_id="gh-client",
+                        client_secret="gh-secret", private_repos=False)
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, payload, headers=None):
+            self.payload = payload
+            self.headers = headers or {}
+        def raise_for_status(self):
+            pass
+        def json(self):
+            return self.payload
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return False
+        async def get(self, url, **kwargs):
+            assert kwargs["headers"]["Authorization"] == "Bearer own-token"
+            calls.append(("GET", url, kwargs.get("params")))
+            if url.endswith("/search/issues"):
+                assert kwargs["params"]["q"] == "repo:acme/project is:open bug"
+                return FakeResponse({"total_count": 1, "incomplete_results": False, "items": [{
+                    "number": 7, "title": "Fix bug", "state": "open", "html_url": "https://github.com/acme/project/issues/7",
+                    "repository_url": "https://api.github.com/repos/acme/project", "body": "Issue body",
+                    "labels": [{"name": "bug"}],
+                }]})
+            if url.endswith("/releases"):
+                return FakeResponse([{"id": 9, "name": "v1", "tag_name": "v1.0.0", "draft": False,
+                                      "prerelease": False, "body": "Release notes", "html_url": "https://github.com/acme/project/releases/tag/v1.0.0",
+                                      "assets": [{"name": "app.zip", "size": 123, "download_count": 4}]}])
+            if url.endswith("/tags"):
+                return FakeResponse([{"name": "v1.0.0", "commit": {"sha": "a" * 40}}])
+            if url.endswith("/actions/runs"):
+                return FakeResponse({"total_count": 1, "workflow_runs": [{
+                    "id": 987654321, "name": "CI", "display_title": "Build", "run_number": 8,
+                    "run_attempt": 1, "event": "push", "status": "completed", "conclusion": "success",
+                    "head_branch": "main", "head_sha": "a" * 40, "actor": {"login": "octocat"},
+                    "html_url": "https://github.com/acme/project/actions/runs/987654321",
+                }]}, {"Link": '<https://api.github.com/next>; rel="next"'})
+            if url.endswith("/actions/runs/987654321/jobs"):
+                return FakeResponse({"total_count": 1, "jobs": [{
+                    "id": 3, "name": "Tests", "status": "completed", "conclusion": "success",
+                    "steps": [{"name": "pytest", "number": 1, "status": "completed", "conclusion": "success"}],
+                }]})
+            raise AssertionError(url)
+        async def post(self, url, **kwargs):
+            assert kwargs["headers"]["Authorization"] == "Bearer own-token"
+            calls.append(("POST", url, kwargs.get("json")))
+            variables = kwargs["json"]["variables"]
+            assert variables["owner"] == "acme" and variables["name"] == "project"
+            assert variables["number"] == 12
+            if variables.get("after"):
+                assert variables["after"] == "opaque-next-cursor"
+                return FakeResponse({"data": {"repository": {"pullRequest": {"reviewThreads": {
+                    "nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None},
+                }}}}})
+            return FakeResponse({"data": {"repository": {"pullRequest": {"reviewThreads": {
+                "nodes": [{
+                    "id": "PRRT_kw123", "isResolved": False, "isOutdated": True,
+                    "path": "src/main.py", "line": 17, "originalLine": 16,
+                    "comments": {"nodes": [{
+                        "databaseId": 44, "author": {"login": "reviewer"}, "body": "Please fix",
+                        "url": "https://github.com/acme/project/pull/12#discussion_r44",
+                        "diffHunk": "@@ -1 +1 @@", "replyTo": None,
+                    }], "pageInfo": {"hasNextPage": True}},
+                }],
+                "pageInfo": {"hasNextPage": True, "endCursor": "opaque-next-cursor"},
+            }}}}})
+
+    with TestClient(app) as client:
+        user = register(client, "github-read-expansion@example.com")
+        store.save_connection(user["user_id"], "github", "42", "octocat",
+                              "own-token", "", ["read:user"], None)
+        assert client.post("/api/user/login", json={"email": "github-read-expansion@example.com", "password": PASSWORD}, headers=ORIGIN).status_code == 200
+        monkeypatch.setattr("app.plugin_connections_v1.httpx.AsyncClient", FakeAsyncClient)
+
+        def call(tool, payload):
+            response = client.post("/api/user/plugins/github/tools/" + tool, headers=ORIGIN, json=payload)
+            assert response.status_code == 200, response.text
+            return response.json()
+
+        issue = call("search_issues", {"query": "is:open bug", "repository": "acme/project"})
+        assert issue["data"][0]["number"] == 7
+        assert issue["data"][0]["repository"] == "acme/project"
+        assert issue["pagination"]["total_count"] == 1
+        release = call("list_releases", {"repository": "acme/project"})
+        assert release["data"][0]["assets"][0]["name"] == "app.zip"
+        tag = call("list_tags", {"repository": "acme/project"})
+        assert tag["data"][0]["sha"] == "a" * 40
+        runs = call("list_workflow_runs", {"repository": "acme/project", "branch": "main", "status": "completed"})
+        assert runs["data"][0]["conclusion"] == "success"
+        assert runs["pagination"]["has_more"] is True
+        assert runs["pagination"]["total_count"] == 1
+        jobs = call("list_workflow_jobs", {"repository": "acme/project", "run_id": 987654321})
+        assert jobs["data"][0]["steps"][0]["name"] == "pytest"
+        threads = call("list_pull_review_threads", {"repository": "acme/project", "pull_number": 12})
+        assert threads["data"][0]["resolved"] is False
+        assert threads["data"][0]["comments"][0]["id"] == 44
+        assert threads["data"][0]["comments_truncated"] is True
+        assert threads["pagination"]["next_cursor"] == "opaque-next-cursor"
+        threads_next = call("list_pull_review_threads", {
+            "repository": "acme/project", "pull_number": 12, "cursor": "opaque-next-cursor",
+        })
+        assert threads_next["pagination"]["has_more"] is False
+        assert calls[-1][2]["variables"]["after"] == "opaque-next-cursor"
+
+        for tool, payload in [
+            ("search_issues", {"query": "is:open bug repo:other/project", "repository": "acme/project"}),
+            ("list_workflow_runs", {"repository": "acme/project", "status": "invalid"}),
+            ("list_workflow_runs", {"repository": "acme/project", "status": []}),
+            ("list_workflow_jobs", {"repository": "acme/project", "run_id": True}),
+            ("list_pull_review_threads", {"repository": "acme/project", "pull_number": 12, "cursor": "bad\nvalue"}),
+        ]:
+            response = client.post("/api/user/plugins/github/tools/" + tool, headers=ORIGIN, json=payload)
+            assert response.status_code == 422, response.text
+        assert len(calls) == 7
