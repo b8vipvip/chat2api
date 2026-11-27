@@ -323,7 +323,10 @@
     let accepted = readValue();
     let pending = false;
     element.addEventListener(eventName, async () => {
-      if (pending) return;
+      if (pending) {
+        try { restoreValue(accepted); } catch {}
+        return;
+      }
       const next = readValue();
       if (Object.is(next,accepted)) return;
       const previous = accepted;
