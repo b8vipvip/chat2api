@@ -258,7 +258,6 @@ def install_web_chat_features_v1(app: Any) -> Any:
             **_PRIVATE_HEADERS, "X-Content-Type-Options": "nosniff",
         })
 
-    @app.get("/api/user/chat/requests/{request_id}/native-content/events")
     pending_native_interactions: dict[str, dict[str, Any]] = {}
     native_interaction_locks: dict[str, asyncio.Lock] = {}
 
@@ -471,6 +470,7 @@ def install_web_chat_features_v1(app: Any) -> Any:
                 **({"warning": "interaction applied but durable snapshot persistence is pending"} if not persisted else {}),
             }, headers={**_PRIVATE_HEADERS, "X-Content-Type-Options": "nosniff"})
 
+    @app.get("/api/user/chat/requests/{request_id}/native-content/events")
     async def user_chat_native_content_events(request_id: str, request: Request) -> StreamingResponse:
         accounts, user, owner = owned_request(request_id, request)
         telemetry = request.app.state.telemetry
