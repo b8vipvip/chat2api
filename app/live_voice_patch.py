@@ -507,6 +507,10 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
         pending_video_frames: dict[str, tuple[int, int, float, int]] = {}
         last_video_sequence = -1
         last_video_timestamp_ms = -1
+        pending_input_audio_clock: tuple[int, int] | None = None
+        last_input_audio_sequence = -1
+        last_input_audio_timestamp_ms = -1
+        discard_next_input_audio_payload = False
         last_video_dispatch_mono = 0.0
         video_frame_count = 0
         video_frame_bytes = 0
@@ -1057,6 +1061,11 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 payload = message.get("bytes")
                 if payload is not None:
                     if payload:
+                        audio_clock = pending_input_audio_clock
+                        pending_input_audio_clock = None
+                        if discard_next_input_audio_payload:
+                            discard_next_input_audio_payload = False
+                            continue
                         if len(payload) > MAX_LIVE_PCM_FRAME_BYTES or len(payload) % 2:
                             await send_json({
                                 "type": "error", "code": "INVALID_INPUT_AUDIO_FRAME",
@@ -1073,6 +1082,10 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                                 "session_id": session_id,
                                 "pcm_base64": base64.b64encode(payload).decode("ascii"),
                                 "sample_rate": 16000,
+                                **({
+                                    "sequence": audio_clock[0],
+                                    "timestamp_ms": audio_clock[1],
+                                } if audio_clock else {}),
                             },
                         )
                     continue
@@ -1103,7 +1116,29 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     })
                     continue
                 control_type = str(control.get("type") or "")
-                if control_type == "response.cancel":
+                if control_type == "input_audio.timestamp":
+                    sequence = control.get("sequence")
+                    timestamp_ms = control.get("timestamp_ms")
+                    valid_clock = (
+                        type(sequence) is int and 0 <= sequence <= 2_147_483_647
+                        and type(timestamp_ms) is int and 0 <= timestamp_ms <= MAX_LIVE_VIDEO_DURATION_MS
+                        and sequence > last_input_audio_sequence
+                        and timestamp_ms > last_input_audio_timestamp_ms
+                    )
+                    if pending_input_audio_clock is not None or not valid_clock:
+                        pending_input_audio_clock = None
+                        discard_next_input_audio_payload = True
+                        await send_json({
+                            "type": "error",
+                            "code": "INVALID_INPUT_AUDIO_TIMESTAMP",
+                            "message": "Audio sequence/timestamp must be valid, monotonic and paired with exactly one PCM frame",
+                            "retryable": True,
+                        })
+                        continue
+                    pending_input_audio_clock = (sequence, timestamp_ms)
+                    last_input_audio_sequence = sequence
+                    last_input_audio_timestamp_ms = timestamp_ms
+                elif control_type == "response.cancel":
                     await registry.send(selected_client, {
                         "type": "voice.live.cancel_response",
                         "request_id": request_id,
