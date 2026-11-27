@@ -501,7 +501,10 @@
         throw new Error("Live video session ended before the frame could be rendered");
       }
       const avSync = await waitForLiveAVFrameClock(ownerRequestId,timestampMs);
-      const avSyncMode = avSync.mode;
+      const avSyncMode = avSync.mode === "shared_audio_context"
+        ? (state.liveVideoFrameRequestMode === "manual"
+          ? "shared_audio_context_manual" : "shared_audio_context_timed_5fps")
+        : avSync.mode;
       const syncSkewMs = avSync.syncSkewMs;
       const context = state.liveVideoContext;
       const canvas = state.liveVideoCanvas;
