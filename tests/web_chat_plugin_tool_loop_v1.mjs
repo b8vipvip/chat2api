@@ -639,10 +639,21 @@ test("new GitHub tools reject unsafe filters, cursors and workflow IDs", () => {
 
 
 test("completed GitHub plugin evidence is available to later turns with stale-data warnings", async () => {
-  const h=makeHarness({planner:[
-    JSON.stringify({tool_calls:[{name:"github.list_workflow_jobs",arguments:{repository:"acme/project",run_id:987654321}}]}),
-    '{"tool_calls":[]}',
-  ]});
+  const h=makeHarness({
+    planner:[
+      JSON.stringify({tool_calls:[
+        {name:"github.list_workflow_jobs",arguments:{repository:"acme/project",run_id:987654321}},
+        {name:"github.get_file_contents",arguments:{repository:"acme/project",path:"README.md",ref:"main"}},
+      ]}),
+      '{"tool_calls":[]}',
+    ],
+    toolHandler:async (provider,tool,args) => {
+      if (tool === "list_workflow_jobs") return {data:[{name:"Tests",status:"completed",conclusion:"success"}]};
+      assert.equal(tool,"get_file_contents");
+      assert.equal(args.ref,"main");
+      return {data:[{repository:"acme/project",path:"README.md",content:"Previous README",url:"https://github.com/acme/project/blob/main/README.md"}]};
+    },
+  });
   h.state.conversations=[{
     id:"conversation-1",
     messages:[{
@@ -659,6 +670,11 @@ test("completed GitHub plugin evidence is available to later turns with stale-da
           status:"completed",arguments:'{"repository":"acme/project"}',output:"完成",
           resultPreview:'{"tool":"github.list_workflow_runs","results":[{"id":987654321,"branch":"main"}]}',
         },
+        {
+          toolName:"GitHub · search_code",callId:"plugin_code",resultId:"plugin_code_result",
+          status:"completed",arguments:'{"query":"repo:acme/project README.md"}',output:"完成",
+          resultPreview:'{"tool":"github.search_code","results":[{"repository":"acme/project","path":"README.md","ref":"main","url":"https://github.com/acme/project/blob/main/README.md"}]}',
+        },
       ],
     }],
   }];
@@ -669,8 +685,8 @@ test("completed GitHub plugin evidence is available to later turns with stale-da
   assert.ok(context,"previous completed plugin evidence must be included in planner context");
   assert.match(context.content,/Previously found issue/);
   assert.match(context.content,/旧结果|最新状态|重新查询/);
-  assert.equal(h.calls.length,1,"a run ID discovered in a prior turn should remain provenance-checked and reusable");
-  assert.equal(h.calls[0][1],"list_workflow_jobs");
+  assert.equal(h.calls.length,2,"prior workflow and code-search evidence should authorize only their exact follow-up reads");
+  assert.deepEqual(h.calls.map(row=>row[1]),["list_workflow_jobs","get_file_contents"]);
 });
 
 
