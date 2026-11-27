@@ -1259,7 +1259,7 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                             "state": row.get("state"), "is_pull_request": isinstance(row.get("pull_request"), dict),
                             "url": row.get("html_url"), "body": str(row.get("body") or "")[:1800],
                             "body_truncated": len(str(row.get("body") or "")) > 1800,
-                            "labels": [str(label.get("name") or "")[:100] for label in row.get("labels", [])[:10] if isinstance(label, dict)],
+                            "labels": [str(label.get("name") or "")[:100] for label in (row.get("labels") or [])[:10] if isinstance(label, dict)],
                             "updated_at": row.get("updated_at"),
                         } for row in raw.get("items", [])[:10] if isinstance(row, dict)]
                         pagination = {
@@ -1287,7 +1287,7 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                                 params["branch"] = branch_value.strip()
                             status_value = payload.get("status")
                             if status_value is not None:
-                                if status_value not in {"queued", "in_progress", "completed", "waiting", "requested", "pending"}:
+                                if not isinstance(status_value, str) or status_value not in {"queued", "in_progress", "completed", "waiting", "requested", "pending"}:
                                     raise HTTPException(422, "workflow status is invalid", headers=_PRIVATE_HEADERS)
                                 params["status"] = status_value
                         response = await client.get(
