@@ -3662,7 +3662,7 @@
       await delay(120);
     }
 
-    if (active.cancelled) await emit({ type: "chat.cancelled", request_id: active.requestId, reason: "Cancelled by API client" });
+    if (active.cancelled) await emit({ type: "chat.cancelled", request_id: active.requestId, reason: String(active.cancelReason || "Cancelled by API client") });
     else await emit({ type: "chat.error", request_id: active.requestId, error: fileCreationRequested
       ? "ChatGPT did not deliver all required verified downloadable file bytes before the deadline"
       : imageBuildArtifactObserved
