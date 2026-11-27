@@ -314,7 +314,13 @@ def install_web_chat_features_v1(app: Any) -> Any:
             if type(value) not in (int, float) or not math.isfinite(value):
                 raise HTTPException(status_code=422, detail="invalid range value", headers=_PRIVATE_HEADERS)
             minimum, maximum, step = (control.get(key) for key in ("min", "max", "step"))
-            units = (value - minimum) / step if step else math.inf
+            if (
+                any(type(item) not in (int, float) or not math.isfinite(item)
+                    for item in (minimum, maximum, step))
+                or minimum >= maximum or step <= 0
+            ):
+                raise HTTPException(status_code=422, detail="native range metadata is invalid", headers=_PRIVATE_HEADERS)
+            units = (value - minimum) / step
             if (value < minimum or value > maximum
                     or not math.isfinite(units) or abs(units - round(units)) > 1e-6):
                 raise HTTPException(status_code=422, detail="range value outside allowed steps", headers=_PRIVATE_HEADERS)
@@ -344,18 +350,21 @@ def install_web_chat_features_v1(app: Any) -> Any:
             control["checked"] = value
         elif node.get("tag") == "input" and control.get("kind") == "radio":
             group = control.get("group")
-            stack = [snapshot.get("root")]
-            while stack:
-                current = stack.pop()
-                if not isinstance(current, dict):
-                    continue
-                other = current.get("control")
-                if (current.get("tag") == "input" and isinstance(other, dict)
-                        and other.get("kind") == "radio" and other.get("group") == group):
-                    other["checked"] = current is node
-                children = current.get("children")
-                if isinstance(children, list):
-                    stack.extend(children)
+            if isinstance(group, str) and group:
+                stack = [snapshot.get("root")]
+                while stack:
+                    current = stack.pop()
+                    if not isinstance(current, dict):
+                        continue
+                    other = current.get("control")
+                    if (current.get("tag") == "input" and isinstance(other, dict)
+                            and other.get("kind") == "radio" and other.get("group") == group):
+                        other["checked"] = current is node
+                    children = current.get("children")
+                    if isinstance(children, list):
+                        stack.extend(children)
+            else:
+                control["checked"] = True
         elif node.get("tag") == "input" and control.get("kind") == "range":
             control["value"] = value
         elif node.get("tag") == "select":
