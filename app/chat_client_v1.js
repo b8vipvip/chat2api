@@ -900,7 +900,7 @@
     return events.reduce((weight,item) => weight
       + (item?.status === "running" ? 1 : 10)
       + String(item?.arguments || "").length
-      + String(item?.output || "").length,0);
+      + String(item?.output || "").length + String(item?.resultPreview || "").length,0);
   }
 
   function mergeConversation(serverRow, localRow) {
@@ -2047,7 +2047,7 @@
         },
         {
           name:"github.get_file_contents",provider:"github",toolName:"get_file_contents",
-          description:"Read a text file from a repository. The exact repository and path must first be returned by github.search_code in this turn; then provide that exact repository and path. An optional ref may be supplied.",
+          description:"Read a text file from a repository. The exact repository and path must first be returned by github.search_code or github.list_directory in this turn; preserve the directory ref if supplied. An optional ref may be supplied.",
           parameters:{type:"object",additionalProperties:false,properties:{repository:repositorySchema,path:{type:"string",minLength:1,maxLength:500},ref:{type:"string",minLength:1,maxLength:255}},required:["repository","path"]},
         },
         {
@@ -2409,7 +2409,7 @@
         + (pagination ? " 第 " + pagination.page + " 页" + (pagination.has_more ? "，还有更多结果" : "，已到末页") : "");
       if (references.length) {
         event.references = references;
-        assistant.references = [...(assistant.references || []),...references].slice(0,8);
+        assistant.references = [...(assistant.references || []),...references].filter((ref,index,all) => all.findIndex(other => other.url === ref.url) === index).slice(0,8);
       }
       result = {
         ok:true,tool:rawName,arguments:args,
