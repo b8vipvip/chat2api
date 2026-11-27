@@ -1255,6 +1255,7 @@ def test_github_actions_releases_tags_issue_search_and_review_threads(tmp_path: 
         assert threads["data"][0]["comments_truncated"] is True
         assert threads["data"][0]["comments_next_cursor"] == "comment-next-cursor"
         assert threads["pagination"]["next_cursor"] == "opaque-next-cursor"
+        assert threads["pagination"]["per_page"] == 10
         threads_next = call("list_pull_review_threads", {
             "repository": "acme/project", "pull_number": 12, "cursor": "opaque-next-cursor",
         })
