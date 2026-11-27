@@ -317,7 +317,7 @@
         !Array.isArray(snapshot.files) || snapshot.files.length > 10) return false;
     return validateNode(snapshot.root,0,"",{nodes:0,chars:0,interactionIds:new Set()});
   }
-  function bindNativeInteraction(element,value,context,eventName,action,readValue,restoreValue) {
+  function bindNativeInteraction(element,value,context,eventName,action,readValue,restoreValue,onAccepted=null) {
     const interactionId = String(value?.interaction_id || "");
     if (!interactionId || typeof context?.onInteraction !== "function") return false;
     let accepted = readValue();
@@ -341,6 +341,7 @@
         });
         if (result?.ok !== true) throw new Error("native interaction was not acknowledged");
         accepted = next;
+        if (typeof onAccepted==="function") onAccepted(next);
         element.removeAttribute?.("aria-invalid");
         if (result?.persisted === false) {
           element.setAttribute("title","操作已同步到 Worker，但服务器尚未确认持久化");
@@ -403,6 +404,7 @@
           if (!context.radioGroups.has(groupKey))
             context.radioGroups.set(groupKey,context.prefix+"-"+groupKey);
           element.name=context.radioGroups.get(groupKey);
+          if (element.checked) context.radioSelection.set(element.name,element);
         }
       }
       // Input controls return early, so apply their validated captured styles
@@ -413,6 +415,21 @@
       if (value.control.kind==="range") {
         bindNativeInteraction(element,value,context,"change","set_value",
           ()=>Number(element.value),previous=>{element.value=String(previous);});
+      } else if (value.control.kind==="radio") {
+        const groupName = element.name;
+        bindNativeInteraction(element,value,context,"change","set_checked",
+          ()=>Boolean(element.checked),
+          previous=>{
+            if (previous) {
+              element.checked=true;
+              context.radioSelection.set(groupName,element);
+            } else {
+              const acceptedRadio=context.radioSelection.get(groupName);
+              if (acceptedRadio && acceptedRadio!==element) acceptedRadio.checked=true;
+              element.checked=false;
+            }
+          },
+          next=>{if(next) context.radioSelection.set(groupName,element);});
       } else {
         bindNativeInteraction(element,value,context,"change","set_checked",
           ()=>Boolean(element.checked),previous=>{element.checked=Boolean(previous);});
@@ -488,7 +505,7 @@
       state.textContent = (snapshot.finality === "verified-final" ? "ChatGPT 原生内容 · 已验证完成" : "ChatGPT 原生内容 · 实时更新，最终校验中") +
         (hasLocalOnlyControls(snapshot.root,onInteraction) ? " · 部分控件仅在本地预览" : "");
       const root = document.createElement("div"); root.className = "native-rich-root";
-      root.appendChild(createNode(snapshot.root,snapshot,0,{radioGroups:new Map(),prefix:"native-"+(++renderSequence),onInteraction,revision:snapshot.revision}));
+      root.appendChild(createNode(snapshot.root,snapshot,0,{radioGroups:new Map(),radioSelection:new Map(),prefix:"native-"+(++renderSequence),onInteraction,revision:snapshot.revision}));
       const files = document.createElement("div"); files.className = "native-generated-files";
       for (const item of snapshot.files) {
         if (!item || typeof item !== "object" || typeof item.filename !== "string") continue;
