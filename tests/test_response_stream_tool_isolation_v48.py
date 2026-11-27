@@ -92,10 +92,11 @@ def test_worker_native_connected_app_isolation_is_fail_closed_and_audited():
     entry = (ROOT / "chrome_extension" / "background_entry.js").read_text(encoding="utf-8")
     contract = (ROOT / "chrome_extension" / "content_runtime_contract_v71.js").read_text(encoding="utf-8")
     assert "safe_to_dispatch: selected.length === 0 && unresolvedDialogs === 0" in content
-    assert "native_github_tool_disabled: true" in content
+    assert 'native_github_tool_policy: "deny"' in content
+    assert 'native_account_authorization_state: "not-inspected-by-worker-ui"' in content
     assert "const protectedAuth = authDanger.test(context);" in content
     assert "match.protectedAuth" in content
-    assert "native_github_tool_enabled: false" in background
+    assert 'native_github_tool_policy: "deny"' in background
     assert "tool-isolation-v49" in background
     assert "tool_isolation_v49:" in contract
     assert "native_tool_stream_v63: Number(nativeTool?.revision || 0) >= 64" in contract
