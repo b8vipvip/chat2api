@@ -1200,7 +1200,7 @@ def test_github_actions_releases_tags_issue_search_and_review_threads(tmp_path: 
                         "databaseId": 44, "author": {"login": "reviewer"}, "body": "Please fix",
                         "url": "https://github.com/acme/project/pull/12#discussion_r44",
                         "diffHunk": "@@ -1 +1 @@", "replyTo": None,
-                    }]},
+                    }], "pageInfo": {"hasNextPage": True}},
                 }],
                 "pageInfo": {"hasNextPage": True, "endCursor": "opaque-next-cursor"},
             }}}}})
@@ -1233,6 +1233,7 @@ def test_github_actions_releases_tags_issue_search_and_review_threads(tmp_path: 
         threads = call("list_pull_review_threads", {"repository": "acme/project", "pull_number": 12})
         assert threads["data"][0]["resolved"] is False
         assert threads["data"][0]["comments"][0]["id"] == 44
+        assert threads["data"][0]["comments_truncated"] is True
         assert threads["pagination"]["next_cursor"] == "opaque-next-cursor"
         threads_next = call("list_pull_review_threads", {
             "repository": "acme/project", "pull_number": 12, "cursor": "opaque-next-cursor",
