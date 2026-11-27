@@ -1252,5 +1252,21 @@ assert.deepEqual(dispatchNativeAction("set_selected",capturedTabB.interaction_id
   "req_nativetabs12345"),{ok:true,revision:2});
 assert.ok(tabB.dispatchedEvents.includes("click"),
   "tab actions must click only the captured role=tab element in its original tablist");
+
+const chartLegendToggle=new Element("BUTTON",[],{"aria-label":"Revenue series","aria-pressed":"false"});
+chartLegendToggle.type="button";chartLegendToggle.disabled=false;
+const toggleSnapshot=interactionApi.snapshot({
+  requestId:"req_nativetoggle12345",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[chartLegendToggle]),
+});
+const toggleNode=toggleSnapshot.root.children[0];
+assert.equal(toggleNode.control.kind,"toggle");
+assert.equal(toggleNode.control.pressed,false);
+assert.match(toggleNode.interaction_id,/^nc_1_1$/);
+assert.deepEqual(dispatchNativeAction("set_pressed",toggleNode.interaction_id,true,1,
+  "req_nativetoggle12345"),{ok:true,revision:2});
+assert.ok(chartLegendToggle.dispatchedEvents.includes("click"),
+  "pressed toggles must click only the captured semantic button in the original Worker tab");
+
 console.log("native-content-request-scoped-interaction-actions-passed");
 
