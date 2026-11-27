@@ -441,6 +441,35 @@
     return track;
   }
 
+  async function waitForLiveAVFrameClock(ownerRequestId,timestampMs) {
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const clock = state.liveAVClock;
+      if (clock?.requestId === ownerRequestId &&
+          Number.isFinite(clock.clientOriginMs) && Number.isFinite(clock.audioOriginSec)) break;
+      await delay(20);
+      if (state.requestId !== ownerRequestId) {
+        throw new Error("Live video session ended while waiting for the shared media clock");
+      }
+    }
+    const clock = state.liveAVClock;
+    const audioContext = state.micContext;
+    if (!(clock?.requestId === ownerRequestId && audioContext &&
+          Number.isFinite(clock.clientOriginMs) && Number.isFinite(clock.audioOriginSec) &&
+          Number.isFinite(audioContext.currentTime))) {
+      return {mode:"arrival_fallback",syncSkewMs:null};
+    }
+    const targetAudioTime = clock.audioOriginSec + (timestampMs - clock.clientOriginMs) / 1000;
+    const waitMs = Math.max(0,(targetAudioTime - audioContext.currentTime) * 1000);
+    if (waitMs > 0) await delay(Math.min(waitMs,750));
+    if (state.requestId !== ownerRequestId) {
+      throw new Error("Live video session ended before the synchronized frame was rendered");
+    }
+    return {
+      mode:"shared_audio_context",
+      syncSkewMs:Math.round((audioContext.currentTime - targetAudioTime) * 1000),
+    };
+  }
+
   async function drawLiveVideoFrame(message) {
     const ownerRequestId = String(message.request_id || "");
     if (!ownerRequestId || state.requestId !== ownerRequestId ||
@@ -471,33 +500,9 @@
           !state.liveVideoTrack || state.liveVideoTrack.readyState === "ended") {
         throw new Error("Live video session ended before the frame could be rendered");
       }
-      // Wait briefly for the first paired PCM frame, then schedule camera
-      // drawing against the synthetic microphone AudioContext timeline.
-      for (let attempt = 0; attempt < 12; attempt += 1) {
-        const clock = state.liveAVClock;
-        if (clock?.requestId === ownerRequestId &&
-            Number.isFinite(clock.clientOriginMs) && Number.isFinite(clock.audioOriginSec)) break;
-        await delay(20);
-        if (state.requestId !== ownerRequestId) {
-          throw new Error("Live video session ended while waiting for the shared media clock");
-        }
-      }
-      let avSyncMode = "arrival_fallback";
-      let syncSkewMs = null;
-      const clock = state.liveAVClock;
-      const audioContext = state.micContext;
-      if (clock?.requestId === ownerRequestId && audioContext &&
-          Number.isFinite(clock.clientOriginMs) && Number.isFinite(clock.audioOriginSec) &&
-          Number.isFinite(audioContext.currentTime)) {
-        const targetAudioTime = clock.audioOriginSec + (timestampMs - clock.clientOriginMs) / 1000;
-        const waitMs = Math.max(0, (targetAudioTime - audioContext.currentTime) * 1000);
-        if (waitMs > 0) await delay(Math.min(waitMs, 750));
-        if (state.requestId !== ownerRequestId) {
-          throw new Error("Live video session ended before the synchronized frame was rendered");
-        }
-        syncSkewMs = Math.round((audioContext.currentTime - targetAudioTime) * 1000);
-        avSyncMode = "shared_audio_context";
-      }
+      const avSync = await waitForLiveAVFrameClock(ownerRequestId,timestampMs);
+      const avSyncMode = avSync.mode;
+      const syncSkewMs = avSync.syncSkewMs;
       const context = state.liveVideoContext;
       const canvas = state.liveVideoCanvas;
       const scale = Math.min(canvas.width / bitmap.width, canvas.height / bitmap.height);
