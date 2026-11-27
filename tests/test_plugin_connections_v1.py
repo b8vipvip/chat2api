@@ -1234,7 +1234,7 @@ def test_github_actions_releases_tags_issue_search_and_review_threads(tmp_path: 
             ("search_issues", {"query": "is:open bug repo:other/project", "repository": "acme/project"}),
             ("list_workflow_runs", {"repository": "acme/project", "status": "invalid"}),
             ("list_workflow_jobs", {"repository": "acme/project", "run_id": True}),
-            ("list_pull_review_threads", {"repository": "acme/project", "pull_number": 12, "cursor": "bad\\nvalue"}),
+            ("list_pull_review_threads", {"repository": "acme/project", "pull_number": 12, "cursor": "bad\nvalue"}),
         ]:
             response = client.post("/api/user/plugins/github/tools/" + tool, headers=ORIGIN, json=payload)
             assert response.status_code == 422, response.text
