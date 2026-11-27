@@ -1180,12 +1180,12 @@ assert.match(checkboxNode.interaction_id,/^nc_1_2$/);
 assert.match(rangeNode.interaction_id,/^nc_1_3$/);
 assert.match(selectNode.interaction_id,/^nc_1_4$/);
 let actionSequence=0;
-function dispatchNativeAction(action,interactionId,value,revision=interactionSnapshot.revision,requestId="req_nativeactions12345"){
+function dispatchNativeAction(action,interactionId,value,revision=interactionSnapshot.revision,requestId="req_nativeactions12345",actionId=null){
   let response=null;
   nativeInteractionListener({
     type:"chat2api.native.interaction",
     request_id:requestId,
-    action_id:(++actionSequence).toString(16).padStart(32,"0"),
+    action_id:actionId || (++actionSequence).toString(16).padStart(32,"0"),
     revision,
     interaction_id:interactionId,
     action,
@@ -1203,6 +1203,14 @@ assert.deepEqual(dispatchNativeAction("set_open",detailsNode.interaction_id,true
 assert.equal(details.open,true);
 assert.equal(dispatchNativeAction("set_checked",checkboxNode.interaction_id,false,1).ok,false,
   "a consumed native revision must not be replayed");
+const duplicateActionId="f".repeat(32);
+const firstDelivery=dispatchNativeAction("set_checked",checkboxNode.interaction_id,true,5,
+  "req_nativeactions12345",duplicateActionId);
+assert.deepEqual(firstDelivery,{ok:true,revision:6});
+const duplicateDelivery=dispatchNativeAction("set_checked",checkboxNode.interaction_id,true,5,
+  "req_nativeactions12345",duplicateActionId);
+assert.deepEqual(duplicateDelivery,{ok:true,revision:6,duplicate:true},
+  "a retried action ID returns the prior result without applying twice");
 const disabledCheckbox=new Element("INPUT",[],{"aria-label":"Disabled"});
 disabledCheckbox.type="checkbox";disabledCheckbox.checked=false;disabledCheckbox.disabled=true;
 const disabledRoot=new Element("DIV",[disabledCheckbox]);
