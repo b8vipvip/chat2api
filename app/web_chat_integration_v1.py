@@ -420,6 +420,21 @@ def install_web_chat_features_v1(app: Any) -> Any:
             if target is None:
                 raise HTTPException(status_code=404, detail="native control not found", headers=_PRIVATE_HEADERS)
             validate_native_interaction(target, action, value)
+            store = getattr(request.app.state, "native_content", None)
+            stored_before = store.get(request_id, owner) if store is not None else None
+            stored_target = (
+                find_native_interaction(stored_before.get("root"), interaction_id)
+                if isinstance(stored_before, dict) else None
+            )
+            if (
+                not isinstance(stored_before, dict)
+                or stored_before.get("revision") != revision
+                or not isinstance(stored_target, dict)
+                or stored_target.get("tag") != target.get("tag")
+                or stored_target.get("control") != target.get("control")
+            ):
+                raise HTTPException(status_code=409, detail="native snapshot changed; refresh and retry",
+                                    headers=_PRIVATE_HEADERS)
 
             client_id = str(row.get("client_id") or "")
             if not client_id:
@@ -460,7 +475,6 @@ def install_web_chat_features_v1(app: Any) -> Any:
                 raise HTTPException(status_code=409, detail=acknowledgement.get("error") or "Worker rejected native control action",
                                     headers=_PRIVATE_HEADERS)
 
-            store = getattr(request.app.state, "native_content", None)
             stored = store.get(request_id, owner) if store is not None else None
             if not isinstance(stored, dict) or stored.get("revision") != revision:
                 raise HTTPException(status_code=409, detail="native snapshot changed during interaction; reload the conversation",
