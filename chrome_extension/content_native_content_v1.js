@@ -423,6 +423,30 @@
       if (tag === "button") {
         if (element.closest?.("nav,aside,footer,header,form,[role='menu'],[role='dialog']"))
           return null;
+        const pressedRaw=element.getAttribute?.("aria-pressed");
+        if (pressedRaw==="true" || pressedRaw==="false") {
+          const label=controlLabel(element) || plainText(element).replace(/\s+/g," ").trim();
+          const computed=getComputedStyle(element);
+          if (!label || label.length>160 || computed.display==="none" || computed.visibility==="hidden")
+            return null;
+          if(chars+label.length>textBudget) {
+            active.nativeStructuralFailure="interactive-toggle-label-budget";
+            truncated=true;
+            return null;
+          }
+          chars+=label.length;
+          nodes+=1;
+          const disabled=Boolean(element.disabled || element.matches?.(":disabled")
+            || element.getAttribute?.("aria-disabled")==="true");
+          const interactionId=bindControl(element,"toggle");
+          if(!interactionId)return null;
+          return {
+            tag:"button",
+            interaction_id:interactionId,
+            style:safeStyle(element),
+            control:{kind:"toggle",label,disabled,pressed:pressedRaw==="true"},
+          };
+        }
         const label=controlLabel(element) || plainText(element).replace(/\s+/g," ").trim().slice(0,80);
         if (/^(?:copy(?: code)?|复制(?:代码)?)$/i.test(label)) {
           const text=copyCodeForButton(element);
@@ -1272,6 +1296,14 @@
           return {ok:false,error:"native-tab-no-longer-valid"};
         }
         if (element.getAttribute("aria-selected") !== "true") element.click();
+      } else if (target.kind === "toggle" && action === "set_pressed" && typeof value === "boolean") {
+        const current=element.getAttribute?.("aria-pressed");
+        if (element.tagName?.toLowerCase() !== "button"
+            || !["true","false"].includes(current)
+            || element.getAttribute?.("aria-disabled") === "true") {
+          return {ok:false,error:"native-toggle-no-longer-valid"};
+        }
+        if ((current==="true") !== value) element.click();
       } else {
         return {ok:false,error:"native-control-action-not-allowed"};
       }
