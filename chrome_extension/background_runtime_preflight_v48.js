@@ -119,8 +119,8 @@
     const safe = Boolean(
       result?.ok === true
       && Number(result?.version || 0) === 49
-      && result?.external_account_tools_disabled === true
-      && result?.native_github_tool_disabled === true
+      && result?.external_account_tools_policy === "deny"
+      && result?.native_github_tool_policy === "deny"
       && result?.safe_to_dispatch === true
       && Number(result?.selected_app_controls || 0) === 0
       && Number(result?.unresolved_connection_dialogs || 0) === 0
@@ -131,8 +131,9 @@
         received_response: Boolean(result),
         response_version: Number(result?.version || 0),
         response_ok: result?.ok === true,
-        external_account_tools_disabled: result?.external_account_tools_disabled === true,
-        native_github_tool_disabled: result?.native_github_tool_disabled === true,
+        external_account_tools_policy: String(result?.external_account_tools_policy || ""),
+        native_github_tool_policy: String(result?.native_github_tool_policy || ""),
+        native_account_authorization_state: String(result?.native_account_authorization_state || "unknown"),
         safe_to_dispatch: result?.safe_to_dispatch === true,
         selected_app_controls: Number(result?.selected_app_controls || 0),
         unresolved_connection_dialogs: Number(result?.unresolved_connection_dialogs || 0),
