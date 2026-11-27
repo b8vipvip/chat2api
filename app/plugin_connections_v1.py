@@ -47,6 +47,20 @@ def _github_resource_number(value: Any) -> int:
         raise HTTPException(422, "Issue or Pull Request number must be a positive integer", headers=_PRIVATE_HEADERS)
     return value
 
+def _github_run_id(value: Any) -> int:
+    if type(value) is not int or not 1 <= value <= 9_007_199_254_740_991:
+        raise HTTPException(422, "Workflow run ID must be a positive safe integer", headers=_PRIVATE_HEADERS)
+    return value
+
+
+def _github_cursor(value: Any) -> str | None:
+    if value is None:
+        return None
+    if (not isinstance(value, str) or not value or len(value) > 1024
+        or any(ord(char) < 32 or ord(char) == 127 for char in value)):
+        raise HTTPException(422, "cursor must be a valid opaque GitHub cursor", headers=_PRIVATE_HEADERS)
+    return value
+
 
 def _github_file_path(value: Any) -> tuple[str, str]:
     path = value.strip() if isinstance(value, str) else ""
@@ -1219,6 +1233,195 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                         pagination = {
                             "page": page, "per_page": 20, "has_more": offset + 20 < len(raw),
                             "total_count": len(raw), "incomplete_results": len(raw) >= 1000,
+                        }
+                    elif tool_name == "search_issues":
+                        query = payload.get("query")
+                        query = query.strip() if isinstance(query, str) else ""
+                        if not query or len(query) > 200:
+                            raise HTTPException(422, "query must contain 1-200 characters", headers=_PRIVATE_HEADERS)
+                        repository_value = payload.get("repository")
+                        if repository_value is not None:
+                            repository = _github_repo_name(repository_value)
+                            if re.search(r"(?:^|\\s)repo:", query, re.IGNORECASE):
+                                raise HTTPException(422, "Do not combine repository with a repo: search qualifier", headers=_PRIVATE_HEADERS)
+                            query = "repo:" + repository + " " + query
+                        page = _github_page(payload.get("page"))
+                        response = await client.get(
+                            "https://api.github.com/search/issues",
+                            params={"q": query, "per_page": 10, "page": page, "sort": "updated", "order": "desc"},
+                            headers=github_headers,
+                        )
+                        response.raise_for_status()
+                        raw = response.json()
+                        data = [{
+                            "repository": str((row.get("repository_url") or "").rsplit("/repos/", 1)[-1])[:220],
+                            "number": row.get("number"), "title": str(row.get("title") or "")[:300],
+                            "state": row.get("state"), "is_pull_request": isinstance(row.get("pull_request"), dict),
+                            "url": row.get("html_url"), "body": str(row.get("body") or "")[:1800],
+                            "body_truncated": len(str(row.get("body") or "")) > 1800,
+                            "labels": [str(label.get("name") or "")[:100] for label in row.get("labels", [])[:10] if isinstance(label, dict)],
+                            "updated_at": row.get("updated_at"),
+                        } for row in raw.get("items", [])[:10] if isinstance(row, dict)]
+                        pagination = {
+                            "page": page, "per_page": 10, "has_more": _github_has_more(response),
+                            "total_count": raw.get("total_count") if type(raw.get("total_count")) is int else None,
+                            "incomplete_results": raw.get("incomplete_results") is True,
+                        }
+                    elif tool_name in {"list_releases", "list_tags", "list_workflow_runs"}:
+                        repository = _github_repo_name(payload.get("repository"))
+                        page = _github_page(payload.get("page"))
+                        if tool_name == "list_releases":
+                            suffix = "/releases"
+                            params = {"per_page": 20, "page": page}
+                        elif tool_name == "list_tags":
+                            suffix = "/tags"
+                            params = {"per_page": 20, "page": page}
+                        else:
+                            suffix = "/actions/runs"
+                            params = {"per_page": 20, "page": page}
+                            branch_value = payload.get("branch")
+                            if branch_value is not None:
+                                if (not isinstance(branch_value, str) or not branch_value.strip()
+                                    or len(branch_value) > 255 or any(ord(char) < 32 for char in branch_value)):
+                                    raise HTTPException(422, "branch must be a valid branch name", headers=_PRIVATE_HEADERS)
+                                params["branch"] = branch_value.strip()
+                            status_value = payload.get("status")
+                            if status_value is not None:
+                                if status_value not in {"queued", "in_progress", "completed", "waiting", "requested", "pending"}:
+                                    raise HTTPException(422, "workflow status is invalid", headers=_PRIVATE_HEADERS)
+                                params["status"] = status_value
+                        response = await client.get(
+                            "https://api.github.com/repos/" + repository + suffix,
+                            params=params, headers=github_headers,
+                        )
+                        response.raise_for_status()
+                        raw = response.json()
+                        if tool_name == "list_releases":
+                            if not isinstance(raw, list):
+                                raise HTTPException(502, "Invalid GitHub releases response", headers=_PRIVATE_HEADERS)
+                            data = [{
+                                "repository": repository, "id": row.get("id"),
+                                "name": str(row.get("name") or row.get("tag_name") or "")[:250],
+                                "tag_name": str(row.get("tag_name") or "")[:255],
+                                "draft": row.get("draft") is True, "prerelease": row.get("prerelease") is True,
+                                "created_at": row.get("created_at"), "published_at": row.get("published_at"),
+                                "author": str((row.get("author") or {}).get("login") or "")[:100],
+                                "body": str(row.get("body") or "")[:2000],
+                                "body_truncated": len(str(row.get("body") or "")) > 2000,
+                                "url": row.get("html_url"),
+                                "assets": [{
+                                    "name": str(asset.get("name") or "")[:200],
+                                    "size": asset.get("size"), "download_count": asset.get("download_count"),
+                                    "content_type": str(asset.get("content_type") or "")[:100],
+                                } for asset in (row.get("assets") or [])[:10] if isinstance(asset, dict)],
+                            } for row in raw[:20] if isinstance(row, dict)]
+                        elif tool_name == "list_tags":
+                            if not isinstance(raw, list):
+                                raise HTTPException(502, "Invalid GitHub tags response", headers=_PRIVATE_HEADERS)
+                            data = [{
+                                "repository": repository, "name": str(row.get("name") or "")[:255],
+                                "sha": str((row.get("commit") or {}).get("sha") or "")[:40],
+                                "url": "https://github.com/" + repository + "/tree/" + quote(str(row.get("name") or ""), safe=""),
+                            } for row in raw[:20] if isinstance(row, dict)]
+                        else:
+                            runs = raw.get("workflow_runs", []) if isinstance(raw, dict) else []
+                            data = [{
+                                "repository": repository, "id": row.get("id"), "name": str(row.get("name") or "")[:200],
+                                "display_title": str(row.get("display_title") or row.get("name") or "")[:250],
+                                "run_number": row.get("run_number"), "run_attempt": row.get("run_attempt"),
+                                "event": str(row.get("event") or "")[:80], "status": row.get("status"),
+                                "conclusion": row.get("conclusion"), "branch": str(row.get("head_branch") or "")[:255],
+                                "head_sha": str(row.get("head_sha") or "")[:40],
+                                "actor": str((row.get("actor") or {}).get("login") or "")[:100],
+                                "created_at": row.get("created_at"), "updated_at": row.get("updated_at"),
+                                "url": row.get("html_url"),
+                            } for row in runs[:20] if isinstance(row, dict)]
+                        pagination = {"page": page, "per_page": 20, "has_more": _github_has_more(response)}
+                    elif tool_name == "list_workflow_jobs":
+                        repository = _github_repo_name(payload.get("repository"))
+                        run_id = _github_run_id(payload.get("run_id"))
+                        page = _github_page(payload.get("page"))
+                        response = await client.get(
+                            "https://api.github.com/repos/" + repository + "/actions/runs/" + str(run_id) + "/jobs",
+                            params={"per_page": 20, "page": page}, headers=github_headers,
+                        )
+                        response.raise_for_status()
+                        raw = response.json()
+                        if not isinstance(raw, dict) or not isinstance(raw.get("jobs"), list):
+                            raise HTTPException(502, "Invalid GitHub workflow jobs response", headers=_PRIVATE_HEADERS)
+                        data = [{
+                            "repository": repository, "run_id": run_id, "id": row.get("id"),
+                            "name": str(row.get("name") or "")[:200], "status": row.get("status"),
+                            "conclusion": row.get("conclusion"), "started_at": row.get("started_at"),
+                            "completed_at": row.get("completed_at"), "runner_name": str(row.get("runner_name") or "")[:120],
+                            "url": row.get("html_url"),
+                            "steps": [{
+                                "name": str(step.get("name") or "")[:180], "number": step.get("number"),
+                                "status": step.get("status"), "conclusion": step.get("conclusion"),
+                                "started_at": step.get("started_at"), "completed_at": step.get("completed_at"),
+                            } for step in (row.get("steps") or [])[:30] if isinstance(step, dict)],
+                        } for row in raw["jobs"][:20] if isinstance(row, dict)]
+                        pagination = {"page": page, "per_page": 20, "has_more": _github_has_more(response)}
+                    elif tool_name == "list_pull_review_threads":
+                        repository = _github_repo_name(payload.get("repository"))
+                        pull_number = _github_resource_number(payload.get("pull_number"))
+                        cursor = _github_cursor(payload.get("cursor"))
+                        owner, repo_name = repository.split("/", 1)
+                        graphql_query = """
+                            query($owner: String!, $name: String!, $number: Int!, $after: String) {
+                              repository(owner: $owner, name: $name) {
+                                pullRequest(number: $number) {
+                                  reviewThreads(first: 50, after: $after) {
+                                    nodes {
+                                      id isResolved isOutdated path line originalLine
+                                      comments(first: 20) {
+                                        nodes {
+                                          databaseId author { login } body createdAt url diffHunk
+                                          replyTo { databaseId }
+                                        }
+                                      }
+                                    }
+                                    pageInfo { hasNextPage endCursor }
+                                  }
+                                }
+                              }
+                            }
+                        """
+                        response = await client.post(
+                            "https://api.github.com/graphql",
+                            json={"query": graphql_query, "variables": {
+                                "owner": owner, "name": repo_name, "number": pull_number, "after": cursor,
+                            }},
+                            headers=github_headers,
+                        )
+                        response.raise_for_status()
+                        raw = response.json()
+                        if not isinstance(raw, dict) or raw.get("errors"):
+                            raise HTTPException(502, "GitHub review thread query failed", headers=_PRIVATE_HEADERS)
+                        pull = (((raw.get("data") or {}).get("repository") or {}).get("pullRequest") or {})
+                        if not pull:
+                            raise HTTPException(404, "GitHub Pull Request not found", headers=_PRIVATE_HEADERS)
+                        threads = pull.get("reviewThreads") or {}
+                        data = [{
+                            "repository": repository, "pull_number": pull_number,
+                            "thread_id": str(row.get("id") or "")[:200],
+                            "resolved": row.get("isResolved") is True, "outdated": row.get("isOutdated") is True,
+                            "path": str(row.get("path") or "")[:500], "line": row.get("line"),
+                            "original_line": row.get("originalLine"),
+                            "comments": [{
+                                "id": comment.get("databaseId"),
+                                "author": str((comment.get("author") or {}).get("login") or "")[:100],
+                                "body": str(comment.get("body") or "")[:1800],
+                                "created_at": comment.get("createdAt"), "url": comment.get("url"),
+                                "diff_hunk": str(comment.get("diffHunk") or "")[:800],
+                                "in_reply_to_id": (comment.get("replyTo") or {}).get("databaseId"),
+                            } for comment in ((row.get("comments") or {}).get("nodes") or [])[:20] if isinstance(comment, dict)],
+                            "url": next((comment.get("url") for comment in ((row.get("comments") or {}).get("nodes") or []) if isinstance(comment, dict) and comment.get("url")), "https://github.com/" + repository + "/pull/" + str(pull_number)),
+                        } for row in threads.get("nodes", [])[:50] if isinstance(row, dict)]
+                        page_info = threads.get("pageInfo") or {}
+                        pagination = {
+                            "page": 1, "per_page": 50, "has_more": page_info.get("hasNextPage") is True,
+                            "next_cursor": page_info.get("endCursor") if page_info.get("hasNextPage") is True else None,
                         }
                     elif tool_name == "get_file_contents":
                         repository = _github_repo_name(payload.get("repository"))
