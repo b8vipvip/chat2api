@@ -396,13 +396,14 @@
       const semanticRole=String(element.getAttribute?.("role") || "").toLowerCase();
       if (semanticRole === "tab") {
         const tabList=element.closest?.("[role='tablist']");
-        const group=tabGroupId(tabList);
         const selectedRaw=element.getAttribute?.("aria-selected");
         const label=controlLabel(element) || plainText(element).replace(/\s+/g," ").trim();
-        if (!group || !label || label.length>160
+        if (!tabList || !label || label.length>160
             || !["true","false"].includes(selectedRaw)
             || (tag==="button" && element.form)
             || element.closest?.("nav,aside,footer,header,form,[role='menu'],[role='dialog']")) return null;
+        const group=tabGroupId(tabList);
+        if (!group) return null;
         if(chars+label.length>textBudget) {
           active.nativeStructuralFailure="interactive-tab-label-budget";
           truncated=true;
