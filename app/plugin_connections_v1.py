@@ -1202,7 +1202,6 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                         sha = payload.get("sha")
                         if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-fA-F]{7,40}", sha):
                             raise HTTPException(422, "sha must be a 7-40 character hexadecimal commit SHA", headers=_PRIVATE_HEADERS)
-                        page = _github_page(payload.get("page"))
                         # GitHub's commit-detail endpoint does not paginate its files array.
                         # It returns at most 300 changed files; never pretend page=N is supported.
                         response = await client.get(
