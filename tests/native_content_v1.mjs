@@ -1253,6 +1253,31 @@ assert.deepEqual(dispatchNativeAction("set_selected",capturedTabB.interaction_id
 assert.ok(tabB.dispatchedEvents.includes("click"),
   "tab actions must click only the captured role=tab element in its original tablist");
 
+const formAssociatedTab=new Element("BUTTON",[],{role:"tab","aria-selected":"false","aria-label":"Unsafe tab"});
+formAssociatedTab.type="button";formAssociatedTab.form={};
+const formTabList=new Element("DIV",[formAssociatedTab],{role:"tablist"});
+const formTabSnapshot=interactionApi.snapshot({
+  requestId:"req_nativeformtabs1",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[formTabList]),
+});
+assert.equal((formTabSnapshot.root.children[0].children || []).some(node=>node.tag==="button"),false,
+  "form-associated tabs must not enter the remote action surface");
+
+const lateFormTab=new Element("BUTTON",[],{role:"tab","aria-selected":"false","aria-label":"Late form tab"});
+lateFormTab.type="button";
+const lateFormTabList=new Element("DIV",[lateFormTab],{role:"tablist"});
+const lateFormTabSnapshot=interactionApi.snapshot({
+  requestId:"req_nativelateformtab",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[lateFormTabList]),
+});
+lateFormTab.form={};
+const lateFormTabNode=lateFormTabSnapshot.root.children[0].children[0];
+assert.equal(dispatchNativeAction("set_selected",lateFormTabNode.interaction_id,true,1,
+  "req_nativelateformtab").ok,false,
+  "Worker must revalidate form association before clicking a captured tab");
+assert.equal(lateFormTab.dispatchedEvents.includes("click"),false);
+
+
 const chartLegendToggle=new Element("BUTTON",[],{"aria-label":"Revenue series","aria-pressed":"false"});
 chartLegendToggle.type="button";chartLegendToggle.disabled=false;
 const toggleSnapshot=interactionApi.snapshot({
