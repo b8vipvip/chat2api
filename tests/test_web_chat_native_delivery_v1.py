@@ -37,6 +37,20 @@ def test_native_renderer_rejects_active_nodes_and_untrusted_urls() -> None:
     assert "native-renderer-validation-passed" in result.stdout
 
 
+
+def test_native_interaction_worker_dispatch_uses_original_tab():
+    node = shutil.which("node")
+    if node is None:
+        return
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [node, "tests/native_interaction_dispatch_v1.mjs"],
+        cwd=root, check=False, capture_output=True, text=True, timeout=20,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "native-interaction-original-worker-tab-dispatch-passed" in result.stdout
+
+
 def test_user_native_content_adapter_enforces_key_owner_and_preserves_validated_svg(tmp_path: Path) -> None:
     settings = Settings(
         CHAT2API_API_KEY="web-chat-native-test-master-key",
