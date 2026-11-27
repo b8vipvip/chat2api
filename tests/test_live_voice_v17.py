@@ -689,10 +689,18 @@ def test_live_voice_bounds_pcm16_frames_and_keeps_session_after_bad_input(tmp_pa
                 assert oversized["code"] == "INVALID_INPUT_AUDIO_FRAME"
 
                 valid_pcm = b"\x01\x02" * 320
+                live.send_json({"type":"input_audio.timestamp","sequence":0,"timestamp_ms":50})
+                live.send_json({"type":"input_audio.timestamp","sequence":1,"timestamp_ms":60})
+                timestamp_error = live.receive_json()
+                assert timestamp_error["code"] == "INVALID_INPUT_AUDIO_TIMESTAMP"
+                live.send_bytes(valid_pcm)  # discard the PCM paired with the invalid timestamp
+                live.send_json({"type":"input_audio.timestamp","sequence":1,"timestamp_ms":60})
                 live.send_bytes(valid_pcm)
                 forwarded = extension.receive_json()
                 assert forwarded["type"] == "voice.live.audio"
                 assert base64.b64decode(forwarded["pcm_base64"]) == valid_pcm
+                assert forwarded["sequence"] == 1
+                assert forwarded["timestamp_ms"] == 60
 
                 response_id = "voice-pcm-bounded-response"
                 extension.send_json({
