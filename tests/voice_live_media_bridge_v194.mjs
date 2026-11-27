@@ -47,7 +47,7 @@ const avClockWait=vm.runInNewContext(
   voiceMain.slice(avClockStart,avClockEnd)+"\\nwaitForLiveAVFrameClock",
   {state:avClockState,delay:async ms=>{avClockState.micContext.currentTime+=ms/1000;}},
 );
-const alignedFrame=await avClockWait("av-clock-test",500);
+const alignedFrame=JSON.parse(JSON.stringify(await avClockWait("av-clock-test",500)));
 assert.equal(alignedFrame.mode,"shared_audio_context");
 assert.equal(alignedFrame.syncSkewMs,0,
   "video drawing must wait for the timestamp-matched synthetic microphone clock");
@@ -56,7 +56,7 @@ const avClockFallback=vm.runInNewContext(
   voiceMain.slice(avClockStart,avClockEnd)+"\\nwaitForLiveAVFrameClock",
   {state:fallbackClockState,delay:async()=>{}},
 );
-assert.deepEqual(await avClockFallback("av-fallback-test",500),
+assert.deepEqual(JSON.parse(JSON.stringify(await avClockFallback("av-fallback-test",500))),
   {mode:"arrival_fallback",syncSkewMs:null});
 
 assert.ok(liveText.includes("videoSenderUnavailable(active)"),
