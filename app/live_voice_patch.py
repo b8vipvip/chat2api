@@ -1071,11 +1071,21 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     break
                 payload = message.get("bytes")
                 if payload is not None:
-                    if payload:
+                    if not payload:
                         if discard_input_audio_payloads > 0:
                             discard_input_audio_payloads -= 1
-                            continue
-                        audio_clock = pending_input_audio_clock
+                        else:
+                            pending_input_audio_clock = None
+                        await send_json({
+                            "type": "error", "code": "INVALID_INPUT_AUDIO_FRAME",
+                            "message": "Input PCM16 frame must not be empty",
+                            "retryable": True,
+                        })
+                        continue
+                    if discard_input_audio_payloads > 0:
+                        discard_input_audio_payloads -= 1
+                        continue
+                    audio_clock = pending_input_audio_clock
                         pending_input_audio_clock = None
                         if len(payload) > MAX_LIVE_PCM_FRAME_BYTES or len(payload) % 2:
                             await send_json({
@@ -1127,6 +1137,15 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     })
                     continue
                 control_type = str(control.get("type") or "")
+                if pending_input_audio_clock is not None and control_type != "input_audio.timestamp":
+                    pending_input_audio_clock = None
+                    discard_input_audio_payloads += 1
+                    await send_json({
+                        "type": "error",
+                        "code": "INVALID_INPUT_AUDIO_TIMESTAMP",
+                        "message": "Audio timestamp was not followed immediately by its PCM frame; the orphaned frame will be discarded",
+                        "retryable": True,
+                    })
                 if control_type == "input_audio.timestamp":
                     sequence = control.get("sequence")
                     timestamp_ms = control.get("timestamp_ms")
