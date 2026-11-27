@@ -126,6 +126,7 @@
     if (retryAfterMs > 0) event.retry_after_ms = retryAfterMs;
     const sent = await trySendSocket(event);
     state.requestTabs.delete(requestId);
+    state.nativeRequestTabs.delete(requestId);
     if (!sent) throw error;
     return null;
   }
@@ -291,7 +292,7 @@
     if (requestId && event.type !== "chat.completed") state.nativeRequestTabs.delete(requestId);
     return false;
   });
-  chrome.tabs.onRemoved.addListener(tabId => {
+  chrome.tabs.onRemoved?.addListener?.(tabId => {
     for (const [requestId, target] of state.nativeRequestTabs) {
       if (target?.tabId === tabId) state.nativeRequestTabs.delete(requestId);
     }
