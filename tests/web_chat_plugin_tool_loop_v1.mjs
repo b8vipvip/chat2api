@@ -75,7 +75,7 @@ function makeHarness({selectedPlugins = ["github"], catalog = null, planner = []
   const api = vm.runInNewContext(
     "(() => { " + helperSource + "\nreturn {" +
       "selectedPluginToolDefinitions,parsePluginToolPlan,validatePluginToolArguments," +
-      "executePluginToolCall,runAutonomousPluginToolLoop}; })()",
+      "executePluginToolCall,runAutonomousPluginToolLoop,buildPluginPlannerPrompt}; })()",
     context,
   );
   return {
