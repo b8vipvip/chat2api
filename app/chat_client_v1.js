@@ -2535,7 +2535,7 @@
         throw new Error("必须使用用户明确提供或本轮 GitHub 分支、Tag、Commit 结果返回的 ref。");
       }
       if (definition.name === "github.search_issues") {
-        const qualifier = args.query.match(/(?:^|\\s)repo:([A-Za-z0-9_.-]{1,100}\\/[A-Za-z0-9_.-]{1,100})(?=\\s|$)/i);
+        const qualifier = args.query.match(/(?:^|\s)repo:([A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100})(?=\s|$)/i);
         if (qualifier && !knownGithubRepos.has(qualifier[1]) && !userPromptText.includes(qualifier[1])) {
           throw new Error("GitHub Issue 搜索中的 repo: 必须来自用户消息或已发现的仓库。");
         }
