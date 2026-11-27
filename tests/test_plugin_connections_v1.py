@@ -1185,6 +1185,23 @@ def test_github_actions_releases_tags_issue_search_and_review_threads(tmp_path: 
         async def post(self, url, **kwargs):
             assert kwargs["headers"]["Authorization"] == "Bearer own-token"
             calls.append(("POST", url, kwargs.get("json")))
+            if "node(id: $threadId)" in kwargs["json"]["query"]:
+                variables = kwargs["json"]["variables"]
+                assert variables["threadId"] == "PRRT_kw123"
+                assert variables["after"] == "comment-next-cursor"
+                return FakeResponse({"data": {"node": {
+                    "id": "PRRT_kw123", "isResolved": False, "isOutdated": True,
+                    "path": "src/main.py", "line": 17, "originalLine": 16,
+                    "pullRequest": {"number": 12, "repository": {"nameWithOwner": "acme/project"}},
+                    "comments": {
+                        "nodes": [{
+                            "databaseId": 45, "author": {"login": "maintainer"}, "body": "Fixed in the next commit",
+                            "url": "https://github.com/acme/project/pull/12#discussion_r45",
+                            "diffHunk": "@@ -1 +1 @@", "replyTo": {"databaseId": 44},
+                        }],
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    },
+                }}})
             variables = kwargs["json"]["variables"]
             assert variables["owner"] == "acme" and variables["name"] == "project"
             assert variables["number"] == 12
@@ -1201,7 +1218,7 @@ def test_github_actions_releases_tags_issue_search_and_review_threads(tmp_path: 
                         "databaseId": 44, "author": {"login": "reviewer"}, "body": "Please fix",
                         "url": "https://github.com/acme/project/pull/12#discussion_r44",
                         "diffHunk": "@@ -1 +1 @@", "replyTo": None,
-                    }], "pageInfo": {"hasNextPage": True}},
+                    }], "pageInfo": {"hasNextPage": True, "endCursor": "comment-next-cursor"}},
                 }],
                 "pageInfo": {"hasNextPage": True, "endCursor": "opaque-next-cursor"},
             }}}}})
@@ -1236,12 +1253,21 @@ def test_github_actions_releases_tags_issue_search_and_review_threads(tmp_path: 
         assert threads["data"][0]["resolved"] is False
         assert threads["data"][0]["comments"][0]["id"] == 44
         assert threads["data"][0]["comments_truncated"] is True
+        assert threads["data"][0]["comments_next_cursor"] == "comment-next-cursor"
         assert threads["pagination"]["next_cursor"] == "opaque-next-cursor"
         threads_next = call("list_pull_review_threads", {
             "repository": "acme/project", "pull_number": 12, "cursor": "opaque-next-cursor",
         })
         assert threads_next["pagination"]["has_more"] is False
         assert calls[-1][2]["variables"]["after"] == "opaque-next-cursor"
+        comment_page = call("list_pull_review_thread_comments", {
+            "repository": "acme/project", "pull_number": 12,
+            "thread_id": threads["data"][0]["thread_id"],
+            "cursor": threads["data"][0]["comments_next_cursor"],
+        })
+        assert comment_page["data"][0]["comments"][0]["id"] == 45
+        assert comment_page["data"][0]["comments"][0]["in_reply_to_id"] == 44
+        assert comment_page["pagination"]["has_more"] is False
 
         for tool, payload in [
             ("search_issues", {"query": "is:open bug repo:other/project", "repository": "acme/project"}),
@@ -1249,7 +1275,9 @@ def test_github_actions_releases_tags_issue_search_and_review_threads(tmp_path: 
             ("list_workflow_runs", {"repository": "acme/project", "status": []}),
             ("list_workflow_jobs", {"repository": "acme/project", "run_id": True}),
             ("list_pull_review_threads", {"repository": "acme/project", "pull_number": 12, "cursor": "bad\nvalue"}),
+            ("list_pull_review_thread_comments", {"repository": "acme/project", "pull_number": 12, "thread_id": "PRRT_kw123"}),
+            ("list_pull_review_thread_comments", {"repository": "acme/project", "pull_number": 12, "thread_id": "bad\\nthread", "cursor": "cursor"}),
         ]:
             response = client.post("/api/user/plugins/github/tools/" + tool, headers=ORIGIN, json=payload)
             assert response.status_code == 422, response.text
-        assert len(calls) == 7
+        assert len(calls) == 8
