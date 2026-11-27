@@ -672,3 +672,18 @@ test("completed GitHub plugin evidence is available to later turns with stale-da
   assert.equal(h.calls.length,1,"a run ID discovered in a prior turn should remain provenance-checked and reusable");
   assert.equal(h.calls[0][1],"list_workflow_jobs");
 });
+
+
+test("GitHub Issue search cannot invent a repository qualifier", async () => {
+  const h=makeHarness({
+    planner:[JSON.stringify({tool_calls:[{
+      name:"github.search_issues",arguments:{query:"repo:unmentioned/secret is:open"},
+    }]})],
+  });
+  await h.api.runAutonomousPluginToolLoop(
+    [{role:"user",content:"搜索我有权限访问的 GitHub issue"}],h.assistant,"key",h.recoveryApi,"req",
+  );
+  assert.equal(h.calls.length,0);
+  assert.equal(h.assistant.toolEvents[0].status,"failed");
+  assert.match(h.assistant.toolEvents[0].output,/repo: 必须来自用户消息或已发现的仓库/);
+});
