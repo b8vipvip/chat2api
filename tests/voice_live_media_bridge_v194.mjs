@@ -2,12 +2,16 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
+const liveClient = readFileSync("app/chat_voice_client_v1.js", "utf8");
 const liveMain = readFileSync("chrome_extension/voice_live_main.js", "utf8");
 const liveContent = readFileSync("chrome_extension/content_voice_live.js", "utf8");
 const liveText = readFileSync("chrome_extension/content_voice_live_text_v24.js", "utf8");
 const voiceMain = readFileSync("chrome_extension/voice_main.js", "utf8");
 const liveRouting = readFileSync("chrome_extension/audio_routing_live.js", "utf8");
-for (const src of [liveMain, liveContent, liveText, voiceMain, liveRouting]) new vm.Script(src);
+for (const src of [liveClient, liveMain, liveContent, liveText, voiceMain, liveRouting]) new vm.Script(src);
+assert.ok(liveClient.includes('type:"input_audio.timestamp"'), "PCM blocks must carry the browser session clock");
+assert.ok(liveClient.includes("frameStartMs"), "PCM timestamps must refer to the first sample in the block");
+assert.ok(liveClient.indexOf('sendJson({type:"input_audio.timestamp"') < liveClient.indexOf("socket.send(frame)"), "the audio clock control must precede its paired binary PCM frame");
 assert.ok(liveMain.includes("state.remoteTrack"), "stream from actual WebRTC track");
 assert.ok(!liveMain.includes("state?.recorder?.stream"), "never wait on an unarmed MediaRecorder");
 assert.ok(!liveMain.includes("recorderChunks.splice"), "live stream cannot mutate batch recording");
@@ -715,4 +719,5 @@ assert.ok(stoppedResponseIndex >= 0 && stopAckIndex > stoppedResponseIndex,
   "main-world stop acknowledgement must follow the final response.stopped snapshot");
 assert.equal(stopEvents[stopAckIndex].request_id,"live-v194");
 assert.equal(stopEvents[stopAckIndex].session_id,"session-v194");
+assert.equal(currentVoiceState.liveAVClock,null,"stopping a Voice session must clear its shared A/V clock");
 console.log("Live Voice binds WebRTC track directly, streams PCM and preserves ordered microphone input");
