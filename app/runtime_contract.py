@@ -175,6 +175,7 @@ def version_contract_payload(app: FastAPI) -> dict[str, Any]:
             "worker_runtime_preflight": True,
             "worker_ui_hygiene_health_modal_v101": True,
             "external_account_tool_isolation": True,
+            "external_account_tool_isolation_fail_closed_v49": True,
             "managed_request_draft_recovery": True,
             "persistent_request_draft_ownership": True,
             "visible_generation_liveness": True,
