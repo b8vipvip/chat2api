@@ -452,22 +452,38 @@ def install_web_chat_features_v1(app: Any) -> Any:
                 "future": future,
             }
             try:
+                action_message = {
+                    "type": "chat.native.interaction",
+                    "request_id": request_id,
+                    "action_id": action_id,
+                    "revision": revision,
+                    "interaction_id": interaction_id,
+                    "action": action,
+                    "value": value,
+                }
                 try:
-                    await request.app.state.registry.send(client_id, {
-                        "type": "chat.native.interaction",
-                        "request_id": request_id,
-                        "action_id": action_id,
-                        "revision": revision,
-                        "interaction_id": interaction_id,
-                        "action": action,
-                        "value": value,
-                    })
+                    await request.app.state.registry.send(client_id, action_message)
                 except (RuntimeError, KeyError) as error:
                     raise HTTPException(status_code=503, detail="original Worker is unavailable", headers=_PRIVATE_HEADERS) from error
                 try:
-                    acknowledgement = await asyncio.wait_for(future, timeout=5.0)
-                except asyncio.TimeoutError as error:
-                    raise HTTPException(status_code=504, detail="Worker native control acknowledgement timed out", headers=_PRIVATE_HEADERS) from error
+                    acknowledgement = await asyncio.wait_for(future, timeout=3.0)
+                except asyncio.TimeoutError:
+                    # The Worker may have applied the action while its first
+                    # ACK was lost. Re-send the same server-generated action
+                    # ID; the content script deduplicates it and returns the
+                    # original result without applying it twice.
+                    retry_future = asyncio.get_running_loop().create_future()
+                    pending_native_interactions[action_id]["future"] = retry_future
+                    try:
+                        await request.app.state.registry.send(client_id, action_message)
+                    except (RuntimeError, KeyError) as error:
+                        raise HTTPException(status_code=503, detail="original Worker route was lost during retry",
+                                            headers=_PRIVATE_HEADERS) from error
+                    try:
+                        acknowledgement = await asyncio.wait_for(retry_future, timeout=2.0)
+                    except asyncio.TimeoutError as error:
+                        raise HTTPException(status_code=504, detail="Worker native control acknowledgement timed out",
+                                            headers=_PRIVATE_HEADERS) from error
             finally:
                 pending_native_interactions.pop(action_id, None)
 
