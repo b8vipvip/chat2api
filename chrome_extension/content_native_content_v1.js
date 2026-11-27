@@ -396,12 +396,14 @@
       const semanticRole=String(element.getAttribute?.("role") || "").toLowerCase();
       if (semanticRole === "tab") {
         const tabList=element.closest?.("[role='tablist']");
-        const group=tabGroupId(tabList);
         const selectedRaw=element.getAttribute?.("aria-selected");
         const label=controlLabel(element) || plainText(element).replace(/\s+/g," ").trim();
-        if (!group || !label || label.length>160
+        if (!tabList || !label || label.length>160
             || !["true","false"].includes(selectedRaw)
+            || (tag==="button" && element.form)
             || element.closest?.("nav,aside,footer,header,form,[role='menu'],[role='dialog']")) return null;
+        const group=tabGroupId(tabList);
+        if (!group) return null;
         if(chars+label.length>textBudget) {
           active.nativeStructuralFailure="interactive-tab-label-budget";
           truncated=true;
@@ -427,7 +429,7 @@
         if (pressedRaw==="true" || pressedRaw==="false") {
           const label=controlLabel(element) || plainText(element).replace(/\s+/g," ").trim();
           const computed=getComputedStyle(element);
-          if (!label || label.length>160 || computed.display==="none" || computed.visibility==="hidden")
+          if (!label || label.length>160 || element.form || computed.display==="none" || computed.visibility==="hidden")
             return null;
           if(chars+label.length>textBudget) {
             active.nativeStructuralFailure="interactive-toggle-label-budget";
@@ -1290,6 +1292,7 @@
         element.dispatchEvent(new Event("change",{bubbles:true,composed:true}));
       } else if (target.kind === "tab" && action === "set_selected" && value === true) {
         if (element.getAttribute?.("role") !== "tab"
+            || (element.tagName?.toLowerCase() === "button" && element.form)
             || !element.closest?.("[role='tablist']")
             || element.getAttribute?.("aria-disabled") === "true"
             || element.getAttribute?.("aria-selected") === null) {
@@ -1299,6 +1302,7 @@
       } else if (target.kind === "toggle" && action === "set_pressed" && typeof value === "boolean") {
         const current=element.getAttribute?.("aria-pressed");
         if (element.tagName?.toLowerCase() !== "button"
+            || element.form
             || !["true","false"].includes(current)
             || element.getAttribute?.("aria-disabled") === "true") {
           return {ok:false,error:"native-toggle-no-longer-valid"};
