@@ -180,3 +180,23 @@ The first native-interaction delivery slice adds a typed control contract to the
 - During rolling upgrades, the server normalizes persisted/older-Worker `details.open` and `button.action/action_value` snapshots into the typed control contract; older disclosure snapshots without a `summary` remain renderable.
 
 Checkbox/radio/range/select state is currently a local Web Chat preview; changing it does not submit a value to the upstream ChatGPT page. The renderer labels this limitation. This slice does NOT claim remote action parity for generated apps, tabs, interactive chart legends, canvas/WebGL, iframe widgets, tool buttons or arbitrary React event handlers. Those require a separately authorized, request-scoped action bridge and remain open under Issue #854. The authoritative Markdown answer remains available if a component cannot be safely represented.
+
+## 9. Current implementation status — 2026-11-27
+
+The following updates supersede earlier progress notes in this document and Issue #854:
+
+- **Worker native connected-app isolation v49** is merged in PR #956. The Worker runtime now fails closed when the native app-picker preflight cannot verify a safe request surface, injects a no-native-account-app execution policy, and audits/aborts a detected native connected-account tool call. This is defense-in-depth, not account-level OAuth introspection; the Worker ChatGPT account should remain without installed/authorized external account apps. Web Chat's separately authorized server-side plugins remain isolated from Worker-native Apps.
+- **Generated media and rich visual delivery** have additional verified integrity/budget work merged in PR #949. The stale PR #936 was closed as a duplicate; its functional content had already landed through #949. Its extra 0.22.303 version bump was not required for the accepted compatibility hotfix, which preserves the 0.22.302 bridge/manifest contract.
+- **Live Web Chat video input** now uses a bounded synthetic WebRTC camera track in the Worker ChatGPT tab, fed by browser-captured frames at up to 5 FPS, with 300-frame / 64-MiB session caps, sequence/timestamp metadata, frame ACKs and sender-loss fallback. This is a bounded frame relay, not a direct camera track shared between browsers.
+- **Native controls** are captured and safely rendered as typed disclosures, checkbox/radio/range/select controls and local code-copy actions. The typed controls now have a same-origin, owner-checked, snapshot-revision-bound action bridge to the original Worker socket/tab; Worker ACK is required and the server persists a new snapshot revision. Arbitrary buttons, chart actions, canvas/WebGL, iframe widgets and arbitrary React handlers remain intentionally inert or omitted.
+- **Voice context and lifecycle code** includes request-scoped setup-turn context/instruction injection with upstream acknowledgement, transcript persistence, cancellation/stop race fixes, Broker ACKs and media readiness checks. Those are code-level implementations; they do not prove an authenticated live Worker session or uninterrupted active Voice call across a complete browser restart.
+
+### Remaining substantive work
+
+1. Broader component parity beyond the typed-control bridge: arbitrary buttons, app tabs, chart legend/action handlers, canvas/WebGL, iframe widgets and arbitrary React handlers remain unsupported. Any future bridge must remain allowlisted, request-scoped and explicitly user-triggered.
+2. Implement and test a shared audio/video media clock if frame-accurate A/V synchronization is required. The current camera frame timestamp is diagnostic metadata; it is not proof of frame-accurate synchronization with the synthetic microphone's WebRTC audio clock.
+3. Define recovery behavior for a full Worker/browser restart during an active Voice call. Existing text/SSE recovery does not resume the original WebRTC media session.
+4. Complete staging acceptance with a real authenticated Worker + ChatGPT session for Worker reconnect, Broker/server restart, media/file integrity, final usage settlement and cross-device browser behavior.
+
+Keep Issue #854 open for these substantive gaps and real staging acceptance. Do not reclassify already implemented code as unfixed merely because staging evidence is absent, and do not mark the remaining boundaries complete based only on CI.
+
