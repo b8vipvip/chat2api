@@ -77,7 +77,7 @@ GET /version
 - Preserve individually SHA-256-verified image slots when other image identities in the same reply are incomplete; unverified slots remain placeholders.
 - Align Worker and server text-budget accounting for interactive control labels.
 - Keep the existing `0.22.302` Server/Bridge/manifest contract; the deployment Worker sync guard detects changed `chrome_extension/` paths and forces a Worker refresh without changing the wire protocol or manifest version.
-- Worker native connected-app isolation v49 adds a fail-closed composer/app-picker preflight, denies native connected-account tools in the Worker policy, and aborts/audits a detected native account-tool call. The post-detection abort is defense-in-depth, not proof that an upstream tool side effect was prevented; the Worker ChatGPT account must remain disconnected from GitHub and other external account apps.
+- Worker native connected-app isolation v49 adds a fail-closed composer/app-picker preflight, injects a Worker-side no-native-app policy, and aborts/audits a detected native account-tool call. The post-detection abort is defense-in-depth, not proof that an upstream tool side effect was prevented; the Worker ChatGPT account must remain disconnected from GitHub and other external account apps.
 
 ## v0.22.300
 
