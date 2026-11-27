@@ -71,6 +71,44 @@ def test_native_interaction_ids_are_unique_typed_and_private_to_web_chat():
 
 
 
+def test_native_semantic_tabs_are_typed_and_private_to_web_chat():
+    from app.native_content_v1 import native_public_v1_tree
+
+    payload = {
+        "version": 1, "revision": 9,
+        "root": {"tag": "div", "children": [
+            {"tag": "div", "control": {"kind": "tablist", "group": "tg_1"},
+             "children": [
+                 {"tag": "button", "interaction_id": "nc_9_1",
+                  "control": {"kind": "tab", "label": "Overview", "disabled": False,
+                              "selected": True, "group": "tg_1"}},
+                 {"tag": "button", "interaction_id": "nc_9_2",
+                  "control": {"kind": "tab", "label": "Details", "disabled": False,
+                              "selected": False, "group": "tg_1"}},
+             ]},
+        ]},
+    }
+    validated = validate_native_snapshot(payload)
+    tabs = validated["root"]["children"][0]
+    assert tabs["control"] == {"kind": "tablist", "group": "tg_1"}
+    assert [node["control"]["selected"] for node in tabs["children"]] == [True, False]
+    public = native_public_v1_tree(validated["root"])
+    assert "interaction_id" not in json.dumps(public)
+    assert "tablist" not in json.dumps(public)
+
+    invalid = json.loads(json.dumps(payload))
+    invalid["root"]["children"][0]["children"][1]["control"]["group"] = "tg_0"
+    with pytest.raises(ValueError):
+        validate_native_snapshot(invalid)
+
+    invalid = json.loads(json.dumps(payload))
+    invalid["root"]["children"][1:] = [{"tag": "button", "interaction_id": "nc_9_3",
+        "control": {"kind": "tab", "label": "Other", "disabled": False,
+                    "selected": False, "group": "tg_2"}}]
+    with pytest.raises(ValueError):
+        validate_native_snapshot(invalid)
+
+
 def test_native_sidecar_is_versioned_and_owner_isolated(tmp_path):
     store = NativeContentStore(tmp_path)
     assert store.publish("req_12345678", "key_a", snapshot())
