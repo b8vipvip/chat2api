@@ -29,6 +29,7 @@ assert.ok(voiceMain.includes("state.liveVideoTrack.requestFrame()"), "each camer
 assert.ok(liveMain.includes("LIVE_AV_SYNC_BUFFER_SECONDS"), "input PCM must use a bounded A/V jitter buffer");
 assert.ok(liveContent.includes("timestamp_ms: message.timestampMs"), "audio clock metadata must reach the MAIN-world audio graph");
 assert.ok(liveRouting.includes("timestampMs: message.timestamp_ms"), "the Worker router must preserve audio timestamps");
+assert.ok(liveText.includes("received.sync_skew_ms !== null"), "arrival fallback must not be misreported as a measured zero-skew frame");
 assert.ok(voiceMain.includes('voice.live.video.sender.attached'), "the bridge must verify that the upstream PeerConnection attached the video track");
 assert.ok(voiceMain.includes('voice.live.video.sender.detached'), "replacing the synthetic sender must be observable");
 assert.ok(voiceMain.includes('voice.live.video.track.ended'), "an ended synthetic track must be observable");
