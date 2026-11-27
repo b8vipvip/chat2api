@@ -2834,8 +2834,12 @@
           });
         }
         if (tool === "github.get_file_contents" && args.repository && args.path) {
-          knownGithubFileRefs.add(args.repository + ":" + args.path);
-          knownGithubFileRefs.add(JSON.stringify([args.repository,args.ref || "",args.path]));
+          if (args.ref) {
+            knownGithubRefs.add(args.repository + ":" + args.ref);
+            knownGithubFileRefs.add(JSON.stringify([args.repository,args.ref,args.path]));
+          } else {
+            knownGithubFileRefs.add(args.repository + ":" + args.path);
+          }
         }
         if (["github.list_commits","github.list_branches","github.get_commit"].includes(tool)) {
           if (args.ref) knownGithubRefs.add(args.repository + ":" + args.ref);
@@ -3035,6 +3039,15 @@
             if (row.type === "dir") knownGithubDirectoryRefs.add(key);
             if (row.type === "file") knownGithubFileRefs.add(key);
           });
+        }
+        if (outcome.result?.ok && outcome.tool === "github.get_file_contents") {
+          const {repository,path,ref} = outcome.result.arguments;
+          if (ref) {
+            knownGithubRefs.add(repository + ":" + ref);
+            knownGithubFileRefs.add(JSON.stringify([repository,ref,path]));
+          } else {
+            knownGithubFileRefs.add(repository + ":" + path);
+          }
         }
         if (outcome.result?.ok && outcome.tool === "gmail.search_messages") {
           (outcome.result.results || []).forEach(row => {
