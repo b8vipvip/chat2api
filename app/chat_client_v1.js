@@ -2362,6 +2362,7 @@
       const query = typeof args.query === "string" ? args.query.trim() : "";
       if (!query || query.length > 200) throw new Error("GitHub Issue 搜索词必须为 1-200 个字符");
       const repository = args.repository === undefined ? "" : repositoryValue();
+      if (repository && /(?:^|\\s)repo:/i.test(query)) throw new Error("指定 repository 时不能重复传入 repo: 搜索限定符");
       const page = pageValue();
       return {query,...(repository ? {repository} : {}),...(page === undefined ? {} : {page})};
     }
@@ -2542,7 +2543,7 @@
       }
       if (definition.name === "github.list_workflow_jobs") {
         const key = args.repository + ":" + args.run_id;
-        if (!knownGithubRunRefs.has(key) && !userPromptText.includes(String(args.run_id))) {
+        if (!knownGithubRunRefs.has(key) && !new RegExp("(?:^|\\\\D)" + args.run_id + "(?:$|\\\\D)").test(userPromptText)) {
           throw new Error("必须使用用户提供或本轮 GitHub Actions 返回的 workflow run ID。");
         }
       }
