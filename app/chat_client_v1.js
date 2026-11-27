@@ -1984,7 +1984,12 @@
       if (toolName === "get_commit") {
         return rows.slice(0,1).map(row => ({
           repository:row.repository,sha:row.sha,message:String(row.message || "").slice(0,1800),
-          author:row.author,date:row.date,url:row.url,stats:row.stats,parents:row.parents,files:row.files,
+          author:row.author,date:row.date,url:row.url,stats:row.stats,parents:row.parents,
+          files:Array.isArray(row.files) ? row.files.slice(0,20) : [],
+          files_returned_by_github:row.files_returned_by_github,
+          files_included:row.files_included,
+          files_truncated:row.files_truncated === true,
+          github_api_file_cap_reached:row.github_api_file_cap_reached === true,
         }));
       }
       if (toolName === "search_issues") {
@@ -2170,8 +2175,8 @@
         },
         {
           name:"github.get_commit",provider:"github",toolName:"get_commit",
-          description:"Read a specific commit and paginated changed files. Use a SHA from user text or prior commit/branch results. Use page 1-100; check pagination.has_more.",
-          parameters:{type:"object",additionalProperties:false,properties:{repository:repositorySchema,sha:{"type":"string","pattern":"^[0-9a-fA-F]{7,40}$"},page:{type:"integer",minimum:1,maximum:100}},required:["repository","sha"]},
+          description:"Read a specific commit and up to 20 changed-file summaries. GitHub's commit-detail endpoint does not support file pagination; the result explicitly reports files_returned_by_github, files_included and files_truncated. If files_truncated is true, use directory browsing and grounded file reads to inspect additional files.",
+          parameters:{type:"object",additionalProperties:false,properties:{repository:repositorySchema,sha:{"type":"string","pattern":"^[0-9a-fA-F]{7,40}$"}},required:["repository","sha"]},
         },
         {
           name:"github.list_directory",provider:"github",toolName:"list_directory",
@@ -2358,8 +2363,10 @@
     }
     if (["github.list_issue_comments","github.list_pull_reviews","github.list_pull_review_comments","github.list_pull_comments","github.list_branches","github.get_commit","github.list_directory"].includes(definition.name)) {
       const result = {repository:repositoryValue()};
-      const page = pageValue();
-      if (page !== undefined) result.page = page;
+      if (definition.name !== "github.get_commit") {
+        const page = pageValue();
+        if (page !== undefined) result.page = page;
+      }
       if (definition.name === "github.list_issue_comments") result.issue_number = positiveNumber(args.issue_number);
       if (["github.list_pull_reviews","github.list_pull_review_comments","github.list_pull_comments"].includes(definition.name)) result.pull_number = positiveNumber(args.pull_number);
       if (definition.name === "github.get_commit") {
