@@ -46,6 +46,7 @@
     liveVideoLastSequence: -1,
     liveVideoFrameCount: 0,
     liveVideoFrameRequestMode: "",
+    liveAVClockWaitedRequestId: null,
   };
   globalThis[KEY] = state;
 
@@ -438,17 +439,24 @@
     state.liveVideoLastSequence = -1;
     state.liveVideoFrameCount = 0;
     state.liveVideoFrameRequestMode = typeof track.requestFrame === "function" ? "manual" : "timed_5fps";
+    state.liveAVClockWaitedRequestId = null;
     return track;
   }
 
   async function waitForLiveAVFrameClock(ownerRequestId,timestampMs) {
-    for (let attempt = 0; attempt < 12; attempt += 1) {
-      const clock = state.liveAVClock;
-      if (clock?.requestId === ownerRequestId &&
-          Number.isFinite(clock.clientOriginMs) && Number.isFinite(clock.audioOriginSec)) break;
-      await delay(20);
-      if (state.requestId !== ownerRequestId) {
-        throw new Error("Live video session ended while waiting for the shared media clock");
+    const hasClock = () => {
+      const current = state.liveAVClock;
+      return current?.requestId === ownerRequestId
+        && Number.isFinite(current.clientOriginMs)
+        && Number.isFinite(current.audioOriginSec);
+    };
+    if (!hasClock() && state.liveAVClockWaitedRequestId !== ownerRequestId) {
+      state.liveAVClockWaitedRequestId = ownerRequestId;
+      for (let attempt = 0; attempt < 12 && !hasClock(); attempt += 1) {
+        await delay(20);
+        if (state.requestId !== ownerRequestId) {
+          throw new Error("Live video session ended while waiting for the shared media clock");
+        }
       }
     }
     const clock = state.liveAVClock;
