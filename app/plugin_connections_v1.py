@@ -1203,9 +1203,11 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                         if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-fA-F]{7,40}", sha):
                             raise HTTPException(422, "sha must be a 7-40 character hexadecimal commit SHA", headers=_PRIVATE_HEADERS)
                         page = _github_page(payload.get("page"))
+                        # GitHub's commit-detail endpoint does not paginate its files array.
+                        # It returns at most 300 changed files; never pretend page=N is supported.
                         response = await client.get(
                             "https://api.github.com/repos/" + repository + "/commits/" + sha,
-                            params={"per_page": 5, "page": page}, headers=github_headers,
+                            headers=github_headers,
                         )
                         response.raise_for_status()
                         raw = response.json()
@@ -1227,9 +1229,13 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
                                 "patch": str(row.get("patch") or "")[:1000],
                                 "patch_available": isinstance(row.get("patch"), str),
                                 "patch_truncated": len(str(row.get("patch") or "")) > 1000,
-                            } for row in (raw.get("files") or [])[:5] if isinstance(row, dict)],
+                            } for row in (raw.get("files") or [])[:20] if isinstance(row, dict)],
+                            "files_returned_by_github": len(raw.get("files") or []),
+                            "files_included": min(len(raw.get("files") or []), 20),
+                            "files_truncated": len(raw.get("files") or []) > 20,
+                            "github_api_file_cap_reached": len(raw.get("files") or []) >= 300,
                         }]
-                        pagination = {"page": page, "per_page": 5, "has_more": _github_has_more(response)}
+                        pagination = {"page": 1, "per_page": 20, "has_more": False}
                     elif tool_name == "list_directory":
                         repository = _github_repo_name(payload.get("repository"))
                         path_value = payload.get("path", "")
