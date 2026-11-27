@@ -233,10 +233,13 @@
       if (control.kind==="copy") return exact(["kind","label","text"]) &&
         safeControlText(control.label,80) && control.label.trim().length>0 &&
         safeControlText(control.text,150000,true) && control.text.length>0;
-      return control.kind==="tab" && exact(["kind","label","disabled","selected","group"]) &&
+      if (control.kind==="tab") return exact(["kind","label","disabled","selected","group"]) &&
         safeControlText(control.label,160) && control.label.trim().length>0 &&
         typeof control.disabled==="boolean" && typeof control.selected==="boolean" &&
         typeof control.group==="string" && /^tg_[1-9][0-9]{0,3}$/.test(control.group);
+      return control.kind==="toggle" && exact(["kind","label","disabled","pressed"]) &&
+        safeControlText(control.label,160) && control.label.trim().length>0 &&
+        typeof control.disabled==="boolean" && typeof control.pressed==="boolean";
     }
     return false;
   }
@@ -264,7 +267,7 @@
       if (tag==="details" && value.control?.kind!=="disclosure") return false;
       if (tag==="input" && !["checkbox","radio","range"].includes(value.control?.kind)) return false;
       if (tag==="select" && value.control?.kind!=="select") return false;
-      if (tag==="button" && value.control?.kind!=="tab") return false;
+      if (tag==="button" && !["tab","toggle"].includes(value.control?.kind)) return false;
     }
     let childTabGroup=parentTabGroup;
     if (value.control !== undefined) {
@@ -435,6 +438,44 @@
     return true;
   }
 
+  function bindToggleInteraction(element,value,context) {
+    const interactionId=String(value?.interaction_id || "");
+    const control=value?.control || {};
+    if (!interactionId || typeof context?.onInteraction!=="function") return false;
+    let accepted=control.pressed===true;
+    let pending=false;
+    element.addEventListener("click",async()=>{
+      if (pending) return;
+      const next=!accepted;
+      pending=true;
+      element.setAttribute("aria-busy","true");
+      try {
+        const result=await context.onInteraction({
+          interaction_id:interactionId,
+          revision:context.revision,
+          action:"set_pressed",
+          value:next,
+        });
+        if (result?.ok!==true) throw new Error("native toggle action was not acknowledged");
+        accepted=next;
+        element.setAttribute("aria-pressed",String(next));
+        element.removeAttribute?.("aria-invalid");
+        if (result?.persisted===false) {
+          element.setAttribute("title","切换已同步到 Worker，但服务器尚未确认持久化");
+        } else {
+          element.removeAttribute?.("title");
+        }
+      } catch (_) {
+        element.setAttribute("aria-invalid","true");
+        element.setAttribute("title","切换同步失败，请重试");
+      } finally {
+        pending=false;
+        element.removeAttribute?.("aria-busy");
+      }
+    });
+    return true;
+  }
+
   function createNode(value,snapshot,depth,context) {
     if (depth > 64) throw new Error("native tree depth exceeded");
     const tag = value.tag;
@@ -477,6 +518,20 @@
         if(validStyle(key,item,tag))element.style[key]=item;
       });
       bindTabInteraction(element,value,context);
+      return element;
+    } else if (tag==="button" && value.control?.kind==="toggle") {
+      element=document.createElement("button");
+      element.type="button";
+      element.className="native-toggle-control";
+      element.disabled=value.control.disabled;
+      element.textContent=value.control.label;
+      element.setAttribute("aria-label",value.control.label);
+      element.setAttribute("aria-pressed",String(value.control.pressed));
+      element.setAttribute("aria-disabled",String(value.control.disabled));
+      if (value.style) Object.entries(value.style).forEach(([key,item])=>{
+        if(validStyle(key,item,tag))element.style[key]=item;
+      });
+      bindToggleInteraction(element,value,context);
       return element;
     } else if (tag==="input") {
       element=document.createElement("input");
@@ -590,7 +645,7 @@
       if (!node || typeof node!=="object") continue;
       if (["input","select","details"].includes(node.tag)
           && (!node.interaction_id || typeof onInteraction!=="function")) return true;
-      if (node.tag==="button" && node.control?.kind==="tab"
+      if (node.tag==="button" && ["tab","toggle"].includes(node.control?.kind)
           && (!node.interaction_id || typeof onInteraction!=="function")) return true;
       pending.push(...(node.children || []));
     }
