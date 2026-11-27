@@ -13,7 +13,6 @@ NEW_JS = [
     "chrome_extension/content_request_lifecycle_v50.js", "chrome_extension/content_rich_response_v69.js",
     "chrome_extension/content_request_v6.js", "chrome_extension/content_network_stream_recovery_v55.js",
     "chrome_extension/content_native_tool_stream_v63.js", "chrome_extension/native_tool_stream_main_v63.js",
-    "chrome_extension/content_tool_isolation_v49.js", "chrome_extension/background_tool_isolation_v49.js",
     "chrome_extension/content_response_semantic_recovery_v51.js", "chrome_extension/content_transient_retry_v50.js",
     "chrome_extension/content_generation_liveness_v49.js", "chrome_extension/content_runtime_contract_v48.js",
     "chrome_extension/content_runtime_contract_v71.js", "chrome_extension/network_stream_main_v55.js",
@@ -97,6 +96,7 @@ def test_worker_native_connected_app_isolation_is_fail_closed_and_audited():
     assert "native_github_tool_enabled: false" in background
     assert "tool-isolation-v49" in background
     assert "tool_isolation_v49:" in contract
+    assert "native_tool_stream_v63: Number(nativeTool?.revision || 0) >= 64" in contract
     assert "background_tool_isolation_v49.js" in entry
     assert "content_tool_isolation_v49.js" in manifest["content_scripts"][1]["js"]
     assert "blockNativeExternalAccountTool" in bridge
