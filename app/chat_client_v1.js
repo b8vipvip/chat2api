@@ -2702,11 +2702,12 @@
           ...(result.results_truncated ? {results_truncated:true,omitted_results_count:result.omitted_results_count} : {}),
           ...(result.single_result_truncated ? {single_result_truncated:true} : {}),
         };
-        while (JSON.stringify(preview).length > 2000 && preview.results.length > 1) {
+        const previewLimit = rawName === "github.list_pull_review_threads" ? 3000 : 2000;
+        while (JSON.stringify(preview).length > previewLimit && preview.results.length > 1) {
           preview.results.pop();
           preview.preview_truncated = true;
         }
-        if (JSON.stringify(preview).length > 2000) {
+        if (JSON.stringify(preview).length > previewLimit) {
           preview.results = [];
           preview.preview_truncated = true;
           preview.excerpt = JSON.stringify(previewRows[0] || {}).slice(0,700);
@@ -2784,7 +2785,7 @@
           message_created_at:String(message.createdAt || ""),
           toolName:String(event.toolName || "GitHub plugin").slice(0,100),
           arguments:String(event.arguments || "").slice(0,600),
-          resultPreview:event.resultPreview.slice(0,2000),
+          resultPreview:event.resultPreview.slice(0,3000),
           references:normalizeToolReferences(event.references).slice(0,4),
         };
         const weight = JSON.stringify(evidence).length;
