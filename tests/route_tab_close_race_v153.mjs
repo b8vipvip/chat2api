@@ -17,13 +17,17 @@ const retirement=section(routerSource,"  async function retireRoute(key, route, 
 // reallocation. Measure the router retirement plus the second resolution,
 // not just the later tabs.sendMessage recovery path.
 const routeHelpers=section(dispatchSource,"  function recordRouteReallocation(message, started) {","  function enqueueDispatch(taskFactory) {");
-let readinessClock=0,readinessAllocations=0,readinessRetires=0;
+let readinessClock=0,readinessAllocations=0,readinessRetires=0,readinessPersists=0;
 const readinessContext={
   globalThis:{
     resolveTargetTabForRequest:async()=>({id:++readinessAllocations,windowId:77}),
     __CHAT2API_CONVERSATION_ROUTING_V1__:{failRequest:async()=>{readinessRetires++;return true;}},
   },
-  state:{requestTabs:new Map()},
+  state:{requestTabs:new Map(),nativeRequestTabs:new Map()},
+  persistNativeRequestTabs:async()=>{
+    readinessPersists++;
+    assert.ok(readinessContext.state.nativeRequestTabs instanceof Map);
+  },
   monotonicNow:()=>++readinessClock,
   elapsedMs:started=>Math.max(0,++readinessClock-started),
   timingValue:value=>typeof value==="number"&&Number.isFinite(value)&&value>=0?Math.round(value*10)/10:null,
@@ -39,6 +43,7 @@ const readinessTab=await readinessContext.globalThis.resolve(readinessMessage);
 assert.equal(readinessTab.id,2);
 assert.equal(readinessAllocations,2);
 assert.equal(readinessRetires,1);
+assert.equal(readinessPersists,1,"routed tab resolution must persist its native action route");
 assert.equal(readinessMessage.__chat2api_worker_route_reallocation_ms,1,
   "pre-dispatch tab-readiness retry must expose its own duration");
 

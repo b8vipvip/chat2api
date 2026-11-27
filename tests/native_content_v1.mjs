@@ -11,6 +11,12 @@ class Element {
     for(const c of children) if(c instanceof Element)c.parentElement=this;
   }
   getAttribute(name){return Object.prototype.hasOwnProperty.call(this.attributes,name)?this.attributes[name]:null;}
+  dispatchEvent(event){(this.dispatchedEvents??=[]).push(event.type);return true;}
+  click(){
+    if(this.type==="checkbox")this.checked=!this.checked;
+    else if(this.type==="radio")this.checked=true;
+    this.dispatchEvent({type:"change"});
+  }
   getBoundingClientRect(){return {width:100,height:100};}
   matches(s){return false;}
   closest(s){if(String(s).includes("form")){for(let node=this;node;node=node.parentElement)if(node.tagName==="FORM")return node;}return null;}
@@ -1136,3 +1142,83 @@ assert.equal(chartReply.root.children[0].children[0].text,"季度收入趋势");
 assert.equal(chartReply.root.children[0].children[1].tag,"desc");
 assert.equal(chartReply.root.children[0].children[1].text,"按季度展示收入变化");
 console.log("Native interactive controls: safe disclosure, choice, select, slider and code-copy capture");
+
+// Typed native controls carry request/revision-scoped IDs. Only the exact
+// original Worker DOM element may receive a user-initiated, allowlisted action.
+let nativeInteractionListener=null;
+const interactionCtx={
+  ...ctx,
+  HTMLInputElement:class HTMLInputElement {},
+  HTMLSelectElement:class HTMLSelectElement {},
+  Event:class Event {constructor(type,options={}){this.type=type;Object.assign(this,options);}},
+  chrome:{runtime:{
+    sendMessage:async message=>{sent.push(message);return {ok:true,committed:true};},
+    onMessage:{addListener:listener=>{nativeInteractionListener=listener;}},
+  }},
+};
+delete interactionCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,interactionCtx);
+const interactionCheckbox=new Element("INPUT",[],{"aria-label":"Enable"});
+interactionCheckbox.type="checkbox";interactionCheckbox.checked=false;interactionCheckbox.disabled=false;
+const interactionRange=new Element("INPUT",[],{"aria-label":"Opacity"});
+interactionRange.type="range";interactionRange.min="0";interactionRange.max="100";interactionRange.step="5";interactionRange.value="25";interactionRange.disabled=false;
+const interactionOptionA=new Element("OPTION",[],{});interactionOptionA.value="a";interactionOptionA.label="Option A";interactionOptionA.textContent="Option A";interactionOptionA.disabled=false;interactionOptionA.selected=true;
+const interactionOptionB=new Element("OPTION",[],{});interactionOptionB.value="b";interactionOptionB.label="Option B";interactionOptionB.textContent="Option B";interactionOptionB.disabled=false;interactionOptionB.selected=false;
+const interactionSelect=new Element("SELECT",[interactionOptionA,interactionOptionB],{"aria-label":"Mode"});
+interactionSelect.options=[interactionOptionA,interactionOptionB];interactionSelect.value="a";interactionSelect.multiple=false;interactionSelect.disabled=false;
+const interactionDetails=new Element("DETAILS",[new Element("SUMMARY",[{nodeType:3,nodeValue:"Details"}])]);
+interactionDetails.open=false;
+const interactionRoot=new Element("DIV",[interactionDetails,interactionCheckbox,interactionRange,interactionSelect]);
+const interactionApi=interactionCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+const interactionSnapshot=interactionApi.snapshot({
+  requestId:"req_nativeactions12345",submitStartedAt:Date.now(),
+  lastCandidateNode:interactionRoot,
+});
+assert.ok(interactionSnapshot);
+const [detailsNode,checkboxNode,rangeNode,selectNode]=interactionSnapshot.root.children;
+assert.match(detailsNode.interaction_id,/^nc_1_1$/);
+assert.match(checkboxNode.interaction_id,/^nc_1_2$/);
+assert.match(rangeNode.interaction_id,/^nc_1_3$/);
+assert.match(selectNode.interaction_id,/^nc_1_4$/);
+let actionSequence=0;
+function dispatchNativeAction(action,interactionId,value,revision=interactionSnapshot.revision,requestId="req_nativeactions12345",actionId=null){
+  let response=null;
+  nativeInteractionListener({
+    type:"chat2api.native.interaction",
+    request_id:requestId,
+    action_id:actionId || (++actionSequence).toString(16).padStart(32,"0"),
+    revision,
+    interaction_id:interactionId,
+    action,
+    value,
+  },{},value=>{response=value;});
+  return response === null ? null : JSON.parse(JSON.stringify(response));
+}
+assert.deepEqual(dispatchNativeAction("set_checked",checkboxNode.interaction_id,true),{ok:true,revision:2});
+assert.equal(interactionCheckbox.checked,true);
+assert.deepEqual(dispatchNativeAction("set_value",rangeNode.interaction_id,50,2),{ok:true,revision:3});
+assert.equal(interactionRange.value,"50");
+assert.deepEqual(dispatchNativeAction("set_value",selectNode.interaction_id,"b",3),{ok:true,revision:4});
+assert.equal(interactionSelect.value,"b");
+assert.deepEqual(dispatchNativeAction("set_open",detailsNode.interaction_id,true,4),{ok:true,revision:5});
+assert.equal(interactionDetails.open,true);
+assert.equal(dispatchNativeAction("set_checked",checkboxNode.interaction_id,false,1).ok,false,
+  "a consumed native revision must not be replayed");
+const duplicateActionId="f".repeat(32);
+const firstDelivery=dispatchNativeAction("set_checked",checkboxNode.interaction_id,true,5,
+  "req_nativeactions12345",duplicateActionId);
+assert.deepEqual(firstDelivery,{ok:true,revision:6});
+const duplicateDelivery=dispatchNativeAction("set_checked",checkboxNode.interaction_id,true,5,
+  "req_nativeactions12345",duplicateActionId);
+assert.deepEqual(duplicateDelivery,{ok:true,revision:6,duplicate:true},
+  "a retried action ID returns the prior result without applying twice");
+const interactionDisabledCheckbox=new Element("INPUT",[],{"aria-label":"Disabled"});
+interactionDisabledCheckbox.type="checkbox";interactionDisabledCheckbox.checked=false;interactionDisabledCheckbox.disabled=true;
+const disabledRoot=new Element("DIV",[interactionDisabledCheckbox]);
+const disabledSnapshot=interactionApi.snapshot({
+  requestId:"req_nativeactionsdisabled",submitStartedAt:Date.now(),
+  lastCandidateNode:disabledRoot,
+});
+assert.equal(dispatchNativeAction("set_checked",disabledSnapshot.root.children[0].interaction_id,true,disabledSnapshot.revision,"req_nativeactionsdisabled").ok,false);
+console.log("native-content-request-scoped-interaction-actions-passed");
+

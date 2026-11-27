@@ -97,3 +97,56 @@ def test_registry_binds_every_broker_request_family_including_legacy_dictation(t
         assert replacement_socket.sent == []
 
     asyncio.run(scenario())
+
+def test_registry_retains_native_interaction_route_only_on_original_chat_socket(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        registry = ClientRegistry(tmp_path)
+        socket = FakeSocket()
+        registry.clients["worker-native"] = SimpleNamespace(connection_enabled=True)
+        registry.sockets["worker-native"] = socket
+        registry.chatgpt_routing_ready = lambda _client_id: True
+        request_id = "req_native_interaction_1234"
+        state = SimpleNamespace(
+            client_id="worker-native", dispatch_socket=None,
+            terminal_event_type=None, completed_mono=None,
+        )
+        registry.request_broker = SimpleNamespace(requests={request_id: state})
+
+        await registry.send("worker-native", {
+            "type": "chat.request", "request_id": request_id,
+        })
+        route = registry.native_interaction_routes.get(request_id)
+        assert route and route["websocket"] is socket
+        assert route["client_id"] == "worker-native"
+
+        # The Broker lease is released after chat.completed, but a bounded
+        # native interaction route remains bound to the exact original socket.
+        registry.request_broker.requests.clear()
+        await registry.send("worker-native", {
+            "type": "chat.native.interaction",
+            "request_id": request_id,
+            "action_id": "a" * 32,
+        })
+        assert socket.sent[-1]["type"] == "chat.native.interaction"
+
+        replacement = FakeSocket()
+        registry.sockets["worker-native"] = replacement
+        with pytest.raises(RuntimeError, match="original Worker socket"):
+            await registry.send("worker-native", {
+                "type": "chat.native.interaction",
+                "request_id": request_id,
+                "action_id": "b" * 32,
+            })
+        assert replacement.sent == []
+
+        registry.sockets["worker-native"] = socket
+        registry.native_interaction_routes[request_id]["expires_mono"] = 0
+        with pytest.raises(RuntimeError, match="route expired"):
+            await registry.send("worker-native", {
+                "type": "chat.native.interaction",
+                "request_id": request_id,
+                "action_id": "c" * 32,
+            })
+
+    asyncio.run(scenario())
+

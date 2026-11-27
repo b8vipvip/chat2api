@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
+import math
 import re
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -254,6 +257,257 @@ def install_web_chat_features_v1(app: Any) -> Any:
         return JSONResponse(snapshot, headers={
             **_PRIVATE_HEADERS, "X-Content-Type-Options": "nosniff",
         })
+
+    pending_native_interactions: dict[str, dict[str, Any]] = {}
+    native_interaction_locks: dict[str, asyncio.Lock] = {}
+
+    async def receive_native_interaction_ack(client_id: str, websocket: Any, message: dict[str, Any]) -> None:
+        action_id = str(message.get("action_id") or "")
+        pending = pending_native_interactions.get(action_id)
+        if (not pending or pending.get("client_id") != client_id
+                or pending.get("websocket") is not websocket):
+            return
+        if (
+            pending.get("request_id") != str(message.get("request_id") or "")
+            or pending.get("revision") != message.get("revision")
+            or pending.get("interaction_id") != str(message.get("interaction_id") or "")
+        ):
+            return
+        future = pending.get("future")
+        if isinstance(future, asyncio.Future) and not future.done():
+            future.set_result({
+                "ok": message.get("ok") is True,
+                "revision": message.get("revision"),
+                "error": str(message.get("error") or "")[:120],
+            })
+
+    app.state.native_interaction_ack_receiver = receive_native_interaction_ack
+
+    def find_native_interaction(root: object, interaction_id: str) -> dict[str, Any] | None:
+        stack = [root]
+        visited = 0
+        while stack and visited < 30000:
+            node = stack.pop()
+            if not isinstance(node, dict):
+                continue
+            visited += 1
+            if node.get("interaction_id") == interaction_id:
+                return node
+            children = node.get("children")
+            if isinstance(children, list):
+                stack.extend(reversed(children))
+        return None
+
+    def validate_native_interaction(node: dict[str, Any], action: str, value: object) -> None:
+        tag = node.get("tag")
+        control = node.get("control") if isinstance(node.get("control"), dict) else {}
+        if control.get("disabled") is True:
+            raise HTTPException(status_code=409, detail="native control is disabled", headers=_PRIVATE_HEADERS)
+        kind = control.get("kind")
+        if tag == "details" and kind == "disclosure" and action == "set_open" and type(value) is bool:
+            return
+        if tag == "input" and kind == "checkbox" and action == "set_checked" and type(value) is bool:
+            return
+        if tag == "input" and kind == "radio" and action == "set_checked" and value is True:
+            return
+        if tag == "input" and kind == "range" and action == "set_value":
+            if type(value) not in (int, float) or not math.isfinite(value):
+                raise HTTPException(status_code=422, detail="invalid range value", headers=_PRIVATE_HEADERS)
+            minimum, maximum, step = (control.get(key) for key in ("min", "max", "step"))
+            if (
+                any(type(item) not in (int, float) or not math.isfinite(item)
+                    for item in (minimum, maximum, step))
+                or minimum >= maximum or step <= 0
+            ):
+                raise HTTPException(status_code=422, detail="native range metadata is invalid", headers=_PRIVATE_HEADERS)
+            units = (value - minimum) / step
+            if (value < minimum or value > maximum
+                    or not math.isfinite(units) or abs(units - round(units)) > 1e-6):
+                raise HTTPException(status_code=422, detail="range value outside allowed steps", headers=_PRIVATE_HEADERS)
+            return
+        if tag == "select" and kind == "select" and action == "set_value" and isinstance(value, str):
+            options = node.get("children") if isinstance(node.get("children"), list) else []
+            if any(
+                isinstance(option, dict)
+                and isinstance(option.get("control"), dict)
+                and option["control"].get("kind") == "option"
+                and option["control"].get("value") == value
+                and option["control"].get("disabled") is not True
+                for option in options
+            ):
+                return
+            raise HTTPException(status_code=422, detail="select option is not allowed", headers=_PRIVATE_HEADERS)
+        raise HTTPException(status_code=422, detail="native control action is not allowed", headers=_PRIVATE_HEADERS)
+
+    def apply_native_interaction(snapshot: dict[str, Any], interaction_id: str, action: str, value: object) -> None:
+        node = find_native_interaction(snapshot.get("root"), interaction_id)
+        if node is None:
+            raise ValueError("native interaction target disappeared")
+        control = node.get("control") if isinstance(node.get("control"), dict) else {}
+        if node.get("tag") == "details":
+            control["open"] = value
+        elif node.get("tag") == "input" and control.get("kind") == "checkbox":
+            control["checked"] = value
+        elif node.get("tag") == "input" and control.get("kind") == "radio":
+            group = control.get("group")
+            if isinstance(group, str) and group:
+                stack = [snapshot.get("root")]
+                while stack:
+                    current = stack.pop()
+                    if not isinstance(current, dict):
+                        continue
+                    other = current.get("control")
+                    if (current.get("tag") == "input" and isinstance(other, dict)
+                            and other.get("kind") == "radio" and other.get("group") == group):
+                        other["checked"] = current is node
+                    children = current.get("children")
+                    if isinstance(children, list):
+                        stack.extend(children)
+            else:
+                control["checked"] = True
+        elif node.get("tag") == "input" and control.get("kind") == "range":
+            control["value"] = value
+        elif node.get("tag") == "select":
+            control["selected"] = value
+            for option in node.get("children") or []:
+                option_control = option.get("control") if isinstance(option, dict) else None
+                if isinstance(option_control, dict) and option_control.get("kind") == "option":
+                    option_control["selected"] = option_control.get("value") == value
+
+    @app.post("/api/user/chat/requests/{request_id}/native-content/interactions")
+    async def user_chat_native_content_interaction(request_id: str, request: Request) -> Response:
+        if not same_origin_admin_request(request):
+            raise HTTPException(status_code=403, detail="Same-origin request required", headers=_PRIVATE_HEADERS)
+        accounts, user, owner = owned_request(request_id, request)
+        try:
+            body = await request.json()
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="invalid interaction body", headers=_PRIVATE_HEADERS)
+        if not isinstance(body, dict) or set(body) != {"revision", "interaction_id", "action", "value"}:
+            raise HTTPException(status_code=422, detail="invalid interaction schema", headers=_PRIVATE_HEADERS)
+        revision = body.get("revision")
+        interaction_id = body.get("interaction_id")
+        action = body.get("action")
+        value = body.get("value")
+        if (
+            type(revision) is not int or not 1 <= revision < 1000000
+            or not isinstance(interaction_id, str)
+            or not re.fullmatch(r"nc_[1-9][0-9]{0,6}_[1-9][0-9]{0,3}", interaction_id)
+            or not isinstance(action, str) or action not in {"set_open", "set_checked", "set_value"}
+        ):
+            raise HTTPException(status_code=422, detail="invalid interaction envelope", headers=_PRIVATE_HEADERS)
+
+        if request_id not in native_interaction_locks and len(native_interaction_locks) >= 128:
+            for stale_request_id, stale_lock in list(native_interaction_locks.items()):
+                if not stale_lock.locked():
+                    native_interaction_locks.pop(stale_request_id, None)
+                    if len(native_interaction_locks) < 128:
+                        break
+        if request_id not in native_interaction_locks and len(native_interaction_locks) >= 128:
+            raise HTTPException(status_code=429, detail="native interaction lock capacity reached",
+                                headers=_PRIVATE_HEADERS)
+        lock = native_interaction_locks.setdefault(request_id, asyncio.Lock())
+        async with lock:
+            row = request.app.state.telemetry.get(request_id) or {}
+            if str(row.get("status") or "").lower() != "completed":
+                raise HTTPException(status_code=409, detail="native controls are available after completion", headers=_PRIVATE_HEADERS)
+            snapshot = await user_native_snapshot(request_id, request)
+            if not snapshot or snapshot.get("finality") != "verified-final":
+                raise HTTPException(status_code=409, detail="verified native snapshot is not ready", headers=_PRIVATE_HEADERS)
+            if snapshot.get("revision") != revision:
+                raise HTTPException(status_code=409, detail="native snapshot revision changed; refresh and retry", headers=_PRIVATE_HEADERS)
+            target = find_native_interaction(snapshot.get("root"), interaction_id)
+            if target is None:
+                raise HTTPException(status_code=404, detail="native control not found", headers=_PRIVATE_HEADERS)
+            validate_native_interaction(target, action, value)
+            store = getattr(request.app.state, "native_content", None)
+            stored_before = store.get(request_id, owner) if store is not None else None
+            stored_target = (
+                find_native_interaction(stored_before.get("root"), interaction_id)
+                if isinstance(stored_before, dict) else None
+            )
+            if (
+                not isinstance(stored_before, dict)
+                or stored_before.get("revision") != revision
+                or not isinstance(stored_target, dict)
+                or stored_target.get("tag") != target.get("tag")
+                or stored_target.get("control") != target.get("control")
+            ):
+                raise HTTPException(status_code=409, detail="native snapshot changed; refresh and retry",
+                                    headers=_PRIVATE_HEADERS)
+
+            client_id = str(row.get("client_id") or "")
+            if not client_id:
+                raise HTTPException(status_code=503, detail="original Worker route unavailable", headers=_PRIVATE_HEADERS)
+            if len(pending_native_interactions) >= 128:
+                raise HTTPException(status_code=429, detail="too many pending native interactions", headers=_PRIVATE_HEADERS)
+            action_id = uuid.uuid4().hex
+            future = asyncio.get_running_loop().create_future()
+            pending_native_interactions[action_id] = {
+                "client_id": client_id,
+                "websocket": request.app.state.registry.sockets.get(client_id),
+                "request_id": request_id,
+                "revision": revision,
+                "interaction_id": interaction_id,
+                "future": future,
+            }
+            try:
+                action_message = {
+                    "type": "chat.native.interaction",
+                    "request_id": request_id,
+                    "action_id": action_id,
+                    "revision": revision,
+                    "interaction_id": interaction_id,
+                    "action": action,
+                    "value": value,
+                }
+                try:
+                    await request.app.state.registry.send(client_id, action_message)
+                except (RuntimeError, KeyError) as error:
+                    raise HTTPException(status_code=503, detail="original Worker is unavailable", headers=_PRIVATE_HEADERS) from error
+                try:
+                    acknowledgement = await asyncio.wait_for(future, timeout=3.0)
+                except asyncio.TimeoutError:
+                    # The Worker may have applied the action while its first
+                    # ACK was lost. Re-send the same server-generated action
+                    # ID; the content script deduplicates it and returns the
+                    # original result without applying it twice.
+                    retry_future = asyncio.get_running_loop().create_future()
+                    pending_native_interactions[action_id]["future"] = retry_future
+                    try:
+                        await request.app.state.registry.send(client_id, action_message)
+                    except (RuntimeError, KeyError) as error:
+                        raise HTTPException(status_code=503, detail="original Worker route was lost during retry",
+                                            headers=_PRIVATE_HEADERS) from error
+                    try:
+                        acknowledgement = await asyncio.wait_for(retry_future, timeout=2.0)
+                    except asyncio.TimeoutError as error:
+                        raise HTTPException(status_code=504, detail="Worker native control acknowledgement timed out",
+                                            headers=_PRIVATE_HEADERS) from error
+            finally:
+                pending_native_interactions.pop(action_id, None)
+
+            if not acknowledgement.get("ok"):
+                raise HTTPException(status_code=409, detail=acknowledgement.get("error") or "Worker rejected native control action",
+                                    headers=_PRIVATE_HEADERS)
+
+            stored = store.get(request_id, owner) if store is not None else None
+            if not isinstance(stored, dict) or stored.get("revision") != revision:
+                raise HTTPException(status_code=409, detail="native snapshot changed during interaction; reload the conversation",
+                                    headers=_PRIVATE_HEADERS)
+            updated = copy.deepcopy(stored)
+            apply_native_interaction(updated, interaction_id, action, value)
+            updated["revision"] = revision + 1
+            if not store.publish(request_id, owner, updated):
+                raise HTTPException(status_code=409, detail="native interaction state could not be committed",
+                                    headers=_PRIVATE_HEADERS)
+            persisted = bool(store.persist(request_id, owner))
+            return JSONResponse({
+                "ok": True,
+                "revision": revision + 1,
+                "persisted": persisted,
+                **({"warning": "interaction applied but durable snapshot persistence is pending"} if not persisted else {}),
+            }, headers={**_PRIVATE_HEADERS, "X-Content-Type-Options": "nosniff"})
 
     @app.get("/api/user/chat/requests/{request_id}/native-content/events")
     async def user_chat_native_content_events(request_id: str, request: Request) -> StreamingResponse:

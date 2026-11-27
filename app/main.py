@@ -4046,6 +4046,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     if callable(receiver) and registry.sockets.get(client_id) is websocket:
                         await receiver(client_id,message)
                     continue
+                if message_type == "chat.native.interaction.ack":
+                    # The Worker ACK is correlated to a server-created action
+                    # lease and the exact authenticated socket. It is not a
+                    # request-v6 terminal or a generic tool event.
+                    receiver = getattr(app.state, "native_interaction_ack_receiver", None)
+                    if callable(receiver) and registry.sockets.get(client_id) is websocket:
+                        await receiver(client_id, websocket, message)
+                    continue
                 if message_type == "chat.file.chunk":
                     # A successful socket.send is NOT a persisted chunk ACK.
                     # The server replies to the same authenticated socket only

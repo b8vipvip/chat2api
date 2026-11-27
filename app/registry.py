@@ -62,6 +62,10 @@ class ClientRegistry:
         # only new correlated extension.status updates refresh this timestamp.
         self.worker_pool_capacity_received_at: dict[str, float] = {}
         self.api_key_routes: dict[str, str] = {}
+        # A completed native snapshot may remain interactive for a bounded
+        # period. Retain only the original request-to-tab socket authority;
+        # reconnects never inherit this route.
+        self.native_interaction_routes: dict[str, dict[str, Any]] = {}
         self.routing_key_context: contextvars.ContextVar[str | None] = contextvars.ContextVar(
             "chat2api_api_key_route", default=None
         )
@@ -384,6 +388,17 @@ class ClientRegistry:
                         state.dispatch_socket = websocket
                     elif dispatch_socket is not websocket:
                         raise RuntimeError("Request Worker connection changed")
+            elif request_type == "chat.native.interaction":
+                route = self.native_interaction_routes.get(request_id)
+                if route is None or float(route.get("expires_mono") or 0) <= time.monotonic():
+                    self.native_interaction_routes.pop(request_id, None)
+                    raise RuntimeError("Native interaction request route expired")
+                if (
+                    str(route.get("client_id") or "") != client_id
+                    or route.get("websocket") is not websocket
+                ):
+                    raise RuntimeError("Native interaction is not bound to the original Worker socket")
+                websocket = route["websocket"]
             elif request_type in request_followup_types:
                 expected_socket = getattr(state, "dispatch_socket", None) if state is not None else None
                 terminal_event_type = getattr(state, "terminal_event_type", None) if state is not None else None
@@ -422,6 +437,18 @@ class ClientRegistry:
                     dispatch_state, "dispatch_send_completed_mono", None,
                 ) is None:
                     dispatch_state.dispatch_send_completed_mono = time.perf_counter()
+            if request_type == "chat.request" and request_id:
+                self.native_interaction_routes[request_id] = {
+                    "client_id": client_id,
+                    "websocket": websocket,
+                    "expires_mono": time.monotonic() + 1800.0,
+                }
+                self.native_interaction_routes = {
+                    key: route for key, route in self.native_interaction_routes.items()
+                    if float(route.get("expires_mono") or 0) > time.monotonic()
+                }
+                while len(self.native_interaction_routes) > 128:
+                    self.native_interaction_routes.pop(next(iter(self.native_interaction_routes)))
 
     def online_client_ids(self) -> list[str]:
         return sorted(

@@ -279,3 +279,48 @@ assert.equal(interactiveRenderer.renderNativeSnapshot(chartHost,chartSnapshot),t
 assert.equal(findTag(chartHost,"title").childNodes[0].textContent,"季度收入趋势");
 assert.equal(findTag(chartHost,"desc").childNodes[0].textContent,"按季度展示收入变化");
 console.log("native-renderer-svg-chart-tooltip-passed");
+
+const actionable=structuredClone(interactive);
+actionable.revision=8;
+actionable.root.children[0].interaction_id="nc_8_1";
+actionable.root.children[1].interaction_id="nc_8_2";
+actionable.root.children[2].interaction_id="nc_8_3";
+actionable.root.children[3].interaction_id="nc_8_4";
+actionable.root.children[4].interaction_id="nc_8_5";
+assert.equal(interactiveRenderer.validateSnapshot(actionable),true);
+const actionHost=new FakeElement("host");
+const interactionCalls=[];
+const actionHandler=async payload=>{
+  interactionCalls.push(payload);
+  return {ok:true,revision:payload.revision+1};
+};
+assert.equal(interactiveRenderer.renderNativeSnapshot(actionHost,actionable,[],actionHandler),true);
+assert.doesNotMatch(actionHost.childNodes[0].textContent,/本地预览/);
+const actionInputs=findAll(actionHost,node=>node.tagName==="input");
+actionInputs[0].checked=false;
+await actionInputs[0].events.change();
+actionInputs[2].value="50";
+await actionInputs[2].events.change();
+const actionSelect=findTag(actionHost,"select");
+actionSelect.value="line";
+await actionSelect.events.change();
+const actionDetails=findTag(actionHost,"details");
+actionDetails.open=false;
+await actionDetails.events.toggle();
+assert.deepEqual(interactionCalls.map(call=>[call.interaction_id,call.action,call.value]),[
+  ["nc_8_2","set_checked",false],
+  ["nc_8_4","set_value",50],
+  ["nc_8_5","set_value","line"],
+  ["nc_8_1","set_open",false],
+]);
+const badInteractionId=structuredClone(actionable);
+badInteractionId.root.children[1].interaction_id="nc_bad";
+assert.equal(interactiveRenderer.validateSnapshot(badInteractionId),false);
+const interactionIdOnUnsupportedNode=structuredClone(actionable);
+interactionIdOnUnsupportedNode.root.children[5].interaction_id="nc_8_6";
+assert.equal(interactiveRenderer.validateSnapshot(interactionIdOnUnsupportedNode),false);
+const duplicateInteractionId=structuredClone(actionable);
+duplicateInteractionId.root.children[2].interaction_id="nc_8_2";
+assert.equal(interactiveRenderer.validateSnapshot(duplicateInteractionId),false);
+console.log("native-renderer-upstream-interaction-callback-passed");
+
