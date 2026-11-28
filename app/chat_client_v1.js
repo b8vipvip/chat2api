@@ -194,8 +194,8 @@
     start.classList.toggle("hidden", state.voiceActive);
     stop.classList.toggle("hidden", !state.voiceActive);
     stop.disabled = !state.voiceActive || state.voiceStopping;
-    camera.classList.toggle("hidden", !state.voiceActive || state.voiceStarting);
-    camera.disabled = !state.voiceActive || state.voiceStarting || !selectedKeyHasScope("files");
+    camera.classList.toggle("hidden", !state.voiceActive || state.voiceStarting || state.voiceStopping);
+    camera.disabled = !state.voiceActive || state.voiceStarting || state.voiceStopping || !selectedKeyHasScope("files");
     if (!selectedKeyHasScope("files")) camera.title = "服务端统一 API Key 缺少 files 权限";
     else camera.title = "在同一 Voice 会话中发送实时视频；若上游不支持 WebRTC 将降级为图片帧";
     if (typeof updatePluginPickerButton === "function") updatePluginPickerButton();
@@ -224,6 +224,10 @@
         closed:"实时语音已结束",
       };
       $("voiceStatus").textContent = labels[status] || "实时语音";
+    }
+    if (status === "ready" && state.voiceClient && !state.voiceClient.isCameraActive()) {
+      $("voiceCameraPreview").classList.add("hidden");
+      $("voiceCameraButton").textContent = "开启摄像头";
     }
     if (status === "closed") {
       const partialAssistantText = String(state.voiceAssistantLine?.textContent || "").trim();
