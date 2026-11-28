@@ -10,6 +10,7 @@
   const nativeControlTargetsByRequest = new Map();
   const nativeControlLatestRevision = new Map();
   const nativeControlAppliedActions = new Map();
+  const nativeControlCaptureContexts = new Map();
   const tags = new Set("div p span strong em h1 h2 h3 h4 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br a details summary input select option button".split(" "));
   // Do not serialize MathML as HTML div/span descendants; its parent structure
   // and unit labels require the MathML namespace through the server and UI.
@@ -822,10 +823,14 @@
     while (revisions.size > 8) revisions.delete(revisions.keys().next().value);
     nativeControlTargetsByRequest.set(active.requestId, revisions);
     nativeControlLatestRevision.set(active.requestId, revision);
+    if (scopedRoots?.length && controlTargets.size && !images && !active.nativeGraphicsUnsupported) {
+      nativeControlCaptureContexts.set(active.requestId,{active,revision,roots:[...scopedRoots]});
+    } else nativeControlCaptureContexts.delete(active.requestId);
     while (nativeControlTargetsByRequest.size > 24) {
       const oldest = nativeControlTargetsByRequest.keys().next().value;
       nativeControlTargetsByRequest.delete(oldest);
       nativeControlLatestRevision.delete(oldest);
+      nativeControlCaptureContexts.delete(oldest);
     }
     return {version:1, revision, root};
   }
@@ -1343,9 +1348,57 @@
     }
   }
 
+  async function recaptureAfterInteraction(message, response, context) {
+    const requestId = String(message.request_id);
+    const revision = Number(message.revision);
+    // Allow the upstream UI to settle, then re-prove the exact original
+    // assistant boundary. Never use a newly selected/latest reply.
+    await new Promise(resolve=>setTimeout(resolve,180));
+    if (nativeControlLatestRevision.get(requestId)!==revision+1 ||
+        nativeControlCaptureContexts.get(requestId)!==context) return;
+    const region = globalThis.__CHAT2API_NATIVE_DOM_EVIDENCE_V1__?.replyRoots?.(context.active);
+    if (!Array.isArray(region?.roots) || region.roots.length!==context.roots.length ||
+        region.roots.some((root,index)=>root!==context.roots[index] || !root.isConnected)) return;
+    const revisions = nativeControlTargetsByRequest.get(requestId);
+    const fallbackTargets = revisions?.get(revision+1);
+    const replay = {...context.active,nativeRevision:revision,nativeSentRevision:revision};
+    let tree;
+    try { tree = snapshot(replay); } catch (_) {}
+    const containsRaster = root => {
+      const stack = [root];
+      while (stack.length) {
+        const node=stack.pop();
+        if (node?.tag==="img") return true;
+        if (Array.isArray(node?.children)) stack.push(...node.children);
+      }
+      return false;
+    };
+    // A new raster cannot reuse the old archive's media_index. Until the
+    // media pipeline supports interaction revisions, fail closed on it.
+    if (!tree || tree.revision!==revision+1 || containsRaster(tree.root) ||
+        replay.nativeGraphicsUnsupported ||
+        new TextEncoder().encode(JSON.stringify(tree)).length>256*1024) {
+      if (fallbackTargets) revisions?.set(revision+1,fallbackTargets);
+      nativeControlLatestRevision.set(requestId,revision+1);
+      nativeControlCaptureContexts.set(requestId,{...context,revision:revision+1});
+      return;
+    }
+    response.snapshot=tree;
+    response.recapture_status="verified";
+  }
+
   chrome.runtime.onMessage?.addListener?.((message, _sender, sendResponse) => {
     if (message?.type !== "chat2api.native.interaction") return false;
-    sendResponse(applyNativeInteraction(message));
+    const requestId=String(message.request_id || "");
+    const context=nativeControlCaptureContexts.get(requestId);
+    const response=applyNativeInteraction(message);
+    if (response.ok && !response.duplicate && context?.revision===Number(message.revision)) {
+      response.recapture_status="unavailable";
+      void recaptureAfterInteraction(message,response,context)
+        .catch(()=>{}).finally(()=>sendResponse(response));
+      return true;
+    }
+    sendResponse(response);
     return false;
   });
 
