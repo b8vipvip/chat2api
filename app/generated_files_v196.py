@@ -74,6 +74,7 @@ class GeneratedFileArchive:
                 object_key TEXT NOT NULL, created_at TEXT NOT NULL
             )""")
             conn.execute("CREATE INDEX IF NOT EXISTS generated_files_request_idx ON generated_files(request_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS generated_files_owner_id_idx ON generated_files(owner,id)")
 
     def _db(self):
         conn = sqlite3.connect(self.db_path, timeout=20)
@@ -312,6 +313,41 @@ class GeneratedFileArchive:
         if len(data) != row["size"] or hashlib.sha256(data).hexdigest() != row["sha256"]:
             raise ValueError("Generated file integrity verification failed")
         return data, row["mime"], row["filename"]
+
+    def list_owned(self, owners: set[str], after: str = "", limit: int = 50):
+        """Keyset pagination over the authenticated account's ownership keys.
+
+        Never return bearer tokens or object storage paths to the library.
+        Chunk owner sets to stay within SQLite parameter limits.
+        """
+        if not 1 <= limit <= 100:
+            raise ValueError("invalid generated file page")
+        keys = sorted(set(owners))
+        candidates = []
+        with self._db() as conn:
+            conn.execute("BEGIN")
+            for start in range(0, len(keys), 200):
+                batch = keys[start:start + 200]
+                placeholders = ",".join("?" for _ in batch)
+                rows = conn.execute(
+                    "SELECT id,request_id,filename,mime,size,created_at "
+                    "FROM generated_files WHERE owner IN (" + placeholders + ") "
+                    "AND id>? ORDER BY id ASC LIMIT ?",
+                    (*batch, after, limit + 1),
+                ).fetchall()
+                candidates.extend(dict(row) for row in rows)
+                candidates.sort(key=lambda row: row["id"])
+                del candidates[limit + 1:]
+        return candidates
+
+    def read_owned(self, file_id: str, owners: set[str]):
+        with self._db() as conn:
+            row = conn.execute("SELECT owner,token FROM generated_files WHERE id=?", (file_id,)).fetchone()
+        if not row or row["owner"] not in owners:
+            raise KeyError("Unknown generated file")
+        # Keep the archive's existing integrity verification; the bearer
+        # capability stays internal to the server.
+        return self.read(file_id, row["token"])
 
     def list_items(self, limit: int = 80):
         with self._db() as conn:
