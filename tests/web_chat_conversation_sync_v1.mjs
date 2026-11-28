@@ -257,3 +257,44 @@ test("conversation sync does not retry permanent client errors", async () => {
   assert.equal(timers.size,0);
   assert.equal(state.remoteSyncRetryCounts.has(conversation.id),false);
 });
+
+
+test("stale same-query search responses cannot overwrite a newer search", async () => {
+  const start = source.indexOf("  async function searchConversationsOnServer(");
+  const end = source.indexOf("  function onConversationSearchInput(", start);
+  assert.ok(start >= 0 && end > start);
+  const state = {searchController:null,searchResults:null,searchQuery:"",searchWarned:false};
+  const requests = [];
+  let renders = 0, warnings = 0;
+  const context = vm.createContext({
+    state, AbortController,
+    $:()=>({value:"same"}),
+    fetch:(_url,options)=>new Promise((resolve,reject)=>requests.push({resolve,reject,signal:options.signal})),
+    normalizeConversationRow:row=>({...row}),
+    renderSidebar:()=>{renders += 1;},
+    toast:()=>{warnings += 1;},
+  });
+  const search = vm.runInContext(source.slice(start,end)+"\nsearchConversationsOnServer",context);
+  const reply = id=>({ok:true,json:async()=>({data:[{id,serverRevision:1}]})});
+  const first = search("same");
+  // Simulate a transport that resolves despite cancellation.
+  state.searchController.abort();
+  const second = search("same");
+  requests[1].resolve(reply("new"));
+  await second;
+  requests[0].resolve(reply("old"));
+  await first;
+  assert.equal(state.searchResults[0].id,"new");
+  assert.equal(renders,1);
+
+  const third = search("same");
+  state.searchController.abort();
+  const fourth = search("same");
+  requests[3].resolve(reply("newer"));
+  await fourth;
+  requests[2].reject(new Error("late network error"));
+  await third;
+  assert.equal(state.searchResults[0].id,"newer");
+  assert.equal(warnings,0);
+  assert.equal(renders,2);
+});

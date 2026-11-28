@@ -663,7 +663,7 @@ const fetcher = async (url, options) => {
 };
 vm.runInNewContext(src, {
   window, AbortController, Date, Promise, Math,
-  setTimeout:fn=>{fn();return 1;}, clearTimeout:()=>{}
+  setTimeout, clearTimeout
 });
 const api = window.Chat2APIStreamRecoveryV1;
 assert(api && api.isRequestId("req_12345678"));
@@ -770,6 +770,39 @@ assert(/^req_[A-Za-z0-9_-]{8,120}$/.test(api.createRequestId({randomUUID:()=>"12
   }).cancel({request_id:"req_12345678",assistant_message_id:"message_123456"});
   assert.strictEqual(finalizing.status, "finalizing");
   assert.strictEqual(finalizing.terminal, false);
+  // Native fetch aborts both the response headers and body when its signal fires.
+  const stall = signal => new Promise((resolve,reject)=>{
+    const aborted = () => reject(Object.assign(new Error("aborted"), {name:"AbortError"}));
+    if (signal.aborted) aborted();
+    else signal.addEventListener("abort",aborted,{once:true});
+  });
+  const record = {request_id:"req_12345678", assistant_message_id:"message_123456"};
+  const blockedHeaders = api.create({
+    maxDurationMs:1000,fetcher:(_url,options)=>stall(options.signal)
+  });
+  const timedOut = await blockedHeaders.resume(record);
+  assert.strictEqual(timedOut.status,"recovery_timeout");
+  assert.strictEqual(timedOut.terminal,false);
+  // Verify the controller slot is released, not permanently stuck.
+  assert.strictEqual((await blockedHeaders.resume(record)).status,"recovery_timeout");
+
+  const blockedBody = api.create({
+    maxDurationMs:1000,
+    fetcher:async(_url,options)=>({status:200,ok:true,json:()=>stall(options.signal)})
+  });
+  assert.strictEqual((await blockedBody.resume(record)).status,"recovery_timeout");
+  const stopped = blockedBody.resume(record);
+  blockedBody.stop();
+  assert.strictEqual((await stopped).status,"polling_stopped");
+
+  const blockedCancel = api.create({
+    cancelTimeoutMs:1000,
+    fetcher:async(_url,options)=>({status:200,ok:true,json:()=>stall(options.signal)})
+  });
+  const cancelTimeout = await blockedCancel.cancel(record);
+  assert.strictEqual(cancelTimeout.status,"cancel_unavailable");
+  assert.strictEqual(cancelTimeout.terminal,false);
+  assert.strictEqual(cancelTimeout.cancel_requested,false);
   console.log("recovery-harness-passed");
 })().catch(error=>{console.error(error);process.exitCode=1;});
 """

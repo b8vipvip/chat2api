@@ -73,6 +73,12 @@
       const controller = new AbortControllerImpl();
       activeController = controller;
       const startedAt = Date.now();
+      let timedOut = false;
+      // Bound the entire polling lifecycle, including a stalled fetch or body.
+      const timer = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, maxDuration);
       let delay = baseDelay;
       emit({request_id:requestId, assistant_message_id:assistantId}, {
         status:"recovering", active:true, terminal:false,
@@ -124,7 +130,10 @@
 
           let payload;
           try { payload = await response.json(); }
-          catch {
+          catch (error) {
+            if (controller.signal.aborted || error?.name === "AbortError") {
+              throw Object.assign(new Error("Recovery polling aborted"), {name:"AbortError"});
+            }
             const result = {status:"invalid_response", active:false, terminal:false};
             emit(safeRecord, result);
             return result;
@@ -201,12 +210,13 @@
         return result;
       } catch (error) {
         if (error && error.name === "AbortError") {
-          const result = {status:"polling_stopped", terminal:false, active:false};
+          const result = {status:timedOut ? "recovery_timeout" : "polling_stopped", terminal:false, active:false};
           emit(safeRecord, result);
           return result;
         }
         throw error;
       } finally {
+        clearTimeout(timer);
         if (activeController === controller) activeController = null;
       }
     }
@@ -362,7 +372,7 @@
       const cancelController = AbortControllerImpl ? new AbortControllerImpl() : null;
       const cancelTimer = cancelController
         ? setTimeout(() => cancelController.abort(), cancelTimeout) : null;
-      let response;
+      let response, payload;
       try {
         response = await fetcher(
           "/api/user/chat/requests/" + encodeURIComponent(requestId) + "/cancel",
@@ -373,6 +383,16 @@
             ...(cancelController ? {signal:cancelController.signal} : {}),
           }
         );
+        // Keep the deadline armed through the successful response body.
+        if (response.ok) {
+          try { payload = await response.json(); }
+          catch (error) {
+            if (cancelController?.signal.aborted || error?.name === "AbortError") throw error;
+            const result = {status:"invalid_response", active:true, terminal:false, cancel_requested:false};
+            emit(safeRecord, result);
+            return result;
+          }
+        }
       } catch {
         const result = {status:"cancel_unavailable", active:true, terminal:false, cancel_requested:false};
         emit(safeRecord, result);
@@ -397,13 +417,6 @@
       }
       if (!response.ok) {
         const result = {status:"cancel_failed", active:true, terminal:false, cancel_requested:false};
-        emit(safeRecord, result);
-        return result;
-      }
-      let payload;
-      try { payload = await response.json(); }
-      catch {
-        const result = {status:"invalid_response", active:true, terminal:false, cancel_requested:false};
         emit(safeRecord, result);
         return result;
       }
