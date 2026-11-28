@@ -3374,11 +3374,28 @@
           phase:"plugin_tool_planning",code:"invalid_plan",
         },"warning");
         plannerRequests += 1;
-        if (state.pluginPlanningLease) await state.pluginPlanningLease.checkpoint(plannerRequests,toolCalls);
+        if (state.pluginPlanningLease) await state.pluginPlanningLease.checkpoint(plannerRequests,toolCalls,{
+          request_id:plannerRequestId,model:requestModelId,start_tool_calls:toolCalls,calls:[],
+        });
         break;
       }
       plannerRequests += 1;
-      if (state.pluginPlanningLease) await state.pluginPlanningLease.checkpoint(plannerRequests,toolCalls);
+      // Persist only schema-validated, selected tool intents. They are data,
+      // not authorization to invoke a provider; the actual dispatch still
+      // performs the existing provenance and connection checks.
+      const plannedCalls = [];
+      for (const call of calls.slice(0,Math.min(3,maxToolCalls-toolCalls))) {
+        try {
+          const name = String(call?.name || call?.function?.name || "");
+          const definition = definitions.find(item=>item.name===name);
+          if (!definition) continue;
+          const args = validatePluginToolArguments(definition,call?.arguments ?? call?.function?.arguments ?? {});
+          plannedCalls.push({name,arguments:args});
+        } catch {}
+      }
+      const planCheckpoint = {request_id:plannerRequestId,model:requestModelId,
+        start_tool_calls:toolCalls,calls:plannedCalls};
+      if (state.pluginPlanningLease) await state.pluginPlanningLease.checkpoint(plannerRequests,toolCalls,planCheckpoint);
       if (!calls.length) break;
 
       messages.push({
@@ -3518,7 +3535,7 @@
         toolCalls += 1;
         // The next planning round must not depend solely on a debounced PUT.
         // Persist completed evidence before another provider call is launched.
-        if (state.pluginPlanningLease) await state.pluginPlanningLease.checkpoint(plannerRequests,toolCalls);
+        if (state.pluginPlanningLease) await state.pluginPlanningLease.checkpoint(plannerRequests,toolCalls,planCheckpoint);
         if (toolCalls >= maxToolCalls) {
           limitReached = true;
           break;
@@ -5091,12 +5108,12 @@
       }
     };
     const lease = {
-      async checkpoint(rounds, toolCalls) {
+      async checkpoint(rounds, toolCalls, plan = null) {
         assertTransport();
         const toolEvents = normalizeToolEvents(assistant.toolEvents,"assistant")
           .filter(event => ["completed","failed"].includes(event.status));
         const result = await pluginTaskOperation(conversation,assistant,"checkpoint",holder,{
-          rounds,tool_calls:toolCalls,tool_events:toolEvents,
+          rounds,tool_calls:toolCalls,tool_events:toolEvents,...(plan ? {plan} : {}),
         });
         assertTransport();
         if (!result.granted) throw new Error("插件检查点未获确认");
