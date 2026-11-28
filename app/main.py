@@ -477,11 +477,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         recovery_watchdog = asyncio.create_task(expire_lost_web_chat_leases())
         file_retention_task = asyncio.create_task(expire_web_chat_orphan_files())
+        plugin_recovery_task = None
+        if getattr(app.state,"web_chat_conversations",None) is not None:
+            from .web_chat_plugin_recovery_v1 import run_plugin_recovery_scheduler
+            plugin_recovery_task = asyncio.create_task(run_plugin_recovery_scheduler(app))
         try:
             yield
         finally:
             recovery_watchdog.cancel()
             file_retention_task.cancel()
+            if plugin_recovery_task is not None:
+                plugin_recovery_task.cancel()
+                await asyncio.gather(plugin_recovery_task,return_exceptions=True)
             try:
                 await recovery_watchdog
             except asyncio.CancelledError:
