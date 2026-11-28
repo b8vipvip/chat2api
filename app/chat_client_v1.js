@@ -557,13 +557,18 @@
   }
 
   async function apiJson(path, options = {}) {
+    const owner = String(state.user?.user_id || "");
+    const pluginRequest = path === "/api/user/plugins" || path.startsWith("/api/user/plugins/");
     const response = await fetch(path, {
       credentials: "same-origin",
       ...options,
-      headers: { ...(options.headers || {}) },
+      headers: { ...(options.headers || {}), ...(pluginRequest ? {"X-Chat2API-User-ID":owner} : {}) },
     });
     let payload = {};
     try { payload = await response.json(); } catch {}
+    if (String(state.user?.user_id || "") !== owner) {
+      throw new Error("账户已切换，已忽略旧请求结果");
+    }
     if (!response.ok) {
       const error = new Error(payload.detail || payload?.error?.message || "HTTP " + response.status);
       error.status = response.status;
@@ -3452,19 +3457,40 @@
   }
 
   async function loadPluginCatalog(force = false) {
+    const owner = String(state.user?.user_id || "");
+    if (state.pluginCatalogOwner !== owner) {
+      state.pluginCatalogOwner = owner;
+      state.pluginCatalog = [];
+      state.pluginCatalogLoaded = false;
+      state.pluginCatalogError = "";
+      state.selectedPlugins = [];
+      updatePluginPickerButton();
+    }
+    if (!owner || state.user?.is_guest) {
+      renderPluginCatalog();
+      return;
+    }
     if (state.pluginCatalogLoaded && !force) {
       renderPluginCatalog();
       return;
     }
+    const flight = {};
+    state.pluginCatalogRequest = flight;
+    const current = () => state.pluginCatalogRequest === flight && String(state.user?.user_id || "") === owner;
     try {
       const payload = await apiJson("/api/user/plugins");
-      state.pluginCatalog = Array.isArray(payload.data) ? payload.data : [];
+      if (!current()) return;
+      if (!Array.isArray(payload.data)) throw new Error("插件目录格式无效");
+      state.pluginCatalog = payload.data;
       state.pluginCatalogError = "";
       state.pluginCatalogLoaded = true;
       restorePluginSelection();
       recordClientDiagnostic("webchat.plugins.catalog_loaded", {model_count: state.pluginCatalog.length, phase: "plugin_catalog"});
     } catch (error) {
+      if (!current()) return;
       state.pluginCatalogError = String(error?.message || error?.name || "PluginCatalogError");
+      state.pluginCatalogLoaded = false;
+      state.pluginCatalog = [];
       state.selectedPlugins = [];
       updatePluginPickerButton();
       recordClientDiagnostic("webchat.plugins.catalog_failed", {phase: "plugin_catalog", error_name: error?.name || "PluginCatalogError"}, "warning");
@@ -5315,6 +5341,11 @@
     event.preventDefault();
     const submit = $("webChatLoginSubmit");
     const errorBox = $("webChatLoginError");
+    if (state.user?.is_guest && (state.streaming || state.voiceActive ||
+        state.pendingImages.length || state.pendingFiles.length)) {
+      errorBox.textContent = "请先结束游客会话的生成或语音，并发送或移除附件后再登录。";
+      return;
+    }
     submit.disabled = true;
     errorBox.textContent = "";
     try {
@@ -5334,7 +5365,10 @@
       closeLoginDialog();
       state.user = null;
       $("sidebarAccount").hidden = true;
-      await bootstrap();
+      // Stay on the current Web Chat URL, but rebuild the entire account
+      // runtime. Re-entering bootstrap in the old JS context retains timers,
+      // recovery callbacks, drafts, native snapshots and plugin credentials.
+      window.location.reload();
     } catch (error) {
       errorBox.textContent = String(error?.message || error);
     } finally {

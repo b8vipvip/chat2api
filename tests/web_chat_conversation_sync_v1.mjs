@@ -563,3 +563,29 @@ test("model directory cache and in-flight responses are isolated by account and 
   await switched;
   assert.equal(state.selectedModel,"gpt-5.6-sol");
 });
+
+
+test("plugin catalog ignores old account responses and clears stale grants on failure", async () => {
+  const requests=[];
+  const state={user:{user_id:"a"},pluginCatalog:[],selectedPlugins:[]};
+  const ctx=vm.createContext({
+    state,apiJson:()=>new Promise((resolve,reject)=>requests.push({resolve,reject})),
+    updatePluginPickerButton(){},renderPluginCatalog(){},restorePluginSelection(){},recordClientDiagnostic(){},
+  });
+  const start=source.indexOf("  async function loadPluginCatalog(");
+  const end=source.indexOf("  function renderLibrary(",start);
+  const load=vm.runInContext(source.slice(start,end)+"\nloadPluginCatalog",ctx);
+  const a=load();
+  state.user={user_id:"b"};
+  const b=load();
+  requests[1].resolve({data:[{id:"gmail",connected:true}]});
+  await b;
+  requests[0].resolve({data:[{id:"github",connected:true}]});
+  await a;
+  assert.equal(state.pluginCatalog[0].id,"gmail");
+  const refresh=load(true);
+  requests[2].reject(new Error("offline"));
+  await refresh;
+  assert.equal(state.pluginCatalog.length,0);
+  assert.equal(state.pluginCatalogLoaded,false);
+});

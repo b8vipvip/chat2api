@@ -1300,3 +1300,20 @@ def test_github_actions_releases_tags_issue_search_and_review_threads(tmp_path: 
             response = client.post("/api/user/plugins/github/tools/" + tool, headers=ORIGIN, json=payload)
             assert response.status_code == 422, response.text
         assert len(calls) == 9
+
+
+def test_stale_tab_cannot_access_replacement_accounts_plugins(tmp_path: Path):
+    app = make_app(tmp_path)
+    with TestClient(app) as client:
+        old = register(client, "plugin-stale-tab@example.com")
+        client.cookies.clear()
+        new = register(client, "plugin-replacement@example.com")
+        assert old["user_id"] != new["user_id"]
+        headers = {**ORIGIN, "X-Chat2API-User-ID": old["user_id"]}
+        assert client.get("/api/user/plugins", headers=headers).status_code == 409
+        assert client.post("/api/user/plugins/github/disconnect", headers=headers, json={}).status_code == 409
+        assert client.post("/api/user/plugins/github/tools/search_repositories",
+                           headers=headers, json={"query":"test"}).status_code == 409
+        assert client.get("/api/user/plugins", headers={
+            "X-Chat2API-User-ID": new["user_id"]
+        }).status_code == 200

@@ -495,6 +495,9 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
         user = accounts.authenticate(request.cookies.get(USER_SESSION_COOKIE)) if accounts else None
         if not user:
             raise HTTPException(401, "请先登录账户", headers=_PRIVATE_HEADERS)
+        expected_owner = request.headers.get("X-Chat2API-User-ID")
+        if expected_owner is not None and expected_owner != str(user["user_id"]):
+            raise HTTPException(409, "Web Chat 账户已切换，请刷新页面", headers=_PRIVATE_HEADERS)
         if user.get("is_guest"):
             raise HTTPException(403, "游客账户暂不支持连接外部插件", headers=_PRIVATE_HEADERS)
         from .web_chat_identity_v1 import web_chat_session_policy_allows
