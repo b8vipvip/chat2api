@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import asyncio
 import re
+from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Request, Response
 
+from .admin_auth import same_origin_admin_request
 from .file_store import safe_name
 from .user_commerce import USER_SESSION_COOKIE
 
@@ -115,5 +117,50 @@ def install_web_chat_file_download_api(app: FastAPI) -> FastAPI:
             "Cross-Origin-Resource-Policy": "same-origin",
             "Referrer-Policy": "no-referrer",
         })
+
+    @app.delete("/api/user/chat/generated-files/{file_id}")
+    async def delete_owned_generated_file(file_id: str, request: Request) -> Response:
+        if not same_origin_admin_request(request):
+            _http_error(403, "same-origin request required")
+        accounts = getattr(request.app.state, "user_accounts", None)
+        user = accounts.authenticate(request.cookies.get(USER_SESSION_COOKIE)) if accounts else None
+        if not user:
+            _http_error(401, "user login required")
+        user_id = str(user["user_id"])
+        expected = request.headers.get("X-Chat2API-User-ID")
+        if expected is not None and expected != user_id:
+            _http_error(409, "Web Chat account changed; reload the page")
+        if user.get("is_guest"):
+            _http_error(403, "authenticated account required")
+        if not _GENERATED_FILE_ID_RE.fullmatch(file_id):
+            _http_error(404, "file not found")
+        archive = getattr(request.app.state, "generated_files", None)
+        conversations = getattr(request.app.state, "web_chat_conversations", None)
+        if archive is None or conversations is None:
+            _http_error(503, "generated file reference service unavailable")
+
+        def guarded_delete():
+            identity = archive.deletion_identity(file_id)
+            if not identity or not accounts.owns_key(user_id, identity[0]):
+                _http_error(404, "file not found")
+            owner_key, request_id = identity
+            with conversations.generated_deletion_guard(user_id, file_id, request_id) as allowed:
+                if not allowed:
+                    _http_error(409, "生成文件仍被已保存的会话引用")
+                # A newly generated file may not have been saved to the
+                # conversation yet. The server, not the browser, enforces age.
+                try:
+                    return archive.delete(file_id, owner=owner_key,
+                        cutoff=datetime.now(timezone.utc) - timedelta(hours=24))
+                except PermissionError:
+                    _http_error(409, "生成文件尚在 24 小时保护期内")
+
+        try:
+            deleted = await asyncio.to_thread(guarded_delete)
+        except (ValueError, OSError):
+            _http_error(503, "file content unavailable")
+        if not deleted:
+            _http_error(404, "file not found")
+        return Response('{"deleted":true}', media_type="application/json", headers=_PRIVATE_HEADERS)
 
     return app
