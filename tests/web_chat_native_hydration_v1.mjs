@@ -36,6 +36,7 @@ const state = {
   pendingFiles:[],
   pendingFilesConversationId:"",
   selectedModel:"gpt-5.6-sol",
+  models:[{id:"gpt-5.6-sol",capabilities:["text"]}],
 };
 const fetched = [];
 const streams = [];
@@ -58,8 +59,12 @@ const switchEnd = source.indexOf("  function deleteConversation(",switchStart);
 assert.ok(switchStart >= 0 && switchEnd > switchStart);
 let rendered = 0;
 let lastRequestedConversation = "";
+const modelSelectorStart = source.indexOf("  function selectAvailableTextModel(");
+const modelSelectorEnd = source.indexOf("  async function loadModels(",modelSelectorStart);
+assert.ok(modelSelectorStart >= 0 && modelSelectorEnd > modelSelectorStart);
 const switchConversation = vm.runInNewContext(
-  source.slice(switchStart,switchEnd) + "\nsetActiveConversation",
+  source.slice(modelSelectorStart,modelSelectorEnd) + source.slice(switchStart,switchEnd) +
+  "\nsetActiveConversation",
   {
     state,
     toast(){throw Error("switch should be allowed");},
