@@ -293,6 +293,10 @@
       interaction_id:interactionId,
       ok:result?.ok===true,
       error:String(result?.error || "").slice(0,120),
+      ...(result?.ok===true && result?.recapture_status ? {
+        recapture_status:result.recapture_status,
+        ...(result.snapshot ? {snapshot:result.snapshot} : {}),
+      } : {}),
     });
     return result;
   }
