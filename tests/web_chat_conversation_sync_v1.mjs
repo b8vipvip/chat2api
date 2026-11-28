@@ -298,3 +298,103 @@ test("stale same-query search responses cannot overwrite a newer search", async 
   assert.equal(warnings,0);
   assert.equal(renders,2);
 });
+
+
+function deleteHarness(fetcher) {
+  const row = {id:"c2a_delete_test_001",title:"original",serverRevision:3,messages:[{id:"m1",content:"unsynced text"}]};
+  const other = {id:"c2a_delete_test_002",title:"other",serverRevision:1,messages:[]};
+  const searchController = new AbortController();
+  const state = {
+    storageKey:"owner-a",conversations:[row,other],activeConversationId:row.id,
+    pendingConversationDeletes:new Set(),remoteSyncTimers:new Map(),remoteSyncRetryCounts:new Map(),
+    remoteSyncInFlight:new Map(),remoteSyncAgain:new Set(),remoteSyncFingerprints:new Map(),
+    searchResults:[row,other],searchController,pendingImages:[],pendingFiles:[],
+  };
+  const saves = [], warnings = [];
+  const context = vm.createContext({
+    state,MAX_CONVERSATIONS:15,window:{confirm:()=>true,clearTimeout(){}},
+    fetch:fetcher,
+    normalizeConversationRow:value=>({...value,serverRevision:value.revision}),
+    mergeConversation:(server,local)=>({...local,...server}),
+    persistHistorySnapshot:()=>saves.push(state.conversations.map(item=>item.id)),
+    renderAll(){},toast:value=>warnings.push(value),
+  });
+  const deleteStart=source.indexOf("  async function deleteConversationFromServer(");
+  const deleteEnd=source.indexOf("  function saveHistory(",deleteStart);
+  const uiStart=source.indexOf("  function deleteConversation(");
+  const uiEnd=source.indexOf("  function renameConversation(",uiStart);
+  const api=vm.runInContext(source.slice(deleteStart,deleteEnd)+source.slice(uiStart,uiEnd)+
+    "\n({deleteConversation,deleteConversationFromServer})",context);
+  return {state,row,other,api,saves,warnings,searchController};
+}
+
+test("conversation deletion retains local history until a verified server tombstone", async () => {
+  let resolve;
+  const h=deleteHarness(()=>new Promise(r=>{resolve=r;}));
+  h.api.deleteConversation(h.row.id);
+  assert.equal(h.state.pendingConversationDeletes.has(h.row.id),true);
+  assert.equal(h.state.conversations[0],h.row);
+  assert.equal(h.state.activeConversationId,h.other.id);
+  h.api.deleteConversation(h.row.id); // duplicate click must not dispatch again
+  resolve({ok:true,status:200,json:async()=>({conversation:{id:h.row.id,deleted:true,revision:4}})});
+  await new Promise(r=>setImmediate(r));
+  assert.equal(h.state.pendingConversationDeletes.size,0);
+  assert.equal(h.state.conversations.some(row=>row.id===h.row.id),false);
+  assert.equal(h.state.searchResults.some(row=>row.id===h.row.id),false);
+  assert.equal(h.searchController.signal.aborted,true);
+  assert.deepEqual(Array.from(h.saves.at(-1)),[h.other.id]);
+});
+
+test("failed or unconfirmed DELETE keeps the original conversation and clears the pending state", async () => {
+  for (const fetcher of [
+    async()=>{throw new Error("offline");},
+    async()=>({ok:true,status:200,json:async()=>({})}),
+    async()=>({ok:false,status:409,json:async()=>({conversation:null})}),
+  ]) {
+    const h=deleteHarness(fetcher);
+    h.api.deleteConversation(h.row.id);
+    await new Promise(r=>setImmediate(r));
+    assert.equal(h.state.pendingConversationDeletes.size,0);
+    assert.equal(h.state.conversations[0].messages[0].content,"unsynced text");
+    assert.equal(h.warnings.length,1);
+    assert.ok(h.saves.at(-1).includes(h.row.id));
+  }
+});
+
+test("delete conflict keeps the latest server revision for explicit reconfirmation", async () => {
+  const h=deleteHarness(async()=>({ok:false,status:409,json:async()=>({
+    conversation:{id:"c2a_delete_test_001",revision:7,title:"remote edit",messages:[]}
+  })}));
+  h.api.deleteConversation(h.row.id);
+  await new Promise(r=>setImmediate(r));
+  assert.equal(h.state.pendingConversationDeletes.size,0);
+  assert.equal(h.state.conversations[0].title,"remote edit");
+  assert.equal(h.state.conversations[0].serverRevision,7);
+  assert.match(h.warnings[0],/再次确认删除/);
+});
+
+test("import does not switch away from a Voice session started while import was in flight", async () => {
+  const state={streaming:false,voiceActive:false,pendingImages:[],pendingFiles:[],
+    activeConversationId:"voice-chat",conversations:[{id:"voice-chat"}],remoteSyncFingerprints:new Map()};
+  let resolve;
+  const context=vm.createContext({state,MAX_CONVERSATIONS:15,
+    fetch:()=>new Promise(r=>{resolve=r;}),
+    normalizeConversationRow:row=>({...row}),serverConversationPayload:row=>row,
+    persistHistorySnapshot(){},renderAll(){},toast(){},
+    $:()=>({value:""}),
+  });
+  const start=source.indexOf("  async function importConversationJson(");
+  const end=source.indexOf("  async function bootstrap(",start);
+  const run=vm.runInContext(source.slice(start,end)+"\nimportConversationJson",context);
+  const file={size:2,text:async()=>"{}"};
+  state.voiceActive=true;
+  await assert.rejects(run(file),/实时语音/);
+  state.voiceActive=false;
+  const task=run(file);
+  await new Promise(r=>setImmediate(r));
+  state.voiceActive=true;
+  resolve({ok:true,json:async()=>({conversation:{id:"imported",revision:1}})});
+  await task;
+  assert.equal(state.activeConversationId,"voice-chat");
+  assert.equal(state.conversations[0].id,"imported");
+});
