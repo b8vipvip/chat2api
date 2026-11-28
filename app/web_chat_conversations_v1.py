@@ -170,6 +170,19 @@ def _normalize_tool_events(value: Any, role: str) -> list[dict[str, Any]]:
     return rows
 
 
+def _normalize_plugin_checkpoint(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError("invalid plugin checkpoint")
+    rounds, calls = value.get("rounds"), value.get("tool_calls")
+    if (type(rounds) is not int or not 1 <= rounds <= 3
+            or type(calls) is not int or not 0 <= calls <= 6):
+        raise ValueError("invalid plugin checkpoint counters")
+    events = _normalize_tool_events(value.get("tool_events"), "assistant")
+    if len(events) > calls or any(event["status"] not in {"completed", "failed"} for event in events):
+        raise ValueError("invalid plugin checkpoint events")
+    return {"rounds": rounds, "tool_calls": calls, "tool_events": events}
+
+
 def normalize_conversation(
     conversation_id: str,
     raw: Any,
@@ -448,8 +461,33 @@ class WebChatConversationStoreV1:
                 )
             """)
 
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS web_chat_plugin_checkpoints (
+                    user_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
+                    message_id TEXT NOT NULL, sequence INTEGER NOT NULL,
+                    payload TEXT NOT NULL, updated_at REAL NOT NULL,
+                    PRIMARY KEY(user_id, conversation_id, message_id)
+                )
+            """)
+            # Conversation deletion/retention and evidence removal are atomic.
+            for operation, owner, condition in (
+                ("UPDATE", "NEW", "WHEN NEW.deleted=1"),
+                ("DELETE", "OLD", ""),
+            ):
+                connection.execute(f"""
+                    CREATE TRIGGER IF NOT EXISTS web_chat_plugin_checkpoint_{operation.lower()}
+                    AFTER {operation} ON web_chat_conversations {condition}
+                    BEGIN
+                        DELETE FROM web_chat_plugin_checkpoints
+                        WHERE user_id={owner}.user_id AND conversation_id={owner}.conversation_id;
+                    END
+                """)
+
     def plugin_task(self, user_id: str, conversation_id: str, message_id: str,
-                    operation: str, holder: str = "") -> dict[str, Any]:
+                    operation: str, holder: str = "",
+                    checkpoint: dict[str, Any] | None = None) -> dict[str, Any]:
+        if operation == "checkpoint":
+            checkpoint = _normalize_plugin_checkpoint(checkpoint)
         # Lease authority is persisted in SQLite, never in browser localStorage.
         # An expired holder cannot renew or complete its old task.
         with self.lock, closing(self._connect()) as connection:
@@ -476,6 +514,16 @@ class WebChatConversationStoreV1:
                 )
             granted = False
             if operation == "claim" and not row:
+                # Bound orphan evidence from failed conversation uploads.
+                # Live conversations retain evidence until deleted.
+                connection.execute("""
+                    DELETE FROM web_chat_plugin_checkpoints
+                    WHERE user_id=? AND updated_at<? AND NOT EXISTS (
+                        SELECT 1 FROM web_chat_conversations c
+                        WHERE c.user_id=web_chat_plugin_checkpoints.user_id
+                          AND c.conversation_id=web_chat_plugin_checkpoints.conversation_id
+                    )
+                """, (user_id, now - 86400))
                 active = connection.execute(
                     "SELECT COUNT(*) FROM web_chat_plugin_tasks WHERE user_id=? "
                     "AND state='running' AND expires_at>?", (user_id, now),
@@ -493,14 +541,43 @@ class WebChatConversationStoreV1:
                         "WHERE user_id=? AND conversation_id=? AND message_id=?", (now + 180, *key),
                     )
                     granted = True
+                elif operation == "checkpoint":
+                    sequence = checkpoint["rounds"] * 10 + checkpoint["tool_calls"]
+                    payload = json.dumps(checkpoint, ensure_ascii=False, separators=(",", ":"))
+                    if len(payload.encode("utf-8")) > 196608:
+                        raise ValueError("plugin checkpoint is too large")
+                    # Older HTTP retries cannot roll back durable progress.
+                    prior = connection.execute(
+                        "SELECT sequence, payload FROM web_chat_plugin_checkpoints "
+                        "WHERE user_id=? AND conversation_id=? AND message_id=?", key,
+                    ).fetchone()
+                    if not prior or sequence > int(prior["sequence"]):
+                        connection.execute("""
+                            INSERT INTO web_chat_plugin_checkpoints
+                            VALUES (?,?,?,?,?,?)
+                            ON CONFLICT(user_id, conversation_id, message_id)
+                            DO UPDATE SET sequence=excluded.sequence,payload=excluded.payload,
+                                updated_at=excluded.updated_at
+                        """, (*key, sequence, payload, now))
+                        granted = True
+                    elif sequence == int(prior["sequence"]) and payload == prior["payload"]:
+                        granted = True
                 elif operation in {"completed", "interrupted"}:
                     state, granted = operation, True
                     connection.execute(
                         "UPDATE web_chat_plugin_tasks SET state=?,expires_at=0 "
                         "WHERE user_id=? AND conversation_id=? AND message_id=?", (state, *key),
                     )
+            result = {"state": state, "granted": granted}
+            if operation == "status" and state != "running":
+                saved = connection.execute(
+                    "SELECT payload FROM web_chat_plugin_checkpoints "
+                    "WHERE user_id=? AND conversation_id=? AND message_id=?", key,
+                ).fetchone()
+                if saved:
+                    result["checkpoint"] = json.loads(saved["payload"])
             connection.commit()
-            return {"state": state, "granted": granted}
+            return result
 
     def change_generation(self, user_id: str) -> int:
         with self.lock, closing(self._connect()) as connection:
@@ -985,16 +1062,19 @@ def install_web_chat_conversations_v1(app: FastAPI) -> None:
         if user.get("is_guest") or not same_origin_admin_request(request):
             raise HTTPException(status_code=403, detail="authenticated same-origin request required", headers=_PRIVATE_HEADERS)
         try:
-            body = json.loads(await _read_bounded_request_body(request, 4096))
+            body = json.loads(await _read_bounded_request_body(request, 262144))
             cid, mid = body["conversation_id"], body["message_id"]
             operation, holder = body["operation"], body.get("holder", "")
             if (not _CONVERSATION_ID_RE.fullmatch(cid) or not _MESSAGE_ID_RE.fullmatch(mid)
-                    or operation not in {"claim", "renew", "completed", "interrupted", "status"}
+                    or operation not in {"claim", "renew", "completed", "interrupted", "status", "checkpoint"}
                     or (operation != "status" and not _MESSAGE_ID_RE.fullmatch(holder))):
                 raise ValueError("invalid task")
+            checkpoint = _normalize_plugin_checkpoint(body.get("checkpoint")) if operation == "checkpoint" else None
+            if checkpoint is not None and len(json.dumps(checkpoint, ensure_ascii=False).encode("utf-8")) > 196608:
+                raise ValueError("plugin checkpoint is too large")
         except (ValueError, KeyError, TypeError, AttributeError, UnicodeDecodeError):
             raise HTTPException(status_code=422, detail="invalid plugin task", headers=_PRIVATE_HEADERS)
-        result = store.plugin_task(str(user["user_id"]), cid, mid, operation, holder)
+        result = await asyncio.to_thread(store.plugin_task, str(user["user_id"]), cid, mid, operation, holder, checkpoint)
         return JSONResponse(result, headers=_PRIVATE_HEADERS)
 
     @app.get("/api/user/chat/conversations/changes")
