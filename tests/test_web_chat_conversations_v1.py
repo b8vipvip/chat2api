@@ -386,7 +386,7 @@ def test_browser_conversation_merge_conflict_resolution() -> None:
 
 
 
-def test_conversation_attachment_references_protect_files_until_last_cross_device_tombstone(tmp_path: Path) -> None:
+def test_conversation_attachment_references_protect_files_until_last_cross_device_tombstone(tmp_path: Path, monkeypatch) -> None:
     app = create_app(Settings(
         CHAT2API_API_KEY="web-chat-conversation-files-master-key",
         CHAT2API_DATA_DIR=str(tmp_path),
@@ -534,7 +534,21 @@ def test_conversation_attachment_references_protect_files_until_last_cross_devic
         assert client.get("/api/user/chat/library?scope=unreferenced").json()["data"] == []
         app.state.file_store.get(image_id).created_at = "2020-01-01T00:00:00+00:00"
         app.state.file_store.get(document_id).created_at = "2020-01-01T00:00:00+00:00"
+        from contextlib import contextmanager
+        guard_calls = []
+        original_guard = store.file_reference_snapshot_guard
+
+        @contextmanager
+        def checked_reference_guard():
+            # The reference database must be locked before the file store.
+            assert not app.state.file_store.lock._is_owned()
+            guard_calls.append(True)
+            with original_guard() as referenced:
+                yield referenced
+
+        monkeypatch.setattr(store, "file_reference_snapshot_guard", checked_reference_guard)
         unused = client.get("/api/user/chat/library?scope=unreferenced").json()["data"]
+        assert guard_calls == [True]
         assert [(item["id"], item["reference_count"]) for item in unused] == [(image_id, 0)]
         remaining = client.get("/api/user/chat/library").json()["data"]
         assert [(item["id"], item["reference_count"]) for item in remaining] == [(document_id, 1)]
