@@ -838,6 +838,12 @@ def install_web_chat_conversations_v1(app: FastAPI) -> None:
         user = accounts.authenticate(request.cookies.get(USER_SESSION_COOKIE)) if accounts else None
         if not user:
             raise HTTPException(status_code=401, detail="user login required", headers=_PRIVATE_HEADERS)
+        # The browser supplies its expected account, never an authentication
+        # credential. A stale tab can otherwise write its old local text into
+        # a newly logged-in account using the replacement same-origin cookie.
+        expected_owner = request.headers.get("X-Chat2API-User-ID")
+        if expected_owner is not None and expected_owner != str(user["user_id"]):
+            raise HTTPException(status_code=409, detail="Web Chat account changed; reload the page", headers=_PRIVATE_HEADERS)
         return accounts, user
 
     @app.get("/api/user/chat/conversations")

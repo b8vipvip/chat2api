@@ -621,3 +621,31 @@ def test_conversation_tool_events_preserve_unknown_and_missing_status_as_unknown
                 "callId": "call-invalid-1",
                 "status": invalid,
             }], "assistant")
+
+
+def test_stale_tab_account_header_cannot_write_to_replacement_session(tmp_path: Path):
+    app = create_app(Settings(CHAT2API_DATA_DIR=str(tmp_path)))
+    _install_web_chat_test_features(app)
+    with TestClient(app) as client:
+        owner = client.post("/api/user/register", json={
+            "email": "stale-tab-owner@example.test", "password": "stale-tab-password"
+        })
+        assert owner.status_code == 200, owner.text
+        owner_id = owner.json()["user"]["user_id"]
+        client.cookies.clear()
+        other = client.post("/api/user/register", json={
+            "email": "replacement-session@example.test", "password": "stale-tab-password"
+        })
+        assert other.status_code == 200, other.text
+        headers = {"Origin": "http://testserver", "X-Chat2API-User-ID": owner_id}
+        conversation = _conversation("c2a_stale_tab_owner_0001")
+        base = "/api/user/chat/conversations"
+        assert client.get(base, headers=headers).status_code == 409
+        assert client.get(base + "/search?q=test", headers=headers).status_code == 409
+        saved = client.put(base + "/" + conversation["id"], headers=headers, json={
+            "expected_revision": 0, "conversation": conversation,
+        })
+        assert saved.status_code == 409, saved.text
+        deleted = client.delete(base + "/" + conversation["id"] + "?expected_revision=0", headers=headers)
+        assert deleted.status_code == 409, deleted.text
+        assert client.get(base).json()["data"] == []

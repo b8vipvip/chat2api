@@ -139,3 +139,66 @@ def test_web_chat_admin_projection_does_not_restore_denied_models(tmp_path: Path
         allowed = send("gpt-5.6-sol")
         assert allowed.status_code == 200, allowed.text
         assert dispatched == ["gpt-5.6-sol"]
+
+
+def test_web_chat_ready_page_default_survives_failed_manual_model_sync(tmp_path: Path):
+    app = create_app(Settings(CHAT2API_DATA_DIR=str(tmp_path)))
+    install_control_plane_v1(app)
+    app.state.control_plane.update_client({"web_chat_enabled": True})
+    install_user_console_v104_patch(app)
+    app.state.tenant_memberships = TenantMembershipStore(tmp_path)
+    install_model_entitlements(app)
+    install_web_chat_features_v1(app)
+    shared, _ = asyncio.run(app.state.api_keys.create("web-chat-default-route"))
+    app.state.control_plane.update_client({"api_key_id": shared["key_id"]})
+
+    sync_rows = []
+    async def last_sync():
+        return {
+            "available_models": sync_rows,
+            "available_models_default_mapping": "gpt-5.6-sol",
+            "available_models_task": {"state": "failed", "completed_workers": 0, "total_workers": 1},
+        }
+
+    ready_workers = ["free-worker"]
+    disabled = []
+    app.state.worker_model_tasks_v147_snapshot = last_sync
+    app.state.worker_text_model_management_v146_snapshot = lambda: {
+        "data": [{"id": "default", "enabled": True, "routable_by": ready_workers,
+                  "state": "default-unverified"}],
+        "legacy_minimum_model": "gpt-5.6-sol",
+        "disabled": disabled,
+    }
+    from fastapi.responses import JSONResponse
+    calls = []
+    async def adapter(body, request, client_id, request_id, principal):
+        calls.append((body.model, request.scope.get("chat2api_mode1_web_chat")))
+        return JSONResponse({"model": body.model})
+    app.state.chat_completions_adapter = adapter
+    with TestClient(app) as client:
+        registered = client.post("/api/user/register", json={
+            "email": "failed-model-sync@example.com", "password": "web-chat-password-123",
+        })
+        assert registered.status_code == 200, registered.text
+        def models():
+            response = client.get("/api/user/chat/models")
+            assert response.status_code == 200, response.text
+            return response.json()["data"]
+
+        rows = models()
+        assert [row["id"] for row in rows] == ["default"]
+        assert rows[0]["mapped_model_id"] == "gpt-5.6-sol"
+        sent = client.post("/api/user/chat/completions", headers={"Origin": "http://testserver"}, json={
+            "model": "default", "messages": [{"role": "user", "content": "hello"}], "stream": False,
+        })
+        assert sent.status_code == 200, sent.text
+        assert calls == [("default", True)]
+        disabled.append("gpt-5.6-sol")
+        assert models() == []
+        disabled.clear()
+        app.state.model_entitlements.upsert("key", shared["key_id"], "deny", ["gpt-5.6-sol"])
+        assert models() == []
+        # An old successful sync is not proof of current readiness.
+        sync_rows.append({"id": "default"})
+        ready_workers.clear()
+        assert models() == []

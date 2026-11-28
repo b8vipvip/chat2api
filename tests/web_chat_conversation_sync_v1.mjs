@@ -106,7 +106,7 @@ test("a locally completed reply wins over a stale pending server placeholder", (
     updatedAt: "2026-11-20T00:00:05Z",
     serverRevision: 2,
     messages: [
-      {id: "message_assistant_03", role: "assistant", content: "", pending: true, recoveryStatus: "streaming"},
+      {id: "message_assistant_03", role: "assistant", content: "a very long unverified server draft that must never replace the final local answer", pending: true, recoveryStatus: "streaming"},
     ],
   };
   const local = {
@@ -510,4 +510,115 @@ test("conversation switching and bootstrap cannot resurrect an image-only model"
   assert.ok(send.includes("model: requestModelId,"));
   assert.ok(!send.includes("model: state.selectedModel"));
   assert.ok(source.includes("model:requestModelId,\n          messages:plannerMessages,"));
+});
+
+
+test("a stale search result cannot roll back acknowledged conversation revision", () => {
+  const local={id:"conversation-test",serverRevision:9,title:"new",messages:[]};
+  const old={id:local.id,serverRevision:3,title:"old",messages:[]};
+  const state={conversations:[local],searchResults:[old]};
+  const ctx=vm.createContext({state,mergeConversation(){throw Error("stale snapshot must not merge");}});
+  const start=source.indexOf("  function hydrateSearchConversation(");
+  const end=source.indexOf("  async function searchConversationsOnServer(",start);
+  const hydrate=vm.runInContext(source.slice(start,end)+"\nhydrateSearchConversation",ctx);
+  assert.equal(hydrate(old),local);
+  assert.equal(local.serverRevision,9);
+  assert.equal(local.title,"new");
+});
+
+test("text-only merge keeps a newer replay cursor even without tool evidence", () => {
+  const remote={id:"conv",serverRevision:2,messages:[{id:"m",content:"longer text",lastEventId:1,pending:true}]};
+  const local={id:"conv",messages:[{id:"m",content:"text",lastEventId:8,pending:true}]};
+  const merged=mergeConversation(remote,local);
+  assert.equal(merged.messages[0].lastEventId,8);
+});
+
+test("model directory cache and in-flight responses are isolated by account and key", async () => {
+  const state={user:{user_id:"alice"},webChatKeyId:"a",models:[],selectedModel:"default"};
+  const requests=[];
+  const ctx=vm.createContext({
+    state,currentConversation:()=>null,selectedKeyId:()=>state.webChatKeyId,
+    apiJson:(_path,options)=>new Promise(resolve=>requests.push({resolve,key:options.headers["X-Chat2API-User-Key-ID"]})),
+    resizeComposer(){},setConnection(){},recordClientDiagnostic(){},
+  });
+  const start=source.indexOf("  function selectAvailableTextModel(");
+  const end=source.indexOf("  function exportConversation(",start);
+  const api=vm.runInContext("let modelCatalogLoadPromise=null;\n"+source.slice(start,end)+"\n({loadModels})",ctx);
+  const old=api.loadModels();
+  state.user={user_id:"bob"};state.webChatKeyId="b";
+  const current=api.loadModels();
+  assert.equal(requests.length,2);
+  assert.equal(state.selectedModel,"");
+  requests[1].resolve({data:[{id:"gpt-6-sol",capabilities:["text"]}]});
+  await current;
+  requests[0].resolve({data:[{id:"default",capabilities:["text"]}]});
+  await old;
+  assert.equal(state.selectedModel,"gpt-6-sol");
+  assert.equal(state.models[0].id,"gpt-6-sol");
+  state.webChatKeyId="other-key";
+  const switched=api.loadModels();
+  assert.equal(requests.length,3);
+  assert.equal(state.selectedModel,"");
+  requests[2].resolve({data:[{id:"gpt-5.6-sol",capabilities:["text"]}]});
+  await switched;
+  assert.equal(state.selectedModel,"gpt-5.6-sol");
+});
+
+
+test("plugin catalog ignores old account responses and clears stale grants on failure", async () => {
+  const requests=[];
+  const state={user:{user_id:"a"},pluginCatalog:[],selectedPlugins:[]};
+  const ctx=vm.createContext({
+    state,apiJson:()=>new Promise((resolve,reject)=>requests.push({resolve,reject})),
+    updatePluginPickerButton(){},renderPluginCatalog(){},restorePluginSelection(){},recordClientDiagnostic(){},
+  });
+  const start=source.indexOf("  async function loadPluginCatalog(");
+  const end=source.indexOf("  function renderLibrary(",start);
+  const load=vm.runInContext(source.slice(start,end)+"\nloadPluginCatalog",ctx);
+  const a=load();
+  state.user={user_id:"b"};
+  const b=load();
+  requests[1].resolve({data:[{id:"gmail",connected:true}]});
+  await b;
+  requests[0].resolve({data:[{id:"github",connected:true}]});
+  await a;
+  assert.equal(state.pluginCatalog[0].id,"gmail");
+  const refresh=load(true);
+  requests[2].reject(new Error("offline"));
+  await refresh;
+  assert.equal(state.pluginCatalog.length,0);
+  assert.equal(state.pluginCatalogLoaded,false);
+});
+
+
+test("failed initial history hydration retries once at a time and waits for an idle client", async () => {
+  const state={user:{user_id:"a"},webChatKeyId:"key",remoteSyncReady:false,remoteSyncRetryNeeded:true,
+    pendingImages:[],pendingFiles:[],recoveryInFlight:new Set(),pendingConversationDeletes:new Set(),
+    streaming:true};
+  let calls=0,complete,rendered=0;
+  const ctx=vm.createContext({state,
+    syncServerConversations:()=>{calls++;return new Promise(resolve=>{complete=resolve;});},
+    currentConversation:()=>null,selectAvailableTextModel(){},loadModels(){},
+    renderAll(){rendered++;},resumePendingMessages(){},hydrateNativeSnapshots(){},recordClientDiagnostic(){},
+  });
+  const check=source.slice(source.indexOf("  function canRetryInitialConversationSync("),
+    source.indexOf("  async function syncServerConversations("));
+  const retry=source.slice(source.indexOf("  async function retryInitialConversationSync("),
+    source.indexOf("  function scheduleConversationSync("));
+  const run=vm.runInContext(check+retry+"\nretryInitialConversationSync",ctx);
+  await run();
+  assert.equal(calls,0);
+  state.streaming=false;
+  const first=run();
+  await run();
+  assert.equal(calls,1);
+  complete(false);await first;
+  assert.equal(rendered,0);
+  const next=run();
+  assert.equal(calls,2);
+  state.remoteSyncReady=true;state.remoteSyncRetryNeeded=false;
+  complete(true);await next;
+  assert.equal(rendered,1);
+  await run();
+  assert.equal(calls,2);
 });
