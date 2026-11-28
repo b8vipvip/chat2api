@@ -1372,6 +1372,6 @@ const duplicate=await new Promise(resolve=>recaptureListener(envelope,{},resolve
 assert.equal(duplicate.duplicate,true);
 assert.equal(duplicate.snapshot.revision,2);
 currentRoot=new Element("DIV");
-const moved=await new Promise(resolve=>recaptureListener({...envelope,
+const movedReply=await new Promise(resolve=>recaptureListener({...envelope,
   revision:2,interaction_id:"nc_2_1",action_id:"b".repeat(32),value:false}, {},resolve));
-assert.equal(moved.error,"native-interaction-reply-scope-changed");
+assert.equal(movedReply.error,"native-interaction-reply-scope-changed");
