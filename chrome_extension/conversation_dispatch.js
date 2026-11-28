@@ -259,7 +259,8 @@
       target && target.expiresAt > Date.now()
       && /^[a-f0-9]{32}$/.test(actionId)
       && Number.isInteger(revision) && revision >= 1
-      && /^nc_[1-9][0-9]{0,6}_[1-9][0-9]{0,3}$/.test(interactionId)
+      && (/^nc_[1-9][0-9]{0,6}_[1-9][0-9]{0,3}$/.test(interactionId) ||
+          (interactionId==="native_refresh" && message.action==="refresh_canvas" && message.value===null))
     ) {
       try {
         const tab = await chrome.tabs.get(target.tabId);
