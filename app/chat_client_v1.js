@@ -532,8 +532,18 @@
           const current = await apiJson("/api/user/me");
           if (ownerId && String(current.user?.user_id || "") === ownerId &&
               String(state.user?.user_id || "") === ownerId) return;
-        } catch {}
+        } catch (error) {
+          // Network outages, proxy reloads and 5xx are not proof that
+          // the authenticated account disappeared. Preserve reconnect context.
+          if (![401,403].includes(error?.status)) return;
+        }
         if (state.voiceClient !== client || state.voiceStopping) return;
+        // A successful /me for a different account must stop the old
+        // microphone session without logging out the newly signed-in user.
+        if (state.user && String(state.user.user_id || "") !== ownerId) {
+          await stopVoiceCall();
+          return;
+        }
         state.user = null;
         $("sidebarAccount").hidden = true;
         showOnly("authRequired");
