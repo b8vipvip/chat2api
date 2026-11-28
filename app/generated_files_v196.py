@@ -358,6 +358,13 @@ class GeneratedFileArchive:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def deletion_identity(self, file_id: str):
+        with self._db() as conn:
+            row = conn.execute(
+                "SELECT owner,request_id FROM generated_files WHERE id=?", (file_id,)
+            ).fetchone()
+        return (str(row["owner"]), str(row["request_id"])) if row else None
+
     def delete(self, file_id: str):
         with self._db() as conn:
             row = conn.execute("SELECT * FROM generated_files WHERE id = ?", (file_id,)).fetchone()
