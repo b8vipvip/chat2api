@@ -45,6 +45,7 @@
     searchWarned: false,
     voiceClient: null,
     voiceStarting: false,
+    voiceStopping: false,
     voiceActive: false,
     voicePanelVisible: false,
     voiceAssistantLine: null,
@@ -191,7 +192,7 @@
     start.disabled = state.streaming || state.voiceActive || !state.webChatKeyId || (!selectedKeyHasScope("audio") && !selectedKeyHasScope("chat"));
     start.classList.toggle("hidden", state.voiceActive);
     stop.classList.toggle("hidden", !state.voiceActive);
-    stop.disabled = !state.voiceActive || state.voiceStarting;
+    stop.disabled = !state.voiceActive || state.voiceStopping;
     camera.classList.toggle("hidden", !state.voiceActive || state.voiceStarting);
     camera.disabled = !state.voiceActive || state.voiceStarting || !selectedKeyHasScope("files");
     if (!selectedKeyHasScope("files")) camera.title = "服务端统一 API Key 缺少 files 权限";
@@ -203,6 +204,11 @@
   }
 
   function setVoiceUi(status, detail = "") {
+    // Camera cleanup can emit idle/ready before the actual call closes.
+    // Keep the UI bound to the stopping call until its terminal callback.
+    if (state.voiceStopping && status !== "closed" && status !== "stopping") return;
+    if (status === "idle" && state.voiceActive) return;
+    state.voiceStopping = status === "stopping";
     state.voiceStarting = status === "requesting_microphone" || status === "camera_starting";
     state.voiceActive = ["requesting_microphone","ready","camera_starting","camera_ready","stopping"].includes(status);
     if (status !== "idle") state.voicePanelVisible = true;
@@ -424,6 +430,7 @@
     $("voicePanel").classList.remove("hidden");
     $("voiceTranscript").replaceChildren();
     state.voiceAssistantLine = null;
+    const ownerId = String(state.user?.user_id || "");
     const client = voiceApi.create({
       sessionEndpoint:"/api/user/chat/voice-session",
       fileUploadEndpoint:"/api/user/chat/files",
@@ -433,8 +440,11 @@
       beforeConnect:async () => {
         try {
           const session = await apiJson("/api/user/me");
-          if (String(session.user?.user_id || "") === String(state.user?.user_id || "")) return;
+          if (state.voiceClient !== client || state.voiceStopping) throw new Error("语音启动已取消");
+          if (ownerId && String(session.user?.user_id || "") === ownerId &&
+              String(state.user?.user_id || "") === ownerId) return;
         } catch {}
+        if (state.voiceClient !== client || state.voiceStopping) throw new Error("语音启动已取消");
         state.user = null;
         $("sidebarAccount").hidden = true;
         state.voicePanelVisible = false;
@@ -446,20 +456,28 @@
         openLoginDialog();
         throw new Error("用户登录状态已失效，请重新登录后再使用实时语音");
       },
-      onState:(status,detail) => setVoiceUi(status,detail),
-      onEvent:handleVoiceEvent,
+      onState:(status,detail) => {
+        if (state.voiceClient === client) setVoiceUi(status,detail);
+      },
+      onEvent:payload => {
+        if (state.voiceClient === client) handleVoiceEvent(payload);
+      },
     });
     state.voiceClient = client;
     setVoiceUi("requesting_microphone","正在请求麦克风权限…");
     try {
       recordClientDiagnostic("voice.start_requested", {feature: "voice", phase: "connect"});
       await client.start();
+      if (state.voiceClient !== client || state.voiceStopping) return;
       recordClientDiagnostic("voice.started", {feature: "voice", phase: "connected"});
       state.voiceAuthTimer = window.setInterval(async () => {
+        if (state.voiceClient !== client || state.voiceStopping) return;
         try {
           const current = await apiJson("/api/user/me");
-          if (String(current.user?.user_id || "") === String(state.user?.user_id || "")) return;
+          if (ownerId && String(current.user?.user_id || "") === ownerId &&
+              String(state.user?.user_id || "") === ownerId) return;
         } catch {}
+        if (state.voiceClient !== client || state.voiceStopping) return;
         state.user = null;
         $("sidebarAccount").hidden = true;
         showOnly("authRequired");
@@ -471,10 +489,11 @@
         await stopVoiceCall();
       },60000);
     } catch (error) {
+      if (state.voiceClient !== client || state.voiceStopping) return;
       recordClientDiagnostic("voice.start_failed", {feature: "voice", phase: "connect", error_name: error?.name || "Error"}, "error");
-      await client.stop();
-      if (state.voiceClient === client) state.voiceClient = null;
-      setVoiceUi("closed","实时语音启动失败：" + String(error?.message || error));
+      try { await client.stop(); } catch {}
+      if (state.voiceClient && state.voiceClient !== client) return;
+      if (state.voiceClient === client) setVoiceUi("closed","实时语音启动失败：" + String(error?.message || error));
       toast("无法启动实时语音：" + String(error?.message || error));
     }
   }
@@ -482,12 +501,12 @@
   async function stopVoiceCall() {
     const client = state.voiceClient;
     if (!client) { setVoiceUi("closed"); return; }
+    if (state.voiceStopping) return;
     setVoiceUi("stopping","正在结束实时语音…");
     recordClientDiagnostic("voice.stop_requested", {feature: "voice", phase: "stop"});
     try { await client.stop(); recordClientDiagnostic("voice.stopped", {feature: "voice", phase: "closed"}); }
     catch (error) { recordClientDiagnostic("voice.stop_failed", {feature: "voice", phase: "stop", error_name: error?.name || "Error"}, "warning"); toast("结束语音时发生错误：" + String(error?.message || error)); }
-    if (state.voiceClient === client) state.voiceClient = null;
-    setVoiceUi("closed");
+    if (state.voiceClient === client) setVoiceUi("closed");
   }
 
   async function toggleVoiceCamera() {
@@ -506,8 +525,10 @@
     try {
       $("voiceCameraPreview").classList.remove("hidden");
       await client.startCamera($("voiceCameraPreview"));
+      if (state.voiceClient !== client || state.voiceStopping) return;
       $("voiceCameraButton").textContent = "关闭摄像头";
     } catch (error) {
+      if (state.voiceClient !== client || state.voiceStopping) return;
       $("voiceCameraPreview").classList.add("hidden");
       toast("无法开启摄像头：" + String(error?.message || error));
     }
@@ -1059,6 +1080,20 @@
     state.remoteSyncTimers.set(conversationId, timer);
   }
 
+  async function fetchConversationMutation(url, options) {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 20000);
+    try {
+      const response = await fetch(url, {...options, signal:controller.signal});
+      let result = {};
+      try { result = await response.json(); }
+      catch (error) { if (controller.signal.aborted) throw error; }
+      return {response,result};
+    } finally {
+      window.clearTimeout(timer);
+    }
+  }
+
   async function syncConversationToServer(conversationId) {
     if (!state.remoteSyncReady || state.pendingConversationDeletes?.has(conversationId)) return;
     if (state.remoteSyncInFlight.has(conversationId)) {
@@ -1073,7 +1108,7 @@
         const body = serverConversationPayload(conversation);
         const fingerprint = JSON.stringify(body);
         if (state.remoteSyncFingerprints.get(conversationId) === fingerprint) return;
-        const response = await fetch("/api/user/chat/conversations/" + encodeURIComponent(conversationId), {
+        const {response,result} = await fetchConversationMutation("/api/user/chat/conversations/" + encodeURIComponent(conversationId), {
           method: "PUT",
           credentials: "same-origin",
           headers: {"Content-Type":"application/json", "Accept":"application/json"},
@@ -1082,8 +1117,6 @@
             conversation: body,
           }),
         });
-        let result = {};
-        try { result = await response.json(); } catch {}
         if (response.status === 409 && result.conversation) {
           if (result.conversation.deleted === true) {
             state.conversations = state.conversations.filter((row) => row.id !== conversationId);
@@ -1172,14 +1205,12 @@
       }
       if (!sameAccount()) return;
       const expectedRevision = Number(conversation.serverRevision || 0);
-      const response = await fetch("/api/user/chat/conversations/" + encodeURIComponent(conversationId) +
+      const {response,result} = await fetchConversationMutation("/api/user/chat/conversations/" + encodeURIComponent(conversationId) +
         "?expected_revision=" + encodeURIComponent(String(expectedRevision)), {
         method: "DELETE",
         credentials: "same-origin",
         headers: {"Accept":"application/json"},
       });
-      let result = {};
-      try { result = await response.json(); } catch {}
       if (!sameAccount()) return;
       const row = result.conversation;
       if (response.status === 409 && row?.id === conversationId && row.deleted !== true) {

@@ -30,6 +30,7 @@ const state = {
   conversations:[latest,older],
   voiceActive:false,
   streaming:false,
+  pendingConversationDeletes:new Set(),
   pendingImages:[],
   pendingImagesConversationId:"",
   pendingFiles:[],

@@ -153,7 +153,7 @@ test("conversation sync retries transient transport failures with bounded backof
   let nextTimerId = 0;
   let calls = 0;
   const context = vm.createContext({
-    state,
+    state, AbortController,
     window:{
       setTimeout(callback,delay) {
         const id = ++nextTimerId;
@@ -230,7 +230,7 @@ test("conversation sync does not retry permanent client errors", async () => {
   const timers = new Map();
   let nextTimerId = 0;
   const context = vm.createContext({
-    state,
+    state, AbortController,
     window:{
       setTimeout(callback,delay) { const id=++nextTimerId;timers.set(id,{callback,delay});return id; },
       clearTimeout(id) { timers.delete(id); },
@@ -312,7 +312,8 @@ function deleteHarness(fetcher) {
   };
   const saves = [], warnings = [];
   const context = vm.createContext({
-    state,MAX_CONVERSATIONS:15,window:{confirm:()=>true,clearTimeout(){}},
+    state,MAX_CONVERSATIONS:15,AbortController,
+    window:{confirm:()=>true,setTimeout,clearTimeout},
     fetch:fetcher,
     normalizeConversationRow:value=>({...value,serverRevision:value.revision}),
     mergeConversation:(server,local)=>({...local,...server}),
@@ -323,7 +324,9 @@ function deleteHarness(fetcher) {
   const deleteEnd=source.indexOf("  function saveHistory(",deleteStart);
   const uiStart=source.indexOf("  function deleteConversation(");
   const uiEnd=source.indexOf("  function renameConversation(",uiStart);
-  const api=vm.runInContext(source.slice(deleteStart,deleteEnd)+source.slice(uiStart,uiEnd)+
+  const mutationStart=source.indexOf("  async function fetchConversationMutation(");
+  const mutationEnd=source.indexOf("  async function syncConversationToServer(",mutationStart);
+  const api=vm.runInContext(source.slice(mutationStart,mutationEnd)+source.slice(deleteStart,deleteEnd)+source.slice(uiStart,uiEnd)+
     "\n({deleteConversation,deleteConversationFromServer})",context);
   return {state,row,other,api,saves,warnings,searchController};
 }
@@ -402,4 +405,27 @@ test("import does not switch away from a Voice session started while import was 
   assert.equal(state.conversations[0].id,"imported");
   assert.equal(state.conversations.length,15);
   assert.ok(state.conversations.some(row=>row.id==="voice-chat"));
+});
+
+
+test("conversation mutation timeout covers the response body and releases the timer", async () => {
+  let expire, cleared=0, signal;
+  const context=vm.createContext({
+    AbortController,window:{setTimeout(fn){expire=fn;return 1;},clearTimeout(){cleared++;}},
+    fetch:async(_url,options)=>{
+      signal=options.signal;
+      return {ok:true,json:()=>new Promise((_resolve,reject)=>{
+        signal.addEventListener("abort",()=>reject(new Error("aborted")),{once:true});
+      })};
+    },
+  });
+  const start=source.indexOf("  async function fetchConversationMutation(");
+  const end=source.indexOf("  async function syncConversationToServer(",start);
+  const mutate=vm.runInContext(source.slice(start,end)+"\nfetchConversationMutation",context);
+  const pending=mutate("/test",{method:"DELETE"});
+  await new Promise(r=>setImmediate(r));
+  expire();
+  await assert.rejects(pending,/aborted/);
+  assert.equal(signal.aborted,true);
+  assert.equal(cleared,1);
 });
