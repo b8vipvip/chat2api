@@ -5056,7 +5056,7 @@
       while (stack.length) {
         const node = stack.pop();
         if (!node || typeof node !== "object") continue;
-        if (node.interaction_id) { interactive = true; break; }
+        if (node.interaction_id || node.tag === "canvas_raster") { interactive = true; break; }
         if (Array.isArray(node.children)) stack.push(...node.children);
       }
       if (interactive && !candidates.includes(message.requestId)) candidates.push(message.requestId);
@@ -5064,9 +5064,31 @@
     }
     state.nativeInteractionRefreshInFlight = true;
     try {
+      let sampledCanvas = false;
       for (const requestId of candidates) {
         if (String(state.user?.user_id || "") !== owner || currentConversation()?.id !== conversation.id) return;
         await refreshNativeSnapshot(requestId);
+        if (String(state.user?.user_id || "") !== owner || currentConversation()?.id !== conversation.id) return;
+        const snapshot=state.nativeSnapshots.get(requestId);
+        if (sampledCanvas || !snapshot || snapshot.finality!=="verified-final" ||
+            state.streaming || state.voiceActive || document.hidden) continue;
+        const stack=[snapshot.root];
+        let hasCanvas=false;
+        while(stack.length){
+          const node=stack.pop();
+          if(node?.tag==="canvas_raster"){hasCanvas=true;break;}
+          if(Array.isArray(node?.children))stack.push(...node.children);
+        }
+        if (hasCanvas) {
+          sampledCanvas=true;
+          try {
+            await submitNativeInteraction(requestId,{revision:snapshot.revision,
+              interaction_id:"native_refresh",action:"refresh_canvas",value:null});
+          } catch (_) {
+            // A closed/restarted Worker tab or a blank WebGL buffer does
+            // not invalidate the last verified raster. Do not replay.
+          }
+        }
       }
     } finally {
       state.nativeInteractionRefreshInFlight = false;
@@ -5194,6 +5216,10 @@
               !state.conversations.includes(conversation) || !conversation.messages.includes(message) ||
               !message.pending || message.recoveryStatus !== "tool_planning") return;
           if (task.state === "running" || task.recoverable === true) continue;
+          if (task.server_finalized === true) {
+            await pullConversationDelta();
+            continue;
+          }
           if (task.state === "missing") {
             const key = JSON.stringify([owner,conversation.id,message.id]);
             const now = Date.now();
