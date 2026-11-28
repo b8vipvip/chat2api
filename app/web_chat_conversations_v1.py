@@ -333,7 +333,7 @@ class WebChatConversationStoreV1:
             connection.execute("PRAGMA journal_mode=WAL")
             self._secure_sqlite_files()
             version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-            if version > 3:
+            if version > 4:
                 raise RuntimeError("Web Chat conversation database version is newer than this application")
             connection.execute("""
                 CREATE TABLE IF NOT EXISTS web_chat_conversations (
@@ -419,8 +419,6 @@ class WebChatConversationStoreV1:
                 except Exception:
                     connection.rollback()
                     raise
-            else:
-                connection.execute("PRAGMA user_version=2")
             connection.execute("""
                 CREATE TABLE IF NOT EXISTS web_chat_policy (
                     policy_id INTEGER PRIMARY KEY CHECK (policy_id = 1),
@@ -434,7 +432,6 @@ class WebChatConversationStoreV1:
                 "VALUES (1, 0, ?)",
                 (_now(),),
             )
-            connection.execute("PRAGMA user_version=3")
             # Additive schema: triggers participate in the same transaction
             # as conversation writes, including retention and other processes.
             connection.execute("""
@@ -483,6 +480,77 @@ class WebChatConversationStoreV1:
                         WHERE user_id={owner}.user_id AND conversation_id={owner}.conversation_id;
                     END
                 """)
+
+            # Separate request and explicit-link references from upload IDs:
+            # generated archives may finish after the conversation is saved.
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                connection.execute("""
+                    CREATE TABLE IF NOT EXISTS web_chat_generated_references (
+                        user_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
+                        reference TEXT NOT NULL,
+                        PRIMARY KEY(user_id, conversation_id, reference)
+                    )
+                """)
+                connection.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_web_chat_generated_reference
+                    ON web_chat_generated_references(user_id,reference)
+                """)
+                # Read the version inside the write transaction: concurrent
+                # constructors must never rebuild over a committed save.
+                if int(connection.execute("PRAGMA user_version").fetchone()[0]) < 4:
+                    connection.execute("DELETE FROM web_chat_generated_references")
+                    for row in connection.execute(
+                        "SELECT user_id,conversation_id,payload FROM web_chat_conversations WHERE deleted=0"
+                    ):
+                        self._replace_generated_references(connection, row["user_id"],
+                            row["conversation_id"], json.loads(row["payload"]))
+                    connection.execute("PRAGMA user_version=4")
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+
+    @staticmethod
+    def _replace_generated_references(connection, user_id, conversation_id, conversation):
+        refs = set()
+        for message in (conversation or {}).get("messages", []):
+            if not isinstance(message, dict) or message.get("role") != "assistant":
+                continue
+            request_id = message.get("requestId")
+            if isinstance(request_id, str) and _REQUEST_ID_RE.fullmatch(request_id):
+                refs.add(request_id)
+            content = message.get("content")
+            if isinstance(content, str):
+                refs.update(re.findall(
+                    r"/api/(?:user/chat/)?generated-files/(gen_[A-Za-z0-9]{8,64})(?=/)", content))
+        connection.execute(
+            "DELETE FROM web_chat_generated_references WHERE user_id=? AND conversation_id=?",
+            (user_id, conversation_id))
+        connection.executemany(
+            "INSERT INTO web_chat_generated_references VALUES (?,?,?)",
+            [(user_id, conversation_id, ref) for ref in sorted(refs)])
+
+    def generated_reference_count(self, user_id: str, file_id: str, request_id: str) -> int:
+        with self.lock, closing(self._connect()) as connection:
+            return int(connection.execute(
+                "SELECT COUNT(DISTINCT conversation_id) FROM web_chat_generated_references "
+                "WHERE user_id=? AND reference IN (?,?)",
+                (user_id, file_id, request_id)).fetchone()[0])
+
+    @contextmanager
+    def generated_deletion_guard(self, user_id: str, file_id: str, request_id: str):
+        with self.lock, closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                row = connection.execute(
+                    "SELECT 1 FROM web_chat_generated_references WHERE user_id=? "
+                    "AND reference IN (?,?) LIMIT 1", (user_id, file_id, request_id)).fetchone()
+                yield row is None
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
 
     def plugin_task(self, user_id: str, conversation_id: str, message_id: str,
                     operation: str, holder: str = "",
@@ -736,6 +804,8 @@ class WebChatConversationStoreV1:
                         int(stored["revision"]),
                     ),
                 ).rowcount
+                if changed == 1:
+                    self._replace_generated_references(connection, user_id, conversation_id, None)
                 expired += int(changed == 1)
             connection.commit()
         return expired
@@ -967,6 +1037,7 @@ class WebChatConversationStoreV1:
                 """,
                 (user_id, conversation_id, revision, saved["updatedAt"], serialized),
             )
+            self._replace_generated_references(connection, user_id, conversation_id, saved)
             connection.execute("COMMIT")
             return True, {**saved, "revision": revision, "deleted": False}
 
@@ -1030,6 +1101,7 @@ class WebChatConversationStoreV1:
                 """,
                 (user_id, conversation_id, revision, now, json.dumps(payload, ensure_ascii=False, separators=(",", ":"))),
             )
+            self._replace_generated_references(connection, user_id, conversation_id, None)
             connection.execute("COMMIT")
             return True, {**payload, "revision": revision, "deleted": True}
 
@@ -1151,7 +1223,8 @@ def install_web_chat_conversations_v1(app: FastAPI) -> None:
             rows = await asyncio.to_thread(archive.list_owned, accounts.key_ids(user_id), after, limit)
             return JSONResponse({
                 "data": [{"id": row["id"], "filename": row["filename"], "mime_type": row["mime"],
-                          "bytes": row["size"], "created_at": row["created_at"], "source": "generated"}
+                          "bytes": row["size"], "created_at": row["created_at"], "source": "generated",
+                          "reference_count": store.generated_reference_count(user_id, row["id"], row["request_id"])}
                          for row in rows[:limit]],
                 "next_cursor": rows[limit-1]["id"] if len(rows) > limit else None,
             }, headers=_PRIVATE_HEADERS)
