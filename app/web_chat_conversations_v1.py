@@ -181,7 +181,36 @@ def _normalize_plugin_checkpoint(value: Any) -> dict[str, Any]:
     events = _normalize_tool_events(value.get("tool_events"), "assistant")
     if len(events) > calls or any(event["status"] not in {"completed", "failed"} for event in events):
         raise ValueError("invalid plugin checkpoint events")
-    return {"rounds": rounds, "tool_calls": calls, "tool_events": events}
+    normalized = {"rounds": rounds, "tool_calls": calls, "tool_events": events}
+    plan = value.get("plan")
+    if plan is not None:
+        if not isinstance(plan, dict) or set(plan) != {"request_id", "model", "calls", "start_tool_calls"}:
+            raise ValueError("invalid plugin planning checkpoint")
+        request_id, model, planned = plan["request_id"], plan["model"], plan["calls"]
+        start = plan["start_tool_calls"]
+        if (not isinstance(request_id, str) or not _REQUEST_ID_RE.fullmatch(request_id)
+                or not isinstance(model, str) or not 1 <= len(model) <= 120
+                or type(start) is not int or not 0 <= start <= calls
+                or not isinstance(planned, list) or len(planned) > 3
+                or start + len(planned) > 6):
+            raise ValueError("invalid plugin plan")
+        normalized_calls = []
+        for call in planned:
+            if not isinstance(call, dict) or set(call) != {"name", "arguments"}:
+                raise ValueError("invalid planned call")
+            name, args = call["name"], call["arguments"]
+            if (not isinstance(name, str) or not re.fullmatch(r"(?:github|gmail)\.[a-z_]{1,64}", name)
+                    or not isinstance(args, dict) or len(args) > 12
+                    or any(not isinstance(key, str) or not re.fullmatch(r"[a-z_]{1,64}", key)
+                           or type(arg) not in {str, int, bool}
+                           or (isinstance(arg, str) and len(arg) > 2048)
+                           for key, arg in args.items())
+                    or len(json.dumps(args, ensure_ascii=False).encode("utf-8")) > 8192):
+                raise ValueError("invalid planned tool arguments")
+            normalized_calls.append({"name": name, "arguments": args})
+        normalized["plan"] = {"request_id": request_id, "model": model,
+                              "start_tool_calls": start, "calls": normalized_calls}
+    return normalized
 
 
 def normalize_conversation(
