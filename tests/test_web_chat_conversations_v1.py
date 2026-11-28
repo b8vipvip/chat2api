@@ -902,6 +902,24 @@ def test_plugin_takeover_retry_budget_survives_restart(tmp_path: Path, monkeypat
     for attempt in range(3):
         now[0] += 181
         store = WebChatConversationStoreV1(tmp_path)
+        assert not store.plugin_task("alice", cid, mid, "takeover", "holder_first")["granted"]
         assert store.plugin_task("alice", cid, mid, "takeover", f"holder_{attempt:04d}")["granted"]
     now[0] += 181
     assert not store.plugin_task("alice", cid, mid, "takeover", "holder_fourth")["granted"]
+
+
+def test_plugin_expired_holder_stop_before_takeover_is_terminal(tmp_path: Path, monkeypatch):
+    import app.web_chat_conversations_v1 as module
+    now = [1000.0]
+    monkeypatch.setattr(module.time, "time", lambda: now[0])
+    store = WebChatConversationStoreV1(tmp_path)
+    cid, mid = "c2a_takeover_0003", "message_assistant_01"
+    conversation = _conversation(cid)
+    conversation["messages"][1].update(pending=True, recoveryStatus="tool_planning")
+    assert store.upsert("alice", conversation, 0)[0]
+    assert store.plugin_task("alice", cid, mid, "claim", "holder_first")["granted"]
+    assert store.plugin_task("alice", cid, mid, "checkpoint", "holder_first",
+        {"rounds": 1, "tool_calls": 0, "tool_events": []})["granted"]
+    now[0] += 181
+    assert store.plugin_task("alice", cid, mid, "interrupted", "holder_first")["granted"]
+    assert not store.plugin_task("alice", cid, mid, "takeover", "holder_second")["granted"]
