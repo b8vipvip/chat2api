@@ -484,20 +484,54 @@
   // immediately when the user switches themes.
   const TEXT_FLOW_TAGS = new Set(["p","h1","h2","h3","h4","ul","ol","li","blockquote"]);
   const FLOW_DIMENSIONS = new Set(["width","minWidth","maxWidth","height","minHeight","maxHeight","marginLeft","marginRight"]);
-  const TABLE_DIMENSIONS = new Set(["width","minWidth","maxWidth","height","minHeight","maxHeight","marginLeft","marginRight","whiteSpace"]);
-  function containsTable(value) {
-    return value.tag === "table" || (value.children || []).some(containsTable);
+  const TABLE_TAGS = new Set(["table","thead","tbody","tr","th","td"]);
+  const TABLE_GEOMETRY = new Set([...FLOW_DIMENSIONS,"whiteSpace","padding","marginTop","marginBottom","borderWidth","borderStyle","borderRadius","borderSpacing","borderCollapse","boxSizing","display"]);
+  const SHELL_GEOMETRY = new Set([...FLOW_DIMENSIONS,"display","padding","marginTop","marginBottom","gap","rowGap","columnGap","gridTemplateColumns","flexDirection","flexWrap","alignItems","justifyContent","alignSelf","justifySelf","borderStyle","borderWidth","borderRadius","boxSizing","whiteSpace"]);
+  // Inspect once per snapshot. A full-bleed Worker table shell may be a
+  // flex column with a wide inner div and empty decoration siblings.
+  // Only collapse wrappers that contain tables and no other semantic
+  // content; never flatten a real grid, chart, tab, or interactive card.
+  function classifyLayout(root) {
+    const layouts=new WeakMap();
+    function visit(node) {
+      const children=(node.children || []).map(visit);
+      const text=typeof node.text==="string" && node.text.trim()!=="";
+      const plainWrapper=["div","span"].includes(node.tag) && !node.control && !node.interaction_id;
+      const empty=plainWrapper && !text && children.every(item=>item.empty);
+      const tables=node.tag==="table" ? 1 : children.reduce((sum,item)=>sum+item.tables,0);
+      const tableShell=plainWrapper && !text && tables===1 &&
+        children.every(item=>item.empty || item.tableOnly);
+      const tableOnly=node.tag==="table" || tableShell;
+      const column=node.style?.display==="flex" && node.style?.flexDirection==="column";
+      const normalWrapper=plainWrapper && node.tag==="div" &&
+        (!["flex","grid","inline-flex","inline-grid"].includes(node.style?.display) || column);
+      const prose=tableOnly || (normalWrapper && children.every(item=>item.prose)) ||
+        (["span","strong","em","a","br","hr","code",...TEXT_FLOW_TAGS].includes(node.tag) &&
+          !node.control && children.every(item=>item.prose));
+      const info={empty,tables,tableOnly,tableShell,prose};
+      layouts.set(node,info);
+      return info;
+    }
+    visit(root);
+    return layouts;
   }
-  function applyCapturedStyle(element,value,depth) {
+  function applyCapturedStyle(element,value,depth,context) {
     const tag=value.tag;
     const graphic=SVG_TAGS.has(tag);
-    const flow=TEXT_FLOW_TAGS.has(tag) ||
-      (tag==="div" && (depth===0 || (!["flex","grid","inline-flex","inline-grid"].includes(value.style?.display) && containsTable(value))));
+    const layout=context.layouts.get(value);
+    const shell=layout?.tableShell;
+    const flow=TEXT_FLOW_TAGS.has(tag) || (tag==="div" && (depth===0 || layout?.prose));
+    const inlineText=["span","strong","em","a"].includes(tag) && layout?.prose &&
+      (!value.style?.display || value.style.display==="inline");
+    if (shell) element.className="native-table-shell";
+    else if (tag==="div" && layout?.prose) element.className="native-prose-flow";
     for (const [key,item] of Object.entries(value.style || {})) {
       if (!validStyle(key,item,tag)) continue;
       if (!graphic && COLOR_STYLES.has(key)) continue;
-      if (flow && FLOW_DIMENSIONS.has(key)) continue;
-      if (["table","thead","tbody","tr","th","td"].includes(tag) && TABLE_DIMENSIONS.has(key)) continue;
+      if (shell && SHELL_GEOMETRY.has(key)) continue;
+      if ((flow || inlineText) && FLOW_DIMENSIONS.has(key)) continue;
+      if (tag==="div" && layout?.prose && ["padding","boxSizing","alignSelf","justifySelf","whiteSpace"].includes(key)) continue;
+      if (TABLE_TAGS.has(tag) && TABLE_GEOMETRY.has(key)) continue;
       element.style[key]=item;
     }
   }
@@ -512,7 +546,7 @@
       element.type="button";
       element.className="native-copy-control";
       element.textContent=value.control.label;
-      applyCapturedStyle(element,value,depth);
+      applyCapturedStyle(element,value,depth,context);
       element.addEventListener?.("click",()=>{
         const clipboard=globalThis.navigator?.clipboard;
         if (!clipboard?.writeText) {
@@ -538,7 +572,7 @@
       element.setAttribute("aria-selected",String(value.control.selected));
       element.setAttribute("aria-disabled",String(value.control.disabled));
       element.tabIndex=value.control.selected?0:-1;
-      applyCapturedStyle(element,value,depth);
+      applyCapturedStyle(element,value,depth,context);
       bindTabInteraction(element,value,context);
       return element;
     } else if (tag==="button" && value.control?.kind==="toggle") {
@@ -550,7 +584,7 @@
       element.setAttribute("aria-label",value.control.label);
       element.setAttribute("aria-pressed",String(value.control.pressed));
       element.setAttribute("aria-disabled",String(value.control.disabled));
-      applyCapturedStyle(element,value,depth);
+      applyCapturedStyle(element,value,depth,context);
       bindToggleInteraction(element,value,context);
       return element;
     } else if (tag==="input") {
@@ -580,7 +614,7 @@
       }
       // Input controls return early, so apply their validated captured styles
       // here rather than silently dropping width/layout information.
-      applyCapturedStyle(element,value,depth);
+      applyCapturedStyle(element,value,depth,context);
       if (value.control.kind==="range") {
         bindNativeInteraction(element,value,context,"change","set_value",
           ()=>Number(element.value),previous=>{element.value=String(previous);});
@@ -625,7 +659,7 @@
         element.referrerPolicy = "no-referrer";
       }
     } else element = document.createElement(tag);
-    applyCapturedStyle(element,value,depth);
+    applyCapturedStyle(element,value,depth,context);
     if (value.attrs) Object.entries(value.attrs).forEach(([key,item]) => { if (validSvgAttribute(key,item)) element.setAttribute(key,item); });
     if (value.math_attrs) Object.entries(value.math_attrs).forEach(([key,item]) => { if (validMathAttribute(tag,key,item)) element.setAttribute(key,item); });
     if (value.control?.kind==="disclosure") element.open=value.control.open;
@@ -645,7 +679,10 @@
       if (value.intrinsic_width && value.intrinsic_height) { element.width = value.intrinsic_width; element.height = value.intrinsic_height; }
     }
     if (typeof value.text === "string") element.appendChild(document.createTextNode(value.text));
-    for (const child of value.children || []) element.appendChild(createNode(child,snapshot,depth+1,context));
+    for (const child of value.children || []) {
+      if (context.layouts.get(value)?.tableShell && context.layouts.get(child)?.empty) continue;
+      element.appendChild(createNode(child,snapshot,depth+1,context));
+    }
     if (tag==="select") {
       element.value=value.control.selected;
       bindNativeInteraction(element,value,context,"change","set_value",
@@ -680,10 +717,10 @@
     try {
       const state = document.createElement("div");
       state.className = "native-delivery-state";
-      state.textContent = (snapshot.finality === "verified-final" ? "ChatGPT 原生内容 · 已验证完成" : "ChatGPT 原生内容 · 实时更新，最终校验中") +
+      state.textContent = (snapshot.finality === "verified-final" ? "ChatGPT 原生内容 · 终态快照已校验" : "ChatGPT 原生内容 · 实时更新，最终校验中") +
         (hasLocalOnlyControls(snapshot.root,onInteraction) ? " · 部分控件仅在本地预览" : "");
       const root = document.createElement("div"); root.className = "native-rich-root";
-      root.appendChild(createNode(snapshot.root,snapshot,0,{radioGroups:new Map(),radioSelection:new Map(),radioIndex:0,tabSelection:new Map(),pendingTabGroups:new Set(),prefix:"native-"+(++renderSequence),onInteraction,revision:snapshot.revision}));
+      root.appendChild(createNode(snapshot.root,snapshot,0,{layouts:classifyLayout(snapshot.root),radioGroups:new Map(),radioSelection:new Map(),radioIndex:0,tabSelection:new Map(),pendingTabGroups:new Set(),prefix:"native-"+(++renderSequence),onInteraction,revision:snapshot.revision}));
       const files = document.createElement("div"); files.className = "native-generated-files";
       for (const item of snapshot.files) {
         if (!item || typeof item !== "object" || typeof item.filename !== "string") continue;

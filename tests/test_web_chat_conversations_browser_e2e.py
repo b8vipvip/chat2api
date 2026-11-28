@@ -293,25 +293,50 @@ def test_web_chat_native_snapshot_adapts_to_client_theme() -> None:
                 version:1, revision:1, finality:'verified-final', assets:[], files:[],
                 root:{tag:'div',style:{color:'#111111',backgroundColor:'#ffffff',width:'1100px',marginLeft:'350px'},children:[
                   {tag:'p',text:'Native text',style:{color:'#111111'}},
-                  {tag:'div',style:{display:'block',width:'900px',marginLeft:'300px'},children:[
-                    {tag:'table',style:{width:'900px'},children:[{tag:'tbody',children:[
-                      {tag:'tr',children:[{tag:'th',text:'Heading',style:{backgroundColor:'#ffffff',color:'#111111'}},
-                        {tag:'td',text:'Value',style:{color:'#111111',whiteSpace:'nowrap',width:'800px'}}]}
-                    ]}]}
-                  ]}
+                  {tag:'div',style:{display:'flex',flexDirection:'column',width:'1558px',height:'295px',padding:'0 395px'},children:[
+                    {tag:'div',style:{display:'block',width:'1558px',padding:'0 395px'},children:[
+                      {tag:'table',style:{width:'768px',borderWidth:'3px',borderStyle:'solid'},children:[{tag:'tbody',children:[
+                        {tag:'tr',children:[{tag:'th',text:'Heading',style:{backgroundColor:'#ffffff',color:'#111111'}},
+                          {tag:'th',text:'Content'}]},
+                        ...Array.from({length:7},(_,i)=>({tag:'tr',style:{height:'37px',borderWidth:'3px',borderStyle:'solid'},children:[
+                          {tag:'td',text:'Stage '+i,style:{color:'#111111',whiteSpace:'nowrap',width:'220px'}},
+                          {tag:'td',children:[{tag:'p',text:'Value '+i,style:{width:'548px',height:'20px'}}]}
+                        ]}))
+                      ]}]}
+                    ]},
+                    {tag:'div',style:{width:'1558px',height:'295px'}}
+                  ]},
+                  {tag:'p',text:'After table'}
                 ]}
               })""")
-            for theme, text_color, page_color, panel_color in (
-                ("dark", "rgb(236, 236, 236)", "rgb(33, 33, 33)", "rgb(47, 47, 47)"),
-                ("light", "rgb(37, 37, 37)", "rgb(255, 255, 255)", "rgb(244, 244, 244)"),
-            ):
-                page.evaluate("(theme) => document.documentElement.dataset.theme = theme", theme)
-                assert page.locator(".native-rich-root p").evaluate("(el) => getComputedStyle(el).color") == text_color
-                assert page.locator(".native-rich-root td").evaluate("(el) => getComputedStyle(el).color") == text_color
-                assert page.locator(".native-rich-root th").evaluate("(el) => getComputedStyle(el).backgroundColor") == panel_color
-                assert page.locator(".main-panel").evaluate("(el) => getComputedStyle(el).backgroundColor") == page_color
-                assert page.locator(".composer textarea").evaluate("(el) => getComputedStyle(el).color") == text_color
-                assert page.locator(".native-rich-root").evaluate("(el) => el.scrollWidth <= el.clientWidth + 1")
-                assert page.locator(".native-table-scroll").evaluate("(el) => el.getBoundingClientRect().width <= 390")
+            for width in (390, 768, 1280):
+                page.set_viewport_size({"width": width, "height": 800})
+                for theme, text_color, page_color in (
+                    ("dark", "rgb(236, 236, 236)", "rgb(33, 33, 33)"),
+                    ("light", "rgb(37, 37, 37)", "rgb(255, 255, 255)"),
+                ):
+                    page.evaluate("(theme) => document.documentElement.dataset.theme = theme", theme)
+                    assert page.locator(".native-rich-root p").first.evaluate("(el) => getComputedStyle(el).color") == text_color
+                    assert page.locator(".native-rich-root td").first.evaluate("(el) => getComputedStyle(el).color") == text_color
+                    assert page.locator(".native-rich-root th").first.evaluate("(el) => getComputedStyle(el).backgroundColor") == "rgba(0, 0, 0, 0)"
+                    assert page.locator(".main-panel").evaluate("(el) => getComputedStyle(el).backgroundColor") == page_color
+                    assert page.locator(".composer textarea").evaluate("(el) => getComputedStyle(el).color") == text_color
+                    assert page.locator(".native-rich-root").evaluate("(el) => el.scrollWidth <= el.clientWidth + 1")
+                    assert page.locator(".native-table-scroll").evaluate("(el) => el.scrollWidth <= el.clientWidth + 1")
+                    assert page.locator(".native-rich-root tr").count() == 8
+                    assert page.locator(".native-rich-root td").count() == 14
+                    assert page.locator(".native-rich-root td").first.evaluate("(el) => getComputedStyle(el).borderLeftWidth") == "0px"
+                    assert page.locator(".native-rich-root td").first.evaluate("(el) => getComputedStyle(el).borderBottomWidth") == "1px"
+                    rects = page.evaluate("""() => {
+                      const root=document.querySelector('.native-rich-root');
+                      const table=root.querySelector('table').getBoundingClientRect();
+                      const first=root.querySelector('p').getBoundingClientRect();
+                      const after=[...root.querySelectorAll('p')].at(-1).getBoundingClientRect();
+                      return {tableX:table.x,firstX:first.x,tableBottom:table.bottom,afterY:after.y,
+                        tableRight:table.right,rootRight:root.getBoundingClientRect().right};
+                    }""")
+                    assert abs(rects["tableX"] - rects["firstX"]) <= 1
+                    assert rects["tableRight"] <= rects["rootRight"] + 1
+                    assert rects["afterY"] >= rects["tableBottom"]
         finally:
             browser.close()

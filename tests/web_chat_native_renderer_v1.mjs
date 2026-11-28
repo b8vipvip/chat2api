@@ -462,3 +462,44 @@ assert.equal(findTag(themeHost,"td").style.color,undefined);
 assert.equal(findTag(themeHost,"path").attributes.stroke,"#123456");
 assert.equal(findTag(themeHost,"button").style.backgroundColor,undefined);
 assert.equal(JSON.stringify(themeSnapshot),beforeThemeRender,"rendering must not mutate archive evidence");
+
+
+// Regression: a 768px reply contained a 1558px Worker full-bleed flex
+// wrapper and an empty decoration sibling. The table itself was 768px.
+// Replay must retain semantic rows, not the original viewport geometry.
+const wideTable={tag:"table",style:{width:"768px",height:"295px",borderWidth:"3px",borderStyle:"solid"},children:[
+  {tag:"tbody",children:Array.from({length:8},(_,i)=>({tag:"tr",style:{height:"37px",borderWidth:"3px",borderStyle:"solid"},children:[
+    {tag:i===0?"th":"td",text:"Stage "+i,style:{width:"220px",borderWidth:"3px",borderStyle:"solid"}},
+    {tag:i===0?"th":"td",text:"Content "+i,style:{width:"548px",height:"37px",borderWidth:"3px",borderStyle:"solid"}}
+  ]}))}
+]};
+const wideSnapshot={version:1,revision:10,finality:"verified-final",assets:[],files:[],root:{tag:"div",style:{width:"768px",height:"669px",display:"flex",flexDirection:"column"},children:[
+  {tag:"p",text:"Before"},
+  {tag:"div",style:{display:"flex",flexDirection:"column",width:"1558px",height:"295px",padding:"0 395px"},children:[
+    {tag:"div",style:{display:"block",width:"1558px",padding:"0 395px"},children:[wideTable]},
+    {tag:"div",style:{width:"1558px",height:"295px"}}
+  ]},
+  {tag:"p",text:"After"},
+  {tag:"div",style:{display:"grid",gridTemplateColumns:"120px 120px",width:"240px"},children:[
+    {tag:"span",text:"Actual grid A"},{tag:"span",text:"Actual grid B"}
+  ]}
+]}};
+const wideHost=new FakeElement("div");
+assert(renderer.renderNativeSnapshot(wideHost,wideSnapshot));
+const wideRoot=wideHost.childNodes[1].childNodes[0];
+const outerShell=wideRoot.childNodes[1];
+assert.equal(outerShell.className,"native-table-shell");
+assert.equal(outerShell.style.width,undefined);
+assert.equal(outerShell.style.padding,undefined);
+assert.equal(outerShell.style.display,undefined);
+assert.equal(outerShell.childNodes.length,1,"empty decoration must not retain a second wide box");
+assert.equal(outerShell.childNodes[0].className,"native-table-shell");
+assert.equal(outerShell.childNodes[0].style.width,undefined);
+assert.equal(findTag(wideHost,"table").style.borderWidth,undefined);
+assert.equal(findTag(wideHost,"td").style.height,undefined);
+assert.equal(findTag(wideHost,"tr").style.borderStyle,undefined);
+assert.equal(findTag(wideHost,"tbody").childNodes.length,8);
+assert.equal(wideRoot.childNodes[3].style.gridTemplateColumns,"120px 120px");
+assert.equal(wideRoot.childNodes[3].style.width,"240px");
+assert.match(wideHost.childNodes[0].textContent,/终态快照已校验/);
+assert.doesNotMatch(wideHost.childNodes[0].textContent,/视觉.*已验证/);
