@@ -15,6 +15,7 @@ const terminal = "data: [DONE]";
 async function send(chunks, close = true, onCancel = () => {}, scenario = {}) {
   const conversation = {id: "conversation-test", messages: []};
   const messages = [];
+  const leaseOperations = [];
   const body = new ReadableStream({
     start(controller) {
       const encoder = new TextEncoder();
@@ -58,7 +59,15 @@ async function send(chunks, close = true, onCancel = () => {}, scenario = {}) {
       if (scenario.networkFailure) throw new Error("connection lost before headers");
       return {ok: true, body};
     },
-    withPluginPlanningLease: async (_conversation,_assistant,run)=>run(),
+    // Exercise the actual lease wrapper declared inside the extracted source.
+    fetchConversationMutation: async (_url, options) => {
+      const operation = JSON.parse(options.body).operation;
+      leaseOperations.push(operation);
+      return {response:{ok:true},result:{
+        state: operation === "claim" || operation === "renew" ? "running" : operation,
+        granted:true,
+      }};
+    },
     runAutonomousPluginToolLoop: async (_messages,assistant) => {
       assistant.toolEvents.push({callId:"plugin-call",status:"completed"});
       throw new Error("planner interrupted");
@@ -77,6 +86,8 @@ async function send(chunks, close = true, onCancel = () => {}, scenario = {}) {
     window: {
       clearTimeout() {},
       setTimeout() { return 0; },
+      setInterval() { return 1; },
+      clearInterval() {},
       Chat2APIStreamRecoveryV1: {
         createRequestId: () => "req_request_test",
         create: () => ({resume: async () => ({status: "recovery_timeout", terminal: false})}),
@@ -98,6 +109,7 @@ async function send(chunks, close = true, onCancel = () => {}, scenario = {}) {
     ...(scenario.networkFailure || scenario.pluginFailure ? {
       pending:conversation.messages.find(row=>row.role==="assistant")?.pending,
       status:conversation.messages.find(row=>row.role==="assistant")?.recoveryStatus,
+      leaseOperations,
     } : {}),
   };
 }
@@ -719,6 +731,7 @@ test("a failed plugin planning round preserves evidence but unblocks the convers
   assert.equal(result.pending,false);
   assert.equal(result.status,"error");
   assert.match(result.replies[0],/已保留取得的插件查询证据/);
+  assert.deepEqual(result.leaseOperations,["claim","interrupted"]);
 });
 
 
