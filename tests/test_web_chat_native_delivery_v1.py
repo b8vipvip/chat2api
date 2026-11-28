@@ -215,18 +215,13 @@ def test_owner_scoped_native_interaction_applies_to_original_worker_and_persists
     )
     app = create_app(settings)
 
-    async def snapshot_loader(request_id, owner, **_kwargs):
-        stored = app.state.native_content.get(request_id, owner)
-        if not stored:
-            return None
-        return {**stored, "assets": [], "files": [], "finality": "verified-final"}
-
-    app.state.native_response_snapshot = snapshot_loader
+    # Exercise the real terminal finality authority, not a permissive loader.
     shared_key = _install_shared_web_chat(app)
 
     class AckSocket:
         def __init__(self):
             self.sent = []
+            self.recapture = None
 
         async def send_json(self, payload):
             self.sent.append(dict(payload))
@@ -239,6 +234,8 @@ def test_owner_scoped_native_interaction_applies_to_original_worker_and_persists
                         "revision": payload["revision"],
                         "interaction_id": payload["interaction_id"],
                         "ok": True,
+                        **({"recapture_status": "verified", "snapshot": self.recapture}
+                           if self.recapture is not None else {}),
                     },
                 )
 
@@ -263,6 +260,9 @@ def test_owner_scoped_native_interaction_applies_to_original_worker_and_persists
                 "web_chat_mode": True,
                 "client_id": "worker-native-action",
                 "status": "completed",
+                "diagnostics": {"native_snapshot_terminal_complete": True,
+                                "native_capture_revision": 1, "native_snapshot_received_revision": 1,
+                                "native_layout_summary": {"revision": 1, "images": 0, "archived_assets": 0}},
                 "response_media": [],
                 "response_generated_files": [],
             })
@@ -360,6 +360,25 @@ def test_owner_scoped_native_interaction_applies_to_original_worker_and_persists
         )
         assert invalid.status_code == 422
         assert len(socket.sent) == 3
+        socket.recapture = {"version": 1, "revision": 5, "root": {"tag": "div", "children": [
+            {"tag": "input", "interaction_id": "nc_5_1",
+             "control": {"kind": "range", "label": "Opacity", "disabled": False,
+                         "min": 0, "max": 100, "step": 5, "value": 50}},
+            {"tag": "p", "text": "Updated dynamic content"},
+        ]}}
+        recaptured = client.post(
+            f"/api/user/chat/requests/{request_id}/native-content/interactions",
+            headers=headers,
+            json={"revision": 4, "interaction_id": "nc_1_2", "action": "set_value", "value": 50},
+        )
+        assert recaptured.status_code == 200, recaptured.text
+        assert recaptured.json() == {"ok": True, "revision": 5, "persisted": True, "recaptured": True}
+        latest = client.get(f"/api/user/chat/requests/{request_id}/native-content")
+        assert latest.status_code == 200, latest.text
+        assert latest.json()["root"]["children"][1]["text"] == "Updated dynamic content"
+        assert latest.json()["finality"] == "verified-final"
+        proof = app.state.telemetry.get(request_id)["native_interaction_proof"]
+        assert proof["base_revision"] == 1 and proof["revision"] == 5
 
         client.cookies.clear()
         other = client.post(
