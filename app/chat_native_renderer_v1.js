@@ -482,7 +482,7 @@
   // Keep SVG drawing colors and explicit MathML attributes; project HTML
   // surfaces onto the local theme so archived and streaming replies adapt
   // immediately when the user switches themes.
-  const TEXT_FLOW_TAGS = new Set(["p","h1","h2","h3","h4","ul","ol","li","blockquote"]);
+  const TEXT_FLOW_TAGS = new Set(["p","h1","h2","h3","h4","ul","ol","li","blockquote","pre"]);
   const FLOW_DIMENSIONS = new Set(["width","minWidth","maxWidth","height","minHeight","maxHeight","marginLeft","marginRight"]);
   const TABLE_TAGS = new Set(["table","thead","tbody","tr","th","td"]);
   const TABLE_GEOMETRY = new Set([...FLOW_DIMENSIONS,"whiteSpace","padding","marginTop","marginBottom","borderWidth","borderStyle","borderRadius","borderSpacing","borderCollapse","boxSizing","display"]);
@@ -530,6 +530,12 @@
       if (!graphic && COLOR_STYLES.has(key)) continue;
       if (shell && SHELL_GEOMETRY.has(key)) continue;
       if ((flow || inlineText) && FLOW_DIMENSIONS.has(key)) continue;
+      // Normal text should reflow at the client's type scale. Preserve
+      // emphasis and component-specific typography, not Worker zoom pixels.
+      if (layout?.prose && ["fontSize","lineHeight"].includes(key)) continue;
+      if (layout?.prose && ["p","ul","ol","li","h1","h2","h3","h4","blockquote","pre"].includes(tag) &&
+          ["marginTop","marginBottom"].includes(key)) continue;
+      if (tag==="pre" && ["whiteSpace","wordBreak","overflowWrap","padding","boxSizing"].includes(key)) continue;
       if (tag==="div" && layout?.prose && ["padding","boxSizing","alignSelf","justifySelf","whiteSpace"].includes(key)) continue;
       if (TABLE_TAGS.has(tag) && TABLE_GEOMETRY.has(key)) continue;
       element.style[key]=item;
@@ -690,6 +696,10 @@
     } else if (tag==="details") {
       bindNativeInteraction(element,value,context,"toggle","set_open",
         ()=>Boolean(element.open),previous=>{element.open=Boolean(previous);});
+    }
+    if (tag==="pre") {
+      element.className="native-code-pre";
+      element.setAttribute("tabindex","0");
     }
     if (tag==="table") {
       const wrapper=document.createElement("div");

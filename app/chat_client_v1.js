@@ -2093,7 +2093,7 @@
         }
       } else {
         const nativeRenderer = window.Chat2APINativeRendererV1;
-        const nativeSnapshot = message.requestId ? state.nativeSnapshots.get(message.requestId) : null;
+        const nativeSnapshot = nativeSnapshotForMessage(message);
         const messageReferences = referencesForMessage(message);
         nativeRendered = Boolean(nativeRenderer && typeof nativeRenderer.renderNativeSnapshot === "function" &&
           nativeSnapshot && nativeRenderer.renderNativeSnapshot(
@@ -2102,12 +2102,26 @@
               ? interaction => submitNativeInteraction(message.requestId,interaction)
               : null,
           ));
+        if (nativeRendered) {
+          // Only the successfully rendered, request-owned snapshot can be
+          // selected by the local visual acceptance capture tool.
+          body.setAttribute("data-chat2api-native-render-request-id",message.requestId);
+          body.setAttribute("data-chat2api-native-render-finality",nativeSnapshot.finality);
+          body.setAttribute("data-chat2api-native-render-revision",String(nativeSnapshot.revision));
+        }
         if (!nativeRendered) {
           const renderer = window.Chat2APISafeRenderer;
           if (renderer && typeof renderer.renderMarkdown === "function") {
             renderer.renderMarkdown(body,message.content,messageReferences);
           }
           else body.textContent = message.content;
+          if (!message.pending && message.recoveryStatus === "completed" &&
+              message.requestId && !String(message.content || "").trim() && !message.toolEvents?.length) {
+            const status = document.createElement("div");
+            status.className = "native-delivery-state";
+            status.textContent = "没有可显示的文本 · 原生内容尚未到达";
+            body.appendChild(status);
+          }
         }
       }
       if (message.role === "assistant") {
@@ -4843,9 +4857,22 @@
     });
     return rows;
   }
+  function nativeSnapshotForMessage(message) {
+    const snapshot = message.requestId ? state.nativeSnapshots.get(message.requestId) : null;
+    if (!snapshot) return null;
+    // After a text completion, an older partial native tree must not hide
+    // the authoritative final text while the final native sidecar catches up.
+    if (!message.pending && message.recoveryStatus === "completed" &&
+        snapshot.finality !== "verified-final" && String(message.content || "").trim()) return null;
+    return snapshot;
+  }
   function mergeNativeSnapshot(previous,snapshot) {
     if (!previous) return snapshot;
     if (snapshot.revision < previous.revision) return null;
+    // A newer provisional interaction/progress capture cannot replace a
+    // verified final reply until the new revision is itself verified.
+    if (previous.finality === "verified-final" && snapshot.finality !== "verified-final" &&
+        snapshot.revision > previous.revision) return null;
     if (snapshot.revision > previous.revision) return snapshot;
     // A DOM revision identifies one immutable tree. Only its archive envelope
     // (media URLs, generated-file readiness and finality) may be enriched.
@@ -5429,8 +5456,16 @@
         assistant.pending = false;
         assistant.recoveryStatus = "completed";
         if (!assistant.content.trim() && !assistant.toolEvents?.length) {
-          conversation.messages = conversation.messages.filter((message) => message.id !== assistant.id);
-          toast("模型没有返回文本内容。");
+          // Native-only answers may finish before their snapshot arrives.
+          // Retain the request-bound message so SSE/GET can hydrate its
+          // images, controls or generated files instead of losing the turn.
+          if (assistant.requestId) {
+            await refreshNativeSnapshot(assistant.requestId);
+            if (!nativeSnapshotForMessage(assistant)) toast("文本为空，正在等待原生内容归档。");
+          } else {
+            conversation.messages = conversation.messages.filter((message) => message.id !== assistant.id);
+            toast("模型没有返回文本内容。");
+          }
         }
       } else {
         diagnosticOutcome = "recovery_pending";

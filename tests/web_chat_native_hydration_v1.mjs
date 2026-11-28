@@ -100,8 +100,8 @@ const targetConversation = {id:"race-conversation",messages:[target]};
 const raceState = {conversations:[targetConversation],nativeSnapshots:new Map()};
 let finishFetch;
 let raceRenders = 0;
-const {applyNativeSnapshot,refreshNativeSnapshot} = vm.runInNewContext(
-  source.slice(snapshotStart,snapshotEnd) + "\n({applyNativeSnapshot,refreshNativeSnapshot})",
+const {applyNativeSnapshot,refreshNativeSnapshot,nativeSnapshotForMessage} = vm.runInNewContext(
+  source.slice(snapshotStart,snapshotEnd) + "\n({applyNativeSnapshot,refreshNativeSnapshot,nativeSnapshotForMessage})",
   {
     state:raceState,
     window:{Chat2APINativeRendererV1:{validateSnapshot:s=>Boolean(s && Number.isInteger(s.revision))}},
@@ -181,3 +181,17 @@ assert.equal(applyNativeSnapshot("native-race",v2WithMedia),false,"same-revision
 assert.equal(JSON.stringify(raceState.nativeSnapshots.get("native-race")),JSON.stringify(v2Final));
 
 console.log("web-chat-native-hydration-v1-passed");
+
+target.content="authoritative final answer";
+target.pending=false;
+target.recoveryStatus="completed";
+assert.equal(applyNativeSnapshot("native-race",snapshot(3)),false,"provisional revisions cannot hide verified-final content");
+assert.equal(nativeSnapshotForMessage(target).finality,"verified-final");
+assert.equal(applyNativeSnapshot("native-race",snapshot(3,"verified-final")),true);
+raceState.nativeSnapshots.set("native-race",snapshot(4));
+assert.equal(nativeSnapshotForMessage(target),null,"completed authoritative text must remain visible during native archive lag");
+target.pending=true;
+assert.equal(nativeSnapshotForMessage(target).revision,4);
+target.pending=false;
+target.content="";
+assert.equal(nativeSnapshotForMessage(target).revision,4,"native-only answers remain visible while final archive catches up");

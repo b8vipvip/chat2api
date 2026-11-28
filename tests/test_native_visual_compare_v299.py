@@ -98,3 +98,25 @@ def test_v300_declared_full_screenshot_cannot_hide_cropped_width_or_height(tmp_p
             archive.writestr(key, value)
     with pytest.raises(ValueError, match="screenshot-pixels-do-not-cover-capture-rect"):
         load_capture(actual, "native")
+
+
+def test_hyphenated_real_request_shape_is_supported(tmp_path):
+    request="req_12345678-1234-1234-1234-123456789abc"
+    a=load_capture(_bundle(tmp_path,"original",request=request),"original")
+    b=load_capture(_bundle(tmp_path,"native",request=request),"native")
+    assert compare(a,b)["status"]=="passed"
+
+
+def test_native_capture_requires_message_binding(tmp_path):
+    import pytest
+    path=_bundle(tmp_path,"native")
+    with zipfile.ZipFile(path) as archive:
+        items={name:archive.read(name) for name in archive.namelist()}
+    manifest=json.loads(items["manifest.json"])
+    manifest["request_binding"]="unknown"
+    items["manifest.json"]=json.dumps(manifest).encode()
+    with zipfile.ZipFile(path,"w") as archive:
+        for key,value in items.items():
+            archive.writestr(key,value)
+    with pytest.raises(ValueError,match="native-message-identity-unverified"):
+        load_capture(path,"native")

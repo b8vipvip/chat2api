@@ -503,3 +503,17 @@ assert.equal(wideRoot.childNodes[3].style.gridTemplateColumns,"120px 120px");
 assert.equal(wideRoot.childNodes[3].style.width,"240px");
 assert.match(wideHost.childNodes[0].textContent,/终态快照已校验/);
 assert.doesNotMatch(wideHost.childNodes[0].textContent,/视觉.*已验证/);
+
+const typographySnapshot={version:1,revision:11,finality:"verified-final",assets:[],files:[],root:{tag:"div",children:[
+  {tag:"p",style:{fontSize:"22px",lineHeight:"40px",marginBottom:"50px"},children:[
+    {tag:"strong",text:"Bold",style:{fontWeight:"700",fontSize:"22px"}}]},
+  {tag:"pre",style:{width:"1400px",height:"80px",whiteSpace:"pre-wrap"},children:[{tag:"code",text:"const value = 1;"}]}
+]}};
+const typographyHost=new FakeElement("div");
+assert(renderer.renderNativeSnapshot(typographyHost,typographySnapshot));
+assert.equal(findTag(typographyHost,"p").style.fontSize,undefined);
+assert.equal(findTag(typographyHost,"p").style.marginBottom,undefined);
+assert.equal(findTag(typographyHost,"strong").style.fontWeight,"700");
+assert.equal(findTag(typographyHost,"pre").className,"native-code-pre");
+assert.equal(findTag(typographyHost,"pre").style.width,undefined);
+assert.equal(findTag(typographyHost,"pre").style.whiteSpace,undefined);
