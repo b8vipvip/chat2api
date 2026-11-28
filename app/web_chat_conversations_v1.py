@@ -763,6 +763,11 @@ class WebChatConversationStoreV1:
                   AND t.expires_at<=? AND c.deleted=0
                   AND COALESCE(a.attempts,0)<3
                   AND json_extract(p.payload,'$.auto_resume')=1
+                  AND EXISTS (SELECT 1 FROM json_each(c.payload,'$.messages') m
+                      WHERE json_extract(m.value,'$.id')=t.message_id
+                      AND json_extract(m.value,'$.role')='assistant'
+                      AND json_extract(m.value,'$.pending')=1
+                      AND json_extract(m.value,'$.recoveryStatus')='tool_planning')
                 ORDER BY t.expires_at LIMIT ?
             """, (time.time(), max(1, min(32, limit)))).fetchall()
             return [tuple(row) for row in rows]
@@ -1018,6 +1023,10 @@ class WebChatConversationStoreV1:
                     attempts = connection.execute(
                         "SELECT attempts FROM web_chat_plugin_takeovers WHERE user_id=? AND conversation_id=? AND message_id=?", key
                     ).fetchone()
+                    if connection.execute(
+                        "SELECT 1 FROM web_chat_plugin_finals WHERE user_id=? AND conversation_id=? AND message_id=?", key
+                    ).fetchone():
+                        result["server_finalized"] = state in {"completed","interrupted"} and not row["expires_at"]
                     result["recoverable"] = bool(row and state == "interrupted" and row["expires_at"] > 0
                         and result["checkpoint"].get("auto_resume") is True
                         and (not attempts or attempts["attempts"] < 3))
@@ -1545,6 +1554,9 @@ def install_web_chat_conversations_v1(app: FastAPI) -> None:
         except (ValueError, KeyError, TypeError, AttributeError, UnicodeDecodeError):
             raise HTTPException(status_code=422, detail="invalid plugin task", headers=_PRIVATE_HEADERS)
         result = await asyncio.to_thread(store.plugin_task, str(user["user_id"]), cid, mid, operation, holder, checkpoint)
+        # Full result rows are consumed only by the internal executor, not by
+        # browser takeover responses (which may follow an OAuth account switch).
+        result.pop("tool_results",None)
         return JSONResponse(result, headers=_PRIVATE_HEADERS)
 
     @app.get("/api/user/chat/conversations/changes")
