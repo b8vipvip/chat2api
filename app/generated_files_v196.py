@@ -365,11 +365,32 @@ class GeneratedFileArchive:
             ).fetchone()
         return (str(row["owner"]), str(row["request_id"])) if row else None
 
-    def delete(self, file_id: str):
+    @staticmethod
+    def old_enough(created_at: str, cutoff: datetime) -> bool:
+        try:
+            created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+            return created.tzinfo is not None and created <= cutoff
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return False
+
+    def aged_candidates(self, cutoff: datetime, after: str = "", limit: int = 100):
+        # IDs are immutable; advance even over retained or foreign rows.
         with self._db() as conn:
+            rows = conn.execute(
+                "SELECT id,owner,request_id,created_at FROM generated_files "
+                "WHERE id>? AND created_at<=? ORDER BY id LIMIT ?",
+                (after, cutoff.isoformat(), min(500, max(1, limit))),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def delete(self, file_id: str, *, owner: str | None = None, cutoff: datetime | None = None):
+        with self._db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             row = conn.execute("SELECT * FROM generated_files WHERE id = ?", (file_id,)).fetchone()
-            if not row:
+            if not row or (owner is not None and row["owner"] != owner):
                 return False
+            if cutoff is not None and not self.old_enough(row["created_at"], cutoff):
+                raise PermissionError("Generated file is within its retention grace period")
             if row["backend"] == "local":
                 target = (self.storage.root / row["object_key"]).resolve()
                 if not target.is_relative_to(self.storage.root.resolve()):
