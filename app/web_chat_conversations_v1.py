@@ -8,7 +8,7 @@ import sqlite3
 import stat
 import threading
 import time
-from contextlib import closing, contextmanager
+from contextlib import closing, contextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -898,7 +898,9 @@ class WebChatConversationStoreV1:
         file_store: Any = None,
     ) -> tuple[bool, dict[str, Any] | None]:
         conversation_id = str(conversation["id"])
-        with self.lock, self._connect() as connection:
+        # Direct store callers follow the same ordering as HTTP routes and
+        # cleanup, including when a file_store is explicitly supplied.
+        with (file_store.lock if file_store is not None else nullcontext()), self.lock, self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 """
@@ -1160,10 +1162,9 @@ def install_web_chat_conversations_v1(app: FastAPI) -> None:
             # Do not expose newly uploaded drafts to cleanup actions. Only
             # older, browser-originated attachments are eligible for listing.
             cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
-            # Match upsert/deletion lock ordering: reference DB first,
-            # then file store. The inverse order can deadlock a concurrent
-            # conversation save while the library enumerates orphan files.
-            with store.file_reference_snapshot_guard() as referenced, file_store.lock:
+            # All production save/delete/retention paths take FileStore
+            # before the reference DB. The library must use the same order.
+            with file_store.lock, store.file_reference_snapshot_guard() as referenced:
                 candidates = []
                 for item in sorted(file_store.items.values(), key=lambda row: row.file_id):
                     if (item.file_id <= after or item.file_id in referenced or item.source != "web_chat"
