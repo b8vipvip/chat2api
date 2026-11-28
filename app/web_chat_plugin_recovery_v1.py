@@ -267,14 +267,17 @@ async def recover_one(app, key):
                 raise PermissionError("plugin connection changed")
         await fence()
         check_bindings()
+        original_result_count = len(journal)
         journal = _context_rows(journal,bindings)
+        if len(journal)!=original_result_count:
+            raise PermissionError("original provider results lack matching account binding")
         messages = _messages(conversation,mid)
         user_text = "\n".join(str(m["content"]) for m in messages if m["role"]=="user")
         model = checkpoint["plan"]["model"]
         # Revalidate entitlement even before issuing provider reads.
         user = _account(app,uid)
         _, principal = await resolve_owned_web_chat_principal(app,user,conversation.get("apiKeyId"))
-        if not web_chat_model_decision(app,principal,model).get("allowed"):
+        if model.lower() in {"gpt-image","gpt-live","gpt-live-mini","chatgpt-web"} or not web_chat_model_decision(app,principal,model).get("allowed"):
             raise PermissionError("model no longer allowed")
         rounds, calls = checkpoint["rounds"],checkpoint["tool_calls"]
         plan = checkpoint["plan"]
@@ -317,7 +320,8 @@ async def recover_one(app, key):
                 events = (events+[{"toolName":tool,"callId":event_id,"resultId":event_id+"_result",
                     "status":"completed" if result["status"]==200 else "failed",
                     "arguments":json.dumps(args,ensure_ascii=False)[:1200],"output":"服务端恢复执行",
-                    "resultPreview":json.dumps(result["body"],ensure_ascii=False)[:6000]}])[-6:]
+                    **({"resultPreview":json.dumps(result["body"],ensure_ascii=False)[:6000]}
+                       if provider=="github" else {})}])[-6:]
             calls = max(calls,plan["start_tool_calls"]+len(planned))
             if rounds>=3 or calls>=6 or not planned or not bindings:
                 break
