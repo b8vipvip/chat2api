@@ -625,7 +625,7 @@ def test_conversation_attachment_reference_migration_backfills_legacy_rows(tmp_p
     assert migrated.file_reference_count(file_id, "legacy-user") == 2
     assert migrated.referenced_file_ids() == {file_id}
     with sqlite3.connect(database) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
 
 
 def test_conversation_tool_events_preserve_unknown_and_missing_status_as_unknown() -> None:
@@ -815,3 +815,32 @@ def test_generated_library_pagination_and_session_download_are_owner_scoped(tmp_
         }).status_code == 200
         assert client.get(library, params={"scope": "generated"}).json()["data"] == []
         assert client.get(url).status_code == 404
+
+
+def test_generated_references_count_by_request_and_link_and_backfill(tmp_path: Path):
+    store = WebChatConversationStoreV1(tmp_path)
+    file_id = "gen_abcdefghijk123"
+    request_id = "req_generated_12345"
+    first = _conversation("c2a_generated_ref_01")
+    first["messages"][1]["requestId"] = request_id
+    first["messages"][1]["content"] = f"[file](/api/generated-files/{file_id}/opaque-token)"
+    second = _conversation("c2a_generated_ref_02")
+    second["messages"][1]["content"] = f"[file](/api/user/chat/generated-files/{file_id}/download)"
+    assert store.upsert("alice", first, 0)[0]
+    assert store.upsert("alice", second, 0)[0]
+    assert store.upsert("bob", first, 0)[0]
+    assert store.generated_reference_count("alice", file_id, request_id) == 2
+    assert store.generated_reference_count("bob", file_id, request_id) == 1
+    with store.generated_deletion_guard("alice", file_id, request_id) as allowed:
+        assert not allowed
+    with sqlite3.connect(store.path) as connection:
+        connection.execute("DROP TABLE web_chat_generated_references")
+        connection.execute("PRAGMA user_version=3")
+    reopened = WebChatConversationStoreV1(tmp_path)
+    assert reopened.generated_reference_count("alice", file_id, request_id) == 2
+    assert reopened.delete("alice", first["id"], 1)[0]
+    assert reopened.generated_reference_count("alice", file_id, request_id) == 1
+    assert reopened.delete("alice", second["id"], 1)[0]
+    with reopened.generated_deletion_guard("alice", file_id, request_id) as allowed:
+        assert allowed
+    assert reopened.generated_reference_count("bob", file_id, request_id) == 1
