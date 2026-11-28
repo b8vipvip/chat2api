@@ -822,6 +822,24 @@ def test_generated_library_pagination_and_session_download_are_owner_scoped(tmp_
         assert store.delete(owner_id, conversation["id"], 1)[0]
         assert client.delete(admin_url, headers={"Authorization": "Bearer generated-library-master-key"}).status_code == 200
         assert client.get(url).status_code == 404
+        third = archive.store(b"%PDF-1.7\nthird", "three.pdf", "application/pdf", owner_key, "req_three")
+        delete_url = f"/api/user/chat/generated-files/{third['id']}"
+        assert client.delete(delete_url).status_code == 409
+        assert client.delete(f"/api/user/chat/generated-files/{foreign['id']}").status_code == 404
+        with sqlite3.connect(archive.db_path) as connection:
+            connection.execute("UPDATE generated_files SET created_at=? WHERE id=?",
+                               ("2020-01-01T00:00:00+00:00", third["id"]))
+        assert client.delete(delete_url, headers={"Origin":"https://evil.example"}).status_code == 403
+        assert client.delete(delete_url, headers={"X-Chat2API-User-ID":"old-user"}).status_code == 409
+        rows = client.get(library, params={"scope": "generated"}).json()["data"]
+        assert next(row for row in rows if row["id"] == third["id"])["deletable"] is True
+        linked = _conversation("c2a_generated_guard_02")
+        linked["messages"][1]["content"] = f"[file](/api/user/chat/generated-files/{third['id']}/download)"
+        assert store.upsert(owner_id, linked, 0)[0]
+        assert client.delete(delete_url).status_code == 409
+        assert store.delete(owner_id, linked["id"], 1)[0]
+        assert client.delete(delete_url).json()["deleted"] is True
+        assert client.get(delete_url + "/download").status_code == 404
         client.cookies.clear()
         assert client.get(url).status_code == 401
         assert client.post("/api/user/register", json={
