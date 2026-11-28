@@ -75,6 +75,10 @@ def install_web_chat_features_v1(app: Any) -> Any:
         if not user:
             raise HTTPException(status_code=401, detail="user login required",
                                 headers=_PRIVATE_HEADERS)
+        expected = request.headers.get("X-Chat2API-User-ID")
+        if expected is not None and expected != str(user["user_id"]):
+            raise HTTPException(status_code=409, detail="Web Chat account changed; reload the page",
+                                headers=_PRIVATE_HEADERS)
         return accounts, user
 
     async def resolve_chat_identity(request: Request, *, require_same_origin: bool = False):
@@ -652,7 +656,7 @@ def install_web_chat_features_v1(app: Any) -> Any:
     async def web_chat_private_cache_boundary(request, call_next):
         response = await call_next(request)
         path = request.url.path
-        if path.startswith(("/api/user/chat/completions", "/api/user/chat/conversations", "/api/user/chat/requests/", "/api/user/chat/files/", "/api/user/chat/library", "/api/user/files/")):
+        if path.startswith(("/api/user/chat/completions", "/api/user/chat/conversations", "/api/user/chat/requests/", "/api/user/chat/files/", "/api/user/chat/generated-files/", "/api/user/chat/library", "/api/user/files/")):
             response.headers["Cache-Control"] = "private, no-store"
             vary_values = [value.strip() for value in response.headers.get("Vary", "").split(",") if value.strip()]
             if not any(value.lower() == "cookie" for value in vary_values):
