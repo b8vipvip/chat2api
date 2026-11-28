@@ -740,6 +740,14 @@ const completedCloseUi = vm.runInContext(
 completedCloseUi("closed");
 assert.equal(duplicateCloseWrites,0,"closing after response.done must not persist the same answer twice");
 
+// An automatic camera stop (upload error or frame budget) must reset
+// the Web Chat controls even though the audio session stays connected.
+closeState.voiceClient={isCameraActive:()=>false};
+closeElementsMap.voiceCameraButton.textContent="关闭摄像头";
+closeUi("ready","实时视频已停止");
+assert.equal(closeState.voiceActive,true);
+assert.equal(closeElementsMap.voiceCameraButton.textContent,"开启摄像头");
+
 // A server-side camera ACK timeout must release the browser's one-frame
 // in-flight guard so the next timestamped frame can be sent.
 class NoAckWebSocket extends FakeWebSocket {

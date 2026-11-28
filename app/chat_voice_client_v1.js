@@ -739,8 +739,8 @@
         const stillCurrent = cameraCaptureIsCurrent(captureGeneration,itemId,captureEpoch);
         releaseUnsentVideoFrame(itemId,captureEpoch);
         if (!stillCurrent) return;
-        event({type:"client.error",message:String(error?.message || error)});
         stopCamera();
+        event({type:"client.error",message:String(error?.message || error)});
       }
     }
     async function startCamera(targetVideo) {
