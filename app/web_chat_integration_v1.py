@@ -17,6 +17,7 @@ from pydantic import ValidationError
 from .admin_auth import same_origin_admin_request
 from .models import FileUploadRequest
 from .native_content_v1 import native_delivery_fingerprint, validate_native_snapshot
+from .native_snapshot_finality_v282 import native_interaction_digest
 from .user_commerce import USER_SESSION_COOKIE
 
 
@@ -566,13 +567,35 @@ def install_web_chat_features_v1(app: Any) -> Any:
                 raise HTTPException(status_code=409, detail="native interaction state could not be committed",
                                     headers=_PRIVATE_HEADERS)
             persisted = bool(store.persist(request_id, owner))
+            if persisted:
+                try:
+                    # Retain the original terminal evidence rather than rewriting
+                    # Worker completion diagnostics with an interactive revision.
+                    previous = row.get("native_interaction_proof")
+                    base = revision
+                    if (isinstance(previous, dict)
+                            and previous.get("revision") == revision
+                            and previous.get("sha256") == native_interaction_digest(stored)
+                            and type(previous.get("base_revision")) is int
+                            and 1 <= previous["base_revision"] < revision):
+                        base = previous["base_revision"]
+                    await request.app.state.telemetry.update(request_id, {
+                        "native_interaction_proof": {
+                            "base_revision": base, "revision": revision + 1,
+                            "sha256": native_interaction_digest(updated),
+                            "recaptured": recaptured,
+                        }
+                    })
+                except (KeyError, ValueError, OSError):
+                    persisted = False
             return JSONResponse({
                 "ok": True,
                 "revision": revision + 1,
                 "persisted": persisted,
-                "recaptured": recaptured,
+                **({"recaptured": recaptured} if acknowledgement.get("recapture_status") else {}),
                 **({"warning": "interaction applied but durable snapshot persistence is pending"} if not persisted else
-                   {"warning": "interaction applied; full DOM recapture unavailable"} if not recaptured else {}),
+                   {"warning": "interaction applied; full DOM recapture unavailable"}
+                   if acknowledgement.get("recapture_status") == "unavailable" else {}),
             }, headers={**_PRIVATE_HEADERS, "X-Content-Type-Options": "nosniff"})
 
     @app.get("/api/user/chat/requests/{request_id}/native-content/events")
