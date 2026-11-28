@@ -1325,7 +1325,7 @@
     state.sidebarPage = "";
     state.forceScrollToBottom = true;
     const conversation = currentConversation();
-    if (conversation) state.selectedModel = conversation.model || state.selectedModel;
+    selectAvailableTextModel(conversation);
     void loadModels();
     renderAll();
     // Native payloads stay server-authoritative rather than being copied into
@@ -2844,7 +2844,7 @@
     return {callId,tool:rawName,result};
   }
 
-  async function runAutonomousPluginToolLoop(messages, assistant, keyId, recoveryApi, firstRequestId) {
+  async function runAutonomousPluginToolLoop(messages, assistant, keyId, recoveryApi, firstRequestId, requestModelId = state.selectedModel) {
     const definitions = selectedPluginToolDefinitions();
     if (!definitions.length) return {messages,plannerRequests:0,toolCalls:0};
     // Planning requests are intentionally not attached to the visible assistant
@@ -3044,7 +3044,7 @@
           "X-Chat2API-User-Key-ID":keyId,
         },
         body:JSON.stringify({
-          model:state.selectedModel,
+          model:requestModelId,
           messages:plannerMessages,
           stream:false,
           max_tokens:600,
@@ -4601,7 +4601,8 @@
   }
   async function sendMessage(text) {
     if (state.voiceActive) { toast("请先结束实时语音，再发送普通聊天消息。"); return; }
-    if (!state.selectedModel) { toast("当前账户或服务端统一 API Key 没有可用模型。"); return; }
+    const requestModelId = selectAvailableTextModel(currentConversation());
+    if (!requestModelId) { toast("当前账户或服务端统一 API Key 没有可用模型。"); return; }
     if (!selectedKeyHasScope("chat")) { toast("服务端统一 API Key 缺少 chat 权限。"); return; }
     const clean = String(text || "").trim();
     if (state.streaming) return;
@@ -4635,7 +4636,7 @@
       toast("服务端统一 API Key 缺少 files 权限，无法发送附件。");
       return;
     }
-    conversation.model = state.selectedModel;
+    conversation.model = requestModelId;
     state.streaming = true;
     state.abortController = new AbortController();
     $("sendButton").disabled = true;
@@ -4647,7 +4648,7 @@
     const diagnosticStartedAt = Date.now();
     let diagnosticOutcome = "failed";
     recordClientDiagnostic("chat.request.started", {
-      request_id: requestId, model_id: state.selectedModel, phase: "dispatch",
+      request_id: requestId, model_id: requestModelId, phase: "dispatch",
       image_count: pending.length, file_count: pendingFiles.length,
     });
 
@@ -4717,7 +4718,7 @@
       if (Array.isArray(state.selectedPlugins) && state.selectedPlugins.length > 0
           && typeof runAutonomousPluginToolLoop === "function") {
         const toolLoop = await runAutonomousPluginToolLoop(
-          messages,assistant,keyId,recoveryApi,requestId,
+          messages,assistant,keyId,recoveryApi,requestId,requestModelId,
         );
         messages = toolLoop.messages;
         if (toolLoop.plannerRequests > 0) requestId = recoveryApi.createRequestId();
@@ -4737,7 +4738,7 @@
           "X-Chat2API-User-Key-ID": keyId,
         },
         body: JSON.stringify({
-          model: state.selectedModel,
+          model: requestModelId,
           messages,
           stream: true,
         }),
@@ -4748,7 +4749,7 @@
         let payload = {};
         try { payload = await response.json(); } catch {}
         recordClientDiagnostic("chat.request.http_error", {
-          request_id: requestId, model_id: state.selectedModel, http_status: response.status, phase: "dispatch",
+          request_id: requestId, model_id: requestModelId, http_status: response.status, phase: "dispatch",
         }, "warning");
         const guestAccessClosed = guestLoginRequired(response.status, payload);
         if (response.status === 401) {
@@ -4831,7 +4832,7 @@
     } catch (error) {
       diagnosticOutcome = error?.name === "AbortError" ? "cancelled" : "failed";
       recordClientDiagnostic("chat.request.failed", {
-        request_id: requestId, model_id: state.selectedModel, phase: "send",
+        request_id: requestId, model_id: requestModelId, phase: "send",
         error_name: error?.name || "Error",
       }, diagnosticOutcome === "failed" ? "error" : "warning");
       if (error instanceof StreamResponseError) {
@@ -4863,7 +4864,7 @@
       }
     } finally {
       recordClientDiagnostic("chat.request.finished", {
-        request_id: requestId, model_id: state.selectedModel, duration_ms: Date.now() - diagnosticStartedAt,
+        request_id: requestId, model_id: requestModelId, duration_ms: Date.now() - diagnosticStartedAt,
         phase: diagnosticOutcome,
       }, diagnosticOutcome === "failed" ? "error" : "info");
       void flushClientDiagnostics();
@@ -4900,6 +4901,20 @@
     return true;
   }
 
+  // The server's text-only catalog is authoritative. Historical conversations
+  // may retain a retired model (or gpt-image from an older client), but must
+  // never overwrite the active text route after a model refresh or switch.
+  function selectAvailableTextModel(conversation = currentConversation()) {
+    const textRows = Array.isArray(state.models) ? state.models : [];
+    const preferred = conversation?.model || state.selectedModel;
+    const preferredRow = textRows.find(row => row.id === preferred) ||
+      textRows.find(row => row.id === "default" &&
+        (row.mapped_model_id === preferred || row.label === preferred)) ||
+      textRows.find(row => row.id === "default");
+    state.selectedModel = preferredRow?.id || textRows[0]?.id || "";
+    return state.selectedModel;
+  }
+
   async function loadModels(force = false) {
     if (modelCatalogLoadPromise) return modelCatalogLoadPromise;
     if (!force && state.modelCatalogLoadedAt && Date.now() - state.modelCatalogLoadedAt < 20_000) return;
@@ -4931,12 +4946,7 @@
       const textRows = uniqueRows;
       state.models = textRows;
       const ids = textRows.map(row => row.id);
-      const conversation = currentConversation();
-      const preferred = conversation?.model || state.selectedModel;
-      const preferredRow = textRows.find(row => row.id === preferred) ||
-        textRows.find(row => row.id === "default" &&
-          (row.mapped_model_id === preferred || row.label === preferred));
-      state.selectedModel = preferredRow?.id || textRows[0]?.id || "";
+      selectAvailableTextModel(currentConversation());
       state.modelCatalogLoadedAt = Date.now();
       recordClientDiagnostic("webchat.models.catalog_loaded", {
         model_count: ids.length, phase: "model_catalog",
@@ -5126,7 +5136,7 @@
     resumePendingMessages();
     void hydrateNativeSnapshots();
     if (!ready) return;
-    if (currentConversation()) state.selectedModel = currentConversation().model || state.selectedModel;
+    selectAvailableTextModel(currentConversation());
     renderAll();
   }
 

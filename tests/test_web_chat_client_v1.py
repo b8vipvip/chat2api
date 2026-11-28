@@ -93,6 +93,7 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         assert 'selectedModel: "default"' in script.text
         assert "const preferred = conversation?.model || state.selectedModel;" in script.text
         assert 'state.selectedModel = preferredRow?.id || textRows[0]?.id || "";' in script.text
+        assert "selectAvailableTextModel(currentConversation())" in script.text
         assert "modelSelect" not in script.text
         assert "MAX_VOICE_CONTEXT_CHARS = 8000" in script.text
         assert "buildVoiceContext(voiceConversation)" in script.text
@@ -278,6 +279,15 @@ def test_web_chat_uses_shared_server_key_but_keeps_user_identity_isolated(tmp_pa
         assert client.delete(f"/api/user/keys/{key_a}").status_code == 409
         assert shared_token not in session_a.text
         assert shared_public["key_id"] not in session_a.text
+        # Stale clients can no longer route normal chat through image/Voice-only
+        # models. Reject before Worker admission or quota reservation.
+        for unsupported in ("gpt-image", "gpt-live", "gpt-live-mini", "chatgpt-web"):
+            blocked = client.post("/api/user/chat/completions", headers={
+                **origin, "X-Chat2API-User-Key-ID": key_a,
+            }, json={"model": unsupported, "messages": [
+                {"role": "user", "content": "hello"}
+            ], "stream": False})
+            assert blocked.status_code == 422, (unsupported, blocked.text)
         assert client.get("/api/client/config").json()["api_key_configured"] is True
         assert "api_key_id" not in client.get("/api/client/config").json()
         assert client.get("/api/user/keys").json()["data"] == []
