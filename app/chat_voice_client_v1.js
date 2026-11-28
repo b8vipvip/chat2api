@@ -574,6 +574,10 @@
         };
         currentSocket.onclose = () => {
           if (!isCurrentSocket()) return;
+          if (ready && !stopping && !cleaned) {
+            event({type:"client.error",code:"GPT_LIVE_TRANSPORT_LOST",retryable:true,
+              message:"实时语音连接意外关闭。"});
+          }
           if (readyReject) {
             readyReject(new Error("GPT-Live 连接在就绪前关闭"));
             readyReject = null;
@@ -607,7 +611,8 @@
         } catch {}
         // No response from the server: stop capture and preserve transcript
         // rather than silently pretending the original upstream call survived.
-        event({type:"client.error",message:"实时语音连接超时，已停止采集；请重新开始通话以继续。"});
+        event({type:"client.error",code:"GPT_LIVE_TRANSPORT_LOST",retryable:true,
+          message:"实时语音连接超时，已停止采集；请重新开始通话以继续。"});
         void cleanup();
       },HEARTBEAT_INTERVAL_MS);
       started = true;

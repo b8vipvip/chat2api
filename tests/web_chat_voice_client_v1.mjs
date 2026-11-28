@@ -1178,3 +1178,32 @@ for (const mode of ["headers","body","stop"]) {
   assert.equal(watchdog.isActive(),false);
   assert.ok(events.some(event=>event.type==="client.error" && /连接超时/.test(event.message)));
 }
+
+
+// Only an existing call can schedule a bounded reconnect.
+{
+  const state={user:{user_id:"owner"},voiceStartEpoch:7,voiceActive:false};
+  const conversation={id:"chat"};
+  const timers=new Map();let serial=0,starts=0;
+  const ctx=vm.createContext({state,currentConversation:()=>conversation,
+    window:{document:{visibilityState:"visible"},setTimeout(fn){timers.set(++serial,fn);return serial;},
+      clearTimeout(id){timers.delete(id);}},
+    $:()=>({textContent:""}),updateVoiceControls(){},apiJson:async()=>({user:{user_id:"owner"}}),
+    startVoiceCall:async()=>{starts++;},
+  });
+  const start=chatClientSource.indexOf("  function cancelVoiceReconnect(");
+  const end=chatClientSource.indexOf("  async function toggleVoiceCamera(",start);
+  const api=vm.runInContext(chatClientSource.slice(start,end)+"\n({scheduleVoiceReconnect,cancelVoiceReconnect})",ctx);
+  api.scheduleVoiceReconnect("owner","chat",7,1);
+  assert.equal(timers.size,1);
+  const stale=[...timers.values()][0];
+  api.cancelVoiceReconnect();
+  await stale();
+  assert.equal(starts,0);
+  api.scheduleVoiceReconnect("owner","chat",7,4);
+  assert.equal(state.voiceReconnectTicket,null);
+  api.scheduleVoiceReconnect("owner","chat",7,1);
+  const next=[...timers.values()][0];
+  await next();
+  assert.equal(starts,1);
+}

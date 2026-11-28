@@ -53,6 +53,7 @@
     voiceStarting: false,
     voiceStopping: false,
     voiceStartEpoch: 0,
+    voiceReconnectTicket: null,
     voiceActive: false,
     voicePanelVisible: false,
     voiceAssistantLine: null,
@@ -198,9 +199,10 @@
     const camera = $("voiceCameraButton");
     if (!start || !stop || !camera) return;
     start.disabled = state.streaming || state.voiceActive || !state.webChatKeyId || (!selectedKeyHasScope("audio") && !selectedKeyHasScope("chat"));
-    start.classList.toggle("hidden", state.voiceActive);
-    stop.classList.toggle("hidden", !state.voiceActive);
-    stop.disabled = !state.voiceActive || state.voiceStopping;
+    const reconnecting = Boolean(state.voiceReconnectTicket);
+    start.classList.toggle("hidden", state.voiceActive || reconnecting);
+    stop.classList.toggle("hidden", !state.voiceActive && !reconnecting);
+    stop.disabled = (!state.voiceActive && !reconnecting) || state.voiceStopping;
     camera.classList.toggle("hidden", !state.voiceActive || state.voiceStarting || state.voiceStopping);
     camera.disabled = !state.voiceActive || state.voiceStarting || state.voiceStopping || !selectedKeyHasScope("files");
     if (!selectedKeyHasScope("files")) camera.title = "服务端统一 API Key 缺少 files 权限";
@@ -431,8 +433,9 @@
     }
     return Array.from(rows.reverse().join("\n")).slice(-MAX_VOICE_CONTEXT_CHARS).join("");
   }
-  async function startVoiceCall() {
+  async function startVoiceCall(reconnect = null) {
     if (state.streaming || state.voiceActive) return;
+    cancelVoiceReconnect();
     const activeConversation = currentConversation();
     if (activeConversation?.messages.some(message => message.pending === true)) {
       toast("当前对话还有未完成的回复或恢复任务，请先处理后再开始语音。");
@@ -465,6 +468,7 @@
     state.voiceAssistantLine = null;
     const ownerId = String(state.user?.user_id || "");
     const startEpoch = state.voiceStartEpoch = Number(state.voiceStartEpoch || 0) + 1;
+    let wasReady = false, retryableLoss = false;
     const client = voiceApi.create({
       sessionEndpoint:"/api/user/chat/voice-session",
       fileUploadEndpoint:"/api/user/chat/files",
@@ -491,10 +495,18 @@
         throw new Error("用户登录状态已失效，请重新登录后再使用实时语音");
       },
       onState:(status,detail) => {
-        if (state.voiceClient === client) setVoiceUi(status,detail);
+        if (state.voiceClient !== client) return;
+        if (status === "ready") wasReady = true;
+        const shouldReconnect = status === "closed" && wasReady && retryableLoss &&
+          !state.voiceStopping && state.voiceStartEpoch === startEpoch;
+        setVoiceUi(status,detail);
+        if (shouldReconnect) scheduleVoiceReconnect(ownerId,voiceConversation.id,startEpoch,1);
       },
       onEvent:payload => {
-        if (state.voiceClient === client) handleVoiceEvent(payload);
+        if (state.voiceClient !== client) return;
+        if (payload?.retryable === true &&
+            ["GPT_LIVE_WORKER_DISCONNECTED","GPT_LIVE_TRANSPORT_LOST"].includes(payload.code)) retryableLoss = true;
+        handleVoiceEvent(payload);
       },
     });
     state.voiceClient = client;
@@ -529,10 +541,14 @@
       if (state.voiceStartEpoch !== startEpoch || (state.voiceClient && state.voiceClient !== client)) return;
       setVoiceUi("closed","实时语音启动失败：" + String(error?.message || error));
       toast("无法启动实时语音：" + String(error?.message || error));
+      if (reconnect && !["NotAllowedError","NotFoundError","SecurityError"].includes(error?.name)) {
+        scheduleVoiceReconnect(ownerId,voiceConversation.id,startEpoch,reconnect.attempt+1);
+      }
     }
   }
 
   async function stopVoiceCall() {
+    cancelVoiceReconnect();
     const client = state.voiceClient;
     if (!client) { setVoiceUi("closed"); return; }
     if (state.voiceStopping) return;
@@ -542,6 +558,42 @@
     try { await client.stop(); recordClientDiagnostic("voice.stopped", {feature: "voice", phase: "closed"}); }
     catch (error) { recordClientDiagnostic("voice.stop_failed", {feature: "voice", phase: "stop", error_name: error?.name || "Error"}, "warning"); toast("结束语音时发生错误：" + String(error?.message || error)); }
     if (state.voiceClient === client) setVoiceUi("closed");
+  }
+
+  function cancelVoiceReconnect() {
+    const ticket = state.voiceReconnectTicket;
+    state.voiceReconnectTicket = null;
+    if (ticket?.timer != null) window.clearTimeout(ticket.timer);
+  }
+
+  function scheduleVoiceReconnect(owner, conversationId, epoch, attempt) {
+    cancelVoiceReconnect();
+    if (!owner || attempt > 3 || String(state.user?.user_id || "") !== owner ||
+        state.voiceStartEpoch !== epoch || currentConversation()?.id !== conversationId ||
+        state.streaming || state.voiceActive || window.document?.visibilityState === "hidden") return;
+    const ticket = {owner,conversationId,epoch,attempt,timer:null};
+    state.voiceReconnectTicket = ticket;
+    $("voiceStatus").textContent = "语音已断开，正在尝试建立新通话（" + attempt + "/3）；摄像头不会自动恢复。";
+    updateVoiceControls();
+    ticket.timer = window.setTimeout(async () => {
+      const current = () => state.voiceReconnectTicket === ticket &&
+        state.voiceStartEpoch === epoch && String(state.user?.user_id || "") === owner &&
+        currentConversation()?.id === conversationId && !state.streaming && !state.voiceActive &&
+        !state.pendingImages?.length && !state.pendingFiles?.length &&
+        window.document?.visibilityState !== "hidden";
+      try {
+        if (!current()) return;
+        const session = await apiJson("/api/user/me");
+        if (!current() || String(session.user?.user_id || "") !== owner) return;
+        state.voiceReconnectTicket = null;
+        await startVoiceCall(ticket);
+      } catch {
+        if (current()) scheduleVoiceReconnect(owner,conversationId,epoch,attempt+1);
+      } finally {
+        if (state.voiceReconnectTicket === ticket) state.voiceReconnectTicket = null;
+        updateVoiceControls();
+      }
+    },[2000,5000,10000][attempt-1]);
   }
 
   async function toggleVoiceCamera() {
@@ -5804,12 +5856,17 @@
   });
   window.addEventListener("pagehide", () => {
     stopConversationChangeStream();
+    cancelVoiceReconnect();
     checkpointVoiceTranscript();
     void flushClientDiagnostics(true);
   });
   window.setInterval(checkpointVoiceTranscript, 2000);
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") {
+      if (state.voiceReconnectTicket) {
+        cancelVoiceReconnect();
+        updateVoiceControls();
+      }
       checkpointVoiceTranscript();
       void flushClientDiagnostics(true);
     }
