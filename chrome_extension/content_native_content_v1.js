@@ -868,8 +868,8 @@
     while (revisions.size > 8) revisions.delete(revisions.keys().next().value);
     nativeControlTargetsByRequest.set(active.requestId, revisions);
     nativeControlLatestRevision.set(active.requestId, revision);
-    if (scopedRoots?.length && controlTargets.size && !images && !active.nativeGraphicsUnsupported) {
-      nativeControlCaptureContexts.set(active.requestId,{active,revision,roots:[...scopedRoots]});
+    if (scopedRoots?.length && (controlTargets.size || canvasRasters) && !images && !active.nativeGraphicsUnsupported) {
+      nativeControlCaptureContexts.set(active.requestId,{active,revision,roots:[...scopedRoots],root,canvasRasters});
     } else nativeControlCaptureContexts.delete(active.requestId);
     while (nativeControlTargetsByRequest.size > 24) {
       const oldest = nativeControlTargetsByRequest.keys().next().value;
@@ -1232,7 +1232,21 @@
           }
         }
       }
-      const tree = snapshot(active);
+      let tree = snapshot(active);
+      // Transiently cleared WebGL buffers may be readable on a later frame.
+      // Do not alter the upstream context or accept a blank raster as proof.
+      if (final && active.nativeCanvasOmitted && typeof requestAnimationFrame === "function") {
+        for (let attempt=0;attempt<2 && active.nativeCanvasOmitted;attempt++) {
+          if (active.nativeTransferInFlight !== transfer) return;
+          await new Promise(resolve=>{
+            let done=false;
+            const finish=()=>{if(!done){done=true;resolve();}};
+            requestAnimationFrame(finish);
+            setTimeout(finish,100);
+          });
+          tree = snapshot(active);
+        }
+      }
       if (!tree) {
         active.nativeCaptureFailure = "structural-" +
           String(active.nativeStructuralFailure || "unavailable").slice(0,60);
@@ -1422,7 +1436,7 @@
     // media pipeline supports interaction revisions, fail closed on it.
     if (!tree || tree.revision!==revision+1 || containsRaster(tree.root) ||
         replay.nativeGraphicsUnsupported ||
-        new TextEncoder().encode(JSON.stringify(tree)).length>256*1024) {
+        new TextEncoder().encode(JSON.stringify(tree)).length>768*1024) {
       if (fallbackTargets) revisions?.set(revision+1,fallbackTargets);
       nativeControlLatestRevision.set(requestId,revision+1);
       nativeControlCaptureContexts.set(requestId,{...context,revision:revision+1});
@@ -1432,8 +1446,75 @@
     response.recapture_status="verified";
   }
 
+  async function refreshCanvasSnapshot(message) {
+    const requestId=String(message.request_id || ""), revision=Number(message.revision);
+    const actionId=String(message.action_id || "");
+    if (!/^req_[A-Za-z0-9_-]{8,120}$/.test(requestId) ||
+        !Number.isInteger(revision) || revision<1 || revision>=1000000 ||
+        !/^[a-f0-9]{32}$/.test(actionId) ||
+        message.interaction_id!=="native_refresh" || message.value!==null)
+      return {ok:false,error:"invalid-native-refresh"};
+    const previous=nativeControlAppliedActions.get(actionId);
+    if (previous) return previous.requestId===requestId && previous.revision===revision &&
+      previous.action==="refresh_canvas" ? {...previous.response,duplicate:true} :
+      {ok:false,error:"native-interaction-action-id-reused"};
+    const context=nativeControlCaptureContexts.get(requestId);
+    if (!context?.canvasRasters || context.revision!==revision ||
+        nativeControlLatestRevision.get(requestId)!==revision)
+      return {ok:false,error:"canvas-refresh-context-unavailable"};
+    const sameRoots=()=>{
+      const region=globalThis.__CHAT2API_NATIVE_DOM_EVIDENCE_V1__?.replyRoots?.(context.active);
+      return Array.isArray(region?.roots) && region.roots.length===context.roots.length &&
+        region.roots.every((root,index)=>root===context.roots[index] && root.isConnected);
+    };
+    if (!sameRoots()) return {ok:false,error:"native-interaction-reply-scope-changed"};
+    const oldTargets=nativeControlTargetsByRequest.get(requestId);
+    const before=new Map(oldTargets || []);
+    const replay={...context.active,nativeRevision:revision,nativeSentRevision:revision};
+    const restore=()=>{
+      nativeControlTargetsByRequest.set(requestId,before);
+      nativeControlLatestRevision.set(requestId,revision);
+      nativeControlCaptureContexts.set(requestId,context);
+    };
+    let tree=null;
+    for(let attempt=0;attempt<3;attempt++){
+      if (!sameRoots()) return {ok:false,error:"native-interaction-reply-scope-changed"};
+      try { tree=snapshot(replay); } catch (_) {}
+      if (tree && !replay.nativeGraphicsUnsupported) break;
+      restore();
+      await new Promise(resolve=>setTimeout(resolve,40));
+      if (nativeControlLatestRevision.get(requestId)!==revision ||
+          nativeControlCaptureContexts.get(requestId)!==context)
+        return {ok:false,error:"native-refresh-superseded"};
+    }
+    const next=nativeControlCaptureContexts.get(requestId);
+    if (!tree || tree.revision!==revision+1 || replay.nativeGraphicsUnsupported ||
+        !next || next.canvasRasters!==context.canvasRasters ||
+        new TextEncoder().encode(JSON.stringify(tree)).length>768*1024) {
+      restore();
+      return {ok:false,error:"canvas-refresh-pixels-unavailable"};
+    }
+    // Interaction IDs are revision-local, so ignore only their revision
+    // prefix when deciding whether an unchanged frame needs a new commit.
+    const stable=root=>JSON.stringify(root,(key,value)=>
+      key==="interaction_id" && typeof value==="string" ? value.replace(/^nc_\d+_/,"nc_") : value);
+    let response;
+    if(stable(tree.root)===stable(context.root)){
+      restore();
+      response={ok:true,revision,recapture_status:"unchanged"};
+    }else response={ok:true,revision:revision+1,recapture_status:"verified",snapshot:tree};
+    nativeControlAppliedActions.set(actionId,{requestId,revision,action:"refresh_canvas",response});
+    while(nativeControlAppliedActions.size>64)
+      nativeControlAppliedActions.delete(nativeControlAppliedActions.keys().next().value);
+    return response;
+  }
+
   chrome.runtime.onMessage?.addListener?.((message, _sender, sendResponse) => {
     if (message?.type !== "chat2api.native.interaction") return false;
+    if (message.action==="refresh_canvas") {
+      void refreshCanvasSnapshot(message).then(sendResponse,()=>sendResponse({ok:false,error:"canvas-refresh-failed"}));
+      return true;
+    }
     const requestId=String(message.request_id || "");
     const context=nativeControlCaptureContexts.get(requestId);
     if (context?.revision===Number(message.revision)) {
