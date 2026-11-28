@@ -5059,6 +5059,12 @@
     if (state.pluginTaskReconcileInFlight || state.streaming || state.voiceActive || !state.remoteSyncReady) return;
     state.pluginTaskReconcileInFlight = true;
     const owner = String(state.user?.user_id || "");
+    // A conversation PUT and its initial claim are separate HTTP requests.
+    // A peer can observe the pending message before the claim reaches SQLite.
+    // Require a continuous missing observation before declaring it interrupted.
+    const priorMissing = state.pluginMissingLeaseObservations || new Map();
+    const missing = new Map();
+    state.pluginMissingLeaseObservations = missing;
     try {
       for (const conversation of state.conversations) {
         for (const message of conversation.messages || []) {
@@ -5069,6 +5075,17 @@
               !state.conversations.includes(conversation) || !conversation.messages.includes(message) ||
               !message.pending || message.recoveryStatus !== "tool_planning") return;
           if (task.state === "running") continue;
+          if (task.state === "missing") {
+            const key = JSON.stringify([owner,conversation.id,message.id]);
+            const now = Date.now();
+            const firstSeen = priorMissing.get(key) ?? now;
+            missing.set(key,firstSeen);
+            // The claim mutation has a 20 s timeout. Allow a longer grace
+            // window without relying on another device's wall-clock timestamp.
+            if (now - firstSeen < 30000) continue;
+          } else if (!["interrupted","completed","deleted"].includes(task.state)) {
+            continue;
+          }
           // Only terminalize a task after the persisted lease is gone.
           message.pending = false;
           message.recoveryStatus = "error";
