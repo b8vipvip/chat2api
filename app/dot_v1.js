@@ -40,13 +40,29 @@
     for (const task of data.tasks) {
       const card = document.createElement("article"); card.className = "utility-item";
       card.append(node("h3", task.goal), node("p", task.model + " · " + ({
-        queued:"待执行", running:"执行中", completed:"已完成", failed:"失败", interrupted:"已中断"
+        queued:"待提交", scheduled:"等待调度", paused:"已暂停", running:"执行中", completed:"已完成", failed:"失败", interrupted:"已中断", cancelled:"已取消"
       }[task.status] || task.status)));
+      if (task.stop_requested && task.status === "running") card.append(node("p", "已请求停止，等待 Worker 终态"));
+      if (task.status === "scheduled" || task.status === "paused") card.append(node("p", "计划执行：" + new Date(task.run_at * 1000).toLocaleString()));
       if (task.request_id) card.append(node("p", "请求：" + task.request_id));
       if (task.result) card.append(node("pre", task.result));
       if (task.error) card.append(node("p", task.error));
-      if (task.status === "queued") card.append(button("执行", async () => {status("正在调用模型，请保持页面打开…"); await api(base + "/tasks/" + task.id + "/run", "POST");}));
-      if (task.status !== "running") card.append(button("删除", async () => {if (confirm("删除该任务及结果？")) await api(base + "/tasks/" + task.id, "DELETE");}));
+      const path = base + "/tasks/" + task.id;
+      if (task.status === "queued") {
+        card.append(button("后台执行", () => api(path + "/run", "POST")));
+        card.append(button("定时执行", async () => {
+          const value = prompt("多少分钟后执行？（0–43200）", "60");
+          if (value === null) return;
+          const minutes = Number(value);
+          if (!value.trim() || !Number.isInteger(minutes) || minutes < 0 || minutes > 43200) throw new Error("请输入有效分钟数");
+          await api(path + "/run", "POST", {delay_seconds: minutes * 60});
+        }));
+      }
+      if (task.status === "scheduled") card.append(button("暂停", () => api(path + "/control/pause", "POST")));
+      if (task.status === "paused") card.append(button("恢复", () => api(path + "/control/resume", "POST")));
+      if (["queued","scheduled","paused","running"].includes(task.status) && !task.stop_requested)
+        card.append(button("停止", () => api(path + "/control/stop", "POST")));
+      if (!["running","scheduled","paused"].includes(task.status)) card.append(button("删除", async () => {if (confirm("删除该任务及结果？")) await api(base + "/tasks/" + task.id, "DELETE");}));
       list.append(card);
     }
     if (!data.tasks.length) list.append(node("p", "暂无任务"));
@@ -70,4 +86,5 @@
   });
   byId("dotRefresh").addEventListener("click", () => execute(async () => {}));
   execute(async () => {}, true);
+  setInterval(() => { if (!document.hidden && owner && !busy) execute(async () => {}); }, 4000);
 })();
