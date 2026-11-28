@@ -1155,6 +1155,28 @@
     }
   }
 
+  let conversationChangeSource = null;
+  function startConversationChangeStream() {
+    if (conversationChangeSource || !state.user || !state.remoteSyncReady ||
+        typeof window.EventSource !== "function") return;
+    const owner = String(state.user.user_id);
+    const source = new window.EventSource("/api/user/chat/conversations/changes");
+    conversationChangeSource = source;
+    source.addEventListener("changed", () => {
+      if (conversationChangeSource !== source || String(state.user?.user_id || "") !== owner) {
+        source.close();
+        if (conversationChangeSource === source) conversationChangeSource = null;
+        return;
+      }
+      void pullConversationDelta();
+    });
+  }
+
+  function stopConversationChangeStream() {
+    conversationChangeSource?.close();
+    conversationChangeSource = null;
+  }
+
   function canPullConversationDelta() {
     return Boolean(state.user && state.remoteSyncReady && !state.streaming && !state.voiceActive &&
       !state.pendingImages.length && !state.pendingFiles.length && !state.recoveryInFlight.size &&
@@ -5562,6 +5584,7 @@
     state.conversations.forEach((conversation) => {
       if (!conversation.apiKeyId) conversation.apiKeyId = state.webChatKeyId;
     });
+    startConversationChangeStream();
     state.forceScrollToBottom = true;
     if (ready && !state.user?.is_guest && typeof loadPluginCatalog === "function") void loadPluginCatalog(true);
     recordClientDiagnostic("webchat.session.ready", {phase: "bootstrap", model_count: state.models.length});
@@ -5780,6 +5803,7 @@
     recordClientDiagnostic("browser.unhandled_rejection", {phase: "promise", error_name: event.reason?.name || "UnhandledRejection"}, "error");
   });
   window.addEventListener("pagehide", () => {
+    stopConversationChangeStream();
     checkpointVoiceTranscript();
     void flushClientDiagnostics(true);
   });
@@ -5802,13 +5826,18 @@
       void pullConversationDelta();
     }
   });
+  window.addEventListener("pageshow", () => startConversationChangeStream());
   window.addEventListener("online", () => {
+    startConversationChangeStream();
     if (state.user) void loadModels(true);
     void retryInitialConversationSync();
     void pullConversationDelta();
   });
   window.setInterval(() => {
-    if (document.visibilityState === "visible") void pullConversationDelta();
+    if (document.visibilityState === "visible") {
+      startConversationChangeStream();
+      void pullConversationDelta();
+    }
   }, 5000);
   window.setInterval(() => {
     if (state.user && document.visibilityState === "visible" && !state.streaming && !state.voiceActive) {

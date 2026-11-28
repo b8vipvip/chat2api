@@ -1,6 +1,7 @@
 """Durable, owner-scoped persistence for the Mode 1 Web Chat conversation list."""
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import sqlite3
@@ -12,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from .admin_auth import same_origin_admin_request
 from .private_storage import secure_private_sqlite_files
@@ -419,6 +420,30 @@ class WebChatConversationStoreV1:
                 (_now(),),
             )
             connection.execute("PRAGMA user_version=3")
+            # Additive schema: triggers participate in the same transaction
+            # as conversation writes, including retention and other processes.
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS web_chat_change_generations (
+                    user_id TEXT PRIMARY KEY, generation INTEGER NOT NULL
+                )
+            """)
+            for operation, owner in (("INSERT", "NEW"), ("UPDATE", "NEW"), ("DELETE", "OLD")):
+                connection.execute(f"""
+                    CREATE TRIGGER IF NOT EXISTS web_chat_change_{operation.lower()}
+                    AFTER {operation} ON web_chat_conversations
+                    BEGIN
+                        INSERT INTO web_chat_change_generations(user_id, generation)
+                        VALUES ({owner}.user_id, 1)
+                        ON CONFLICT(user_id) DO UPDATE SET generation=generation+1;
+                    END
+                """)
+
+    def change_generation(self, user_id: str) -> int:
+        with self.lock, closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT generation FROM web_chat_change_generations WHERE user_id=?", (user_id,)
+            ).fetchone()
+            return int(row["generation"]) if row else 0
 
     def _connect(self) -> sqlite3.Connection:
         self._secure_sqlite_files(create_database=True)
@@ -889,6 +914,35 @@ def install_web_chat_conversations_v1(app: FastAPI) -> None:
         _, user = current_user(request)
         rows = store.list_for_user(str(user["user_id"]))
         return JSONResponse({"data": rows}, headers=_PRIVATE_HEADERS)
+
+    @app.get("/api/user/chat/conversations/changes")
+    async def stream_user_chat_changes(request: Request):
+        accounts, user = current_user(request)
+        owner = str(user["user_id"])
+        if request.headers.get("sec-fetch-site") not in {None, "", "same-origin", "none"}:
+            raise HTTPException(status_code=403, detail="same-origin stream required", headers=_PRIVATE_HEADERS)
+        cookie = request.cookies.get(USER_SESSION_COOKIE)
+
+        async def events():
+            previous = None
+            # No text or identifiers are streamed. Initial invalidation
+            # covers missed notifications. EventSource reconnects on EOF.
+            for tick in range(30):
+                if await request.is_disconnected():
+                    return
+                current = accounts.authenticate(cookie)
+                if not current or str(current["user_id"]) != owner:
+                    return
+                generation = await asyncio.to_thread(store.change_generation, owner)
+                if generation != previous:
+                    previous = generation
+                    yield "event: changed\ndata: {}\n\n"
+                elif tick % 10 == 0:
+                    yield ": heartbeat\n\n"
+                await asyncio.sleep(1)
+
+        return StreamingResponse(events(), media_type="text/event-stream",
+                                 headers={**_PRIVATE_HEADERS, "X-Accel-Buffering": "no"})
 
     @app.post("/api/user/chat/conversations/delta")
     async def delta_user_chat_conversations(request: Request):

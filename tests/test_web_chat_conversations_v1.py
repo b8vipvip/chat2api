@@ -687,3 +687,18 @@ def test_delta_returns_only_changed_owner_rows_and_old_tombstones(tmp_path: Path
     assert len(changed) == 1
     assert changed[0]["id"] == old["id"] and changed[0]["deleted"]
     assert not any(row["id"] == old["id"] for row in store.delta_for_user("other", known))
+
+
+def test_change_generation_is_durable_and_owner_scoped(tmp_path: Path):
+    a = WebChatConversationStoreV1(tmp_path)
+    b = WebChatConversationStoreV1(tmp_path)
+    row = _conversation("c2a_changes_0001")
+    assert a.change_generation("alice") == 0
+    assert a.upsert("alice", row, 0)[0]
+    assert b.change_generation("alice") == 1
+    assert b.change_generation("bob") == 0
+    assert not b.upsert("alice", row, 0)[0]
+    assert a.change_generation("alice") == 1
+    assert b.delete("alice", row["id"], 1)[0]
+    assert WebChatConversationStoreV1(tmp_path).change_generation("alice") == 2
+    assert b.change_generation("bob") == 0
