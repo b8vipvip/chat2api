@@ -624,7 +624,7 @@ const historyContext = vm.createContext({
   Date,
 });
 const historyUi = vm.runInContext(
-  chatClientSource.slice(appendStart,appendEnd) + "\n({persistVoiceTranscript,handleVoiceEvent})",
+  chatClientSource.slice(appendStart,appendEnd) + "\n({persistVoiceTranscript,handleVoiceEvent,checkpointVoiceTranscript})",
   historyContext,
 );
 historyUi.handleVoiceEvent({type:"transcript.final",text:"请帮我总结今天的会议"});
@@ -669,6 +669,25 @@ assert.equal(voiceConversation.messages[4].content,"最后一个未被轮询捕�
 assert.equal(voiceConversation.messages[4].recoveryStatus,"voice_partial");
 assert.equal(historyState.voiceAssistantPersisted,false,
   "the persistence guard must reset after a completed turn before the next interruption");
+
+historyState.voiceActive = true;
+historyUi.handleVoiceEvent({type:"response.created"});
+historyUi.handleVoiceEvent({type:"response.text.delta",delta:"保存中的部分回复"});
+historyUi.checkpointVoiceTranscript();
+const checkpoint = voiceConversation.messages.at(-1);
+assert.equal(checkpoint.recoveryStatus,"voice_checkpoint");
+assert.equal(voiceConversation.messages.length,6);
+historyUi.handleVoiceEvent({type:"response.text.replace",text:"较新的部分回复"});
+historyUi.checkpointVoiceTranscript();
+assert.equal(voiceConversation.messages.at(-1).id,checkpoint.id);
+assert.equal(voiceConversation.messages.at(-1).content,"较新的部分回复");
+assert.equal(voiceConversation.messages.length,6);
+historyUi.handleVoiceEvent({type:"response.done",text:"最终语音回复"});
+assert.equal(voiceConversation.messages.at(-1).id,checkpoint.id);
+assert.equal(voiceConversation.messages.at(-1).content,"最终语音回复");
+assert.equal(voiceConversation.messages.at(-1).recoveryStatus,"");
+assert.equal(voiceConversation.messages.length,6);
+assert.match(buildVoiceContext({messages:[{role:"assistant",content:"partial",recoveryStatus:"voice_checkpoint"}]}),/未确认完整的语音转录/);
 
 const setVoiceUiStart = chatClientSource.indexOf("  function setVoiceUi(");
 const setVoiceUiEnd = chatClientSource.indexOf("  function appendVoiceTranscript(",setVoiceUiStart);

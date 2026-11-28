@@ -57,6 +57,7 @@
     voicePanelVisible: false,
     voiceAssistantLine: null,
     voiceAssistantPersisted: false,
+    voiceAssistantHistoryId: "",
     voiceAuthTimer: null,
     voiceConversationId: "",
   };
@@ -246,6 +247,7 @@
       $("voiceCameraButton").textContent = "开启摄像头";
       state.voiceAssistantLine = null;
       state.voiceAssistantPersisted = false;
+      state.voiceAssistantHistoryId = "";
       state.voiceClient = null;
       state.voiceConversationId = "";
       if (state.voiceAuthTimer !== null) window.clearInterval(state.voiceAuthTimer);
@@ -283,19 +285,31 @@
     if (!content) return false;
     let conversation = state.conversations.find(row => row.id === state.voiceConversationId) || null;
     if (!conversation) return false;
-    conversation.messages.push({
-      id:id(),
-      role,
-      content,
-      createdAt:new Date().toISOString(),
-      recoveryStatus:String(recoveryStatus || "").slice(0,40),
-    });
+    const status = String(recoveryStatus || "").slice(0,40);
+    const existing = role === "assistant" && state.voiceAssistantHistoryId
+      ? conversation.messages.find(row=>row.id === state.voiceAssistantHistoryId && row.role === "assistant")
+      : null;
+    if (existing) {
+      if (existing.content === content && existing.recoveryStatus === status) return true;
+      existing.content = content;
+      existing.recoveryStatus = status;
+    } else {
+      const message = {id:id(),role,content,createdAt:new Date().toISOString(),recoveryStatus:status};
+      conversation.messages.push(message);
+      if (role === "assistant") state.voiceAssistantHistoryId = message.id;
+    }
     conversation.messages = conversation.messages.slice(-MAX_MESSAGES);
     if (role === "user") autoTitle(conversation);
     conversation.updatedAt = new Date().toISOString();
     saveHistory();
     if (currentConversation()?.id === conversation.id) renderAll();
     return true;
+  }
+
+  function checkpointVoiceTranscript() {
+    if (!state.voiceActive || state.voiceAssistantPersisted || !state.voiceConversationId) return;
+    const text = String(state.voiceAssistantLine?.textContent || "").trim();
+    if (text) persistVoiceTranscript("assistant",text,"voice_checkpoint");
   }
 
   function handleVoiceEvent(payload) {
@@ -314,8 +328,11 @@
       // Start a fresh persistence boundary for each assistant turn. Keep the
       // completed turn's guard set until this event so session-close cleanup
       // cannot accidentally re-save the previous completed transcript.
+      // If a new response begins without a terminal frame, keep the
+      // preceding checkpoint separate from this new turn.
       state.voiceAssistantLine = null;
       state.voiceAssistantPersisted = false;
+      state.voiceAssistantHistoryId = "";
     } else if (payload.type === "transcript.final") {
       appendVoiceTranscript("user",payload.text);
       persistVoiceTranscript("user",payload.text);
@@ -348,6 +365,7 @@
       // session. Detach its partial line so the next response starts clean.
       state.voiceAssistantLine = null;
       state.voiceAssistantPersisted = false;
+      state.voiceAssistantHistoryId = "";
     } else if (payload.type === "response.done") {
       const finalText = String(payload.text || state.voiceAssistantLine?.textContent || "");
       if (!state.voiceAssistantLine && finalText) {
@@ -361,6 +379,7 @@
         state.voiceAssistantPersisted = persistVoiceTranscript("assistant",finalText);
       }
       state.voiceAssistantLine = null;
+      state.voiceAssistantHistoryId = "";
     } else if (payload.type === "input_video.frame.sent") {
       $("voiceStatus").textContent = payload.video_track_mode === "web_rtc" && payload.video_track === true
         ? "WebRTC 实时视频帧已送达 ChatGPT Voice"
@@ -399,7 +418,9 @@
       }
       content = String(content || "").replace(/\s+/g," ").trim();
       if (!content) continue;
-      const prefix = message.role === "user" ? "用户" : "助手";
+      const prefix = message.role === "user" ? "用户" :
+        ["voice_checkpoint","voice_partial"].includes(message.recoveryStatus)
+          ? "助手（未确认完整的语音转录）" : "助手";
       const available = Math.max(0,remaining - Array.from(prefix).length - 2);
       if (!available) break;
       const contentPoints = Array.from(content);
@@ -437,6 +458,7 @@
     state.voiceConversationId = voiceConversation.id;
     state.voiceAssistantLine = null;
     state.voiceAssistantPersisted = false;
+    state.voiceAssistantHistoryId = "";
     state.voicePanelVisible = true;
     $("voicePanel").classList.remove("hidden");
     $("voiceTranscript").replaceChildren();
@@ -4540,7 +4562,7 @@
       cancellation_requested: "正在确认停止", cancelled: "已取消", error: "请求失败",
       stalled: "请求停滞", auth_required: "需要重新登录", not_found: "请求记录不存在",
       recovery_unavailable: "暂时无法恢复，可稍后重试", recovery_timeout: "恢复超时",
-      recovery_failed: "恢复失败", recovery_error: "恢复连接异常", voice_partial: "语音中断 · 部分回复",
+      recovery_failed: "恢复失败", recovery_error: "恢复连接异常", voice_partial: "语音中断 · 部分回复", voice_checkpoint:"语音未确认完成 · 已保存转录",
       invalid_response: "恢复响应无效", request_mismatch: "请求身份不匹配",
       invalid_request: "请求记录无效", polling_stopped: "恢复已停止",
     };
@@ -5552,8 +5574,16 @@
   $("voiceStopButton").addEventListener("click", () => { void stopVoiceCall(); });
   $("voiceCameraButton").addEventListener("click", () => { void toggleVoiceCamera(); });
   $("voiceClearButton").addEventListener("click", () => {
-    $("voiceTranscript").replaceChildren();
-    state.voiceAssistantLine = null;
+    checkpointVoiceTranscript();
+    // Clear the display, not the in-progress transcription accumulator.
+    // Keep the current partial line until it has an authoritative terminal.
+    const line = state.voiceAssistantLine;
+    const activeRow = line?.parentElement;
+    if (state.voiceActive && activeRow) $("voiceTranscript").replaceChildren(activeRow);
+    else {
+      $("voiceTranscript").replaceChildren();
+      state.voiceAssistantLine = null;
+    }
   });
 
   $("newChatButton").addEventListener("click", createConversation);
@@ -5734,9 +5764,16 @@
   window.addEventListener("unhandledrejection", (event) => {
     recordClientDiagnostic("browser.unhandled_rejection", {phase: "promise", error_name: event.reason?.name || "UnhandledRejection"}, "error");
   });
-  window.addEventListener("pagehide", () => { void flushClientDiagnostics(true); });
+  window.addEventListener("pagehide", () => {
+    checkpointVoiceTranscript();
+    void flushClientDiagnostics(true);
+  });
+  window.setInterval(checkpointVoiceTranscript, 2000);
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") void flushClientDiagnostics(true);
+    if (document.visibilityState === "hidden") {
+      checkpointVoiceTranscript();
+      void flushClientDiagnostics(true);
+    }
     else if (state.user) {
       void loadModels();
       void retryInitialConversationSync();
@@ -5765,6 +5802,7 @@
     }
   }, 60_000);
   window.addEventListener("beforeunload", () => {
+    checkpointVoiceTranscript();
     void flushClientDiagnostics(true);
     if (state.voiceAuthTimer !== null) window.clearInterval(state.voiceAuthTimer);
     if (state.voiceClient) void state.voiceClient.stop();
