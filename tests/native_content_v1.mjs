@@ -1375,3 +1375,43 @@ currentRoot=new Element("DIV");
 const movedReply=await new Promise(resolve=>recaptureListener({...envelope,
   revision:2,interaction_id:"nc_2_1",action_id:"b".repeat(32),value:false}, {},resolve));
 assert.equal(movedReply.error,"native-interaction-reply-scope-changed");
+
+// Verified reply-only pixel capture. The original canvas context must not
+// be requested; copy the pixels into an isolated temporary 2D canvas.
+{
+  const png = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAGElEQVR4nAXBAQEAAAjDIG7/zhMWKafAA0LzBf5cKv1OAAAAAElFTkSuQmCC";
+  const originalCanvas = new Element("CANVAS");
+  originalCanvas.width=2; originalCanvas.height=2;
+  originalCanvas.getContext=()=>{throw new Error("original context must not be accessed");};
+  const canvasRoot=new Element("DIV",[originalCanvas]);
+  let tainted=false, blank=false;
+  const ctxCanvas={...ctx,
+    __CHAT2API_NATIVE_DOM_EVIDENCE_V1__:{replyRoots:()=>({
+      scope:"verified_reply_container",roots:[canvasRoot],
+    })},
+    document:{createElement:tag=>{
+      assert.equal(tag,"canvas");
+      return {getContext:()=>({
+        drawImage(source){assert.equal(source,originalCanvas);},
+        getImageData(){
+          if(tainted)throw new Error("SecurityError");
+          return {data:blank?new Uint8Array(16):new Uint8Array([255,0,0,255,255,255,255,255,255,255,255,255,255,255,255,255])};
+        },
+      }),toDataURL:()=>"data:image/png;base64,"+png};
+    }},
+  };
+  delete ctxCanvas.__CHAT2API_NATIVE_CONTENT_V1__;
+  runInNewContext(code,ctxCanvas);
+  const canvasApi=ctxCanvas.__CHAT2API_NATIVE_CONTENT_V1__;
+  const activeCanvas={requestId:"req_canvas_verified123",submitStartedAt:Date.now(),lastCandidateNode:canvasRoot};
+  const resultCanvas=canvasApi.snapshot(activeCanvas);
+  assert.equal(resultCanvas.root.children[0].children[0].tag,"canvas_raster");
+  assert.equal(resultCanvas.root.children[0].children[0].png,png);
+  assert.equal(activeCanvas.nativeCanvasOmitted,0);
+  tainted=true;
+  canvasApi.snapshot(activeCanvas);
+  assert.equal(activeCanvas.nativeCanvasOmitted,1);
+  tainted=false;blank=true;
+  canvasApi.snapshot(activeCanvas);
+  assert.equal(activeCanvas.nativeCanvasOmitted,1);
+}
