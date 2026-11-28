@@ -5460,7 +5460,7 @@
           // Retain the request-bound message so SSE/GET can hydrate its
           // images, controls or generated files instead of losing the turn.
           if (assistant.requestId) {
-            await refreshNativeSnapshot(assistant.requestId);
+            void refreshNativeSnapshot(assistant.requestId);
             if (!nativeSnapshotForMessage(assistant)) toast("文本为空，正在等待原生内容归档。");
           } else {
             conversation.messages = conversation.messages.filter((message) => message.id !== assistant.id);

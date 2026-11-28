@@ -55,6 +55,25 @@ PROBE = r"""(function(requestId,surface){
       ((["auto","scroll","hidden","clip"].includes(getComputedStyle(el).overflowX) && el.scrollWidth>el.clientWidth+2) ||
        (["auto","scroll","hidden","clip"].includes(getComputedStyle(el).overflowY) && el.scrollHeight>el.clientHeight+2))))
     return {ok:false,reason:"native-preview-scroll-clipped"};
+  // captureBeyondViewport cannot expose an inner scroll pane. Fail
+  // closed until scroll-and-stitch is implemented.
+  for(let ancestor=content.parentElement;ancestor && ancestor!==document.body && ancestor!==document.documentElement;ancestor=ancestor.parentElement){
+    const a=ancestor.getBoundingClientRect(), s=getComputedStyle(ancestor);
+    if((["auto","scroll","hidden","clip"].includes(s.overflowX) &&
+        (r.left<a.left-2 || r.right>a.right+2)) ||
+       (["auto","scroll","hidden","clip"].includes(s.overflowY) &&
+        (r.top<a.top-2 || r.bottom>a.bottom+2)))
+      return {ok:false,reason:"native-preview-ancestor-clipped"};
+  }
+  if(surface==="web-chat"){
+    if(r.left<0 || r.top<0 || r.right>innerWidth || r.bottom>innerHeight)
+      return {ok:false,reason:"web-chat-reply-not-fully-in-viewport"};
+    for(const fx of [0.02,0.5,0.98]) for(const fy of [0.02,0.5,0.98]){
+      const top=document.elementFromPoint(r.left+r.width*fx,r.top+r.height*fy);
+      if(!top || !content.contains(top))
+        return {ok:false,reason:"web-chat-reply-obscured"};
+    }
+  }
   const x=window.scrollX + r.left, y=window.scrollY + r.top;
   const images=[...node.querySelectorAll("img")];
   if(images.some(img=>!img.complete || img.naturalWidth<=0))
