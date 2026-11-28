@@ -868,8 +868,8 @@
     while (revisions.size > 8) revisions.delete(revisions.keys().next().value);
     nativeControlTargetsByRequest.set(active.requestId, revisions);
     nativeControlLatestRevision.set(active.requestId, revision);
-    if (scopedRoots?.length && (controlTargets.size || canvasRasters) && !images && !active.nativeGraphicsUnsupported) {
-      nativeControlCaptureContexts.set(active.requestId,{active,revision,roots:[...scopedRoots],root,canvasRasters});
+    if (scopedRoots?.length && (controlTargets.size || canvasRasters) && !active.nativeGraphicsUnsupported) {
+      nativeControlCaptureContexts.set(active.requestId,{active,revision,roots:[...scopedRoots],root,canvasRasters,imageCount:images});
     } else nativeControlCaptureContexts.delete(active.requestId);
     while (nativeControlTargetsByRequest.size > 24) {
       const oldest = nativeControlTargetsByRequest.keys().next().value;
@@ -1407,6 +1407,80 @@
     }
   }
 
+  // Read only the actual visible raster originals in the same verified
+  // reply. New bytes are bounded independently of canvas pixel previews.
+  async function interactionImageEvidence(active,context) {
+    const eligible=node=>{
+      if (!(node instanceof Element) || node.tagName?.toLowerCase()!=="img" ||
+          node.closest?.("form,nav,aside,footer,header,[role='dialog'],[role='menu'],[data-message-author-role='user']")) return false;
+      const box=node.getBoundingClientRect?.(),style=getComputedStyle(node);
+      return box && box.width>=40 && box.height>=40 && style.display!=="none" && style.visibility!=="hidden";
+    };
+    const images=[];
+    for(const root of context.roots){
+      for(const image of composedFind(root,eligible,5)){
+        if(!images.includes(image))images.push(image);
+        if(images.length>4)return null;
+      }
+    }
+    const digests=new Map(),media=[];
+    if(!images.length){active.nativeImageDigests=digests;return media;}
+    const prior=new Set(),stack=[context.root];
+    while(stack.length){
+      const node=stack.pop();
+      if(node?.tag==="img" && HASH_HEX.test(node.source_sha256||""))prior.add(node.source_sha256);
+      if(Array.isArray(node?.children))stack.push(...node.children);
+    }
+    const controller=typeof AbortController==="function"?new AbortController():null;
+    let timer, accepting=true,total=0;
+    const work=Promise.all(images.map(async image=>{
+      try{
+        const source=String(image.currentSrc || image.getAttribute?.("src") || "");
+        if(!source)return false;
+        let result;
+        if(/^https:\/\//i.test(source)){
+          result=await chrome.runtime.sendMessage({type:"chat2api.media.interaction-v1",url:source});
+        }else if(/^(blob:|data:image\/)/i.test(source) && globalThis.crypto?.subtle){
+          if(/^data:image\//i.test(source) && source.length>4*Math.ceil(MAX_IDENTITY_BYTES/3)+128)return false;
+          const response=await fetch(source,{credentials:"omit",redirect:"error",...(controller?{signal:controller.signal}:{})});
+          if(!response.ok || Number(response.headers.get("content-length")||0)>MAX_IDENTITY_BYTES)return false;
+          const blob=await response.blob();
+          const mime=blob.type.toLowerCase();
+          if(!IDENTITY_MIMES.has(mime) || !blob.size || blob.size>MAX_IDENTITY_BYTES)return false;
+          const bytes=new Uint8Array(await blob.arrayBuffer());
+          const hash=new Uint8Array(await crypto.subtle.digest("SHA-256",bytes));
+          result={ok:true,sha256:[...hash].map(x=>x.toString(16).padStart(2,"0")).join(""),bytes:bytes.length};
+          if(bytes.length<=256*1024 && globalThis.btoa){
+            const parts=[];
+            for(let i=0;i<bytes.length;i+=16384)parts.push(String.fromCharCode(...bytes.subarray(i,i+16384)));
+            result.mime=mime;result.base64=btoa(parts.join(""));
+          }
+        }
+        if(!accepting || !result?.ok || !HASH_HEX.test(result.sha256) || !image.isConnected ||
+            source!==String(image.currentSrc || image.getAttribute?.("src") || ""))return false;
+        digests.set(image,result.sha256);
+        if(!prior.has(result.sha256) && typeof result.base64==="string" && IDENTITY_MIMES.has(result.mime) &&
+            Number.isInteger(result.bytes) && result.bytes<=256*1024 &&
+            total+result.bytes<=384*1024 && !media.some(m=>m.sha256===result.sha256)){
+          total+=result.bytes;
+          media.push({sha256:result.sha256,mime:result.mime,base64:result.base64});
+        }
+        return true;
+      }catch(_){return false;}
+    }));
+    try{
+      const results=await Promise.race([work,new Promise(resolve=>{timer=setTimeout(()=>resolve(null),1800);})]);
+      accepting=false;
+      if(!results || results.some(ok=>!ok) || digests.size!==images.length)return null;
+      active.nativeImageDigests=digests;
+      return media;
+    }finally{
+      accepting=false;
+      if(timer!==undefined)clearTimeout(timer);
+      controller?.abort();
+    }
+  }
+
   async function recaptureAfterInteraction(message, response, context) {
     const requestId = String(message.request_id);
     const revision = Number(message.revision);
@@ -1421,28 +1495,25 @@
     const revisions = nativeControlTargetsByRequest.get(requestId);
     const fallbackTargets = revisions?.get(revision+1);
     const replay = {...context.active,nativeRevision:revision,nativeSentRevision:revision};
-    let tree;
-    try { tree = snapshot(replay); } catch (_) {}
-    const containsRaster = root => {
-      const stack = [root];
-      while (stack.length) {
-        const node=stack.pop();
-        if (node?.tag==="img") return true;
-        if (Array.isArray(node?.children)) stack.push(...node.children);
-      }
-      return false;
-    };
-    // A new raster cannot reuse the old archive's media_index. Until the
-    // media pipeline supports interaction revisions, fail closed on it.
-    if (!tree || tree.revision!==revision+1 || containsRaster(tree.root) ||
+    let tree,media=null;
+    try {
+      media=await interactionImageEvidence(replay,context);
+      const latest=globalThis.__CHAT2API_NATIVE_DOM_EVIDENCE_V1__?.replyRoots?.(context.active);
+      if(media!==null && Array.isArray(latest?.roots) && latest.roots.length===context.roots.length &&
+          latest.roots.every((root,index)=>root===context.roots[index] && root.isConnected) &&
+          nativeControlLatestRevision.get(requestId)===revision+1 &&
+          nativeControlCaptureContexts.get(requestId)===context) tree=snapshot(replay);
+    } catch (_) {}
+    if (!tree || tree.revision!==revision+1 || media===null ||
         replay.nativeGraphicsUnsupported ||
-        new TextEncoder().encode(JSON.stringify(tree)).length>768*1024) {
+        new TextEncoder().encode(JSON.stringify({snapshot:tree,media})).length>768*1024) {
       if (fallbackTargets) revisions?.set(revision+1,fallbackTargets);
       nativeControlLatestRevision.set(requestId,revision+1);
       nativeControlCaptureContexts.set(requestId,{...context,revision:revision+1});
       return;
     }
     response.snapshot=tree;
+    if(media.length)response.media=media;
     response.recapture_status="verified";
   }
 

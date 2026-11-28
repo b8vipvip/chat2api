@@ -18,6 +18,7 @@ from .admin_auth import same_origin_admin_request
 from .models import FileUploadRequest
 from .native_content_v1 import native_delivery_fingerprint, validate_native_snapshot
 from .native_snapshot_finality_v282 import native_interaction_digest
+from .native_dynamic_media_v1 import archive_interaction_images
 from .user_commerce import USER_SESSION_COOKIE
 
 
@@ -302,6 +303,7 @@ def install_web_chat_features_v1(app: Any) -> Any:
                 "error": str(message.get("error") or "")[:120],
                 "recapture_status": message.get("recapture_status"),
                 "snapshot": message.get("snapshot"),
+                "media": message.get("media",[]),
             })
 
     app.state.native_interaction_ack_receiver = receive_native_interaction_ack
@@ -564,6 +566,7 @@ def install_web_chat_features_v1(app: Any) -> Any:
                 raise HTTPException(status_code=409, detail="native snapshot changed during interaction; reload the conversation",
                                     headers=_PRIVATE_HEADERS)
             recaptured = acknowledgement.get("recapture_status") == "verified"
+            image_manifest = None
             if canvas_refresh and acknowledgement.get("recapture_status") == "unchanged":
                 return JSONResponse({"ok":True,"revision":revision,"persisted":True,"unchanged":True},
                                     headers=_PRIVATE_HEADERS)
@@ -572,23 +575,30 @@ def install_web_chat_features_v1(app: Any) -> Any:
             if recaptured:
                 try:
                     raw = acknowledgement.get("snapshot")
-                    if len(json.dumps(raw, ensure_ascii=False).encode("utf-8")) > 768 * 1024:
+                    media = acknowledgement.get("media",[])
+                    if len(json.dumps({"snapshot":raw,"media":media},ensure_ascii=False).encode("utf-8")) > 768 * 1024:
                         raise ValueError("interaction snapshot is too large")
                     updated = validate_native_snapshot(raw)
                     if updated["revision"] != revision + 1:
                         raise ValueError("interaction snapshot revision mismatch")
                     if canvas_refresh and canvas_count(updated["root"]) != canvas_count(stored["root"]):
                         raise ValueError("canvas refresh lost a verified raster")
-                    # Image indices are request archive bindings. A dynamic
-                    # recapture cannot invent or reorder those bindings.
-                    for root in (stored["root"], updated["root"]):
-                        stack = [root]
+                    # Validate every current image slot against exact archived
+                    # originals, and archive newly observed bytes first. Never
+                    # remap by ordinal, dimensions or an upstream source URL.
+                    def has_images(root):
+                        stack=[root]
                         while stack:
-                            node = stack.pop()
-                            if node.get("tag") == "img":
-                                raise ValueError("interaction raster recapture unsupported")
+                            node=stack.pop()
+                            if node.get("tag")=="img":
+                                return True
                             stack.extend(node.get("children") or [])
-                except (ValueError, TypeError, KeyError):
+                        return False
+                    if media or has_images(stored["root"]) or has_images(updated["root"]):
+                        image_manifest = await asyncio.to_thread(
+                            archive_interaction_images,request.app.state.media_archive,
+                            owner,request_id,updated,media)
+                except (ValueError, TypeError, KeyError, OSError, AttributeError):
                     raise HTTPException(status_code=409, detail="Worker action applied but recaptured DOM could not be validated",
                                         headers=_PRIVATE_HEADERS) from None
             else:
@@ -611,11 +621,14 @@ def install_web_chat_features_v1(app: Any) -> Any:
                             and type(previous.get("base_revision")) is int
                             and 1 <= previous["base_revision"] < revision):
                         base = previous["base_revision"]
+                        if not recaptured and isinstance(previous.get("image_manifest"),list):
+                            image_manifest = previous["image_manifest"]
                     await request.app.state.telemetry.update(request_id, {
                         "native_interaction_proof": {
                             "base_revision": base, "revision": revision + 1,
                             "sha256": native_interaction_digest(updated),
                             "recaptured": recaptured,
+                            **({"image_manifest":image_manifest} if image_manifest is not None else {}),
                         }
                     })
                 except (KeyError, ValueError, OSError):

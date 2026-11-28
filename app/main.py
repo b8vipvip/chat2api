@@ -58,7 +58,8 @@ from .native_content_v1 import (NativeContentStore, NativeChunkAssembler, native
                                 native_public_v1_tree)
 from .native_dom_evidence_v1 import NativeDomEvidenceStore
 from .native_capture_audit_v281 import capture_comparison
-from .native_snapshot_finality_v282 import native_snapshot_finality, native_terminal_view
+from .native_snapshot_finality_v282 import native_snapshot_finality, native_terminal_view, native_interaction_digest
+from .native_dynamic_media_v1 import interaction_image_projection
 from .media_public_origin_v187 import effective_media_base_url, media_base_for_request
 from .response_history_media_v188 import history_safe_response_text
 from .responses_multimodal_input_v183 import (
@@ -973,6 +974,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                            "height":media.get("height"),
                                            "sha256":media.get("sha256")})
                     break
+        # Only an exact server-committed successor may replace the original
+        # media slot inventory. Keep canonical response_media and Mode 2
+        # output immutable; interaction-only URLs are same-origin routes.
+        proof = row.get("native_interaction_proof")
+        if (preserve_native_tree and isinstance(proof,dict)
+                and proof.get("revision")==snapshot.get("revision")
+                and proof.get("sha256")==native_interaction_digest(snapshot)
+                and "image_manifest" in proof):
+            try:
+                assets,asset_metadata = await asyncio.to_thread(
+                    interaction_image_projection,media_archive,owner,request_id,snapshot,proof["image_manifest"])
+            except (ValueError,KeyError,OSError,sqlite3.Error):
+                assets,asset_metadata = [],[]
         # Files are derived only from this request's archived final reply.
         # Never forward unverified model-provided or upstream temporary URLs.
         files = []

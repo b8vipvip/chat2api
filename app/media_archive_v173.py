@@ -398,8 +398,22 @@ class MediaArchive:
             "backend": row["backend"], "sha256": row["sha256"], "_reused": True,
         }
 
+    def request_image_inventory(self, owner: str, request_id: str, hashes: set[str]) -> dict:
+        """Exact request/owner-scoped original-image metadata; never search by hash globally."""
+        if not hashes or len(hashes)>40:
+            return {}
+        with self._db() as conn:
+            rows = conn.execute("SELECT id,token,sha256,width,height,mime,size FROM media "
+                                "WHERE owner=? AND request_id=? AND sha256 IN ("+
+                                ",".join("?" for _ in hashes)+") ORDER BY created_at DESC,id DESC",
+                                (owner,request_id,*sorted(hashes))).fetchall()
+        result = {}
+        for row in rows:
+            result.setdefault(row["sha256"],dict(row))
+        return result
+
     def store_image(self, raw: bytes, mime: str, owner: str, request_id: str,
-                    *, stop=None):
+                    *, stop=None, max_request_images: int | None = None):
         width, height, preview = self._render_thumbnail(raw, mime)
         cfg = self._config()
         if not cfg["auto_archive"]:
@@ -447,6 +461,10 @@ class MediaArchive:
                     (owner, request_id, mime, len(raw), digest),
                 ).fetchone()
                 if previous is None:
+                    if max_request_images is not None and conn.execute(
+                        "SELECT COUNT(*) FROM media WHERE owner=? AND request_id=?", (owner,request_id)
+                    ).fetchone()[0]>=max_request_images:
+                        raise ValueError("Request media archive limit reached")
                     conn.execute("""INSERT INTO media
                         (id, token, owner, request_id, mime, size, width, height,
                          backend, object_key, thumb_key, created_at, sha256)

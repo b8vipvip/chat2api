@@ -297,6 +297,7 @@
       ...(result?.ok===true && result?.recapture_status ? {
         recapture_status:result.recapture_status,
         ...(result.snapshot ? {snapshot:result.snapshot} : {}),
+        ...(Array.isArray(result.media) && result.media.length ? {media:result.media} : {}),
       } : {}),
     });
     return result;
