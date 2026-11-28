@@ -165,10 +165,17 @@ a{color:inherit}
 .native-rich-root{width:100%;min-width:0;max-width:100%;color:var(--text);overflow-x:auto;overflow-wrap:anywhere;line-height:1.55}
 .native-rich-root img{max-width:100%;height:auto;object-fit:contain}
 .native-rich-root svg{max-width:100%;height:auto;overflow:visible}
-.native-table-scroll{display:block;width:100%;min-width:0;max-width:100%;overflow-x:auto;margin:12px 0 16px}
-.native-rich-root .native-table-scroll table{width:100%;margin:0;border-collapse:collapse}
-.native-rich-root th,.native-rich-root td{border:1px solid var(--line);overflow-wrap:anywhere}
-.native-rich-root th{background:var(--panel);color:var(--text)}
+.native-prose-flow{min-width:0;max-width:100%}
+.native-rich-root .native-table-shell{display:block;width:100%;min-width:0;max-width:100%;height:auto;margin:0;padding:0;box-sizing:border-box}
+.native-table-scroll{display:block;width:100%;min-width:0;max-width:100%;overflow-x:auto;margin:16px 0}
+.native-rich-root .native-table-scroll table{width:100%;min-width:0;max-width:none;margin:0;border:0;border-collapse:collapse;table-layout:auto;font-size:14px;line-height:1.45}
+.native-rich-root .native-table-scroll th,.native-rich-root .native-table-scroll td{padding:8px;border:0;border-bottom:1px solid var(--line);overflow-wrap:anywhere;white-space:normal;text-align:start;vertical-align:top}
+.native-rich-root .native-table-scroll th:first-child,.native-rich-root .native-table-scroll td:first-child{padding-left:0}
+.native-rich-root .native-table-scroll th:last-child,.native-rich-root .native-table-scroll td:last-child{padding-right:0}
+.native-rich-root .native-table-scroll th{background:transparent;color:var(--text);font-weight:600}
+.native-rich-root .native-table-scroll tr:last-child td{border-bottom:0}
+.native-rich-root .native-table-scroll :is(th,td) p{margin:0;min-width:0;max-width:100%;height:auto}
+.native-rich-root .native-table-scroll :is(th,td) :is(span,strong,em,a){max-width:100%}
 .native-rich-root button{color:var(--text)}
 .native-rich-root .native-tab-control,.native-rich-root .native-toggle-control{max-width:100%;padding:5px 9px;border:1px solid var(--line);border-radius:7px;background:var(--panel);color:var(--text);cursor:pointer}
 .native-rich-root .native-tab-control[aria-selected="true"],.native-rich-root .native-toggle-control[aria-pressed="true"]{border-color:var(--accent);background:var(--plugin-active-bg);color:var(--plugin-active-text)}
