@@ -808,13 +808,27 @@ def test_generated_library_pagination_and_session_download_are_owner_scoped(tmp_
         assert "attachment" in download.headers["content-disposition"]
         assert download.headers["cache-control"] == "private, no-store"
         assert client.get(f"/api/user/chat/generated-files/{foreign['id']}/download").status_code == 404
+        conversation = _conversation("c2a_generated_api_ref")
+        conversation["messages"][1]["content"] = f"[file](/api/user/chat/generated-files/{first['id']}/download)"
+        owner_id = app.state.user_accounts.owner_for_key(owner_key)
+        assert owner_id
+        store = app.state.web_chat_conversations
+        assert store.upsert(owner_id, conversation, 0)[0]
+        rows = client.get(library, params={"scope": "generated"}).json()["data"]
+        assert next(row for row in rows if row["id"] == first["id"])["reference_count"] == 1
+        admin_url = f"/api/admin/media-storage/generated-files/{first['id']}"
+        assert client.delete(admin_url, headers={"Authorization": "Bearer generated-library-master-key"}).status_code == 409
+        assert client.get(url).status_code == 200
+        assert store.delete(owner_id, conversation["id"], 1)[0]
+        assert client.delete(admin_url, headers={"Authorization": "Bearer generated-library-master-key"}).status_code == 200
+        assert client.get(url).status_code == 404
         client.cookies.clear()
         assert client.get(url).status_code == 401
         assert client.post("/api/user/register", json={
             "email": "generated-library-other@example.test", "password": "generated-library-password",
         }).status_code == 200
         assert client.get(library, params={"scope": "generated"}).json()["data"] == []
-        assert client.get(url).status_code == 404
+        assert client.get(f"/api/user/chat/generated-files/{second['id']}/download").status_code == 404
 
 
 def test_generated_references_count_by_request_and_link_and_backfill(tmp_path: Path):
