@@ -365,6 +365,12 @@ def install_model_entitlements(app: FastAPI) -> FastAPI:
                 + list(shared_decision.get("matched_rules") or []),
         }
 
+    # The Web Chat administrator projection can contain model choices absent
+    # from the live registry (e.g. observed-only entries). Expose the same
+    # decision function, not a second policy evaluator or an inferred allow
+    # based on missing catalog metadata.
+    app.state.web_chat_model_entitlement_decision = _decision_with_shared_key
+
     base_catalog = registry.model_catalog
 
     def model_catalog_with_entitlements(online_only: bool = True) -> list[dict[str, Any]]:

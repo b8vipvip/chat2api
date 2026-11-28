@@ -3589,7 +3589,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 status_code=403, detail="Same-origin request required",
                 headers={"Cache-Control": "private, no-store", "Vary": "Cookie"},
             )
-        from .web_chat_identity_v1 import resolve_web_chat_principal
+        from .web_chat_identity_v1 import resolve_web_chat_principal, web_chat_model_decision
 
         user, principal = await resolve_web_chat_principal(request, x_chat2api_user_key_id)
         # Web Chat is a text/vision conversation surface. A stale browser or
@@ -3602,6 +3602,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=422,
                 detail="Web Chat 文本聊天不支持该模型，请刷新页面以重新同步可用文本模型",
+                headers={"Cache-Control": "private, no-store", "Vary": "Cookie"},
+            )
+        decision = web_chat_model_decision(request.app, principal, body.model)
+        if decision.get("allowed") is not True:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "model_not_entitled",
+                    "message": "当前账户或服务端统一 API Key 不允许使用该模型，请刷新模型目录",
+                    "reason": decision.get("reason"),
+                    "model": decision.get("model"),
+                },
                 headers={"Cache-Control": "private, no-store", "Vary": "Cookie"},
             )
         request.scope["chat2api_mode1_web_chat"] = True
