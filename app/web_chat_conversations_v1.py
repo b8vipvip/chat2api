@@ -582,7 +582,32 @@ class WebChatConversationStoreV1:
                     "WHERE user_id=? AND conversation_id=? AND message_id=?", key,
                 )
             granted = False
-            if operation == "claim" and not row:
+            resumed_checkpoint = None
+            if operation == "takeover" and row and state == "interrupted" and float(row["expires_at"]) > 0 and holder != row["holder"]:
+                # Only an expired lease is recoverable. An explicit stop or
+                # interrupted release zeroes expires_at and is never resumed.
+                stored = connection.execute(
+                    "SELECT payload FROM web_chat_conversations WHERE user_id=? AND conversation_id=? AND deleted=0",
+                    key[:2]).fetchone()
+                saved = connection.execute(
+                    "SELECT payload FROM web_chat_plugin_checkpoints WHERE user_id=? AND conversation_id=? AND message_id=?",
+                    key).fetchone()
+                pending = stored and any(
+                    isinstance(message, dict) and message.get("id") == message_id
+                    and message.get("role") == "assistant" and message.get("pending") is True
+                    and message.get("recoveryStatus") == "tool_planning"
+                    for message in json.loads(stored["payload"]).get("messages", []))
+                active = connection.execute(
+                    "SELECT COUNT(*) FROM web_chat_plugin_tasks WHERE user_id=? AND state='running' AND expires_at>?",
+                    (user_id, now)).fetchone()[0]
+                if saved and pending and active < 20:
+                    resumed_checkpoint = json.loads(saved["payload"])
+                    connection.execute(
+                        "UPDATE web_chat_plugin_tasks SET holder=?,state='running',expires_at=? "
+                        "WHERE user_id=? AND conversation_id=? AND message_id=?",
+                        (holder, now + 180, *key))
+                    state, granted = "running", True
+            elif operation == "claim" and not row:
                 # Bound orphan evidence from failed conversation uploads.
                 # Live conversations retain evidence until deleted.
                 connection.execute("""
@@ -638,6 +663,8 @@ class WebChatConversationStoreV1:
                         "WHERE user_id=? AND conversation_id=? AND message_id=?", (state, *key),
                     )
             result = {"state": state, "granted": granted}
+            if resumed_checkpoint is not None:
+                result["checkpoint"] = resumed_checkpoint
             if operation == "status" and state != "running":
                 saved = connection.execute(
                     "SELECT payload FROM web_chat_plugin_checkpoints "
@@ -1141,7 +1168,7 @@ def install_web_chat_conversations_v1(app: FastAPI) -> None:
             cid, mid = body["conversation_id"], body["message_id"]
             operation, holder = body["operation"], body.get("holder", "")
             if (not _CONVERSATION_ID_RE.fullmatch(cid) or not _MESSAGE_ID_RE.fullmatch(mid)
-                    or operation not in {"claim", "renew", "completed", "interrupted", "status", "checkpoint"}
+                    or operation not in {"claim", "renew", "completed", "interrupted", "status", "checkpoint", "takeover"}
                     or (operation != "status" and not _MESSAGE_ID_RE.fullmatch(holder))):
                 raise ValueError("invalid task")
             checkpoint = _normalize_plugin_checkpoint(body.get("checkpoint")) if operation == "checkpoint" else None
