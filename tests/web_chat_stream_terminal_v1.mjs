@@ -719,3 +719,47 @@ test("a failed plugin planning round preserves evidence but unblocks the convers
   assert.equal(result.status,"error");
   assert.match(result.replies[0],/已保留取得的插件查询证据/);
 });
+
+
+test("replay callbacks deliver new events before advancing the cursor", () => {
+  const assistant={id:"message-1",requestId:"req_replay_1234",content:"",lastEventId:0};
+  const conversation={id:"conversation-1",messages:[assistant]};
+  let handlers;
+  const ctx=vm.createContext({
+    window:{Chat2APIStreamRecoveryV1:{create:options=>{handlers=options;return {};}}},
+    consumeSseFrame:(frame,row)=>{
+      const eventId=Number(frame.split("\n")[0].slice(4));
+      if(eventId<=row.lastEventId)return false;
+      row.lastEventId=eventId;
+      row.content+=JSON.parse(frame.split("\n")[2].slice(6)).delta;
+      return false;
+    },
+    saveHistory(){},currentConversation:()=>conversation,renderMessages(){},
+  });
+  const start=source.indexOf("  function makeRecoveryController(");
+  const end=source.indexOf("  async function recoverPendingMessage(",start);
+  vm.runInContext(source.slice(start,end)+"\nmakeRecoveryController",ctx)(conversation,assistant);
+  const event={request_id:assistant.requestId,assistant_message_id:assistant.id,id:4,event:"delivery.delta",data:{delta:"answer"}};
+  handlers.onEvent(event);
+  handlers.onEvent(event);
+  assert.equal(assistant.content,"answer");
+  assert.equal(assistant.lastEventId,4);
+});
+
+test("a terminal replay marker without a retrievable final snapshot stays recoverable",async()=>{
+  const assistant={id:"message-1",requestId:"req_replay_1234",content:"partial",pending:true,lastEventId:4};
+  const conversation={id:"conversation-1",messages:[assistant]};
+  const ctx=vm.createContext({state:{recoveryInFlight:new Set()},currentConversation:()=>conversation,
+    saveHistory(){},renderMessages(){},resizeComposer(){},
+  });
+  const start=source.indexOf("  async function recoverPendingMessage(");
+  const end=source.indexOf("  function assistantMessageForRequest(",start);
+  const run=vm.runInContext(source.slice(start,end)+"\nrecoverPendingMessage",ctx);
+  const result=await run(conversation,assistant,{
+    replay:async()=>({status:"completed",terminal:true}),
+    resume:async()=>({status:"recovery_timeout",terminal:false}),
+  });
+  assert.equal(result.status,"recovery_unavailable");
+  assert.equal(assistant.pending,true);
+  assert.equal(assistant.content,"partial");
+});

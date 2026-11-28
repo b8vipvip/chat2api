@@ -812,7 +812,7 @@
       };
       const references = normalizeToolReferences(item.references);
       if (references.length) normalized.references = references;
-      if (typeof item.resultPreview === "string" && item.resultPreview.length <= 2000) normalized.resultPreview = item.resultPreview;
+      if (typeof item.resultPreview === "string" && item.resultPreview.length <= 6000) normalized.resultPreview = item.resultPreview;
       return normalized;
     }).filter(Boolean);
   }
@@ -4524,10 +4524,8 @@
       onEvent(item) {
         if (!item || item.request_id !== assistant.requestId
             || item.assistant_message_id !== assistant.id) return;
-        const idValue = Number(item.id || 0);
-        if (Number.isSafeInteger(idValue) && idValue > Number(assistant.lastEventId || 0)) {
-          assistant.lastEventId = idValue;
-        }
+        // consumeSseFrame owns validation and cursor advancement. Setting
+        // the cursor here first causes every new replay event to be ignored.
         const frame = [
           "id: " + String(item.id || 0),
           "event: " + String(item.event || "message"),
@@ -4572,7 +4570,12 @@
           // cannot leave an empty assistant message marked as completed.
           if (replay.status === "completed" && typeof replay.response_text !== "string") {
             const snapshot = await controller.resume(record);
-            if (snapshot?.terminal === true) result = snapshot;
+            // A marker alone is not an authoritative answer. If the final
+            // snapshot is unavailable, retain the original pending record
+            // and let another recovery attempt reconcile it.
+            result = snapshot?.terminal === true ? snapshot : {
+              status:"recovery_unavailable",terminal:false,active:false,
+            };
           }
         }
       }

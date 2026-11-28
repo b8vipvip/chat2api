@@ -158,7 +158,7 @@ def _normalize_tool_events(value: Any, role: str) -> list[dict[str, Any]]:
             "toolName": tool_name, "callId": call_id, "resultId": result_id,
             "status": status, "arguments": arguments, "output": output,
         }
-        preview = _bounded_string(item.get("resultPreview", ""), "tool result preview", 2000)
+        preview = _bounded_string(item.get("resultPreview", ""), "tool result preview", 6000)
         if preview:
             normalized["resultPreview"] = preview
         references = normalize_tool_references(item.get("references"))

@@ -138,7 +138,8 @@ def test_web_chat_conversation_api_auth_ownership_sync_and_conflicts(tmp_path: P
             "resultId": "result-123", "status": "completed",
             "arguments": '{"query":"Mode 1"}',
             "output": "Found two relevant pages.",
-            "resultPreview": '{"tool":"github.list_issues","results":[{"number":42}]}',
+            "resultPreview": json.dumps({"tool":"github.list_pull_review_threads",
+                "results":[{"thread_id":"PRRT_42","comments_next_cursor":"x"*3000}]}),
             "references": [{
                 "id": "turn0search0",
                 "url": "https://docs.python.org/3/library/",
