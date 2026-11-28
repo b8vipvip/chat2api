@@ -426,3 +426,39 @@ acknowledge({ok:true,persisted:true});
 await firstSelection;
 assert.equal(siblings[1].attributes["aria-selected"],"true");
 assert.equal(siblings[2].attributes["aria-selected"],"false");
+
+ 
+// A light Worker snapshot must be readable in either Web Chat theme without
+// discarding the saved snapshot, graphic colors, or control sizing.
+const themeSnapshot = {
+  version:1, revision:9, finality:"verified-final", assets:[], files:[],
+  root:{tag:"div",style:{color:"rgb(13, 13, 13)",backgroundColor:"#ffffff",width:"1100px",marginLeft:"360px"},children:[
+    {tag:"p",text:"主题回归",style:{color:"#111111",width:"1000px",height:"40px"}},
+    {tag:"div",style:{display:"block",width:"980px",marginLeft:"350px"},children:[
+      {tag:"table",style:{width:"950px",borderColor:"#000000"},children:[
+        {tag:"tbody",children:[{tag:"tr",children:[{tag:"td",text:"表格内容",style:{color:"#000000",width:"480px",whiteSpace:"nowrap"}}]}]}
+      ]}
+    ]},
+    {tag:"svg",attrs:{viewBox:"0 0 10 10"},children:[{tag:"path",attrs:{d:"M0 0 L10 10",stroke:"#123456"}}]},
+    {tag:"button",style:{color:"#111111",backgroundColor:"#ffffff"},control:{kind:"copy",label:"复制",text:"test"}}
+  ]}
+};
+const themeHost=new FakeElement("div");
+const beforeThemeRender=JSON.stringify(themeSnapshot);
+assert(renderer.renderNativeSnapshot(themeHost,themeSnapshot));
+const themedRoot=themeHost.childNodes[1].childNodes[0];
+assert.equal(themedRoot.style.color,undefined);
+assert.equal(themedRoot.style.backgroundColor,undefined);
+assert.equal(themedRoot.style.width,undefined);
+assert.equal(themedRoot.style.marginLeft,undefined);
+assert.equal(themedRoot.childNodes[0].style.height,undefined);
+assert.equal(themedRoot.childNodes[0].style.color,undefined);
+const tableContainer=themedRoot.childNodes[1];
+assert.equal(tableContainer.style.marginLeft,undefined);
+assert.equal(tableContainer.childNodes[0].className,"native-table-scroll");
+assert.equal(findTag(themeHost,"table").style.width,undefined);
+assert.equal(findTag(themeHost,"td").style.whiteSpace,undefined);
+assert.equal(findTag(themeHost,"td").style.color,undefined);
+assert.equal(findTag(themeHost,"path").attributes.stroke,"#123456");
+assert.equal(findTag(themeHost,"button").style.backgroundColor,undefined);
+assert.equal(JSON.stringify(themeSnapshot),beforeThemeRender,"rendering must not mutate archive evidence");
