@@ -809,3 +809,35 @@ test("saved plugin evidence continuation accepts only completed bounded GitHub p
   assert.equal(build({...message,pending:true}).length,0);
   assert.equal(build({...message,recoveryStatus:"completed"}).length,0);
 });
+
+test("a peer waits for an initial plugin claim before terminalizing a missing lease", async () => {
+  let now = 1000, taskState = "missing", saved = 0;
+  const message = {id:"message",role:"assistant",pending:true,recoveryStatus:"tool_planning",toolEvents:[]};
+  const conversation = {id:"conversation",messages:[message]};
+  const state = {user:{user_id:"owner"},remoteSyncReady:true,conversations:[conversation]};
+  const context = vm.createContext({
+    state, Date:{now:()=>now},
+    pluginTaskOperation:async()=>({state:taskState}),
+    saveHistory:()=>{saved+=1;}, renderAll:()=>{},
+  });
+  const start = source.indexOf("  async function reconcileInterruptedPluginTasks(");
+  const end = source.indexOf("  function resumePendingMessages(",start);
+  assert.ok(start >= 0 && end > start);
+  const reconcile = vm.runInContext(source.slice(start,end)+"\nreconcileInterruptedPluginTasks",context);
+  await reconcile();
+  assert.equal(message.pending,true);
+  now += 25000;
+  await reconcile();
+  assert.equal(message.pending,true);
+  taskState = "running";
+  await reconcile();
+  now += 40000;
+  taskState = "missing";
+  await reconcile();
+  assert.equal(message.pending,true);
+  now += 30000;
+  await reconcile();
+  assert.equal(message.pending,false);
+  assert.equal(message.recoveryStatus,"error");
+  assert.equal(saved,1);
+});
