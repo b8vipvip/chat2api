@@ -763,3 +763,22 @@ test("a terminal replay marker without a retrievable final snapshot stays recove
   assert.equal(assistant.pending,true);
   assert.equal(assistant.content,"partial");
 });
+
+
+test("saved plugin evidence continuation accepts only completed bounded GitHub previews",()=>{
+  const ctx=vm.createContext({normalizeToolReferences:()=>[]});
+  const start=source.indexOf("  function buildPluginResumeEvidence(");
+  const end=source.indexOf("  async function sendMessage(",start);
+  const build=vm.runInContext(source.slice(start,end)+"\nbuildPluginResumeEvidence",ctx);
+  const preview=JSON.stringify({tool:"github.list_issues",results:[{number:42}]});
+  const message={role:"assistant",pending:false,recoveryStatus:"error",toolEvents:[
+    {status:"completed",resultPreview:preview,arguments:"{}"},
+    {status:"running",resultPreview:preview},
+    {status:"completed",resultPreview:"not JSON"},
+    {status:"completed",resultPreview:JSON.stringify({tool:"gmail.get_message",results:[{}]})},
+  ]};
+  assert.equal(build(message).length,1);
+  assert.equal(build(message)[0].preview.results[0].number,42);
+  assert.equal(build({...message,pending:true}).length,0);
+  assert.equal(build({...message,recoveryStatus:"completed"}).length,0);
+});
