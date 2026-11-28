@@ -95,6 +95,7 @@
         <div class="utility-page">
           <div class="utility-page-header"><h1>资料库</h1><p>汇总当前账户全部已保存会话引用的图片和文档附件，不限于最近对话。</p></div>
           <p id="libraryStatus" role="status" aria-live="polite"></p>
+          <label>文件范围 <select id="libraryScope" aria-label="文件范围"><option value="referenced">会话已引用</option><option value="unreferenced">未引用（上传超过 24 小时）</option></select></label>
           <button class="attach-button" id="libraryRefreshButton" type="button">刷新资料库</button>
           <div class="utility-list" id="libraryList"><div class="utility-empty">正在整理资料…</div></div>
           <button class="attach-button" id="libraryMoreButton" type="button" hidden>加载更多</button>

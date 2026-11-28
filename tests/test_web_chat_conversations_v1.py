@@ -531,6 +531,11 @@ def test_conversation_attachment_references_protect_files_until_last_cross_devic
         assert deleted_first.json()["conversation"]["deleted"] is True
         assert store.file_reference_count(image_id) == 0
         assert store.file_reference_count(document_id) == 1
+        assert client.get("/api/user/chat/library?scope=unreferenced").json()["data"] == []
+        app.state.file_store.get(image_id).created_at = "2020-01-01T00:00:00+00:00"
+        app.state.file_store.get(document_id).created_at = "2020-01-01T00:00:00+00:00"
+        unused = client.get("/api/user/chat/library?scope=unreferenced").json()["data"]
+        assert [(item["id"], item["reference_count"]) for item in unused] == [(image_id, 0)]
         remaining = client.get("/api/user/chat/library").json()["data"]
         assert [(item["id"], item["reference_count"]) for item in remaining] == [(document_id, 1)]
         synced = client.get("/api/user/chat/conversations")

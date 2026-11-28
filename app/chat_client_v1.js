@@ -14,6 +14,7 @@
     pluginCatalogLoaded: false,
     pluginCatalogError: "",
     libraryRows: [],
+    libraryScope: "referenced",
     libraryCursor: null,
     libraryLoading: false,
     libraryError: "",
@@ -3658,7 +3659,8 @@
 
   async function loadLibraryPage(reset = false) {
     const owner = String(state.user?.user_id || "");
-    if (!owner || state.libraryLoading || (!reset && !state.libraryCursor)) return;
+    if (!owner || state.libraryLoading || state.libraryDeleting || (!reset && !state.libraryCursor)) return;
+    const scope = state.libraryScope || "referenced";
     state.libraryLoading = true;
     state.libraryError = "";
     if (reset) {
@@ -3669,7 +3671,7 @@
     renderLibrary();
     try {
       const cursor = reset ? "" : state.libraryCursor;
-      const {response,result} = await fetchConversationMutation("/api/user/chat/library?limit=50" +
+      const {response,result} = await fetchConversationMutation("/api/user/chat/library?limit=50&scope=" + encodeURIComponent(scope) +
         (cursor ? "&after=" + encodeURIComponent(cursor) : ""), {
         credentials:"same-origin",headers:{"Accept":"application/json","X-Chat2API-User-ID":owner},
       });
@@ -3706,11 +3708,13 @@
       more.disabled = state.libraryLoading;
     }
     const refresh = $("libraryRefreshButton");
-    if (refresh) refresh.disabled = state.libraryLoading;
+    if (refresh) refresh.disabled = state.libraryLoading || Boolean(state.libraryDeleting);
+    const scope = $("libraryScope");
+    if (scope) scope.disabled = state.libraryLoading || Boolean(state.libraryDeleting);
     const seen = new Map();
     // Local cache is only a fallback when server loading has not succeeded.
     // After a successful load, the owner-scoped durable reference index wins.
-    if (!state.libraryLoaded) state.conversations.forEach(conversation => {
+    if (!state.libraryLoaded && state.libraryScope !== "unreferenced") state.conversations.forEach(conversation => {
       (conversation.messages || []).forEach(message => {
         messageFileAttachments(message).forEach(file => {
           if (!seen.has(file.file_id)) seen.set(file.file_id, {
@@ -3733,7 +3737,8 @@
       seen.set(row.id, {
         id:row.id,type:mime.startsWith("image/") ? "image" : "file",
         name:String(row.filename || "附件"),size:Number(row.bytes || 0),mime,
-        conversation:"引用于 " + Number(row.reference_count || 0) + " 个会话",
+        conversation:Number(row.reference_count || 0) > 0 ? "引用于 " + Number(row.reference_count) + " 个会话" : "未引用 · 上传超过 24 小时",
+        removable:state.libraryScope === "unreferenced" && row.reference_count === 0,
         createdAt:String(row.created_at || ""),
       });
     }
@@ -3769,8 +3774,42 @@
       open.className = "library-item-open";
       open.textContent = "下载 ↗";
       card.append(icon, meta, open);
-      root.appendChild(card);
+      if (item.removable) {
+        const wrapper = document.createElement("div");
+        wrapper.appendChild(card);
+        const remove = document.createElement("button");
+        remove.className = "attach-button";
+        remove.type = "button";
+        remove.textContent = "删除未引用附件";
+        remove.disabled = state.libraryLoading || Boolean(state.libraryDeleting);
+        remove.addEventListener("click", () => { void deleteUnusedLibraryFile(item.id); });
+        wrapper.appendChild(remove);
+        root.appendChild(wrapper);
+      } else root.appendChild(card);
     });
+  }
+
+  async function deleteUnusedLibraryFile(fileId) {
+    const owner = String(state.user?.user_id || "");
+    if (!owner || state.libraryScope !== "unreferenced" || state.libraryLoading || state.libraryDeleting ||
+        !state.libraryRows.some(row=>row.id === fileId && row.reference_count === 0)) return;
+    if (!window.confirm("永久删除此未引用附件？此操作无法撤销。")) return;
+    state.libraryDeleting = fileId;
+    renderLibrary();
+    try {
+      const {response,result} = await fetchConversationMutation("/api/user/files/" + encodeURIComponent(fileId), {
+        method:"DELETE",credentials:"same-origin",
+        headers:{"Accept":"application/json","X-Chat2API-User-ID":owner},
+      });
+      if (String(state.user?.user_id || "") !== owner) return;
+      if (!response.ok) throw new Error(result.detail || "附件删除失败");
+      toast("删除请求已完成，正在重新同步资料库。");
+    } catch (error) {
+      if (String(state.user?.user_id || "") === owner) toast(String(error?.message || "附件删除失败"));
+    } finally {
+      state.libraryDeleting = "";
+      if (String(state.user?.user_id || "") === owner) void loadLibraryPage(true);
+    }
   }
 
   function renderAll() {
@@ -5532,6 +5571,10 @@
   });
   $("libraryButton").addEventListener("click", () => openSidebarPage("library"));
   $("libraryRefreshButton").addEventListener("click", () => { void loadLibraryPage(true); });
+  $("libraryScope").addEventListener("change", event => {
+    state.libraryScope = event.target.value === "unreferenced" ? "unreferenced" : "referenced";
+    void loadLibraryPage(true);
+  });
   $("libraryMoreButton").addEventListener("click", () => { void loadLibraryPage(); });
   $("sidebarCollapseButton").addEventListener("click", () => document.body.classList.toggle("sidebar-collapsed"));
   $("conversationSearch").addEventListener("input", onConversationSearchInput);

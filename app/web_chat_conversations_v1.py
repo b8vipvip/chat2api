@@ -916,12 +916,39 @@ def install_web_chat_conversations_v1(app: FastAPI) -> None:
         try:
             limit = int(request.query_params.get("limit") or "50")
             after = str(request.query_params.get("after") or "")
-            refs = store.list_file_references_for_user(user_id, after, limit)
+            scope = str(request.query_params.get("scope") or "referenced")
+            if scope not in {"referenced", "unreferenced"} or not 1 <= limit <= 100 or (after and not _FILE_ID_RE.fullmatch(after)):
+                raise ValueError("invalid library page")
+            refs = store.list_file_references_for_user(user_id, after, limit) if scope == "referenced" else []
         except (TypeError, ValueError):
             raise HTTPException(status_code=422, detail="invalid library page", headers=_PRIVATE_HEADERS)
         file_store = getattr(request.app.state, "file_store", None)
         if file_store is None:
             raise HTTPException(status_code=503, detail="file service unavailable", headers=_PRIVATE_HEADERS)
+        if scope == "unreferenced":
+            # Do not expose newly uploaded drafts to cleanup actions. Only
+            # older, browser-originated attachments are eligible for listing.
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+            with file_store.lock:
+                referenced = store.referenced_file_ids()
+                candidates = []
+                for item in sorted(file_store.items.values(), key=lambda row: row.file_id):
+                    if (item.file_id <= after or item.file_id in referenced or item.source != "web_chat"
+                            or item.pending_delete or not accounts.owns_key(user_id, str(item.owner_key_id))):
+                        continue
+                    try:
+                        created = datetime.fromisoformat(item.created_at.replace("Z", "+00:00"))
+                        if created.tzinfo is None or created > cutoff:
+                            continue
+                    except (ValueError, TypeError, OverflowError):
+                        continue
+                    candidates.append(item)
+                    if len(candidates) > limit:
+                        break
+                return JSONResponse({
+                    "data": [{**item.public(), "reference_count": 0} for item in candidates[:limit]],
+                    "next_cursor": candidates[limit-1].file_id if len(candidates) > limit else None,
+                }, headers=_PRIVATE_HEADERS)
         data = []
         for ref in refs[:limit]:
             item = file_store.get(ref["file_id"])
