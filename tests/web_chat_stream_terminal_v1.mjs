@@ -841,3 +841,27 @@ test("a peer waits for an initial plugin claim before terminalizing a missing le
   assert.equal(message.recoveryStatus,"error");
   assert.equal(saved,1);
 });
+
+test("interrupted plugin recovery restores a server checkpoint missed by the debounced PUT", async () => {
+  const durable = {callId:"plugin-call",resultId:"plugin-result",status:"completed",
+    toolName:"GitHub",arguments:"{}",output:"done",resultPreview:'{"tool":"github.list_issues","results":[{"number":42}]}'};
+  const message = {id:"message",role:"assistant",pending:true,recoveryStatus:"tool_planning",
+    toolEvents:[{callId:"plugin-call",status:"running"}]};
+  const conversation = {id:"conversation",messages:[message]};
+  const state = {user:{user_id:"owner"},remoteSyncReady:true,conversations:[conversation]};
+  let saved = 0;
+  const context = vm.createContext({state,
+    pluginTaskOperation:async()=>({state:"interrupted",checkpoint:{rounds:1,tool_calls:1,tool_events:[durable]}}),
+    normalizeToolEvents:value=>value || [],normalizeToolReferences:value=>value || [],
+    saveHistory:()=>{saved+=1;},renderAll(){},
+  });
+  const start = source.indexOf("  async function reconcileInterruptedPluginTasks(");
+  const end = source.indexOf("  function resumePendingMessages(",start);
+  const reconcile = vm.runInContext(source.slice(start,end)+"\nreconcileInterruptedPluginTasks",context);
+  await reconcile();
+  assert.equal(message.pending,false);
+  assert.equal(message.toolEvents.length,1);
+  assert.equal(message.toolEvents[0].status,"completed");
+  assert.equal(message.toolEvents[0].resultPreview,durable.resultPreview);
+  assert.equal(saved,1);
+});
