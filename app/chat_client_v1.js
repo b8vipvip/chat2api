@@ -481,8 +481,17 @@
           if (state.voiceClient !== client || state.voiceStopping) throw new Error("语音启动已取消");
           if (ownerId && String(session.user?.user_id || "") === ownerId &&
               String(state.user?.user_id || "") === ownerId) return;
-        } catch {}
+        } catch (error) {
+          // A Broker/server restart can temporarily fail /me. Do not turn
+          // that transport outage into a logout that prevents reconnect.
+          if (state.voiceClient !== client || state.voiceStopping) throw new Error("语音启动已取消");
+          if (String(state.user?.user_id || "") === ownerId && error?.status !== 401 && error?.status !== 403)
+            throw error;
+        }
         if (state.voiceClient !== client || state.voiceStopping) throw new Error("语音启动已取消");
+        // An account switch is not permission to clear the new account.
+        if (state.user && String(state.user.user_id || "") !== ownerId)
+          throw new Error("语音账户已切换");
         state.user = null;
         $("sidebarAccount").hidden = true;
         state.voicePanelVisible = false;
@@ -568,12 +577,14 @@
 
   function scheduleVoiceReconnect(owner, conversationId, epoch, attempt) {
     cancelVoiceReconnect();
-    if (!owner || attempt > 3 || String(state.user?.user_id || "") !== owner ||
+    const backoff = [2000,5000,10000,20000,30000,45000];
+    if (!owner || !Number.isInteger(attempt) || attempt < 1 || attempt > backoff.length ||
+        String(state.user?.user_id || "") !== owner ||
         state.voiceStartEpoch !== epoch || currentConversation()?.id !== conversationId ||
         state.streaming || state.voiceActive || window.document?.visibilityState === "hidden") return;
     const ticket = {owner,conversationId,epoch,attempt,timer:null};
     state.voiceReconnectTicket = ticket;
-    $("voiceStatus").textContent = "语音已断开，正在尝试建立新通话（" + attempt + "/3）；摄像头不会自动恢复。";
+    $("voiceStatus").textContent = "语音已断开，正在尝试建立新通话（" + attempt + "/" + backoff.length + "）；摄像头不会自动恢复。";
     updateVoiceControls();
     ticket.timer = window.setTimeout(async () => {
       const current = () => state.voiceReconnectTicket === ticket &&
@@ -593,7 +604,7 @@
         if (state.voiceReconnectTicket === ticket) state.voiceReconnectTicket = null;
         updateVoiceControls();
       }
-    },[2000,5000,10000][attempt-1]);
+    },backoff[attempt-1]);
   }
 
   async function toggleVoiceCamera() {
