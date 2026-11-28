@@ -69,4 +69,4 @@ def test_fresh_install_validates_identity_against_the_current_enrollment():
 def test_runtime_marks_bootstrap_recovery_release():
     runtime = Path("app/runtime_contract.py").read_text(encoding="utf-8")
     assert _runtime_version(runtime) >= (0, 22, 7)
-    assert 'CHROME_BRIDGE_VERSION = "0.22.303"' in runtime
+    assert 'CHROME_BRIDGE_VERSION = "0.22.304"' in runtime
