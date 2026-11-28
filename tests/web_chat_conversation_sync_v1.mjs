@@ -622,3 +622,70 @@ test("failed initial history hydration retries once at a time and waits for an i
   await run();
   assert.equal(calls,2);
 });
+
+
+test("model selector rejects a catalog from another history identity and retries failed loads", async () => {
+  const state={user:{user_id:"owner"},webChatKeyId:"a",models:[],selectedModel:""};
+  let calls=0;
+  const ctx=vm.createContext({
+    state,currentConversation:()=>null,selectedKeyId:()=>state.webChatKeyId,
+    apiJson:async()=>{
+      calls++;
+      if(calls===2) throw Error("offline");
+      return {data:[{id:"default",capabilities:["text"]}]};
+    },
+    resizeComposer(){},setConnection(){},recordClientDiagnostic(){},
+  });
+  const start=source.indexOf("  function selectAvailableTextModel(");
+  const end=source.indexOf("  function exportConversation(",start);
+  const api=vm.runInContext("let modelCatalogLoadPromise=null;\n"+source.slice(start,end)+"\n({loadModels,selectAvailableTextModel})",ctx);
+  await api.loadModels();
+  assert.equal(state.selectedModel,"default");
+  state.webChatKeyId="b";
+  assert.equal(api.selectAvailableTextModel(null),"");
+  await api.loadModels();
+  assert.equal(state.modelCatalogLoadedAt,0);
+  assert.equal(state.selectedModel,"");
+  await api.loadModels();
+  assert.equal(calls,3);
+  assert.equal(state.selectedModel,"default");
+});
+
+
+test("search opening is rejected before hydration while generation is active", () => {
+  const assistant={id:"assistant",content:"live",pending:true};
+  const active={id:"active",messages:[assistant]};
+  const older={id:"old",messages:[]};
+  const state={conversations:[active],activeConversationId:active.id,streaming:true,
+    pendingConversationDeletes:new Set(),pendingImages:[],pendingFiles:[]};
+  let hydrations=0;
+  const ctx=vm.createContext({state,toast(){},
+    hydrateSearchConversation(){hydrations++;throw Error("must not hydrate");}
+  });
+  const start=source.indexOf("  function setActiveConversation(");
+  const end=source.indexOf("  function deleteConversation(",start);
+  const open=vm.runInContext(source.slice(start,end)+"\nsetActiveConversation",ctx);
+  open(older.id,older);
+  assert.equal(hydrations,0);
+  assert.equal(state.conversations[0],active);
+  assert.equal(active.messages[0],assistant);
+});
+
+test("search hydration does not replace live messages or evict the active conversation", () => {
+  const assistant={id:"assistant",content:"live",pending:true};
+  const active={id:"active",messages:[assistant],serverRevision:2};
+  const state={conversations:[active],activeConversationId:active.id,streaming:true,searchResults:[]};
+  let warnings=0;
+  const ctx=vm.createContext({state,MAX_CONVERSATIONS:1,toast(){warnings++;},
+    mergeConversation(){throw Error("live message must not be replaced");},
+    persistHistorySnapshot(){throw Error("live snapshot must not be promoted");}
+  });
+  const start=source.indexOf("  function hydrateSearchConversation(");
+  const end=source.indexOf("  async function searchConversationsOnServer(",start);
+  const hydrate=vm.runInContext(source.slice(start,end)+"\nhydrateSearchConversation",ctx);
+  assert.equal(hydrate({id:"active",serverRevision:3,messages:[]}),active);
+  assert.equal(active.messages[0],assistant);
+  assert.equal(hydrate({id:"older",messages:[]}),null);
+  assert.equal(state.conversations[0],active);
+  assert.equal(warnings,1);
+});

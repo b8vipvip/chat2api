@@ -1355,7 +1355,7 @@
     return conversation;
   }
 
-  function setActiveConversation(conversationId) {
+  function setActiveConversation(conversationId, searchRow = null) {
     if (state.pendingConversationDeletes.has(conversationId)) return;
     if (state.voiceActive) {
       toast("请先结束实时语音，再切换对话。");
@@ -1370,6 +1370,10 @@
       toast("请先发送或移除待发送附件，再切换对话。");
       return;
     }
+    // Do not hydrate (and potentially evict) a search result until the
+    // active generation/Voice/attachment switch guards have passed.
+    if (searchRow && !hydrateSearchConversation(searchRow)) return;
+    if (!state.conversations.some(row => row.id === conversationId)) return;
     state.activeConversationId = conversationId;
     state.sidebarPage = "";
     state.forceScrollToBottom = true;
@@ -1427,11 +1431,15 @@
   }
 
   function hydrateSearchConversation(row) {
+    const live = state.streaming || state.voiceActive || state.recoveryInFlight?.size ||
+      state.pendingImages?.length || state.pendingFiles?.length;
     const existing = state.conversations.find((item) => item.id === row.id);
     if (existing) {
       // Search responses are snapshots, not revision authority. A PUT may
       // have already acknowledged a newer revision since this search started.
-      if (Number(row.serverRevision || 0) >= Number(existing.serverRevision || 0)) {
+      // Replacing the messages array can orphan the live assistant object
+      // still held by SSE/Voice/recovery callbacks. Defer snapshot merging.
+      if (!live && Number(row.serverRevision || 0) >= Number(existing.serverRevision || 0)) {
         Object.assign(existing, mergeConversation(row, existing));
       }
       if (Array.isArray(state.searchResults)) {
@@ -1442,6 +1450,10 @@
     // Opening an older server-side search result promotes it into the local
     // recent window without mutating the server revision. A read must not race
     // a subsequent delete/rename with an unnecessary background PUT.
+    if (live) {
+      toast("请先结束当前生成、语音、恢复或附件操作，再操作较早的搜索结果。");
+      return null;
+    }
     const opened = {...row};
     state.conversations.unshift(opened);
     state.conversations = state.conversations.slice(0, MAX_CONVERSATIONS);
@@ -1546,12 +1558,11 @@
       open.textContent = conversation.title || "新对话";
       open.title = "打开对话；双击重命名";
       open.addEventListener("click", () => {
-        const selected = query ? hydrateSearchConversation(conversation) : conversation;
-        setActiveConversation(selected.id);
+        setActiveConversation(conversation.id, query ? conversation : null);
       });
       open.addEventListener("dblclick", () => {
         const selected = query ? hydrateSearchConversation(conversation) : conversation;
-        renameConversation(selected.id);
+        if (selected) renameConversation(selected.id);
       });
       const remove = document.createElement("button");
       remove.type = "button";
@@ -1561,7 +1572,7 @@
       remove.setAttribute("aria-label", "删除对话");
       remove.addEventListener("click", () => {
         const selected = query ? hydrateSearchConversation(conversation) : conversation;
-        deleteConversation(selected.id);
+        if (selected) deleteConversation(selected.id);
       });
       item.append(open, remove);
       root.appendChild(item);
@@ -3589,6 +3600,13 @@
   }
 
   function renderAll() {
+    // Delete/import/recovery can select another owner key without going
+    // through setActiveConversation. Refresh immediately instead of leaving
+    // the composer disabled until the next focus or periodic model refresh.
+    if (state.user && state.webChatKeyId && state.modelCatalogScope &&
+        state.modelCatalogScope !== JSON.stringify([String(state.user.user_id || ""), selectedKeyId()])) {
+      void loadModels();
+    }
     if (typeof updatePluginPickerButton === "function") updatePluginPickerButton();
     renderSidebar();
     syncSidebarNav();
@@ -4677,7 +4695,11 @@
   async function sendMessage(text) {
     if (state.voiceActive) { toast("请先结束实时语音，再发送普通聊天消息。"); return; }
     const requestModelId = selectAvailableTextModel(currentConversation());
-    if (!requestModelId) { toast("当前账户或服务端统一 API Key 没有可用模型。"); return; }
+    if (!requestModelId) {
+      void loadModels(true);
+      toast("当前账户或服务端统一 API Key 没有可用模型，正在重新同步模型目录。");
+      return;
+    }
     if (!selectedKeyHasScope("chat")) { toast("服务端统一 API Key 缺少 chat 权限。"); return; }
     const clean = String(text || "").trim();
     if (state.streaming) return;
@@ -4980,6 +5002,13 @@
   // may retain a retired model (or gpt-image from an older client), but must
   // never overwrite the active text route after a model refresh or switch.
   function selectAvailableTextModel(conversation = currentConversation()) {
+    // History hydration, delete and import can change the active identity
+    // without a click on the sidebar. Never use a previous key's model list.
+    if (state.modelCatalogScope && state.modelCatalogScope !==
+        JSON.stringify([String(state.user?.user_id || ""), selectedKeyId()])) {
+      state.selectedModel = "";
+      return "";
+    }
     const textRows = Array.isArray(state.models) ? state.models : [];
     const preferred = conversation?.model || state.selectedModel;
     const preferredRow = textRows.find(row => row.id === preferred) ||
@@ -5007,14 +5036,16 @@
     const flight = {scope,promise:null};
     modelCatalogLoadPromise = flight;
     flight.promise = (async () => {
-      let rows = [];
+      let rows = [], catalogFailed = false;
       try {
         const payload = await apiJson("/api/user/chat/models", {
           headers: {"X-Chat2API-User-Key-ID": keyId},
         });
-        rows = Array.isArray(payload.data) ? payload.data : [];
+        if (!Array.isArray(payload.data)) throw new Error("模型目录格式无效");
+        rows = payload.data;
       } catch (error) {
         if (!stillCurrent() || modelCatalogLoadPromise !== flight) return;
+        catalogFailed = true;
         recordClientDiagnostic("webchat.models.load_failed", {
           phase: "model_catalog", error_name: error?.name || "ModelCatalogError",
         }, "warning");
@@ -5037,7 +5068,8 @@
       state.models = textRows;
       const ids = textRows.map(row => row.id);
       selectAvailableTextModel(currentConversation());
-      state.modelCatalogLoadedAt = Date.now();
+      // A transport failure must not become a successful 20s cache hit.
+      state.modelCatalogLoadedAt = catalogFailed ? 0 : Date.now();
       recordClientDiagnostic("webchat.models.catalog_loaded", {
         model_count: ids.length, model_id: state.selectedModel, phase: "model_catalog",
       }, ids.length ? "info" : "warning");
@@ -5230,6 +5262,7 @@
     resumePendingMessages();
     void hydrateNativeSnapshots();
     if (!ready) return;
+    await loadModels();
     selectAvailableTextModel(currentConversation());
     renderAll();
   }
@@ -5434,7 +5467,10 @@
       void retryInitialConversationSync();
     }
   });
-  window.addEventListener("online", () => { void retryInitialConversationSync(); });
+  window.addEventListener("online", () => {
+    if (state.user) void loadModels(true);
+    void retryInitialConversationSync();
+  });
   window.setInterval(() => {
     if (state.user && document.visibilityState === "visible" && !state.streaming && !state.voiceActive) {
       void loadModels(true);

@@ -104,101 +104,89 @@ def install_web_chat_features_v1(app: Any) -> Any:
         if registry is None:
             raise HTTPException(status_code=503, detail="model catalog unavailable",
                                 headers=_PRIVATE_HEADERS)
-        # The administrator's "可用模型" projection is the single source
-        # for Web Chat choices. A Free page-default remains the routing alias
-        # "default", while its visible label is the configured concrete model ID.
-        # This preserves the dispatch semantics without displaying a misleading
-        # generic alias or exposing image/voice-only routes as text models.
-        model_task_snapshot = getattr(request.app.state, "worker_model_tasks_v147_snapshot", None)
+        # In production the live Worker library is the authority for concrete
+        # picker choices. Historical sync tasks may contain stale/offline
+        # models or omit a newly discovered picker after a failed sync.
+        management_snapshot = getattr(request.app.state, "worker_text_model_management_v146_snapshot", None)
+        management_state = management_snapshot() if callable(management_snapshot) else {}
+        live_rows = management_state.get("data") if isinstance(management_state, dict) else None
+        disabled_models = set(management_state.get("disabled") or []) if isinstance(management_state, dict) else set()
+        excluded = {"gpt-image", "gpt-live", "gpt-live-mini", "chatgpt-web", "auto"}
+        catalog = {
+            str(row.get("id") or ""): dict(row)
+            for row in registry.model_catalog(online_only=True)
+            if isinstance(row, dict)
+        }
         models: list[dict[str, Any]] = []
-        if callable(model_task_snapshot):
-            try:
-                available_payload = await model_task_snapshot()
-            except Exception as error:
-                raise HTTPException(status_code=503, detail="available model catalogue unavailable",
-                                    headers=_PRIVATE_HEADERS) from error
-            available_rows = list(available_payload.get("available_models") or [])
-            default_mapping = str(available_payload.get("available_models_default_mapping") or "").strip()
-            management_snapshot = getattr(request.app.state, "worker_text_model_management_v146_snapshot", None)
-            management_state = management_snapshot() if callable(management_snapshot) else {}
-            # A manual sync task is historical evidence, not the authority for
-            # live page-default availability. A failed or never-run sync must
-            # not hide a ready Free Worker which needs no picker interaction.
-            # Use the very same live management projection shown above the
-            # admin sync table; preserve all entitlement/disabled checks below.
-            if isinstance(management_state, dict) and isinstance(management_state.get("data"), list):
-                live_default = next((
-                    row for row in management_state["data"]
-                    if isinstance(row, dict) and row.get("id") == "default"
-                    and row.get("enabled") is not False and row.get("routable_by")
-                ), None)
-                available_rows = [
-                    row for row in available_rows
-                    if not isinstance(row, dict) or row.get("id") != "default"
-                ]
-                if live_default is not None:
-                    available_rows.insert(0, {"id": "default", "live_default": True})
-                default_mapping = str(management_state.get("legacy_minimum_model") or default_mapping).strip()
-            disabled_models = {
-                str(model_id) for model_id in (management_state.get("disabled") or [])
-            } if isinstance(management_state, dict) else set()
-            catalog = {
-                str(row.get("id") or ""): dict(row)
-                for row in registry.model_catalog(online_only=True)
-                if isinstance(row, dict)
-            }
-            for available in available_rows:
-                if not isinstance(available, dict):
+        seen: set[str] = set()
+
+        def add_model(model_id: str, row: dict[str, Any]) -> None:
+            if not model_id or model_id in excluded or model_id in disabled_models or model_id in seen:
+                return
+            if web_chat_model_decision(request.app, principal, model_id).get("allowed") is not True:
+                return
+            seen.add(model_id)
+            models.append({**row, "id": model_id})
+
+        def add_default(mapping: str) -> None:
+            if mapping in disabled_models:
+                return
+            add_model("default", {
+                "label": mapping or "默认模型",
+                "mapped_model_id": mapping or None,
+                "capabilities": ["text"],
+                "selectable": True,
+                "source": "worker-available-default",
+                "validated": False,
+            })
+
+        if isinstance(live_rows, list):
+            default_mapping = str(management_state.get("legacy_minimum_model") or "").strip()
+            if any(isinstance(row, dict) and row.get("id") == "default"
+                   and row.get("enabled") is not False and row.get("routable_by")
+                   for row in live_rows):
+                add_default(default_mapping)
+            for model_id, row in catalog.items():
+                if model_id == "default" or not row.get("clients"):
                     continue
-                model_id = str(available.get("id") or "").strip()
-                if (
-                    not model_id
-                    or model_id in {"gpt-image", "gpt-live", "gpt-live-mini", "chatgpt-web"}
-                    or model_id in disabled_models
-                ):
+                if row.get("selectable") is False and row.get("validated") is not True:
+                    # The mapped Free model is a compatibility route, not a
+                    # concrete picker selection. It is represented by default.
                     continue
-                # Missing from the filtered registry catalog does not mean
-                # unrestricted. The admin snapshot is not user-scoped.
-                if web_chat_model_decision(request.app, principal, model_id).get("allowed") is not True:
+                if "text" not in (row.get("capabilities") or []):
                     continue
-                if model_id == "default":
-                    if default_mapping and default_mapping in disabled_models:
-                        continue
-                    models.append({
-                        "id": "default",
-                        "label": default_mapping or "默认模型",
-                        "mapped_model_id": default_mapping or None,
-                        "capabilities": ["text", "vision", "file-understanding"],
-                        "selectable": True,
-                        "source": "worker-available-default",
-                    })
-                    continue
-                row = catalog.get(model_id, {
-                    "id": model_id, "object": "model", "created": 0,
-                    "owned_by": "chat2api", "capabilities": ["text"],
-                })
-                row["id"] = model_id
-                row["label"] = model_id
-                row["selectable"] = True
-                models.append(row)
+                add_model(model_id, row)
         else:
-            # Compatibility for focused tests and older composition roots that
-            # have not installed the v147 available-model projection.
-            minimum = getattr(registry, "legacy_minimum_model", None)
-            default_mapping = str(minimum() or "").strip() if callable(minimum) else ""
-            for source in registry.model_catalog(online_only=True):
-                if not isinstance(source, dict):
-                    continue
-                model_id = str(source.get("id") or "")
-                if model_id in {"chatgpt-web", "gpt-image", "gpt-live", "gpt-live-mini"}:
-                    continue
-                if web_chat_model_decision(request.app, principal, model_id).get("allowed") is not True:
-                    continue
-                row = dict(source)
-                if model_id == "default":
-                    row["label"] = default_mapping or "默认模型"
-                    row["mapped_model_id"] = default_mapping or None
-                models.append(row)
+            # Older/focused composition roots without a live management
+            # projection retain their historical catalog contract.
+            model_task_snapshot = getattr(request.app.state, "worker_model_tasks_v147_snapshot", None)
+            if callable(model_task_snapshot):
+                try:
+                    available_payload = await model_task_snapshot()
+                except Exception as error:
+                    raise HTTPException(status_code=503, detail="available model catalogue unavailable",
+                                        headers=_PRIVATE_HEADERS) from error
+                mapping = str(available_payload.get("available_models_default_mapping") or "").strip()
+                for available in available_payload.get("available_models") or []:
+                    if not isinstance(available, dict):
+                        continue
+                    model_id = str(available.get("id") or "").strip()
+                    if model_id == "default":
+                        add_default(mapping)
+                    else:
+                        row = catalog.get(model_id, {
+                            "object": "model", "created": 0,
+                            "owned_by": "chat2api", "capabilities": ["text"],
+                        })
+                        add_model(model_id, {**row, "label": model_id, "selectable": True})
+            else:
+                minimum = getattr(registry, "legacy_minimum_model", None)
+                mapping = str(minimum() or "").strip() if callable(minimum) else ""
+                for model_id, row in catalog.items():
+                    if model_id == "default":
+                        add_default(mapping)
+                    else:
+                        add_model(model_id, row)
         return JSONResponse({
             "object": "list",
             "data": models,
