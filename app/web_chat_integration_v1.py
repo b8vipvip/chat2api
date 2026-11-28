@@ -16,7 +16,7 @@ from pydantic import ValidationError
 
 from .admin_auth import same_origin_admin_request
 from .models import FileUploadRequest
-from .native_content_v1 import native_delivery_fingerprint
+from .native_content_v1 import native_delivery_fingerprint, validate_native_snapshot
 from .user_commerce import USER_SESSION_COOKIE
 
 
@@ -296,6 +296,8 @@ def install_web_chat_features_v1(app: Any) -> Any:
                 "ok": message.get("ok") is True,
                 "revision": message.get("revision"),
                 "error": str(message.get("error") or "")[:120],
+                "recapture_status": message.get("recapture_status"),
+                "snapshot": message.get("snapshot"),
             })
 
     app.state.native_interaction_ack_receiver = receive_native_interaction_ack
@@ -535,9 +537,31 @@ def install_web_chat_features_v1(app: Any) -> Any:
             if not isinstance(stored, dict) or stored.get("revision") != revision:
                 raise HTTPException(status_code=409, detail="native snapshot changed during interaction; reload the conversation",
                                     headers=_PRIVATE_HEADERS)
-            updated = copy.deepcopy(stored)
-            apply_native_interaction(updated, interaction_id, action, value)
-            updated["revision"] = revision + 1
+            recaptured = acknowledgement.get("recapture_status") == "verified"
+            if recaptured:
+                try:
+                    raw = acknowledgement.get("snapshot")
+                    if len(json.dumps(raw, ensure_ascii=False).encode("utf-8")) > 256 * 1024:
+                        raise ValueError("interaction snapshot is too large")
+                    updated = validate_native_snapshot(raw)
+                    if updated["revision"] != revision + 1:
+                        raise ValueError("interaction snapshot revision mismatch")
+                    # Image indices are request archive bindings. A dynamic
+                    # recapture cannot invent or reorder those bindings.
+                    for root in (stored["root"], updated["root"]):
+                        stack = [root]
+                        while stack:
+                            node = stack.pop()
+                            if node.get("tag") == "img":
+                                raise ValueError("interaction raster recapture unsupported")
+                            stack.extend(node.get("children") or [])
+                except (ValueError, TypeError, KeyError):
+                    raise HTTPException(status_code=409, detail="Worker action applied but recaptured DOM could not be validated",
+                                        headers=_PRIVATE_HEADERS) from None
+            else:
+                updated = copy.deepcopy(stored)
+                apply_native_interaction(updated, interaction_id, action, value)
+                updated["revision"] = revision + 1
             if not store.publish(request_id, owner, updated):
                 raise HTTPException(status_code=409, detail="native interaction state could not be committed",
                                     headers=_PRIVATE_HEADERS)
@@ -546,7 +570,9 @@ def install_web_chat_features_v1(app: Any) -> Any:
                 "ok": True,
                 "revision": revision + 1,
                 "persisted": persisted,
-                **({"warning": "interaction applied but durable snapshot persistence is pending"} if not persisted else {}),
+                "recaptured": recaptured,
+                **({"warning": "interaction applied but durable snapshot persistence is pending"} if not persisted else
+                   {"warning": "interaction applied; full DOM recapture unavailable"} if not recaptured else {}),
             }, headers={**_PRIVATE_HEADERS, "X-Content-Type-Options": "nosniff"})
 
     @app.get("/api/user/chat/requests/{request_id}/native-content/events")
