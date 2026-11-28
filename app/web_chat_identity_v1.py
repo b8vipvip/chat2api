@@ -93,6 +93,34 @@ async def resolve_web_chat_principal(
     user = accounts.authenticate(request.cookies.get(USER_SESSION_COOKIE))
     if not user:
         raise _private_error(401, "请先登录 Chat2API 账户")
+    return await _resolve_account_principal(app, user, requested_user_key_id)
+
+
+async def resolve_dot_task_principal(app: Any, owner: str) -> tuple[dict[str, Any], ApiPrincipal]:
+    """Internal-only identity for an explicitly submitted durable Dot task.
+
+    Never call with an HTTP-supplied owner. The scheduler reads owner from its
+    authenticated submission journal. Recheck the current account and policy
+    without retaining or minting a browser session.
+    """
+    accounts = getattr(app.state, "user_accounts", None)
+    if accounts is None:
+        raise _private_error(503, "Account service unavailable")
+    with accounts.lock:
+        row = accounts.users.get(owner)
+        user = accounts.public(row) if row else None
+    if not user or not user.get("enabled") or user.get("is_guest"):
+        raise _private_error(403, "Dot account unavailable")
+    return await _resolve_account_principal(app, user, None)
+
+
+async def _resolve_account_principal(app: Any, user: dict[str, Any],
+                                     requested_user_key_id: str | None):
+    accounts = getattr(app.state, "user_accounts", None)
+    api_keys = getattr(app.state, "api_keys", None)
+    control_plane = getattr(app.state, "control_plane", None)
+    if accounts is None or api_keys is None or control_plane is None:
+        raise _private_error(503, "Web Chat service unavailable")
     client_policy = control_plane.public_client()
     if client_policy.get("web_chat_enabled") is not True:
         raise _private_error(403, "Web Chat 当前已由管理员停用")

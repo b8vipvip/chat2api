@@ -44,7 +44,10 @@ def test_dot_expired_lease_not_replayed(tmp_path, monkeypatch):
     with pytest.raises(ValueError):
         store.claim("a", second["id"])
     monkeypatch.setattr(module.time, "time", lambda: 100 + module.LEASE_SECONDS + 1)
-    assert next(row for row in store.list("a") if row["id"] == task["id"])["status"] == "interrupted"
+    # An expired lease is not mutated by an ordinary read; the executor must
+    # reconcile the original Worker terminal first.
+    assert next(row for row in store.list("a") if row["id"] == task["id"])["status"] == "running"
+    store.finish("a", task["id"], running["request_id"], "interrupted")
     with pytest.raises(ValueError):
         store.claim("a", task["id"])
     with pytest.raises(ValueError):
@@ -67,6 +70,9 @@ def test_dot_api_auth_and_real_adapter_boundary(tmp_path, monkeypatch):
 
     allowed = {"yes": True}
     monkeypatch.setattr(module, "resolve_web_chat_principal", identity)
+    async def background_identity(app, owner):
+        return {"user_id": owner}, SimpleNamespace(key_id=owner)
+    monkeypatch.setattr(module, "resolve_dot_task_principal", background_identity)
     monkeypatch.setattr(module, "web_chat_model_decision",
                         lambda *args: {"allowed": allowed["yes"]})
     app = FastAPI()
@@ -100,7 +106,14 @@ def test_dot_api_auth_and_real_adapter_boundary(tmp_path, monkeypatch):
     task = client.post(base + "/tasks", headers=a, json=data).json()["data"]
     run = base + "/tasks/" + task["id"] + "/run"
     assert client.post(run, headers=b).status_code == 404
-    assert client.post(run, headers=a).json()["data"]["result"] == "真实 adapter 结果"
+    assert client.post(run, headers=a).json()["data"]["status"] == "scheduled"
+    import asyncio
+    async def tick():
+        await app.state.dot_runtime.tick()
+        await asyncio.gather(*app.state.dot_runtime.jobs.values())
+        await app.state.dot_runtime.tick()
+    asyncio.run(tick())
+    assert client.get(base, headers=a).json()["tasks"][0]["result"] == "真实 adapter 结果"
     assert client.post(run, headers=a).status_code == 409
     assert len(calls) == 1
     assert calls[0][0].messages[0].content == "审查"
@@ -108,5 +121,98 @@ def test_dot_api_auth_and_real_adapter_boundary(tmp_path, monkeypatch):
     data["idempotency_key"] = str(uuid.uuid4())
     task = client.post(base + "/tasks", headers=a, json=data).json()["data"]
     allowed["yes"] = False
-    assert client.post(base + "/tasks/" + task["id"] + "/run", headers=a).json()["data"]["status"] == "failed"
+    assert client.post(base + "/tasks/" + task["id"] + "/run", headers=a).json()["data"]["status"] == "scheduled"
+    asyncio.run(tick())
+    assert client.get(base, headers=a).json()["tasks"][0]["status"] == "failed"
     assert len(calls) == 1
+
+
+def test_schedule_pause_resume_stop_and_restart(tmp_path, monkeypatch):
+    import app.dot_v1 as module
+    monkeypatch.setattr(module.time, "time", lambda: 100)
+    store = DotStore(tmp_path)
+    task = store.create("a", goal())
+    tid = task["id"]
+    assert store.schedule("a", tid, 60)["run_at"] == 160
+    assert store.due() == []
+    assert store.control("a", tid, "pause")["status"] == "paused"
+    monkeypatch.setattr(module.time, "time", lambda: 200)
+    assert DotStore(tmp_path).due() == []
+    with pytest.raises(KeyError):
+        store.control("b", tid, "resume")
+    store.control("a", tid, "resume")
+    assert DotStore(tmp_path).due() == [{"owner": "a", "id": tid}]
+    running = store.claim("a", tid, scheduled=True)
+    assert store.control("a", tid, "stop")["stop_requested"] == 1
+    assert store.stopped("a", tid, running["request_id"])
+    assert store.list("a")[0]["status"] == "running"
+    with pytest.raises(ValueError):
+        store.remove("a", tid)
+    store.finish("a", tid, running["request_id"], "cancelled")
+    assert store.list("a")[0]["status"] == "cancelled"
+    assert store.due() == []
+
+
+def test_global_capacity_and_original_terminal_recovery(tmp_path, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    import app.dot_v1 as module
+
+    store = DotStore(tmp_path)
+    first = store.create("a", goal())
+    second = store.create("b", goal())
+    store.schedule("a", first["id"])
+    store.schedule("b", second["id"])
+    running = store.claim("a", first["id"], scheduled=True)
+    with pytest.raises(ValueError, match="capacity"):
+        DotStore(tmp_path).claim("b", second["id"], scheduled=True)
+    rid = running["request_id"]
+
+    class Telemetry:
+        def get(self, request_id):
+            return None
+
+        def get_many_persisted(self, ids):
+            assert ids == {rid}
+            return {rid: {"status": "completed", "api_key_id": "a-key",
+                          "web_chat_mode": True, "response_text": "persisted response"}}
+
+    class Journal:
+        async def snapshot(self, request_id, owner):
+            assert request_id == rid and owner == "a-key"
+            return {"terminal_status": "completed", "delivered_text": "exact delivered response"}
+
+    app = SimpleNamespace(state=SimpleNamespace(
+        telemetry=Telemetry(),
+        user_accounts=SimpleNamespace(owns_key=lambda owner, key: owner == "a" and key == "a-key"),
+        web_chat_event_journal=Journal(),
+    ))
+    runtime = module.DotRuntime(app, DotStore(tmp_path))
+    assert asyncio.run(runtime.reconcile(running)) is True
+    final = store.list("a")[0]
+    assert final["status"] == "completed"
+    assert final["result"] == "exact delivered response"
+    assert final["request_id"] == rid
+    assert store.claim("b", second["id"], scheduled=True)["status"] == "running"
+
+
+def test_runtime_rejects_other_owner_terminal(tmp_path, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    import app.dot_v1 as module
+
+    store = DotStore(tmp_path)
+    task = store.create("a", goal())
+    store.schedule("a", task["id"])
+    running = store.claim("a", task["id"], scheduled=True)
+    telemetry = SimpleNamespace(get=lambda rid: {"status": "completed", "api_key_id": "b-key",
+                                                "web_chat_mode": True, "response_text": "private"})
+    app = SimpleNamespace(state=SimpleNamespace(telemetry=telemetry,
+                          user_accounts=SimpleNamespace(owns_key=lambda owner, key: False)))
+    runtime = module.DotRuntime(app, store)
+    assert asyncio.run(runtime.reconcile(running)) is False
+    assert store.list("a")[0]["result"] == ""
+    monkeypatch.setattr(module.time, "time", lambda: running["lease_until"] + 1)
+    assert asyncio.run(runtime.reconcile(running)) is True
+    assert store.list("a")[0]["status"] == "interrupted"
+    assert store.list("a")[0]["result"] == ""
