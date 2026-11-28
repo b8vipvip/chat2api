@@ -46,7 +46,7 @@ const body = new ReadableStream({
   },
 });
 const context = {
-  state: {webChatKeyId: 'key-a', webChatScopes: ['chat', 'models'], user: {user_id: 'user-a'}, selectedModel: 'model', pendingImages: [], pendingImagesConversationId: '', pendingFiles: [], pendingFilesConversationId: ''},
+  state: {webChatKeyId: 'key-a', webChatScopes: ['chat', 'models'], user: {user_id: 'user-a'}, selectedModel: 'model', models: [{id:'model', capabilities:['text']}], pendingImages: [], pendingImagesConversationId: '', pendingFiles: [], pendingFilesConversationId: ''},
   currentConversation: () => conversation,
   window: {Chat2APIStreamRecoveryV1: {createRequestId: () => 'req_webchat_error'}},
   apiJson: async () => ({user: {user_id: 'user-a'}}),
@@ -71,8 +71,10 @@ const context = {
   AbortController, TextDecoder,
 };
 const readFrame = source.slice(source.indexOf('  class StreamResponseError'), source.indexOf('  function recoveryStatusLabel'));
+const selection = source.slice(source.indexOf('  function selectAvailableTextModel('),
+  source.indexOf('  async function loadModels('));
 const send = source.slice(source.indexOf('  async function sendMessage'), source.indexOf('  async function loadWebChatSession'));
-const sendMessage = vm.runInNewContext(readFrame + send + '\nsendMessage', context);
+const sendMessage = vm.runInNewContext(readFrame + selection + send + '\nsendMessage', context);
 (async () => {
   await sendMessage('question');
   assert.deepEqual(notices, ['请求失败：Worker failed']);
