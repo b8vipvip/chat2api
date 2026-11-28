@@ -3868,7 +3868,7 @@
       seen.set(row.id, {
         id:row.id,type:mime.startsWith("image/") ? "image" : "file",
         name:String(row.filename || "附件"),size:Number(row.bytes || 0),mime,
-        conversation:state.libraryScope === "generated" ? "模型生成文件" :
+        conversation:state.libraryScope === "generated" ? "模型生成文件 · 引用于 " + Number(row.reference_count || 0) + " 个会话" :
           Number(row.reference_count || 0) > 0 ? "引用于 " + Number(row.reference_count) + " 个会话" : "未引用 · 上传超过 24 小时",
         generated:state.libraryScope === "generated",
         removable:state.libraryScope === "unreferenced" && row.reference_count === 0,
@@ -4878,9 +4878,13 @@
   }
   async function refreshNativeSnapshot(requestId) {
     const before = state.nativeSnapshots.get(requestId);
+    const owner = String(state.user?.user_id || "");
+    const storageKey = state.storageKey;
+    const sameAccount = () => String(state.user?.user_id || "") === owner && state.storageKey === storageKey;
     try {
       const response = await fetch("/api/user/chat/requests/" + encodeURIComponent(requestId) + "/native-content",
-        {method:"GET",credentials:"same-origin",cache:"no-store",headers:{Accept:"application/json"}});
+        {method:"GET",credentials:"same-origin",cache:"no-store",headers:{Accept:"application/json",...(owner ? {"X-Chat2API-User-ID":owner} : {})}});
+      if (!sameAccount()) return false;
       if (response.status === 404) {
         const previous = state.nativeSnapshots.get(requestId);
         if (previous && previous === before && previous.finality !== "verified-final") {
@@ -4893,6 +4897,7 @@
       }
       if (!response.ok) return false;
       const snapshot = await response.json();
+      if (!sameAccount()) return false;
       const current = state.nativeSnapshots.get(requestId);
       if (current && Number(snapshot?.revision) < current.revision) return false;
       // Same-revision GETs are safe to merge: tree identity is immutable and
@@ -4904,13 +4909,16 @@
     if (!requestId || !interaction || typeof interaction !== "object") {
       throw new Error("无效的原生控件操作");
     }
+    const owner = String(state.user?.user_id || "");
+    const storageKey = state.storageKey;
+    const sameAccount = () => String(state.user?.user_id || "") === owner && state.storageKey === storageKey;
     const response = await fetch(
       "/api/user/chat/requests/" + encodeURIComponent(requestId) + "/native-content/interactions",
       {
         method:"POST",
         credentials:"same-origin",
         cache:"no-store",
-        headers:{"Content-Type":"application/json","Accept":"application/json"},
+        headers:{"Content-Type":"application/json","Accept":"application/json",...(owner ? {"X-Chat2API-User-ID":owner} : {})},
         body:JSON.stringify({
           revision:interaction.revision,
           interaction_id:interaction.interaction_id,
@@ -4920,7 +4928,11 @@
       },
     );
     const result = await response.json().catch(() => ({}));
+    if (!sameAccount()) throw new Error("账户已切换");
     if (!response.ok || result?.ok !== true) {
+      // A stale revision or ambiguous ACK is not safe to replay. First
+      // fetch the authoritative snapshot so the next action uses its revision.
+      if ([409,503,504].includes(response.status)) await refreshNativeSnapshot(requestId);
       throw new Error(String(result?.detail || result?.error || "原生控件同步失败").slice(0,180));
     }
     // The server publishes the acknowledged state as a new immutable native
@@ -4994,6 +5006,38 @@
     } finally {
       state.nativeStreams.delete(requestId);
       if (!controller.signal.aborted) await refreshNativeSnapshot(requestId);
+    }
+  }
+
+  async function refreshInteractiveNativeSnapshots() {
+    if (!state.user || state.streaming || state.voiceActive || state.nativeInteractionRefreshInFlight) return;
+    const conversation = currentConversation();
+    if (!conversation) return;
+    const owner = String(state.user.user_id || "");
+    const candidates = [];
+    for (const message of [...(conversation.messages || [])].reverse()) {
+      if (message.role !== "assistant" || message.pending || !message.requestId) continue;
+      const snapshot = state.nativeSnapshots.get(message.requestId);
+      if (!snapshot || snapshot.finality !== "verified-final") continue;
+      const stack = [snapshot.root];
+      let interactive = false;
+      while (stack.length) {
+        const node = stack.pop();
+        if (!node || typeof node !== "object") continue;
+        if (node.interaction_id) { interactive = true; break; }
+        if (Array.isArray(node.children)) stack.push(...node.children);
+      }
+      if (interactive && !candidates.includes(message.requestId)) candidates.push(message.requestId);
+      if (candidates.length >= 3) break;
+    }
+    state.nativeInteractionRefreshInFlight = true;
+    try {
+      for (const requestId of candidates) {
+        if (String(state.user?.user_id || "") !== owner || currentConversation()?.id !== conversation.id) return;
+        await refreshNativeSnapshot(requestId);
+      }
+    } finally {
+      state.nativeInteractionRefreshInFlight = false;
     }
   }
 
@@ -6051,6 +6095,11 @@
       void retryInitialConversationSync();
     }
   }, 60_000);
+  // Completed native sidecars close their SSE stream. Recheck a bounded
+  // set of visible interactive cards so another device's action converges.
+  window.setInterval(() => {
+    if (document.visibilityState === "visible") void refreshInteractiveNativeSnapshots();
+  }, 15000);
   window.addEventListener("beforeunload", () => {
     checkpointVoiceTranscript();
     void flushClientDiagnostics(true);
