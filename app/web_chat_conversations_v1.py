@@ -559,6 +559,25 @@ class WebChatConversationStoreV1:
                         WHERE user_id={owner}.user_id AND conversation_id={owner}.conversation_id;
                     END
                 """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS web_chat_plugin_planner_requests (
+                    user_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
+                    message_id TEXT NOT NULL, round INTEGER NOT NULL, request_id TEXT NOT NULL,
+                    PRIMARY KEY(user_id,conversation_id,message_id,round)
+                )
+            """)
+            for operation, owner, condition in (
+                ("UPDATE", "NEW", "WHEN NEW.deleted=1"),
+                ("DELETE", "OLD", ""),
+            ):
+                connection.execute(f"""
+                    CREATE TRIGGER IF NOT EXISTS web_chat_plugin_planner_request_{operation.lower()}
+                    AFTER {operation} ON web_chat_conversations {condition}
+                    BEGIN
+                        DELETE FROM web_chat_plugin_planner_requests
+                        WHERE user_id={owner}.user_id AND conversation_id={owner}.conversation_id;
+                    END
+                """)
             # Conversation deletion/retention and evidence removal are atomic.
             for operation, owner, condition in (
                 ("UPDATE", "NEW", "WHEN NEW.deleted=1"),
@@ -767,6 +786,25 @@ class WebChatConversationStoreV1:
                         and m.get("recoveryStatus")=="tool_planning"), None)
         return (row, payload, message) if message is not None else None
 
+    def reserve_plugin_planner(self, user_id: str, cid: str, mid: str, holder: str,
+                               round_number: int) -> dict | None:
+        if round_number not in {2,3}:
+            raise ValueError("invalid recovery planning round")
+        key = (user_id,cid,mid)
+        with self.lock, closing(self._connect()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if not self._plugin_server_pending(conn,key,holder):
+                return None
+            row = conn.execute(
+                "SELECT request_id FROM web_chat_plugin_planner_requests WHERE user_id=? AND conversation_id=? AND message_id=? AND round=?",
+                (*key,round_number)).fetchone()
+            if row:
+                return {"request_id":row["request_id"],"new":False}
+            rid = "req_plugin_plan_" + hashlib.sha256(json.dumps((*key,round_number)).encode()).hexdigest()[:40]
+            conn.execute("INSERT INTO web_chat_plugin_planner_requests VALUES (?,?,?,?,?)",(*key,round_number,rid))
+            conn.commit()
+            return {"request_id":rid,"new":True}
+
     def reserve_plugin_final(self, user_id: str, cid: str, mid: str, holder: str) -> dict | None:
         key = (user_id, cid, mid)
         with self.lock, closing(self._connect()) as conn:
@@ -938,8 +976,7 @@ class WebChatConversationStoreV1:
                             return {"state":state,"granted":False}
                         if prior_payload.get("auto_resume") and (
                             not checkpoint.get("auto_resume") or
-                            any(checkpoint.get("resume_connections",{}).get(k)!=v
-                                for k,v in prior_payload.get("resume_connections",{}).items())
+                            checkpoint.get("resume_connections",{}) != prior_payload.get("resume_connections",{})
                         ):
                             return {"state":state,"granted":False}
                     if not prior or sequence > int(prior["sequence"]):
@@ -1496,7 +1533,12 @@ def install_web_chat_conversations_v1(app: FastAPI) -> None:
                         binding = plugin_connection_binding(oauth,str(user["user_id"]),provider)
                         if binding:
                             bindings[provider] = binding
-                    raw_checkpoint["resume_connections"] = bindings
+                    # Only the explicitly selected providers can be used by the
+                    # detached planner, even if other OAuth connections exist.
+                    selected = raw_checkpoint.get("selected_providers")
+                    if not isinstance(selected,list) or any(p not in {"github","gmail"} for p in selected):
+                        selected = []
+                    raw_checkpoint["resume_connections"] = {p:v for p,v in bindings.items() if p in selected}
             checkpoint = _normalize_plugin_checkpoint(raw_checkpoint) if operation == "checkpoint" else None
             if checkpoint is not None and len(json.dumps(checkpoint, ensure_ascii=False).encode("utf-8")) > 196608:
                 raise ValueError("plugin checkpoint is too large")
