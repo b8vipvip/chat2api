@@ -222,6 +222,7 @@ def test_owner_scoped_native_interaction_applies_to_original_worker_and_persists
         def __init__(self):
             self.sent = []
             self.recapture = None
+            self.media = []
 
         async def send_json(self, payload):
             self.sent.append(dict(payload))
@@ -234,7 +235,8 @@ def test_owner_scoped_native_interaction_applies_to_original_worker_and_persists
                         "revision": payload["revision"],
                         "interaction_id": payload["interaction_id"],
                         "ok": True,
-                        **({"recapture_status": "verified", "snapshot": self.recapture}
+                        **({"recapture_status": "verified", "snapshot": self.recapture,
+                            "media":self.media}
                            if self.recapture is not None else {}),
                     },
                 )
@@ -379,6 +381,42 @@ def test_owner_scoped_native_interaction_applies_to_original_worker_and_persists
         assert latest.json()["finality"] == "verified-final"
         proof = app.state.telemetry.get(request_id)["native_interaction_proof"]
         assert proof["base_revision"] == 1 and proof["revision"] == 5
+
+        # An interaction may reveal a new original image which was not part
+        # of the immutable terminal Markdown. Archive its actual bytes before
+        # publishing revision 6; a second device can hydrate the same image.
+        import base64, hashlib, io
+        from PIL import Image
+        image=Image.new("RGB",(8,8),(20,40,60))
+        buffer=io.BytesIO()
+        image.save(buffer,"PNG")
+        png=buffer.getvalue()
+        digest=hashlib.sha256(png).hexdigest()
+        socket.recapture={"version":1,"revision":6,"root":{"tag":"div","children":[
+            {"tag":"input","interaction_id":"nc_6_1",
+             "control":{"kind":"range","label":"Opacity","disabled":False,"min":0,"max":100,"step":5,"value":75}},
+            {"tag":"img","media_index":0,"source_sha256":digest,"intrinsic_width":8,"intrinsic_height":8},
+        ]}}
+        socket.media=[{"sha256":digest,"mime":"image/png","base64":base64.b64encode(png).decode()}]
+        response=client.post(f"/api/user/chat/requests/{request_id}/native-content/interactions",
+            headers=headers,json={"revision":5,"interaction_id":"nc_5_1","action":"set_value","value":75})
+        assert response.status_code==200,response.text
+        assert response.json()["persisted"]
+        new=client.get(f"/api/user/chat/requests/{request_id}/native-content").json()
+        assert new["revision"]==6 and new["finality"]=="verified-final"
+        assert len(new["assets"])==1
+        assert client.get(new["assets"][0]).content==png
+        assert app.state.telemetry.get(request_id)["response_media"]==[]
+        # A guessed digest or missing original must not replace the last
+        # committed image. The original request archive remains readable.
+        socket.recapture["revision"]=7
+        socket.recapture["root"]["children"][0]["interaction_id"]="nc_7_1"
+        socket.recapture["root"]["children"][1]["source_sha256"]="0"*64
+        socket.media=[]
+        invalid=client.post(f"/api/user/chat/requests/{request_id}/native-content/interactions",
+            headers=headers,json={"revision":6,"interaction_id":"nc_6_1","action":"set_value","value":80})
+        assert invalid.status_code==409
+        assert client.get(f"/api/user/chat/requests/{request_id}/native-content").json()["revision"]==6
 
         client.cookies.clear()
         other = client.post(

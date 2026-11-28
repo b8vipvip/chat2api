@@ -96,6 +96,19 @@ async def resolve_web_chat_principal(
     return await resolve_owned_web_chat_principal(app, user, requested_user_key_id)
 
 
+async def resolve_dot_task_principal(app: Any, owner: str) -> tuple[dict[str, Any], ApiPrincipal]:
+    """Resolve the authenticated durable Dot task owner without minting a session."""
+    accounts = getattr(app.state, "user_accounts", None)
+    if accounts is None:
+        raise _private_error(503, "Account service unavailable")
+    with accounts.lock:
+        row = accounts.users.get(owner)
+        user = accounts.public(row) if row else None
+    if not user or not user.get("enabled") or user.get("is_guest"):
+        raise _private_error(403, "Dot account unavailable")
+    return await resolve_owned_web_chat_principal(app,user,None)
+
+
 async def resolve_owned_web_chat_principal(
     app: Any, user: dict[str, Any], requested_user_key_id: str | None = None,
 ) -> tuple[dict[str, Any], ApiPrincipal]:

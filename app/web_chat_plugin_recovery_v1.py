@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 from fastapi import HTTPException, Request
 
 from .models import ChatCompletionRequest
+from .chat_tool_references_v1 import normalize_tool_references
 from .plugin_connections_v1 import plugin_connection_binding
 from .web_chat_identity_v1 import resolve_owned_web_chat_principal, web_chat_model_decision
 
@@ -422,7 +423,19 @@ async def recover_one(app, key):
                     raise PermissionError("provider result owner mismatch")
                 journal.append({"round":rounds,"tool":tool,"arguments":args,"result":result})
                 event_id = "srv_"+hashlib.sha256(json.dumps([rounds,tool,args],sort_keys=True).encode()).hexdigest()[:32]
+                references=[]
+                for item in result.get("body",{}).get("data",[])[:6]:
+                    if not isinstance(item,dict):
+                        continue
+                    if provider=="github" and isinstance(item.get("url"),str):
+                        references.append({"url":item["url"],
+                            "title":str(item.get("title") or item.get("full_name") or item.get("path") or item.get("name") or "GitHub")[:180],
+                            "snippet":str(item.get("description") or item.get("body") or item.get("message") or "")[:420]})
+                    elif provider=="gmail" and isinstance(item.get("id"),str) and _GMAIL_ID.fullmatch(item["id"]):
+                        references.append({"url":"https://mail.google.com/mail/u/0/#all/"+item["id"],
+                            "title":str(item.get("subject") or "Gmail")[:180],"snippet":""})
                 events = (events+[{"toolName":tool,"callId":event_id,"resultId":event_id+"_result",
+                    "references":normalize_tool_references(references),
                     "status":"completed" if result["status"]==200 else "failed",
                     "arguments":json.dumps(args,ensure_ascii=False)[:1200],"output":"服务端恢复执行",
                     **({"resultPreview":json.dumps(result["body"],ensure_ascii=False)[:6000]}

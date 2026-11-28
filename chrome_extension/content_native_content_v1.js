@@ -1547,10 +1547,16 @@
       nativeControlLatestRevision.set(requestId,revision);
       nativeControlCaptureContexts.set(requestId,context);
     };
-    let tree=null;
+    let tree=null,media=null;
     for(let attempt=0;attempt<3;attempt++){
       if (!sameRoots()) return {ok:false,error:"native-interaction-reply-scope-changed"};
-      try { tree=snapshot(replay); } catch (_) {}
+      try {
+        media=await interactionImageEvidence(replay,context);
+        if(!sameRoots() || nativeControlLatestRevision.get(requestId)!==revision ||
+            nativeControlCaptureContexts.get(requestId)!==context)
+          return {ok:false,error:"native-refresh-superseded"};
+        tree=media!==null?snapshot(replay):null;
+      } catch (_) {}
       if (tree && !replay.nativeGraphicsUnsupported) break;
       restore();
       await new Promise(resolve=>setTimeout(resolve,40));
@@ -1560,8 +1566,8 @@
     }
     const next=nativeControlCaptureContexts.get(requestId);
     if (!tree || tree.revision!==revision+1 || replay.nativeGraphicsUnsupported ||
-        !next || next.canvasRasters!==context.canvasRasters ||
-        new TextEncoder().encode(JSON.stringify(tree)).length>768*1024) {
+        !next || next.canvasRasters!==context.canvasRasters || media===null ||
+        new TextEncoder().encode(JSON.stringify({snapshot:tree,media})).length>768*1024) {
       restore();
       return {ok:false,error:"canvas-refresh-pixels-unavailable"};
     }
@@ -1573,7 +1579,8 @@
     if(stable(tree.root)===stable(context.root)){
       restore();
       response={ok:true,revision,recapture_status:"unchanged"};
-    }else response={ok:true,revision:revision+1,recapture_status:"verified",snapshot:tree};
+    }else response={ok:true,revision:revision+1,recapture_status:"verified",snapshot:tree,
+      ...(media.length?{media}:{})};
     nativeControlAppliedActions.set(actionId,{requestId,revision,action:"refresh_canvas",response});
     while(nativeControlAppliedActions.size>64)
       nativeControlAppliedActions.delete(nativeControlAppliedActions.keys().next().value);
