@@ -32,7 +32,9 @@ async function send(chunks, close = true, onCancel = () => {}) {
     state: {
       webChatKeyId: "test-key", webChatScopes: ["chat", "models", "files", "audio"],
       user: {user_id: "user-a"},
-      selectedModel: "test-model", streaming: false,
+      selectedModel: "test-model",
+      models: [{id:"test-model",capabilities:["text"]}],
+      streaming: false,
       recoveryInFlight: new Set(),
       pendingImages: [],
       pendingImagesConversationId: "",

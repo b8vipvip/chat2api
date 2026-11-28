@@ -429,3 +429,85 @@ test("conversation mutation timeout covers the response body and releases the ti
   assert.equal(signal.aborted,true);
   assert.equal(cleared,1);
 });
+
+
+test("stale image model in a conversation cannot override the server text default", async () => {
+  const start = source.indexOf("  function selectAvailableTextModel(");
+  const end = source.indexOf("  function exportConversation(",start);
+  assert.ok(start >= 0 && end > start,"the production model picker must be exercised");
+  const legacy = {id:"older",model:"gpt-image",messages:[]};
+  const state = {
+    models:[],selectedModel:"gpt-image",conversations:[legacy],
+    activeConversationId:"older",modelCatalogLoadedAt:0,webChatKeyId:"key-1"
+  };
+  let modelLoads=0;
+  const ctx=vm.createContext({
+    state,Date,Promise,
+    modelCatalogLoadPromise:null,
+    currentConversation:()=>legacy,selectedKeyId:()=>"key-1",
+    apiJson:async()=>{modelLoads++;return {data:[
+      {id:"default",label:"gpt-5.6-sol",mapped_model_id:"gpt-5.6-sol",capabilities:["text"]},
+      {id:"gpt-image",capabilities:["image"]},
+      {id:"gpt-live",capabilities:["audio"]}
+    ]};},
+    recordClientDiagnostic(){},setConnection(){},resizeComposer(){},
+  });
+  const api=vm.runInContext(
+    "let modelCatalogLoadPromise = null;\n"+source.slice(start,end)+
+    "\n({selectAvailableTextModel,loadModels})",ctx);
+  await api.loadModels();
+  assert.equal(modelLoads,1);
+  assert.equal(state.models.length,1);
+  assert.equal(state.selectedModel,"default");
+  assert.equal(legacy.model,"gpt-image","historical provenance remains unchanged until sending a new turn");
+  state.selectedModel="gpt-image";
+  assert.equal(api.selectAvailableTextModel(legacy),"default");
+  legacy.model="gpt-5.6-sol";
+  assert.equal(api.selectAvailableTextModel(legacy),"default",
+    "a Free-account mapped label must resolve to the concrete routable default alias");
+  state.models=[{id:"gpt-6",capabilities:["text"]},{id:"default",label:"gpt-5.6-sol",capabilities:["text"]}];
+  legacy.model="unknown-retired-model";
+  assert.equal(api.selectAvailableTextModel(legacy),"default",
+    "an unknown historical model prefers the configured default over unrelated catalog order");
+  legacy.model="gpt-6";
+  assert.equal(api.selectAvailableTextModel(legacy),"gpt-6");
+  state.models=[];
+  assert.equal(api.selectAvailableTextModel(legacy),"","no catalog must fail closed");
+});
+
+test("conversation switching and bootstrap cannot resurrect an image-only model", async () => {
+  const start=source.indexOf("  function setActiveConversation(");
+  const end=source.indexOf("  function deleteConversation(",start);
+  assert.ok(start>=0&&end>start);
+  const old={id:"old",model:"gpt-image",messages:[]},recent={id:"new",model:"default",messages:[]};
+  const state={
+    conversations:[old,recent],activeConversationId:"new",selectedModel:"default",
+    models:[{id:"default",mapped_model_id:"gpt-5.6-sol",capabilities:["text"]}],
+    voiceActive:false,streaming:false,pendingImages:[],pendingFiles:[],
+    pendingConversationDeletes:new Set()
+  };
+  const sourceSelector=source.slice(source.indexOf("  function selectAvailableTextModel("),
+    source.indexOf("  async function loadModels("));
+  const context=vm.createContext({
+    state,currentConversation:()=>state.conversations.find(row=>row.id===state.activeConversationId),
+    loadModels:async()=>{},renderAll(){},hydrateNativeSnapshots:async()=>{},
+    toast(message){throw new Error(message)},document:{body:{classList:{remove(){}}}},
+  });
+  const select=vm.runInContext(sourceSelector+source.slice(start,end)+"\nsetActiveConversation",context);
+  select("old");
+  assert.equal(state.activeConversationId,"old");
+  assert.equal(state.selectedModel,"default");
+  const bootStart=source.indexOf("  async function bootstrap(");
+  const bootEnd=source.indexOf("  if (window.Chat2APIImageDropV1)",bootStart);
+  assert.ok(bootStart>=0&&bootEnd>bootStart);
+  const bootstrap=source.slice(bootStart,bootEnd);
+  assert.ok(bootstrap.includes("selectAvailableTextModel(currentConversation());"));
+  assert.equal(bootstrap.includes("state.selectedModel = currentConversation().model"),false);
+  const sendStart=source.indexOf("  async function sendMessage(text) {");
+  const sendEnd=source.indexOf("  async function loadWebChatSession(",sendStart);
+  const send=source.slice(sendStart,sendEnd);
+  assert.ok(send.includes("const requestModelId = selectAvailableTextModel(currentConversation());"));
+  assert.ok(send.includes("model: requestModelId,"));
+  assert.ok(!send.includes("model: state.selectedModel"));
+  assert.ok(source.includes("model:requestModelId,\n          messages:plannerMessages,"));
+});

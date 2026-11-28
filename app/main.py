@@ -3592,6 +3592,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         from .web_chat_identity_v1 import resolve_web_chat_principal
 
         user, principal = await resolve_web_chat_principal(request, x_chat2api_user_key_id)
+        # Web Chat is a text/vision conversation surface. A stale browser or
+        # imported conversation may still submit a special image/Voice route;
+        # fail before Worker admission/quota instead of executing the wrong
+        # model or hiding the model mismatch in backend routing logs.
+        if str(body.model or "").strip().lower() in {
+            "gpt-image", "gpt-live", "gpt-live-mini", "chatgpt-web",
+        }:
+            raise HTTPException(
+                status_code=422,
+                detail="Web Chat 文本聊天不支持该模型，请刷新页面以重新同步可用文本模型",
+                headers={"Cache-Control": "private, no-store", "Vary": "Cookie"},
+            )
         request.scope["chat2api_mode1_web_chat"] = True
         request.scope["chat2api_web_chat_user_id"] = str(user["user_id"])
         adapter = request.app.state.chat_completions_adapter
