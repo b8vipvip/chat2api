@@ -5013,9 +5013,17 @@
     const claim = await pluginTaskOperation(conversation,assistant,"claim",holder);
     if (!claim.granted) throw new Error("该插件任务已被执行或已失效");
     let finished = false, renewal = null, outcome = "interrupted";
+    const assertTransport = () => {
+      if (state.abortController !== transport || transport?.signal.aborted) {
+        const error = new Error("插件任务已停止");
+        error.name = "AbortError";
+        throw error;
+      }
+    };
     const lease = {
       renew() {
-        if (finished || transport?.signal.aborted) return Promise.reject(new Error("插件任务已停止"));
+        if (finished) return Promise.reject(new Error("插件执行租约已结束"));
+        try { assertTransport(); } catch (error) { return Promise.reject(error); }
         if (renewal) return renewal;
         renewal = pluginTaskOperation(conversation,assistant,"renew",holder).then(result=>{
           if (!result.granted) throw new Error("插件执行租约已失效");
@@ -5027,15 +5035,21 @@
       },
     };
     state.pluginPlanningLease = lease;
-    const timer = window.setInterval(()=>{void lease.renew().catch(()=>{});},30000);
+    let timer = null;
     try {
+      // Stop can race with the claim HTTP response. Release the acquired
+      // lease without launching a planner after the original turn is gone.
+      assertTransport();
+      timer = window.setInterval(()=>{void lease.renew().catch(()=>{});},30000);
       const result = await run();
+      assertTransport();
       await lease.renew();
+      assertTransport();
       outcome = "completed";
       return result;
     } finally {
       finished = true;
-      window.clearInterval(timer);
+      if (timer !== null) window.clearInterval(timer);
       if (state.pluginPlanningLease === lease) state.pluginPlanningLease = null;
       try { await pluginTaskOperation(conversation,assistant,outcome,holder); } catch {}
     }
