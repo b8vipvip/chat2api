@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 import sqlite3
@@ -210,6 +211,15 @@ def _normalize_plugin_checkpoint(value: Any) -> dict[str, Any]:
             normalized_calls.append({"name": name, "arguments": args})
         normalized["plan"] = {"request_id": request_id, "model": model,
                               "start_tool_calls": start, "calls": normalized_calls}
+    if value.get("auto_resume") is True and plan is not None:
+        normalized["auto_resume"] = True
+        bindings = value.get("resume_connections", {})
+        if not isinstance(bindings, dict) or len(bindings) > 2:
+            raise ValueError("invalid resume connections")
+        for provider, fingerprint in bindings.items():
+            if provider not in {"github", "gmail"} or not isinstance(fingerprint, str) or not re.fullmatch("[a-f0-9]{64}", fingerprint):
+                raise ValueError("invalid resume connection")
+        normalized["resume_connections"] = bindings
     return normalized
 
 
@@ -530,6 +540,25 @@ class WebChatConversationStoreV1:
                         WHERE user_id={owner}.user_id AND conversation_id={owner}.conversation_id;
                     END
                 """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS web_chat_plugin_finals (
+                    user_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
+                    message_id TEXT NOT NULL, request_id TEXT NOT NULL,
+                    PRIMARY KEY(user_id,conversation_id,message_id)
+                )
+            """)
+            for operation, owner, condition in (
+                ("UPDATE", "NEW", "WHEN NEW.deleted=1"),
+                ("DELETE", "OLD", ""),
+            ):
+                connection.execute(f"""
+                    CREATE TRIGGER IF NOT EXISTS web_chat_plugin_final_{operation.lower()}
+                    AFTER {operation} ON web_chat_conversations {condition}
+                    BEGIN
+                        DELETE FROM web_chat_plugin_finals
+                        WHERE user_id={owner}.user_id AND conversation_id={owner}.conversation_id;
+                    END
+                """)
             # Conversation deletion/retention and evidence removal are atomic.
             for operation, owner, condition in (
                 ("UPDATE", "NEW", "WHEN NEW.deleted=1"),
@@ -703,6 +732,83 @@ class WebChatConversationStoreV1:
             conn.commit()
             return {"state": "completed", "result": result}
 
+    def expired_plugin_candidates(self, limit: int = 8) -> list[tuple[str, str, str]]:
+        with self.lock, closing(self._connect()) as conn:
+            rows = conn.execute("""
+                SELECT t.user_id,t.conversation_id,t.message_id
+                FROM web_chat_plugin_tasks t
+                JOIN web_chat_plugin_checkpoints p USING(user_id,conversation_id,message_id)
+                JOIN web_chat_conversations c USING(user_id,conversation_id)
+                LEFT JOIN web_chat_plugin_takeovers a USING(user_id,conversation_id,message_id)
+                WHERE t.state IN ('running','interrupted') AND t.expires_at>0
+                  AND t.expires_at<=? AND c.deleted=0
+                  AND COALESCE(a.attempts,0)<3
+                  AND json_extract(p.payload,'$.auto_resume')=1
+                ORDER BY t.expires_at LIMIT ?
+            """, (time.time(), max(1, min(32, limit)))).fetchall()
+            return [tuple(row) for row in rows]
+
+    @staticmethod
+    def _plugin_server_pending(conn, key, holder):
+        task = conn.execute(
+            "SELECT holder,state,expires_at FROM web_chat_plugin_tasks WHERE user_id=? AND conversation_id=? AND message_id=?", key
+        ).fetchone()
+        if (not holder.startswith("srv_") or not task or task["holder"] != holder
+                or task["state"] != "running" or task["expires_at"] <= time.time()):
+            return None
+        row = conn.execute(
+            "SELECT revision,deleted,payload FROM web_chat_conversations WHERE user_id=? AND conversation_id=?",
+            key[:2]).fetchone()
+        if not row or row["deleted"]:
+            return None
+        payload = json.loads(row["payload"])
+        message = next((m for m in payload.get("messages", []) if m.get("id")==key[2]
+                        and m.get("role")=="assistant" and m.get("pending") is True
+                        and m.get("recoveryStatus")=="tool_planning"), None)
+        return (row, payload, message) if message is not None else None
+
+    def reserve_plugin_final(self, user_id: str, cid: str, mid: str, holder: str) -> dict | None:
+        key = (user_id, cid, mid)
+        with self.lock, closing(self._connect()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if not self._plugin_server_pending(conn, key, holder):
+                return None
+            row = conn.execute(
+                "SELECT request_id FROM web_chat_plugin_finals WHERE user_id=? AND conversation_id=? AND message_id=?", key
+            ).fetchone()
+            if row:
+                return {"request_id": row["request_id"], "new": False}
+            rid = "req_plugin_final_" + hashlib.sha256(json.dumps(key).encode()).hexdigest()[:40]
+            conn.execute("INSERT INTO web_chat_plugin_finals VALUES (?,?,?,?)", (*key, rid))
+            conn.commit()
+            return {"request_id": rid, "new": True}
+
+    def finish_plugin_recovery(self, user_id: str, cid: str, mid: str, holder: str,
+                               text: str, request_id: str = "", *, success: bool = False,
+                               events: list | None = None) -> bool:
+        key = (user_id,cid,mid)
+        with self.lock, closing(self._connect()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            pending = self._plugin_server_pending(conn,key,holder)
+            if not pending:
+                return False
+            row,payload,message = pending
+            message.update(content=str(text)[:_MAX_ASSISTANT_MESSAGE_CHARS], requestId=request_id,
+                           pending=False,recoveryStatus="completed" if success else "error",lastEventId=0)
+            if events is not None:
+                message["toolEvents"] = _normalize_tool_events(events,"assistant")
+                message["references"] = normalize_tool_references([
+                    ref for event in message["toolEvents"] for ref in event.get("references",[])
+                ])
+            payload["updatedAt"] = _now()
+            conn.execute("UPDATE web_chat_conversations SET revision=?,updated_at=?,payload=? WHERE user_id=? AND conversation_id=?",
+                         (row["revision"]+1,payload["updatedAt"],json.dumps(payload,ensure_ascii=False,separators=(",",":")),*key[:2]))
+            self._replace_generated_references(conn,user_id,cid,payload)
+            conn.execute("UPDATE web_chat_plugin_tasks SET state=?,expires_at=0 WHERE user_id=? AND conversation_id=? AND message_id=?",
+                         ("completed" if success else "interrupted",*key))
+            conn.commit()
+            return True
+
     def plugin_task(self, user_id: str, conversation_id: str, message_id: str,
                     operation: str, holder: str = "",
                     checkpoint: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -826,6 +932,16 @@ class WebChatConversationStoreV1:
                         "SELECT sequence, payload FROM web_chat_plugin_checkpoints "
                         "WHERE user_id=? AND conversation_id=? AND message_id=?", key,
                     ).fetchone()
+                    if prior:
+                        prior_payload = json.loads(prior["payload"])
+                        if checkpoint["tool_calls"] < prior_payload["tool_calls"]:
+                            return {"state":state,"granted":False}
+                        if prior_payload.get("auto_resume") and (
+                            not checkpoint.get("auto_resume") or
+                            any(checkpoint.get("resume_connections",{}).get(k)!=v
+                                for k,v in prior_payload.get("resume_connections",{}).items())
+                        ):
+                            return {"state":state,"granted":False}
                     if not prior or sequence > int(prior["sequence"]):
                         connection.execute("""
                             INSERT INTO web_chat_plugin_checkpoints
@@ -862,6 +978,12 @@ class WebChatConversationStoreV1:
                 ).fetchone()
                 if saved:
                     result["checkpoint"] = json.loads(saved["payload"])
+                    attempts = connection.execute(
+                        "SELECT attempts FROM web_chat_plugin_takeovers WHERE user_id=? AND conversation_id=? AND message_id=?", key
+                    ).fetchone()
+                    result["recoverable"] = bool(row and state == "interrupted" and row["expires_at"] > 0
+                        and result["checkpoint"].get("auto_resume") is True
+                        and (not attempts or attempts["attempts"] < 3))
             connection.commit()
             return result
 
@@ -1359,9 +1481,23 @@ def install_web_chat_conversations_v1(app: FastAPI) -> None:
             operation, holder = body["operation"], body.get("holder", "")
             if (not _CONVERSATION_ID_RE.fullmatch(cid) or not _MESSAGE_ID_RE.fullmatch(mid)
                     or operation not in {"claim", "renew", "completed", "interrupted", "status", "checkpoint", "takeover"}
-                    or (operation != "status" and not _MESSAGE_ID_RE.fullmatch(holder))):
+                    or (operation != "status" and (not _MESSAGE_ID_RE.fullmatch(holder) or holder.startswith("srv_")))):
                 raise ValueError("invalid task")
-            checkpoint = _normalize_plugin_checkpoint(body.get("checkpoint")) if operation == "checkpoint" else None
+            raw_checkpoint = body.get("checkpoint")
+            if operation == "checkpoint" and isinstance(raw_checkpoint, dict):
+                raw_checkpoint = dict(raw_checkpoint)
+                raw_checkpoint.pop("resume_connections", None)
+                if raw_checkpoint.get("auto_resume") is True:
+                    from .plugin_connections_v1 import plugin_connection_binding
+                    oauth = getattr(request.app.state,"plugin_oauth_store",None)
+                    bindings = {}
+                    # Bind every currently selected/connected provider for subsequent rounds.
+                    for provider in ("github","gmail"):
+                        binding = plugin_connection_binding(oauth,str(user["user_id"]),provider)
+                        if binding:
+                            bindings[provider] = binding
+                    raw_checkpoint["resume_connections"] = bindings
+            checkpoint = _normalize_plugin_checkpoint(raw_checkpoint) if operation == "checkpoint" else None
             if checkpoint is not None and len(json.dumps(checkpoint, ensure_ascii=False).encode("utf-8")) > 196608:
                 raise ValueError("plugin checkpoint is too large")
         except (ValueError, KeyError, TypeError, AttributeError, UnicodeDecodeError):
