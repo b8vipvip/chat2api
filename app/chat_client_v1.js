@@ -4897,6 +4897,11 @@
         messages = toolLoop.messages;
         if (toolLoop.plannerRequests > 0) requestId = recoveryApi.createRequestId();
       }
+      if (state.abortController.signal.aborted) {
+        const cancelled = new Error("本轮已停止");
+        cancelled.name = "AbortError";
+        throw cancelled;
+      }
       assistant.requestId = requestId;
       assistant.lastEventId = 0;
       assistant.recoveryStatus = "streaming";

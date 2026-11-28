@@ -404,3 +404,25 @@ assert.equal(interactiveRenderer.validateSnapshot(malformedToggle),false);
 console.log("native-renderer-semantic-toggle-actions-passed");
 
 
+
+
+const concurrentTabs=structuredClone(tabSnapshot);
+concurrentTabs.root.children[0].children.push({
+  tag:"button",interaction_id:"nc_9_3",
+  control:{kind:"tab",label:"History",disabled:false,selected:false,group:"tg_1"},
+});
+const concurrentHost=new FakeElement("host");
+const concurrentCalls=[];
+let acknowledge;
+assert.equal(interactiveRenderer.renderNativeSnapshot(concurrentHost,concurrentTabs,[],payload=>{
+  concurrentCalls.push(payload);
+  return new Promise(resolve=>{acknowledge=resolve;});
+}),true);
+const siblings=findAll(concurrentHost,node=>node.tagName==="button"&&node.attributes.role==="tab");
+const firstSelection=siblings[1].click();
+await siblings[2].click();
+assert.equal(concurrentCalls.length,1,"same tab group must not dispatch concurrent actions");
+acknowledge({ok:true,persisted:true});
+await firstSelection;
+assert.equal(siblings[1].attributes["aria-selected"],"true");
+assert.equal(siblings[2].attributes["aria-selected"],"false");

@@ -1129,3 +1129,33 @@ for (const mode of ["headers","body","stop"]) {
   assert.equal(socket.sent.filter(x=>typeof x==="string" && JSON.parse(x).type==="input_video.frame").length,1);
   await cameraClient.stop();
 }
+
+
+// A half-open public WebSocket must not leave the microphone recording
+// indefinitely after a broker/transport outage; only a matching pong clears
+// the outstanding heartbeat.
+{
+  const events=[];
+  const watchdog=api.create({
+    token:"managed-key",fetcher,WebSocketImpl:FakeWebSocket,AudioContextImpl:FakeAudioContext,
+    mediaDevices,location:window.location,timers,now:()=>clock,onEvent:event=>events.push(event),
+  });
+  await watchdog.start();
+  const ws=FakeWebSocket.last;
+  const tick=[...intervalCallbacks.values()].find(value=>value.ms===20000);
+  assert.ok(tick);
+  tick.fn();
+  const first=JSON.parse(ws.sent.at(-1));
+  assert.equal(first.type,"ping");
+  ws.onmessage({data:JSON.stringify({type:"pong",timestamp:first.timestamp})});
+  clock+=20000;
+  tick.fn();
+  const second=JSON.parse(ws.sent.at(-1));
+  assert.notEqual(second.timestamp,first.timestamp);
+  ws.onmessage({data:JSON.stringify({type:"pong",timestamp:first.timestamp})});
+  clock+=40000;
+  tick.fn();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(watchdog.isActive(),false);
+  assert.ok(events.some(event=>event.type==="client.error" && /连接超时/.test(event.message)));
+}
