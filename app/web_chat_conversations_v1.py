@@ -466,6 +466,12 @@ class WebChatConversationStoreV1:
                 )
             """)
             connection.execute("""
+                CREATE TABLE IF NOT EXISTS web_chat_plugin_used_holders (
+                    user_id TEXT NOT NULL, conversation_id TEXT NOT NULL, message_id TEXT NOT NULL,
+                    holder TEXT NOT NULL, PRIMARY KEY(user_id,conversation_id,message_id,holder)
+                )
+            """)
+            connection.execute("""
                 CREATE TABLE IF NOT EXISTS web_chat_plugin_checkpoints (
                     user_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
                     message_id TEXT NOT NULL, sequence INTEGER NOT NULL,
@@ -496,6 +502,19 @@ class WebChatConversationStoreV1:
                     AFTER {operation} ON web_chat_conversations {condition}
                     BEGIN
                         DELETE FROM web_chat_plugin_takeovers
+                        WHERE user_id={owner}.user_id AND conversation_id={owner}.conversation_id;
+                    END
+                """)
+
+            for operation, owner, condition in (
+                ("UPDATE", "NEW", "WHEN NEW.deleted=1"),
+                ("DELETE", "OLD", ""),
+            ):
+                connection.execute(f"""
+                    CREATE TRIGGER IF NOT EXISTS web_chat_plugin_holder_{operation.lower()}
+                    AFTER {operation} ON web_chat_conversations {condition}
+                    BEGIN
+                        DELETE FROM web_chat_plugin_used_holders
                         WHERE user_id={owner}.user_id AND conversation_id={owner}.conversation_id;
                     END
                 """)
@@ -622,8 +641,16 @@ class WebChatConversationStoreV1:
                 attempts = connection.execute(
                     "SELECT attempts FROM web_chat_plugin_takeovers WHERE user_id=? AND conversation_id=? AND message_id=?",
                     key).fetchone()
-                if saved and pending and active < 20 and (not attempts or int(attempts["attempts"]) < 3):
+                used = connection.execute(
+                    "SELECT 1 FROM web_chat_plugin_used_holders WHERE user_id=? AND conversation_id=? AND message_id=? AND holder=?",
+                    (*key, holder)).fetchone()
+                if saved and pending and not used and active < 20 and (not attempts or int(attempts["attempts"]) < 3):
                     resumed_checkpoint = json.loads(saved["payload"])
+                    # Persist both generations so even an older holder cannot
+                    # return after a second expiry and revive stale operations.
+                    connection.executemany(
+                        "INSERT OR IGNORE INTO web_chat_plugin_used_holders VALUES (?,?,?,?)",
+                        [(*key, row["holder"]), (*key, holder)])
                     connection.execute("""
                         INSERT INTO web_chat_plugin_takeovers VALUES (?,?,?,1)
                         ON CONFLICT(user_id,conversation_id,message_id) DO UPDATE SET attempts=attempts+1
@@ -633,6 +660,13 @@ class WebChatConversationStoreV1:
                         "WHERE user_id=? AND conversation_id=? AND message_id=?",
                         (holder, now + 180, *key))
                     state, granted = "running", True
+            elif operation == "interrupted" and row and state == "interrupted" and holder and row["holder"] == holder:
+                # A delayed explicit stop before a takeover still wins over
+                # expiration; a superseded holder can never stop its successor.
+                connection.execute(
+                    "UPDATE web_chat_plugin_tasks SET expires_at=0 WHERE user_id=? AND conversation_id=? AND message_id=?",
+                    key)
+                granted = True
             elif operation == "claim" and not row:
                 # Bound orphan evidence from failed conversation uploads.
                 # Live conversations retain evidence until deleted.
