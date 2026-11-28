@@ -64,7 +64,9 @@ def test_chat_client_page_assets_and_auth_boundary(tmp_path: Path) -> None:
         assert 'id="pluginPickerButton"' in composer_html
         assert 'id="pluginsBackToChat"' in page.text
         sidebar_html = page.text.split('<aside class="sidebar"', 1)[1].split("</aside>", 1)[0]
-        assert 'id="newChatButton"' not in sidebar_html
+        assert 'id="newChatButton"' in sidebar_html
+        assert 'id="newChatButton"' not in topbar_html
+        assert page.text.count('id="newChatButton"') == 1
         assert 'id="pluginsButton"' in sidebar_html and 'id="libraryButton"' in sidebar_html
         assert "聊天记录保存在当前浏览器" not in page.text
         assert 'id="exportJsonButton"' in page.text

@@ -117,10 +117,28 @@ def install_web_chat_features_v1(app: Any) -> Any:
             except Exception as error:
                 raise HTTPException(status_code=503, detail="available model catalogue unavailable",
                                     headers=_PRIVATE_HEADERS) from error
-            available_rows = available_payload.get("available_models") or []
+            available_rows = list(available_payload.get("available_models") or [])
             default_mapping = str(available_payload.get("available_models_default_mapping") or "").strip()
             management_snapshot = getattr(request.app.state, "worker_text_model_management_v146_snapshot", None)
             management_state = management_snapshot() if callable(management_snapshot) else {}
+            # A manual sync task is historical evidence, not the authority for
+            # live page-default availability. A failed or never-run sync must
+            # not hide a ready Free Worker which needs no picker interaction.
+            # Use the very same live management projection shown above the
+            # admin sync table; preserve all entitlement/disabled checks below.
+            if isinstance(management_state, dict) and isinstance(management_state.get("data"), list):
+                live_default = next((
+                    row for row in management_state["data"]
+                    if isinstance(row, dict) and row.get("id") == "default"
+                    and row.get("enabled") is not False and row.get("routable_by")
+                ), None)
+                available_rows = [
+                    row for row in available_rows
+                    if not isinstance(row, dict) or row.get("id") != "default"
+                ]
+                if live_default is not None:
+                    available_rows.insert(0, {"id": "default", "live_default": True})
+                default_mapping = str(management_state.get("legacy_minimum_model") or default_mapping).strip()
             disabled_models = {
                 str(model_id) for model_id in (management_state.get("disabled") or [])
             } if isinstance(management_state, dict) else set()

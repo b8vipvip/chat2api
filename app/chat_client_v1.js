@@ -1017,6 +1017,7 @@
         // completed answer with a stale local text snapshot.
         messages.set(message.id, withMergedReferences({...existing,toolEvents:message.toolEvents}));
       } else {
+        // A newer text snapshot must not erase server-side citations.
         // Even a text-only snapshot can carry a newer durable replay cursor.
         messages.set(message.id, withMergedReferences(existing));
       }
