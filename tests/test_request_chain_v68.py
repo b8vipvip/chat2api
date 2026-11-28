@@ -187,7 +187,11 @@ def test_v639_native_sidecar_requires_committed_server_ack_without_terminal_auth
     assert 'response_terminal_source: "verified-request-media-dom-v176"' in controller
     # This observer can neither emit a terminal nor manufacture media URLs.
     assert 'type:"chat.completed"' not in observer
-    assert '"data:image/' not in observer
+    # The only data URI is the local, freshly encoded canvas PNG. The
+    # observer sends bounded pixel bytes, never a DOM-provided URL.
+    assert observer.count('"data:image/') == 1
+    assert 'output.toDataURL("image/png")' in observer
+    assert 'return {tag:"canvas_raster",png,width:output.width,height:output.height}' in observer
 
 def test_v639_never_returns_ordinal_or_dimension_guessed_image_assets():
     backend = read("app/main.py")
