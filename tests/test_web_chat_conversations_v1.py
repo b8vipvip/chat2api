@@ -972,6 +972,9 @@ def test_generated_retention_only_removes_aged_unreferenced_internal_web_chat_fi
         app.state.web_chat_conversations.set_retention_days(30)
     # Fresh process startup invokes the real retention path against durable rows.
     reopened = create_app(settings)
+    # The test installer creates a service key before lifespan loads keys.
+    # Load persisted keys first so that creation cannot overwrite them.
+    asyncio.run(reopened.state.api_keys.load())
     _install_web_chat_test_features(reopened)
     with TestClient(reopened):
         archive = reopened.state.generated_files
