@@ -2269,7 +2269,8 @@
       "/api/user/plugins/" + encodeURIComponent(providerId) + "/tools/" + encodeURIComponent(toolName),
       {
         method: "POST",
-        headers: {"Content-Type":"application/json"},
+        headers: {"Content-Type":"application/json",
+          ...(state.pluginPlanningLease?.durableToolHeaders?.() || {})},
         body: JSON.stringify(payload || {}),
         signal: state.abortController?.signal,
       }
@@ -5117,7 +5118,16 @@
         throw error;
       }
     };
+    let durableRound = 0;
     const lease = {
+      durableToolHeaders() {
+        assertTransport();
+        if (!durableRound) throw new Error("插件规划尚未持久化");
+        return {"X-Chat2API-Plugin-Conversation":conversation.id,
+          "X-Chat2API-Plugin-Message":assistant.id,
+          "X-Chat2API-Plugin-Holder":holder,
+          "X-Chat2API-Plugin-Round":String(durableRound)};
+      },
       async checkpoint(rounds, toolCalls, plan = null) {
         assertTransport();
         const toolEvents = normalizeToolEvents(assistant.toolEvents,"assistant")
@@ -5127,6 +5137,7 @@
         });
         assertTransport();
         if (!result.granted) throw new Error("插件检查点未获确认");
+        durableRound = rounds;
       },
       renew() {
         if (finished) return Promise.reject(new Error("插件执行租约已结束"));
