@@ -3309,6 +3309,7 @@
     const maxToolCalls = 6;
 
     while (plannerRequests < maxRounds && toolCalls < maxToolCalls) {
+      if (state.pluginPlanningLease) await state.pluginPlanningLease.renew();
       const plannerRequestId = plannerRequests === 0
         ? firstRequestId : recoveryApi.createRequestId();
       assistant.lastEventId = 0;
@@ -3385,6 +3386,7 @@
           messages.push({role:"tool",content:JSON.stringify(duplicate)});
           continue;
         }
+        if (state.pluginPlanningLease) await state.pluginPlanningLease.renew();
         executed.add(fingerprint);
         const outcome = await executePluginToolCall(
           call,definitions,assistant,knownGmailMessageIds,knownGithubFileRefs,
@@ -4992,31 +4994,96 @@
       await refreshNativeSnapshot(item.requestId);
     }));
   }
+  async function pluginTaskOperation(conversation, message, operation, holder = "") {
+    const owner = String(state.user?.user_id || "");
+    if (!owner) throw new Error("账户已失效");
+    const {response,result} = await fetchConversationMutation("/api/user/chat/conversations/plugin-task", {
+      method:"POST",credentials:"same-origin",
+      headers:{"Content-Type":"application/json","Accept":"application/json","X-Chat2API-User-ID":owner},
+      body:JSON.stringify({conversation_id:conversation.id,message_id:message.id,operation,holder}),
+    });
+    if (String(state.user?.user_id || "") !== owner || !response.ok || typeof result.state !== "string")
+      throw new Error(result.detail || "无法确认插件执行租约");
+    return result;
+  }
+
+  async function withPluginPlanningLease(conversation, assistant, run) {
+    const holder = id();
+    const transport = state.abortController;
+    const claim = await pluginTaskOperation(conversation,assistant,"claim",holder);
+    if (!claim.granted) throw new Error("该插件任务已被执行或已失效");
+    let finished = false, renewal = null, outcome = "interrupted";
+    const lease = {
+      renew() {
+        if (finished || transport?.signal.aborted) return Promise.reject(new Error("插件任务已停止"));
+        if (renewal) return renewal;
+        renewal = pluginTaskOperation(conversation,assistant,"renew",holder).then(result=>{
+          if (!result.granted) throw new Error("插件执行租约已失效");
+        }).catch(error=>{
+          if (!finished) transport?.abort();
+          throw error;
+        }).finally(()=>{renewal=null;});
+        return renewal;
+      },
+    };
+    state.pluginPlanningLease = lease;
+    const timer = window.setInterval(()=>{void lease.renew().catch(()=>{});},30000);
+    try {
+      const result = await run();
+      await lease.renew();
+      outcome = "completed";
+      return result;
+    } finally {
+      finished = true;
+      window.clearInterval(timer);
+      if (state.pluginPlanningLease === lease) state.pluginPlanningLease = null;
+      try { await pluginTaskOperation(conversation,assistant,outcome,holder); } catch {}
+    }
+  }
+
+  async function reconcileInterruptedPluginTasks() {
+    if (state.pluginTaskReconcileInFlight || state.streaming || state.voiceActive || !state.remoteSyncReady) return;
+    state.pluginTaskReconcileInFlight = true;
+    const owner = String(state.user?.user_id || "");
+    try {
+      for (const conversation of state.conversations) {
+        for (const message of conversation.messages || []) {
+          if (!message.pending || message.recoveryStatus !== "tool_planning") continue;
+          let task;
+          try { task = await pluginTaskOperation(conversation,message,"status"); } catch { continue; }
+          if (String(state.user?.user_id || "") !== owner || state.streaming || state.voiceActive ||
+              !state.conversations.includes(conversation) || !conversation.messages.includes(message) ||
+              !message.pending || message.recoveryStatus !== "tool_planning") return;
+          if (task.state === "running") continue;
+          // Only terminalize a task after the persisted lease is gone.
+          message.pending = false;
+          message.recoveryStatus = "error";
+          message.content = "插件任务已中断。若已保存查询结果，可从结果继续；否则请重新发送问题。";
+          message.toolEvents = (message.toolEvents || []).map(event =>
+            event.status === "running" ? {...event,status:"cancelled",
+              resultId:event.resultId || event.callId + "_result",output:"页面刷新导致工具调用中断。"} : event);
+          saveHistory();
+          renderAll();
+        }
+      }
+    } finally {
+      state.pluginTaskReconcileInFlight = false;
+    }
+  }
+
   function resumePendingMessages() {
     const pending = [];
-    let planningInterrupted = false;
     state.conversations.forEach((conversation) => {
       (conversation.messages || []).forEach((message) => {
         if (message.role !== "assistant" || message.pending !== true) return;
-        if (message.recoveryStatus === "tool_planning") {
-          message.pending = false;
-          message.recoveryStatus = "error";
-          message.content = "本轮插件工具规划或执行因页面刷新而中断。若已保存查询结果，可从结果继续；否则请重新发送问题。";
-          message.toolEvents = (Array.isArray(message.toolEvents) ? message.toolEvents : []).map(event =>
-            event.status === "running"
-              ? {...event,status:"cancelled",resultId:event.resultId || event.callId + "_result",output:"页面刷新导致工具调用中断。"}
-              : event
-          );
-          planningInterrupted = true;
-          return;
-        }
+        if (message.recoveryStatus === "tool_planning") return;
         if (message.requestId) {
           pending.push({conversation,message});
           void streamNativeContent(message.requestId);
         }
       });
     });
-    if (planningInterrupted) saveHistory();
+    void reconcileInterruptedPluginTasks();
     pending.forEach(({conversation,message}) => { void recoverPendingMessage(conversation,message); });
   }
   function buildPluginResumeEvidence(message) {
@@ -5176,8 +5243,8 @@
         messages.push({role:"tool",content:JSON.stringify({saved_plugin_evidence:resumedEvidence})});
       } else if (Array.isArray(state.selectedPlugins) && state.selectedPlugins.length > 0
           && typeof runAutonomousPluginToolLoop === "function") {
-        const toolLoop = await runAutonomousPluginToolLoop(
-          messages,assistant,keyId,recoveryApi,requestId,requestModelId,
+        const toolLoop = await withPluginPlanningLease(conversation,assistant,()=>
+          runAutonomousPluginToolLoop(messages,assistant,keyId,recoveryApi,requestId,requestModelId),
         );
         messages = toolLoop.messages;
         if (toolLoop.plannerRequests > 0) requestId = recoveryApi.createRequestId();
@@ -5894,6 +5961,7 @@
     if (document.visibilityState === "visible") {
       startConversationChangeStream();
       void pullConversationDelta();
+      void reconcileInterruptedPluginTasks();
     }
   }, 5000);
   window.setInterval(() => {

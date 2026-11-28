@@ -58,6 +58,7 @@ async function send(chunks, close = true, onCancel = () => {}, scenario = {}) {
       if (scenario.networkFailure) throw new Error("connection lost before headers");
       return {ok: true, body};
     },
+    withPluginPlanningLease: async (_conversation,_assistant,run)=>run(),
     runAutonomousPluginToolLoop: async (_messages,assistant) => {
       assistant.toolEvents.push({callId:"plugin-call",status:"completed"});
       throw new Error("planner interrupted");

@@ -702,3 +702,25 @@ def test_change_generation_is_durable_and_owner_scoped(tmp_path: Path):
     assert b.delete("alice", row["id"], 1)[0]
     assert WebChatConversationStoreV1(tmp_path).change_generation("alice") == 2
     assert b.change_generation("bob") == 0
+
+
+def test_plugin_task_lease_is_fenced_across_processes_and_restart(tmp_path: Path, monkeypatch):
+    import app.web_chat_conversations_v1 as module
+    now = [1000.0]
+    monkeypatch.setattr(module.time, "time", lambda: now[0])
+    a = WebChatConversationStoreV1(tmp_path)
+    b = WebChatConversationStoreV1(tmp_path)
+    cid, mid = "c2a_task_0001", "message_task_0001"
+    assert a.plugin_task("alice", cid, mid, "claim", "holder_first")["granted"]
+    assert b.plugin_task("alice", cid, mid, "status")["state"] == "running"
+    assert not b.plugin_task("alice", cid, mid, "claim", "holder_second")["granted"]
+    assert b.plugin_task("bob", cid, mid, "status")["state"] == "missing"
+    now[0] += 100
+    assert a.plugin_task("alice", cid, mid, "renew", "holder_first")["granted"]
+    now[0] += 181
+    assert b.plugin_task("alice", cid, mid, "status")["state"] == "interrupted"
+    assert not a.plugin_task("alice", cid, mid, "renew", "holder_first")["granted"]
+    assert not b.plugin_task("alice", cid, mid, "claim", "holder_second")["granted"]
+    assert a.plugin_task("alice", cid, "message_task_0002", "claim", "holder_first")["granted"]
+    assert b.plugin_task("alice", cid, "message_task_0002", "completed", "holder_first")["granted"]
+    assert WebChatConversationStoreV1(tmp_path).plugin_task("alice", cid, "message_task_0002", "status")["state"] == "completed"

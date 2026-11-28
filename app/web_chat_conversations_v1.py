@@ -7,6 +7,7 @@ import re
 import sqlite3
 import stat
 import threading
+import time
 from contextlib import closing, contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -437,6 +438,69 @@ class WebChatConversationStoreV1:
                         ON CONFLICT(user_id) DO UPDATE SET generation=generation+1;
                     END
                 """)
+
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS web_chat_plugin_tasks (
+                    user_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
+                    message_id TEXT NOT NULL, holder TEXT NOT NULL,
+                    state TEXT NOT NULL, expires_at REAL NOT NULL,
+                    PRIMARY KEY(user_id, conversation_id, message_id)
+                )
+            """)
+
+    def plugin_task(self, user_id: str, conversation_id: str, message_id: str,
+                    operation: str, holder: str = "") -> dict[str, Any]:
+        # Lease authority is persisted in SQLite, never in browser localStorage.
+        # An expired holder cannot renew or complete its old task.
+        with self.lock, closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            now = time.time()
+            key = (user_id, conversation_id, message_id)
+            deleted = connection.execute(
+                "SELECT deleted FROM web_chat_conversations WHERE user_id=? AND conversation_id=?",
+                key[:2],
+            ).fetchone()
+            if deleted and deleted["deleted"]:
+                connection.rollback()
+                return {"state": "deleted", "granted": False}
+            row = connection.execute(
+                "SELECT holder, state, expires_at FROM web_chat_plugin_tasks "
+                "WHERE user_id=? AND conversation_id=? AND message_id=?", key,
+            ).fetchone()
+            state = str(row["state"]) if row else "missing"
+            if state == "running" and float(row["expires_at"]) <= now:
+                state = "interrupted"
+                connection.execute(
+                    "UPDATE web_chat_plugin_tasks SET state='interrupted' "
+                    "WHERE user_id=? AND conversation_id=? AND message_id=?", key,
+                )
+            granted = False
+            if operation == "claim" and not row:
+                active = connection.execute(
+                    "SELECT COUNT(*) FROM web_chat_plugin_tasks WHERE user_id=? "
+                    "AND state='running' AND expires_at>?", (user_id, now),
+                ).fetchone()[0]
+                if active < 20:
+                    connection.execute(
+                        "INSERT INTO web_chat_plugin_tasks VALUES (?,?,?,?,'running',?)",
+                        (*key, holder, now + 180),
+                    )
+                    state, granted = "running", True
+            elif row and state == "running" and holder and row["holder"] == holder:
+                if operation in {"claim", "renew"}:
+                    connection.execute(
+                        "UPDATE web_chat_plugin_tasks SET expires_at=? "
+                        "WHERE user_id=? AND conversation_id=? AND message_id=?", (now + 180, *key),
+                    )
+                    granted = True
+                elif operation in {"completed", "interrupted"}:
+                    state, granted = operation, True
+                    connection.execute(
+                        "UPDATE web_chat_plugin_tasks SET state=?,expires_at=0 "
+                        "WHERE user_id=? AND conversation_id=? AND message_id=?", (state, *key),
+                    )
+            connection.commit()
+            return {"state": state, "granted": granted}
 
     def change_generation(self, user_id: str) -> int:
         with self.lock, closing(self._connect()) as connection:
@@ -914,6 +978,24 @@ def install_web_chat_conversations_v1(app: FastAPI) -> None:
         _, user = current_user(request)
         rows = store.list_for_user(str(user["user_id"]))
         return JSONResponse({"data": rows}, headers=_PRIVATE_HEADERS)
+
+    @app.post("/api/user/chat/conversations/plugin-task")
+    async def user_chat_plugin_task(request: Request):
+        _, user = current_user(request)
+        if user.get("is_guest") or not same_origin_admin_request(request):
+            raise HTTPException(status_code=403, detail="authenticated same-origin request required", headers=_PRIVATE_HEADERS)
+        try:
+            body = json.loads(await _read_bounded_request_body(request, 4096))
+            cid, mid = body["conversation_id"], body["message_id"]
+            operation, holder = body["operation"], body.get("holder", "")
+            if (not _CONVERSATION_ID_RE.fullmatch(cid) or not _MESSAGE_ID_RE.fullmatch(mid)
+                    or operation not in {"claim", "renew", "completed", "interrupted", "status"}
+                    or (operation != "status" and not _MESSAGE_ID_RE.fullmatch(holder))):
+                raise ValueError("invalid task")
+        except (ValueError, KeyError, TypeError, AttributeError, UnicodeDecodeError):
+            raise HTTPException(status_code=422, detail="invalid plugin task", headers=_PRIVATE_HEADERS)
+        result = store.plugin_task(str(user["user_id"]), cid, mid, operation, holder)
+        return JSONResponse(result, headers=_PRIVATE_HEADERS)
 
     @app.get("/api/user/chat/conversations/changes")
     async def stream_user_chat_changes(request: Request):
