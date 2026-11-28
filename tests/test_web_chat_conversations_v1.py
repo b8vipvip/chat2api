@@ -982,3 +982,26 @@ def test_generated_retention_only_removes_aged_unreferenced_internal_web_chat_fi
         assert archive.deletion_identity(referenced["id"]) is not None
         assert archive.deletion_identity(external["id"]) is not None
         assert archive.deletion_identity(recent["id"]) is not None
+
+def test_plugin_checkpoint_preserves_normalized_plan_across_takeover(tmp_path: Path, monkeypatch):
+    import app.web_chat_conversations_v1 as module
+    import pytest
+    now = [1000.0]
+    monkeypatch.setattr(module.time, "time", lambda: now[0])
+    store = WebChatConversationStoreV1(tmp_path)
+    cid, mid = "c2a_durable_plan_0001", "message_assistant_01"
+    conversation = _conversation(cid)
+    conversation["messages"][1].update(pending=True, recoveryStatus="tool_planning")
+    assert store.upsert("alice", conversation, 0)[0]
+    assert store.plugin_task("alice", cid, mid, "claim", "holder_first")["granted"]
+    plan = {"request_id": "req_planner_1234", "model": "gpt-6", "start_tool_calls": 0,
+            "calls": [{"name": "github.list_issues", "arguments": {"repository":"owner/repo","page":1}}]}
+    checkpoint = {"rounds":1,"tool_calls":0,"tool_events":[],"plan":plan}
+    assert store.plugin_task("alice", cid, mid, "checkpoint", "holder_first", checkpoint)["granted"]
+    bad = {**checkpoint,"plan":{**plan,"calls":[{"name":"unknown.write","arguments":{}}]}}
+    with pytest.raises(ValueError):
+        store.plugin_task("alice", cid, mid, "checkpoint", "holder_first", bad)
+    now[0] += 181
+    reopened = WebChatConversationStoreV1(tmp_path)
+    resumed = reopened.plugin_task("alice", cid, mid, "takeover", "holder_second")
+    assert resumed["granted"] and resumed["checkpoint"]["plan"] == plan
