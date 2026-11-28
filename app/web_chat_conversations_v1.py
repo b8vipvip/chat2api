@@ -1308,11 +1308,17 @@ def install_web_chat_conversations_v1(app: FastAPI) -> None:
             if archive is None:
                 raise HTTPException(status_code=503, detail="generated file archive unavailable", headers=_PRIVATE_HEADERS)
             rows = await asyncio.to_thread(archive.list_owned, accounts.key_ids(user_id), after, limit)
+            data = []
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+            for row in rows[:limit]:
+                count = store.generated_reference_count(user_id, row["id"], row["request_id"])
+                data.append({"id": row["id"], "filename": row["filename"], "mime_type": row["mime"],
+                             "bytes": row["size"], "created_at": row["created_at"], "source": "generated",
+                             "reference_count": count,
+                             "deletable": not user.get("is_guest") and count == 0
+                             and archive.old_enough(row["created_at"], cutoff)})
             return JSONResponse({
-                "data": [{"id": row["id"], "filename": row["filename"], "mime_type": row["mime"],
-                          "bytes": row["size"], "created_at": row["created_at"], "source": "generated",
-                          "reference_count": store.generated_reference_count(user_id, row["id"], row["request_id"])}
-                         for row in rows[:limit]],
+                "data": data,
                 "next_cursor": rows[limit-1]["id"] if len(rows) > limit else None,
             }, headers=_PRIVATE_HEADERS)
         file_store = getattr(request.app.state, "file_store", None)
