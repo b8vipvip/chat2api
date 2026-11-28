@@ -753,3 +753,14 @@ test("incremental conversation pull applies tombstones and rejects an in-flight 
   assert.equal(state.activeConversationId,"new");
   assert.equal(renders,1);
 });
+
+
+test("longer Voice checkpoints cannot overwrite the confirmed final transcript",()=>{
+  const checkpoint={id:"voice-id",role:"assistant",content:"a longer but unconfirmed transcript",recoveryStatus:"voice_checkpoint"};
+  const final={...checkpoint,content:"final",recoveryStatus:"completed"};
+  const row=(message,updatedAt)=>({id:"voice-conv",messages:[message],updatedAt,serverRevision:2});
+  assert.equal(mergeConversation(row(final,"1"),row(checkpoint,"2")).messages[0].content,"final");
+  assert.equal(mergeConversation(row(checkpoint,"2"),row(final,"1")).messages[0].content,"final");
+  const interrupted={...checkpoint,recoveryStatus:"voice_partial",content:"interrupted"};
+  assert.equal(mergeConversation(row(checkpoint,"2"),row(interrupted,"1")).messages[0].content,"interrupted");
+});

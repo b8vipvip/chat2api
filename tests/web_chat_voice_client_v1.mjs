@@ -685,7 +685,7 @@ assert.equal(voiceConversation.messages.length,6);
 historyUi.handleVoiceEvent({type:"response.done",text:"最终语音回复"});
 assert.equal(voiceConversation.messages.at(-1).id,checkpoint.id);
 assert.equal(voiceConversation.messages.at(-1).content,"最终语音回复");
-assert.equal(voiceConversation.messages.at(-1).recoveryStatus,"");
+assert.equal(voiceConversation.messages.at(-1).recoveryStatus,"completed");
 assert.equal(voiceConversation.messages.length,6);
 assert.match(buildVoiceContext({messages:[{role:"assistant",content:"partial",recoveryStatus:"voice_checkpoint"}]}),/未确认完整的语音转录/);
 

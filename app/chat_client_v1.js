@@ -376,7 +376,7 @@
         state.voiceAssistantLine.textContent = finalText;
       }
       if (finalText) {
-        state.voiceAssistantPersisted = persistVoiceTranscript("assistant",finalText);
+        state.voiceAssistantPersisted = persistVoiceTranscript("assistant",finalText,"completed");
       }
       state.voiceAssistantLine = null;
       state.voiceAssistantHistoryId = "";
@@ -1017,6 +1017,21 @@
         ...(mergedReferences.length ? {references:mergedReferences} : {}),
       });
 
+      // Voice checkpoints are intentionally not marked pending (a crashed
+      // tab must not block new turns), so the generic pending merge rules
+      // cannot distinguish them from final text. Prefer a confirmed final
+      // transcript, then an interrupted terminal, then the newer checkpoint.
+      const voiceRank = row => row.recoveryStatus === "voice_checkpoint" ? 1 :
+        row.recoveryStatus === "voice_partial" ? 2 : 3;
+      const localVoiceRank = voiceRank(message);
+      const serverVoiceRank = voiceRank(existing);
+      if (localVoiceRank < 3 || serverVoiceRank < 3) {
+        const preferred = localVoiceRank > serverVoiceRank ? message :
+          serverVoiceRank > localVoiceRank ? existing :
+          String(localRow.updatedAt || "") > String(serverRow.updatedAt || "") ? message : existing;
+        messages.set(message.id,withMergedReferences(preferred));
+        return;
+      }
       // A terminal snapshot must never be resurrected by a stale pending copy
       // from another device. Keep the longer text/tool evidence, but preserve
       // the terminal side's pending/recoveryStatus state.
@@ -3824,7 +3839,7 @@
         headers:{"Accept":"application/json","X-Chat2API-User-ID":owner},
       });
       if (String(state.user?.user_id || "") !== owner) return;
-      if (!response.ok) throw new Error(result.detail || "附件删除失败");
+      if (!response.ok || result.deleted !== true) throw new Error(result.detail || "服务端尚未确认附件删除");
       toast("删除请求已完成，正在重新同步资料库。");
     } catch (error) {
       if (String(state.user?.user_id || "") === owner) toast(String(error?.message || "附件删除失败"));
