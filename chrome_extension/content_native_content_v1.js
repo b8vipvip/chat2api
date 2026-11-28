@@ -1239,11 +1239,15 @@
       return {ok:false,error:"invalid-interaction-envelope"};
     }
     const actionId = String(message?.action_id || "");
+    const action = String(message?.action || "");
+    const value = message?.value;
     const previousAction = nativeControlAppliedActions.get(actionId);
     if (previousAction) {
       if (previousAction.requestId === requestId
           && previousAction.revision === revision
-          && previousAction.interactionId === interactionId) {
+          && previousAction.interactionId === interactionId
+          && previousAction.action === action
+          && Object.is(previousAction.value,value)) {
         return {...previousAction.response,duplicate:true};
       }
       return {ok:false,error:"native-interaction-action-id-reused"};
@@ -1256,9 +1260,19 @@
     const target = targets?.get(interactionId);
     const element = target?.element;
     if (!element || !element.isConnected) return {ok:false,error:"native-control-no-longer-connected"};
-    if (element.disabled || element.matches?.(":disabled")) return {ok:false,error:"native-control-disabled"};
-    const action = String(message?.action || "");
-    const value = message?.value;
+    if (element.disabled || element.matches?.(":disabled") || element.getAttribute?.("aria-disabled")==="true")
+      return {ok:false,error:"native-control-disabled"};
+    // The original node may have been repurposed by the live page since
+    // capture. A stale checkbox must never click a newly assigned submit
+    // button, or mutate a control that moved into an account/form surface.
+    const tag=element.tagName?.toLowerCase();
+    const liveType=String(element.type || element.getAttribute?.("type") || "").toLowerCase();
+    if (element.form || element.closest?.("form,nav,aside,header,footer,[role='menu'],[role='dialog'],[data-message-author-role='user'],[contenteditable='true']"))
+      return {ok:false,error:"native-control-no-longer-in-safe-scope"};
+    if ((["checkbox","radio","range"].includes(target.kind) && (tag!=="input" || liveType!==target.kind))
+        || (target.kind==="select" && (tag!=="select" || element.multiple))
+        || (target.kind==="disclosure" && tag!=="details"))
+      return {ok:false,error:"native-control-kind-changed"};
     try {
       if (target.kind === "disclosure" && action === "set_open" && typeof value === "boolean") {
         element.open = value;
@@ -1283,7 +1297,7 @@
         element.dispatchEvent(new Event("change",{bubbles:true,composed:true}));
       } else if (target.kind === "select" && action === "set_value" && typeof value === "string") {
         const option = [...(element.options || [])].find(item =>
-          String(item.value) === value && !item.disabled);
+          String(item.value) === value && !item.disabled && !item.closest?.("optgroup[disabled]"));
         if (!option) return {ok:false,error:"native-select-option-not-allowed"};
         const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
         if (setter) setter.call(element, value);
@@ -1318,7 +1332,7 @@
       while (revisions.size > 8) revisions.delete(revisions.keys().next().value);
       const response = {ok:true,revision:revision + 1};
       nativeControlAppliedActions.set(actionId,{
-        requestId,revision,interactionId,response,
+        requestId,revision,interactionId,action,value,response,
       });
       while (nativeControlAppliedActions.size > 64) {
         nativeControlAppliedActions.delete(nativeControlAppliedActions.keys().next().value);
