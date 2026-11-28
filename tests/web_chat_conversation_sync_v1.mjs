@@ -503,7 +503,7 @@ test("conversation switching and bootstrap cannot resurrect an image-only model"
   const bootstrap=source.slice(bootStart,bootEnd);
   assert.ok(bootstrap.includes("selectAvailableTextModel(currentConversation());"));
   assert.equal(bootstrap.includes("state.selectedModel = currentConversation().model"),false);
-  const sendStart=source.indexOf("  async function sendMessage(text) {");
+  const sendStart=source.indexOf("  async function sendMessage(");
   const sendEnd=source.indexOf("  async function loadWebChatSession(",sendStart);
   const send=source.slice(sendStart,sendEnd);
   assert.ok(send.includes("const requestModelId = selectAvailableTextModel(currentConversation());"));
