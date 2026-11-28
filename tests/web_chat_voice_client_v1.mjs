@@ -829,7 +829,7 @@ const budgetWindow = {
   setTimeout,clearTimeout,setInterval,clearInterval,
 };
 const budgetSandbox = vm.createContext({
-  window:budgetWindow,URL,Blob,ArrayBuffer,DataView,Uint8Array,Float32Array,
+  window:budgetWindow,URL,Blob,ArrayBuffer,AbortController,DataView,Uint8Array,Float32Array,
   Number,String,Math,Set,Promise,Date,TypeError,Error,btoa:window.btoa,
 });
 vm.runInContext(budgetSource,budgetSandbox);
@@ -1072,4 +1072,52 @@ for (const mode of ["headers","body","stop"]) {
   assert.equal(signal.aborted,true);
   assert.equal(timeoutClient.isActive(),false);
   assert.equal(FakeWebSocket.last,oldSocket);
+}
+
+
+// Cancellation and upload deadlines must release an unsent camera slot,
+// without ending the voice call or allowing a stale upload to dispatch.
+for (const mode of ["headers","body","stop"]) {
+  let expire, signal, reached;
+  const fetching=new Promise(r=>{reached=r;});
+  const stall=signal=>new Promise((_resolve,reject)=>{
+    const abort=()=>reject(Object.assign(new Error("aborted"),{name:"AbortError"}));
+    if(signal.aborted) abort(); else signal.addEventListener("abort",abort,{once:true});
+  });
+  let uploads=0;
+  const events=[];
+  const cameraClient=api.create({
+    sessionEndpoint:"/api/user/chat/voice-session",fileUploadEndpoint:"/api/user/chat/files",
+    userKeyId:"key_owner_123",WebSocketImpl:FakeWebSocket,AudioContextImpl:FakeAudioContext,
+    mediaDevices,location:window.location,now:()=>clock,onEvent:e=>events.push(e),
+    timers:{...timers,setTimeout(fn,ms){
+      if(ms===15000){expire=fn;return -2;}
+      return timers.setTimeout(fn,ms);
+    },clearTimeout(id){if(id!==-2)timers.clearTimeout(id);}},
+    fetcher:async(url,options)=>{
+      if(url==="/api/user/chat/voice-session") return {
+        ok:true,json:async()=>({websocket_path:"/v1/audio/realtime?session_token=one-time"})
+      };
+      if(++uploads>1) return {ok:true,json:async()=>({id:"file_abcdefgh"})};
+      signal=options.signal;
+      if(mode==="body") return {ok:true,json:()=>{reached();return stall(signal);}};
+      reached();return stall(signal);
+    }
+  });
+  await cameraClient.start();
+  const socket=FakeWebSocket.last;
+  await cameraClient.startCamera(video);
+  await fetching;
+  if(mode==="stop") cameraClient.stopCamera(); else expire();
+  await new Promise(r=>setImmediate(r));
+  assert.equal(signal.aborted,true);
+  assert.equal(cameraClient.isActive(),true);
+  assert.equal(cameraClient.isCameraActive(),false);
+  assert.equal(socket.sent.filter(x=>typeof x==="string" && JSON.parse(x).type==="input_video.frame").length,0);
+  assert.equal(events.some(e=>e.type==="client.error" && /超时/.test(e.message)),mode!=="stop");
+  clock+=250;
+  await cameraClient.startCamera(video);
+  await new Promise(r=>setTimeout(r,10));
+  assert.equal(socket.sent.filter(x=>typeof x==="string" && JSON.parse(x).type==="input_video.frame").length,1);
+  await cameraClient.stop();
 }

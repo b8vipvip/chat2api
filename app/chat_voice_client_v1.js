@@ -14,6 +14,7 @@
   const SESSION_CLOSE_TIMEOUT_MS = 8000;
   const SESSION_READY_TIMEOUT_MS = 90000;
   const SESSION_CREATE_TIMEOUT_MS = 20000;
+  const VIDEO_UPLOAD_TIMEOUT_MS = 15000;
   const DEFAULT_SESSION_INSTRUCTIONS = "请用自然、清晰、简洁的中文与用户进行实时语音对话。需要时结合用户提供的摄像头画面回答。";
   const MAX_SESSION_INSTRUCTIONS_CHARS = 4000;
   const MAX_SESSION_CONTEXT_CHARS = 8000;
@@ -166,6 +167,8 @@
     let supportsVideoFrames = false;
     let readyTimeoutId = null;
     let sessionCreateController = null;
+    let videoUploadController = null;
+    let pendingVideoDispatched = false;
     let closeTimeoutId = null;
     let sessionEpoch = 0;
     let playbackEpoch = 0;
@@ -286,6 +289,10 @@
       // Invalidate a getUserMedia()/play()/frame-upload continuation that is
       // still awaiting permission or I/O. It must not resurrect a stopped camera.
       cameraGeneration += 1;
+      videoUploadController?.abort();
+      // An unsent frame has no server ACK to wait for. A dispatched frame
+      // retains its slot until the matching ACK/error settles its budget.
+      if (videoPending && !pendingVideoDispatched) clearPendingVideoFrame();
       if (cameraTimer !== null) timers.clearInterval(cameraTimer);
       cameraTimer = null;
       if (cameraStream) cameraStream.getTracks().forEach(track => { try { track.stop(); } catch {} });
@@ -598,13 +605,14 @@
       pendingVideoSequence = -1;
       pendingVideoTimestampMs = -1;
       pendingVideoBytes = 0;
+      pendingVideoDispatched = false;
     }
     function releaseUnsentVideoFrame(itemId,epoch) {
       if (epoch !== sessionEpoch || pendingVideoItemId !== itemId) return;
       clearPendingVideoFrame();
     }
-    function cameraCaptureIsCurrent(generation,itemId) {
-      return generation === cameraGeneration &&
+    function cameraCaptureIsCurrent(generation,itemId,epoch) {
+      return epoch === sessionEpoch && generation === cameraGeneration &&
         pendingVideoItemId === itemId && ready && !stopping && Boolean(cameraStream);
     }
     async function captureAndSendFrame() {
@@ -632,14 +640,14 @@
         const context = canvas.getContext("2d",{alpha:false});
         context.drawImage(videoElement,0,0,targetWidth,targetHeight);
         let blob = await new Promise(resolve => canvas.toBlob(resolve,"image/jpeg",0.72));
-        if (!cameraCaptureIsCurrent(captureGeneration,itemId)) {
+        if (!cameraCaptureIsCurrent(captureGeneration,itemId,captureEpoch)) {
           releaseUnsentVideoFrame(itemId,captureEpoch);
           return;
         }
         if (!blob) throw new Error("无法编码摄像头画面");
         if (blob.size > MAX_VIDEO_FRAME_BYTES) {
           blob = await new Promise(resolve => canvas.toBlob(resolve,"image/jpeg",0.48));
-          if (!cameraCaptureIsCurrent(captureGeneration,itemId)) {
+          if (!cameraCaptureIsCurrent(captureGeneration,itemId,captureEpoch)) {
             releaseUnsentVideoFrame(itemId,captureEpoch);
             return;
           }
@@ -659,7 +667,7 @@
         lastVideoTimestampMs = timestampMs;
         pendingVideoTimestampMs = timestampMs;
         const dataBase64 = await blobBase64(blob);
-        if (!cameraCaptureIsCurrent(captureGeneration,itemId)) {
+        if (!cameraCaptureIsCurrent(captureGeneration,itemId,captureEpoch)) {
           releaseUnsentVideoFrame(itemId,captureEpoch);
           return;
         }
@@ -669,24 +677,42 @@
         };
         if (token && !webChatSession) uploadHeaders.Authorization = "Bearer " + token;
         if (userKeyId) uploadHeaders["X-Chat2API-User-Key-ID"] = userKeyId;
-        const upload = await fetcher(fileUploadEndpoint, {
-          method:"POST",
-          credentials:"same-origin",
-          headers:uploadHeaders,
-          body:JSON.stringify({
-            filename:"webchat-camera-" + sequence + ".jpg",
-            mime_type:"image/jpeg",
-            data_base64:dataBase64,
-            purpose:"vision",
-          }),
-        });
-        if (!cameraCaptureIsCurrent(captureGeneration,itemId)) {
-          releaseUnsentVideoFrame(itemId,captureEpoch);
-          return;
+        const uploadController = new AbortController();
+        videoUploadController = uploadController;
+        let uploadTimedOut = false;
+        const uploadTimer = timers.setTimeout(() => {
+          uploadTimedOut = true;
+          uploadController.abort();
+        },VIDEO_UPLOAD_TIMEOUT_MS);
+        let upload, file = {};
+        try {
+          upload = await fetcher(fileUploadEndpoint, {
+            method:"POST",
+            credentials:"same-origin",
+            headers:uploadHeaders,
+            signal:uploadController.signal,
+            body:JSON.stringify({
+              filename:"webchat-camera-" + sequence + ".jpg",
+              mime_type:"image/jpeg",
+              data_base64:dataBase64,
+              purpose:"vision",
+            }),
+          });
+          if (!cameraCaptureIsCurrent(captureGeneration,itemId,captureEpoch)) {
+            releaseUnsentVideoFrame(itemId,captureEpoch);
+            return;
+          }
+          try { file = await upload.json(); }
+          catch (error) { if (uploadController.signal.aborted) throw error; }
+          if (uploadController.signal.aborted) throw new Error("Video upload aborted");
+        } catch (error) {
+          if (uploadTimedOut) throw new Error("摄像头画面上传超时，请重新开启摄像头");
+          throw error;
+        } finally {
+          timers.clearTimeout(uploadTimer);
+          if (videoUploadController === uploadController) videoUploadController = null;
         }
-        let file = {};
-        try { file = await upload.json(); } catch {}
-        if (!cameraCaptureIsCurrent(captureGeneration,itemId)) {
+        if (!cameraCaptureIsCurrent(captureGeneration,itemId,captureEpoch)) {
           releaseUnsentVideoFrame(itemId,captureEpoch);
           return;
         }
@@ -702,6 +728,7 @@
           file_id:fileId,
           text:"摄像头画面",
         })) throw new Error("实时语音连接已断开");
+        pendingVideoDispatched = true;
         videoFrameCount += 1;
         event({type:"input_video.frame.queued",sequence});
         if (videoFrameCount >= MAX_VIDEO_FRAMES) {
@@ -709,7 +736,7 @@
           event({type:"client.notice",message:"已达到本次语音会话 300 帧上限，实时视频已停止"});
         }
       } catch (error) {
-        const stillCurrent = cameraCaptureIsCurrent(captureGeneration,itemId);
+        const stillCurrent = cameraCaptureIsCurrent(captureGeneration,itemId,captureEpoch);
         releaseUnsentVideoFrame(itemId,captureEpoch);
         if (!stillCurrent) return;
         event({type:"client.error",message:String(error?.message || error)});
