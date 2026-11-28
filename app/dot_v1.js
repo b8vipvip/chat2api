@@ -43,7 +43,7 @@
         queued:"待执行", running:"执行中", completed:"已完成", failed:"失败", interrupted:"已中断"
       }[task.status] || task.status)));
       if (task.request_id) card.append(node("p", "请求：" + task.request_id));
-      if (task.result) { const out = node("p", task.result); out.style.whiteSpace = "pre-wrap"; card.append(out); }
+      if (task.result) card.append(node("pre", task.result));
       if (task.error) card.append(node("p", task.error));
       if (task.status === "queued") card.append(button("执行", async () => {status("正在调用模型，请保持页面打开…"); await api(base + "/tasks/" + task.id + "/run", "POST");}));
       if (task.status !== "running") card.append(button("删除", async () => {if (confirm("删除该任务及结果？")) await api(base + "/tasks/" + task.id, "DELETE");}));
