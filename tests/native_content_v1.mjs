@@ -1224,6 +1224,21 @@ const duplicateDelivery=dispatchNativeAction("set_checked",checkboxNode.interact
   "req_nativeactions12345",duplicateActionId);
 assert.deepEqual(duplicateDelivery,{ok:true,revision:6,duplicate:true},
   "a retried action ID returns the prior result without applying twice");
+assert.equal(dispatchNativeAction("set_checked",checkboxNode.interaction_id,false,5,
+  "req_nativeactions12345",duplicateActionId).error,"native-interaction-action-id-reused",
+  "same action ID must not acknowledge a different requested value");
+interactionCheckbox.type="submit";
+assert.equal(dispatchNativeAction("set_checked",checkboxNode.interaction_id,false,6).error,
+  "native-control-kind-changed");
+assert.equal(interactionCheckbox.checked,true);
+interactionCheckbox.type="checkbox";
+interactionCheckbox.form={};
+assert.equal(dispatchNativeAction("set_checked",checkboxNode.interaction_id,false,6).error,
+  "native-control-no-longer-in-safe-scope");
+interactionCheckbox.form=null;
+interactionSelect.multiple=true;
+assert.equal(dispatchNativeAction("set_value",selectNode.interaction_id,"a",6).error,
+  "native-control-kind-changed");
 const interactionDisabledCheckbox=new Element("INPUT",[],{"aria-label":"Disabled"});
 interactionDisabledCheckbox.type="checkbox";interactionDisabledCheckbox.checked=false;interactionDisabledCheckbox.disabled=true;
 const disabledRoot=new Element("DIV",[interactionDisabledCheckbox]);

@@ -986,13 +986,13 @@ console.log("web-chat-voice-client-v1-passed");
   const state={user:{user_id:"owner"},voiceActive:false,voiceStarting:false,voiceStopping:false,
     webChatKeyId:"shared",voiceAuthTimer:null};
   const calls=[], timers=new Map();
-  let nextTimer=0;
+  let nextTimer=0, authError=null;
   const element={classList:{add(){},remove(){},toggle(){}},replaceChildren(){},textContent:""};
   const context=vm.createContext({
     state,$:()=>element,
     currentConversation:()=>({id:"chat",messages:[]}),selectedKeyHasScope:()=>true,
     DEFAULT_VOICE_INSTRUCTIONS:"test",buildVoiceContext:()=>"",
-    apiJson:async()=>({user:{user_id:"owner"}}),
+    apiJson:async()=>{if(authError)throw authError;return {user:{user_id:"owner"}};},
     recordClientDiagnostic(){},toast(){},handleVoiceEvent:p=>calls.push(p),
     setVoiceUi(status){
       state.voiceActive=status!=="closed";
@@ -1017,6 +1017,11 @@ console.log("web-chat-voice-client-v1-passed");
   await api.stopVoiceCall();
   const newStart=api.startVoiceCall();
   const current=state.voiceClient;
+  authError=Object.assign(new Error("Broker unavailable"),{status:503});
+  await assert.rejects(current.options.beforeConnect(),/Broker unavailable/);
+  assert.equal(state.user.user_id,"owner");
+  authError=null;
+  await current.options.beforeConnect();
   old.options.onState("closed");
   old.options.onEvent({type:"stale"});
   old.rejectStart(new Error("late permission rejection"));
@@ -1184,9 +1189,9 @@ for (const mode of ["headers","body","stop"]) {
 {
   const state={user:{user_id:"owner"},voiceStartEpoch:7,voiceActive:false};
   const conversation={id:"chat"};
-  const timers=new Map();let serial=0,starts=0;
+  const timers=new Map();let serial=0,starts=0,delays=[];
   const ctx=vm.createContext({state,currentConversation:()=>conversation,
-    window:{document:{visibilityState:"visible"},setTimeout(fn){timers.set(++serial,fn);return serial;},
+    window:{document:{visibilityState:"visible"},setTimeout(fn,delay){delays.push(delay);timers.set(++serial,fn);return serial;},
       clearTimeout(id){timers.delete(id);}},
     $:()=>({textContent:""}),updateVoiceControls(){},apiJson:async()=>({user:{user_id:"owner"}}),
     startVoiceCall:async()=>{starts++;},
@@ -1200,9 +1205,10 @@ for (const mode of ["headers","body","stop"]) {
   api.cancelVoiceReconnect();
   await stale();
   assert.equal(starts,0);
-  api.scheduleVoiceReconnect("owner","chat",7,4);
+  api.scheduleVoiceReconnect("owner","chat",7,7);
   assert.equal(state.voiceReconnectTicket,null);
-  api.scheduleVoiceReconnect("owner","chat",7,1);
+  api.scheduleVoiceReconnect("owner","chat",7,6);
+  assert.equal(delays.at(-1),45000);
   const next=[...timers.values()][0];
   await next();
   assert.equal(starts,1);

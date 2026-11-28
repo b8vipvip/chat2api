@@ -1,6 +1,7 @@
 """W-05: authenticated download boundary for user-owned chat files."""
 from __future__ import annotations
 
+import asyncio
 import re
 from urllib.parse import quote
 
@@ -11,6 +12,7 @@ from .user_commerce import USER_SESSION_COOKIE
 
 
 _FILE_ID_RE = re.compile(r"^file_[A-Za-z0-9_-]{8,100}$")
+_GENERATED_FILE_ID_RE = re.compile(r"^gen_[A-Za-z0-9]{8,64}$")
 _MIME_RE = re.compile(r"^[A-Za-z0-9.+-]{1,100}/[A-Za-z0-9.+-]{1,100}$")
 _PRIVATE_HEADERS = {"Cache-Control": "private, no-store", "Vary": "Cookie"}
 
@@ -78,5 +80,40 @@ def install_web_chat_file_download_api(app: FastAPI) -> FastAPI:
                 "Referrer-Policy": "no-referrer",
             },
         )
+
+    @app.get("/api/user/chat/generated-files/{file_id}/download")
+    async def download_owned_generated_file(file_id: str, request: Request) -> Response:
+        accounts = getattr(request.app.state, "user_accounts", None)
+        if accounts is None:
+            _http_error(503, "user account service unavailable")
+        user = accounts.authenticate(request.cookies.get(USER_SESSION_COOKIE))
+        if not user:
+            _http_error(401, "user login required")
+        if not _GENERATED_FILE_ID_RE.fullmatch(file_id):
+            _http_error(404, "file not found")
+        archive = getattr(request.app.state, "generated_files", None)
+        if archive is None:
+            _http_error(503, "generated file archive unavailable")
+        try:
+            payload, _mime, filename = await asyncio.to_thread(
+                archive.read_owned, file_id, accounts.key_ids(str(user["user_id"])),
+            )
+        except (KeyError, FileNotFoundError):
+            _http_error(404, "file not found")
+        except (ValueError, OSError):
+            _http_error(503, "file content unavailable")
+        filename = safe_name(str(filename or "download.bin"))
+        ascii_fallback = re.sub(r"[^A-Za-z0-9._-]", "_", filename) or "download.bin"
+        return Response(payload, media_type="application/octet-stream", headers={
+            **_PRIVATE_HEADERS,
+            "Content-Disposition": (
+                f'attachment; filename="{ascii_fallback}"; '
+                f"filename*=UTF-8''{quote(filename, safe='')}"
+            ),
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+            "Cross-Origin-Resource-Policy": "same-origin",
+            "Referrer-Policy": "no-referrer",
+        })
 
     return app

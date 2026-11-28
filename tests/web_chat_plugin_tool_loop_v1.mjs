@@ -921,3 +921,25 @@ test("GitHub review thread history previews retain every thread and its cursor",
   assert.equal(preview.results[9].thread_id,"PRRT_9");
   assert.equal(preview.results[9].comments_next_cursor,"cursor-9");
 });
+
+test("planner waits for durable checkpoint before advancing to another provider call", async () => {
+  const h = makeHarness({
+    planner:['{"tool_calls":[{"name":"github.search_repositories","arguments":{"query":"chat2api"}}]}',
+      '{"tool_calls":[]}'],
+    toolHandler:async()=>({data:[{full_name:"b8vipvip/chat2api"}]}),
+  });
+  const checkpoints = [];
+  h.state.pluginPlanningLease = {
+    renew:async()=>{},
+    checkpoint:async(rounds,calls)=>{
+      checkpoints.push([rounds,calls,h.assistant.toolEvents.length]);
+      if (rounds === 1 && calls === 1) throw new Error("checkpoint unavailable");
+    },
+  };
+  await assert.rejects(h.api.runAutonomousPluginToolLoop(
+    [{role:"user",content:"查找仓库"}],h.assistant,"key-1",h.recoveryApi,"req-planner-1",
+  ), /checkpoint unavailable/);
+  assert.deepEqual(checkpoints,[[1,0,0],[1,1,1]]);
+  assert.equal(h.calls.length,1);
+  assert.equal(h.requests.length,1);
+});

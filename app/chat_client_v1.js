@@ -86,6 +86,7 @@
   });
   const ALLOWED_DOCUMENT_MIME_TYPES = new Set(Object.values(DOCUMENT_MIME_BY_EXTENSION));
   const FILE_ID_PATTERN = /^file_[A-Za-z0-9]{8,64}$/;
+  const GENERATED_FILE_ID_PATTERN = /^gen_[A-Za-z0-9]{8,64}$/;
   let modelCatalogLoadPromise = null;
   let clientDiagnosticFlushPromise = null;
   let clientDiagnosticFlushTimer = null;
@@ -481,8 +482,17 @@
           if (state.voiceClient !== client || state.voiceStopping) throw new Error("语音启动已取消");
           if (ownerId && String(session.user?.user_id || "") === ownerId &&
               String(state.user?.user_id || "") === ownerId) return;
-        } catch {}
+        } catch (error) {
+          // A Broker/server restart can temporarily fail /me. Do not turn
+          // that transport outage into a logout that prevents reconnect.
+          if (state.voiceClient !== client || state.voiceStopping) throw new Error("语音启动已取消");
+          if (String(state.user?.user_id || "") === ownerId && error?.status !== 401 && error?.status !== 403)
+            throw error;
+        }
         if (state.voiceClient !== client || state.voiceStopping) throw new Error("语音启动已取消");
+        // An account switch is not permission to clear the new account.
+        if (state.user && String(state.user.user_id || "") !== ownerId)
+          throw new Error("语音账户已切换");
         state.user = null;
         $("sidebarAccount").hidden = true;
         state.voicePanelVisible = false;
@@ -568,12 +578,14 @@
 
   function scheduleVoiceReconnect(owner, conversationId, epoch, attempt) {
     cancelVoiceReconnect();
-    if (!owner || attempt > 3 || String(state.user?.user_id || "") !== owner ||
+    const backoff = [2000,5000,10000,20000,30000,45000];
+    if (!owner || !Number.isInteger(attempt) || attempt < 1 || attempt > backoff.length ||
+        String(state.user?.user_id || "") !== owner ||
         state.voiceStartEpoch !== epoch || currentConversation()?.id !== conversationId ||
         state.streaming || state.voiceActive || window.document?.visibilityState === "hidden") return;
     const ticket = {owner,conversationId,epoch,attempt,timer:null};
     state.voiceReconnectTicket = ticket;
-    $("voiceStatus").textContent = "语音已断开，正在尝试建立新通话（" + attempt + "/3）；摄像头不会自动恢复。";
+    $("voiceStatus").textContent = "语音已断开，正在尝试建立新通话（" + attempt + "/" + backoff.length + "）；摄像头不会自动恢复。";
     updateVoiceControls();
     ticket.timer = window.setTimeout(async () => {
       const current = () => state.voiceReconnectTicket === ticket &&
@@ -593,7 +605,7 @@
         if (state.voiceReconnectTicket === ticket) state.voiceReconnectTicket = null;
         updateVoiceControls();
       }
-    },[2000,5000,10000][attempt-1]);
+    },backoff[attempt-1]);
   }
 
   async function toggleVoiceCamera() {
@@ -3362,9 +3374,11 @@
           phase:"plugin_tool_planning",code:"invalid_plan",
         },"warning");
         plannerRequests += 1;
+        if (state.pluginPlanningLease) await state.pluginPlanningLease.checkpoint(plannerRequests,toolCalls);
         break;
       }
       plannerRequests += 1;
+      if (state.pluginPlanningLease) await state.pluginPlanningLease.checkpoint(plannerRequests,toolCalls);
       if (!calls.length) break;
 
       messages.push({
@@ -3502,6 +3516,9 @@
           }),
         });
         toolCalls += 1;
+        // The next planning round must not depend solely on a debounced PUT.
+        // Persist completed evidence before another provider call is launched.
+        if (state.pluginPlanningLease) await state.pluginPlanningLease.checkpoint(plannerRequests,toolCalls);
         if (toolCalls >= maxToolCalls) {
           limitReached = true;
           break;
@@ -3792,7 +3809,8 @@
       if (!response.ok || !Array.isArray(result.data)) throw new Error(result.detail || "资料库暂不可用");
       const byId = new Map(state.libraryRows.map(row => [row.id,row]));
       result.data.forEach(row => {
-        if (FILE_ID_PATTERN.test(String(row?.id || ""))) byId.set(row.id,row);
+        const pattern = scope === "generated" ? GENERATED_FILE_ID_PATTERN : FILE_ID_PATTERN;
+        if (pattern.test(String(row?.id || ""))) byId.set(row.id,row);
       });
       state.libraryRows = [...byId.values()];
       state.libraryCursor = typeof result.next_cursor === "string" && result.next_cursor !== cursor
@@ -3827,7 +3845,7 @@
     const seen = new Map();
     // Local cache is only a fallback when server loading has not succeeded.
     // After a successful load, the owner-scoped durable reference index wins.
-    if (!state.libraryLoaded && state.libraryScope !== "unreferenced") state.conversations.forEach(conversation => {
+    if (!state.libraryLoaded && state.libraryScope === "referenced") state.conversations.forEach(conversation => {
       (conversation.messages || []).forEach(message => {
         messageFileAttachments(message).forEach(file => {
           if (!seen.has(file.file_id)) seen.set(file.file_id, {
@@ -3850,7 +3868,9 @@
       seen.set(row.id, {
         id:row.id,type:mime.startsWith("image/") ? "image" : "file",
         name:String(row.filename || "附件"),size:Number(row.bytes || 0),mime,
-        conversation:Number(row.reference_count || 0) > 0 ? "引用于 " + Number(row.reference_count) + " 个会话" : "未引用 · 上传超过 24 小时",
+        conversation:state.libraryScope === "generated" ? "模型生成文件" :
+          Number(row.reference_count || 0) > 0 ? "引用于 " + Number(row.reference_count) + " 个会话" : "未引用 · 上传超过 24 小时",
+        generated:state.libraryScope === "generated",
         removable:state.libraryScope === "unreferenced" && row.reference_count === 0,
         createdAt:String(row.created_at || ""),
       });
@@ -3861,14 +3881,15 @@
       empty.className = "utility-empty";
       empty.textContent = state.libraryLoading ? "正在加载文件…" :
         state.libraryError ? "暂时无法读取服务端文件索引，请重试。" :
-        "当前已加载范围内没有图片或文档附件。";
+        state.libraryScope === "generated" ? "暂无已归档的模型生成文件。" : "当前已加载范围内没有图片或文档附件。";
       root.appendChild(empty);
       return;
     }
     items.forEach(item => {
       const card = document.createElement("a");
       card.className = "library-item";
-      card.href = "/api/user/chat/files/" + encodeURIComponent(item.id) + "/download";
+      card.href = (item.generated ? "/api/user/chat/generated-files/" : "/api/user/chat/files/") +
+        encodeURIComponent(item.id) + "/download";
       card.target = "_blank";
       card.rel = "noopener noreferrer";
       const icon = document.createElement("span");
@@ -4994,13 +5015,14 @@
       await refreshNativeSnapshot(item.requestId);
     }));
   }
-  async function pluginTaskOperation(conversation, message, operation, holder = "") {
+  async function pluginTaskOperation(conversation, message, operation, holder = "", checkpoint = null) {
     const owner = String(state.user?.user_id || "");
     if (!owner) throw new Error("账户已失效");
     const {response,result} = await fetchConversationMutation("/api/user/chat/conversations/plugin-task", {
       method:"POST",credentials:"same-origin",
       headers:{"Content-Type":"application/json","Accept":"application/json","X-Chat2API-User-ID":owner},
-      body:JSON.stringify({conversation_id:conversation.id,message_id:message.id,operation,holder}),
+      body:JSON.stringify({conversation_id:conversation.id,message_id:message.id,operation,holder,
+        ...(checkpoint ? {checkpoint} : {})}),
     });
     if (String(state.user?.user_id || "") !== owner || !response.ok || typeof result.state !== "string")
       throw new Error(result.detail || "无法确认插件执行租约");
@@ -5021,6 +5043,16 @@
       }
     };
     const lease = {
+      async checkpoint(rounds, toolCalls) {
+        assertTransport();
+        const toolEvents = normalizeToolEvents(assistant.toolEvents,"assistant")
+          .filter(event => ["completed","failed"].includes(event.status));
+        const result = await pluginTaskOperation(conversation,assistant,"checkpoint",holder,{
+          rounds,tool_calls:toolCalls,tool_events:toolEvents,
+        });
+        assertTransport();
+        if (!result.granted) throw new Error("插件检查点未获确认");
+      },
       renew() {
         if (finished) return Promise.reject(new Error("插件执行租约已结束"));
         try { assertTransport(); } catch (error) { return Promise.reject(error); }
@@ -5085,6 +5117,24 @@
             if (now - firstSeen < 30000) continue;
           } else if (!["interrupted","completed","deleted"].includes(task.state)) {
             continue;
+          }
+          // Restore independently committed evidence before the normal
+          // conversation snapshot catches up. A terminal local event may
+          // already contain newer data; never replace it with an older one.
+          if (Array.isArray(task.checkpoint?.tool_events)) {
+            const local = normalizeToolEvents(message.toolEvents,"assistant");
+            const merged = new Map(normalizeToolEvents(task.checkpoint.tool_events,"assistant")
+              .map(event=>[event.callId || event.resultId,event]));
+            for (const event of local) {
+              const key = event.callId || event.resultId;
+              if (!merged.has(key) || ["completed","failed"].includes(event.status))
+                merged.set(key,event);
+            }
+            message.toolEvents = [...merged.values()].slice(-6);
+            message.references = normalizeToolReferences([
+              ...(message.references || []),
+              ...message.toolEvents.flatMap(event=>event.references || []),
+            ]);
           }
           // Only terminalize a task after the persisted lease is gone.
           message.pending = false;
@@ -5790,7 +5840,7 @@
   $("libraryButton").addEventListener("click", () => openSidebarPage("library"));
   $("libraryRefreshButton").addEventListener("click", () => { void loadLibraryPage(true); });
   $("libraryScope").addEventListener("change", event => {
-    state.libraryScope = event.target.value === "unreferenced" ? "unreferenced" : "referenced";
+    state.libraryScope = ["unreferenced","generated"].includes(event.target.value) ? event.target.value : "referenced";
     void loadLibraryPage(true);
   });
   $("libraryMoreButton").addEventListener("click", () => { void loadLibraryPage(); });

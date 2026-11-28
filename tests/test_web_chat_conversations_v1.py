@@ -738,3 +738,80 @@ def test_plugin_task_lease_is_fenced_across_processes_and_restart(tmp_path: Path
     assert a.plugin_task("alice", cid, "message_task_0002", "claim", "holder_first")["granted"]
     assert b.plugin_task("alice", cid, "message_task_0002", "completed", "holder_first")["granted"]
     assert WebChatConversationStoreV1(tmp_path).plugin_task("alice", cid, "message_task_0002", "status")["state"] == "completed"
+
+def test_plugin_checkpoint_survives_restart_and_is_fenced_and_deleted(tmp_path: Path, monkeypatch):
+    import app.web_chat_conversations_v1 as module
+    now = [1000.0]
+    monkeypatch.setattr(module.time, "time", lambda: now[0])
+    a = WebChatConversationStoreV1(tmp_path)
+    cid, mid = "c2a_checkpoint_0001", "message_assistant_01"
+    assert a.upsert("alice", _conversation(cid), 0)[0]
+    assert a.plugin_task("alice", cid, mid, "claim", "holder_first")["granted"]
+    first = {"rounds": 1, "tool_calls": 0, "tool_events": []}
+    evidence = {"toolName": "GitHub", "callId": "call_1", "resultId": "call_1_result",
+                "status": "completed", "arguments": "{}", "output": "done",
+                "resultPreview": '{"tool":"github.list_issues","results":[{"number":42}]}'}
+    second = {"rounds": 1, "tool_calls": 1, "tool_events": [evidence]}
+    assert a.plugin_task("alice", cid, mid, "checkpoint", "holder_first", first)["granted"]
+    assert a.plugin_task("alice", cid, mid, "checkpoint", "holder_first", second)["granted"]
+    b = WebChatConversationStoreV1(tmp_path)
+    assert not b.plugin_task("alice", cid, mid, "checkpoint", "holder_second", second)["granted"]
+    assert not b.plugin_task("alice", cid, mid, "checkpoint", "holder_first", first)["granted"]
+    assert b.plugin_task("alice", cid, mid, "checkpoint", "holder_first", second)["granted"]
+    assert "checkpoint" not in b.plugin_task("alice", cid, mid, "status")
+    assert "checkpoint" not in b.plugin_task("bob", cid, mid, "status")
+    now[0] += 181
+    saved = b.plugin_task("alice", cid, mid, "status")
+    assert saved["state"] == "interrupted"
+    assert saved["checkpoint"] == second
+    assert not a.plugin_task("alice", cid, mid, "checkpoint", "holder_first", second)["granted"]
+    assert b.delete("alice", cid, 1)[0]
+    assert b.plugin_task("alice", cid, mid, "status")["state"] == "deleted"
+    with sqlite3.connect(b.path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM web_chat_plugin_checkpoints").fetchone()[0] == 0
+
+def test_generated_library_pagination_and_session_download_are_owner_scoped(tmp_path: Path):
+    app = create_app(Settings(
+        CHAT2API_API_KEY="generated-library-master-key",
+        CHAT2API_DATA_DIR=str(tmp_path),
+    ))
+    _install_web_chat_test_features(app)
+    with TestClient(app) as client:
+        client.headers.update({"Origin": "http://testserver"})
+        assert client.post("/api/user/register", json={
+            "email": "generated-library-owner@example.test", "password": "generated-library-password",
+        }).status_code == 200
+        key = client.post("/api/user/keys", json={"name": "owner key"})
+        assert key.status_code == 200, key.text
+        owner_key = key.json()["key"]["key_id"]
+        archive = app.state.generated_files
+        first = archive.store(b"%PDF-1.7\nfirst", "one.pdf", "application/pdf", owner_key, "req_one")
+        second = archive.store(b"%PDF-1.7\nsecond", "two.pdf", "application/pdf", owner_key, "req_two")
+        foreign = archive.store(b"%PDF-1.7\nforeign", "foreign.pdf", "application/pdf", "foreign-key", "req_foreign")
+        library = "/api/user/chat/library"
+        response = client.get(library, params={"scope": "generated", "limit": 1})
+        assert response.status_code == 200, response.text
+        page = response.json()
+        assert len(page["data"]) == 1 and page["next_cursor"]
+        next_page = client.get(library, params={
+            "scope": "generated", "limit": 1, "after": page["next_cursor"],
+        }).json()
+        assert next_page["next_cursor"] is None
+        rows = page["data"] + next_page["data"]
+        assert {row["id"] for row in rows} == {first["id"], second["id"]}
+        assert all(row["source"] == "generated" for row in rows)
+        assert all("token" not in row and "url" not in row and "owner" not in row for row in rows)
+        assert client.get(library, params={"scope": "generated", "after": "file_12345678"}).status_code == 422
+        url = f"/api/user/chat/generated-files/{first['id']}/download"
+        download = client.get(url)
+        assert download.status_code == 200 and download.content == b"%PDF-1.7\nfirst"
+        assert "attachment" in download.headers["content-disposition"]
+        assert download.headers["cache-control"] == "private, no-store"
+        assert client.get(f"/api/user/chat/generated-files/{foreign['id']}/download").status_code == 404
+        client.cookies.clear()
+        assert client.get(url).status_code == 401
+        assert client.post("/api/user/register", json={
+            "email": "generated-library-other@example.test", "password": "generated-library-password",
+        }).status_code == 200
+        assert client.get(library, params={"scope": "generated"}).json()["data"] == []
+        assert client.get(url).status_code == 404
