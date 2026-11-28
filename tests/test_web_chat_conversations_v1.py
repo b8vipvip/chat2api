@@ -475,6 +475,17 @@ def test_conversation_attachment_references_protect_files_until_last_cross_devic
         assert store.file_reference_count(image_id) == 1
         assert store.file_reference_count(document_id) == 2
         assert store.referenced_file_ids() >= {image_id, document_id}
+        first_page = client.get("/api/user/chat/library?limit=1")
+        assert first_page.status_code == 200, first_page.text
+        page = first_page.json()
+        assert len(page["data"]) == 1 and page["next_cursor"]
+        second_page = client.get("/api/user/chat/library", params={"limit": 1, "after": page["next_cursor"]}).json()
+        assert second_page["next_cursor"] is None
+        indexed = {item["id"]: item for item in page["data"] + second_page["data"]}
+        assert set(indexed) == {image_id, document_id}
+        assert indexed[document_id]["reference_count"] == 2
+        assert indexed[document_id]["filename"] == "notes.txt"
+        assert client.get("/api/user/chat/library?limit=101").status_code == 422
 
         # Another signed-in account cannot attach a file owned by the first.
         client.cookies.clear()
@@ -484,6 +495,7 @@ def test_conversation_attachment_references_protect_files_until_last_cross_devic
             json={"email": "conversation-file-other@example.test", "password": "conversation-file-other-password"},
         )
         assert other.status_code == 200, other.text
+        assert client.get("/api/user/chat/library").json()["data"] == []
         foreign = _conversation("c2a_file_foreign_0001")
         foreign["messages"][0]["content"] = [
             {"type": "text", "text": "不能引用别人的文件"},
@@ -518,6 +530,8 @@ def test_conversation_attachment_references_protect_files_until_last_cross_devic
         assert deleted_first.json()["conversation"]["deleted"] is True
         assert store.file_reference_count(image_id) == 0
         assert store.file_reference_count(document_id) == 1
+        remaining = client.get("/api/user/chat/library").json()["data"]
+        assert [(item["id"], item["reference_count"]) for item in remaining] == [(document_id, 1)]
         synced = client.get("/api/user/chat/conversations")
         assert any(row["id"] == first["id"] and row["deleted"] for row in synced.json()["data"])
         assert client.delete(
@@ -530,6 +544,7 @@ def test_conversation_attachment_references_protect_files_until_last_cross_devic
         )
         assert deleted_second.status_code == 200, deleted_second.text
         assert store.file_reference_count(document_id) == 0
+        assert client.get("/api/user/chat/library").json()["data"] == []
         assert client.delete(
             f"/api/user/files/{document_id}",
             headers={"Origin": "http://testserver"},

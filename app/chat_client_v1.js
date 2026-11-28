@@ -13,6 +13,11 @@
     pluginCatalog: [],
     pluginCatalogLoaded: false,
     pluginCatalogError: "",
+    libraryRows: [],
+    libraryCursor: null,
+    libraryLoading: false,
+    libraryError: "",
+    libraryLoaded: false,
     selectedPlugins: [],
     modelCatalogLoadedAt: 0,
     selectedModel: "default",
@@ -1956,6 +1961,7 @@
     state.sidebarPage = page;
     document.body.classList.remove("sidebar-open");
     renderAll();
+    if (page === "library") void loadLibraryPage(true);
   }
 
   function pluginSelectionStorageKey() {
@@ -3553,12 +3559,61 @@
     renderPluginCatalog();
   }
 
+  async function loadLibraryPage(reset = false) {
+    const owner = String(state.user?.user_id || "");
+    if (!owner || state.libraryLoading || (!reset && !state.libraryCursor)) return;
+    state.libraryLoading = true;
+    state.libraryError = "";
+    if (reset) {
+      state.libraryRows = [];
+      state.libraryCursor = null;
+      state.libraryLoaded = false;
+    }
+    renderLibrary();
+    try {
+      const cursor = reset ? "" : state.libraryCursor;
+      const {response,result} = await fetchConversationMutation("/api/user/chat/library?limit=50" +
+        (cursor ? "&after=" + encodeURIComponent(cursor) : ""), {
+        credentials:"same-origin",headers:{"Accept":"application/json","X-Chat2API-User-ID":owner},
+      });
+      if (String(state.user?.user_id || "") !== owner) return;
+      if (!response.ok || !Array.isArray(result.data)) throw new Error(result.detail || "资料库暂不可用");
+      const byId = new Map(state.libraryRows.map(row => [row.id,row]));
+      result.data.forEach(row => {
+        if (FILE_ID_PATTERN.test(String(row?.id || ""))) byId.set(row.id,row);
+      });
+      state.libraryRows = [...byId.values()];
+      state.libraryCursor = typeof result.next_cursor === "string" && result.next_cursor !== cursor
+        ? result.next_cursor : null;
+      state.libraryLoaded = true;
+    } catch (error) {
+      if (String(state.user?.user_id || "") !== owner) return;
+      state.libraryError = String(error?.message || "资料库暂不可用");
+    } finally {
+      state.libraryLoading = false;
+      if (String(state.user?.user_id || "") === owner && state.sidebarPage === "library") renderLibrary();
+    }
+  }
+
   function renderLibrary() {
     const root = $("libraryList");
     if (!root) return;
     root.replaceChildren();
+    const status = $("libraryStatus");
+    if (status) status.textContent = state.libraryLoading ? "正在同步资料库…" :
+      state.libraryError ? "资料库同步失败：" + state.libraryError :
+      state.libraryLoaded ? "已加载 " + state.libraryRows.length + " 个服务端文件" : "正在准备资料库…";
+    const more = $("libraryMoreButton");
+    if (more) {
+      more.hidden = !state.libraryCursor;
+      more.disabled = state.libraryLoading;
+    }
+    const refresh = $("libraryRefreshButton");
+    if (refresh) refresh.disabled = state.libraryLoading;
     const seen = new Map();
-    state.conversations.forEach(conversation => {
+    // Local cache is only a fallback when server loading has not succeeded.
+    // After a successful load, the owner-scoped durable reference index wins.
+    if (!state.libraryLoaded) state.conversations.forEach(conversation => {
       (conversation.messages || []).forEach(message => {
         messageFileAttachments(message).forEach(file => {
           if (!seen.has(file.file_id)) seen.set(file.file_id, {
@@ -3576,11 +3631,22 @@
         });
       });
     });
+    for (const row of state.libraryRows || []) {
+      const mime = String(row.mime_type || "application/octet-stream");
+      seen.set(row.id, {
+        id:row.id,type:mime.startsWith("image/") ? "image" : "file",
+        name:String(row.filename || "附件"),size:Number(row.bytes || 0),mime,
+        conversation:"引用于 " + Number(row.reference_count || 0) + " 个会话",
+        createdAt:String(row.created_at || ""),
+      });
+    }
     const items = [...seen.values()].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
     if (!items.length) {
       const empty = document.createElement("div");
       empty.className = "utility-empty";
-      empty.textContent = "当前同步的对话中还没有图片或文档附件。上传到对话中的文件会自动出现在这里。";
+      empty.textContent = state.libraryLoading ? "正在加载文件…" :
+        state.libraryError ? "暂时无法读取服务端文件索引，请重试。" :
+        "当前已加载范围内没有图片或文档附件。";
       root.appendChild(empty);
       return;
     }
@@ -5325,6 +5391,8 @@
     renderAll();
   });
   $("libraryButton").addEventListener("click", () => openSidebarPage("library"));
+  $("libraryRefreshButton").addEventListener("click", () => { void loadLibraryPage(true); });
+  $("libraryMoreButton").addEventListener("click", () => { void loadLibraryPage(); });
   $("sidebarCollapseButton").addEventListener("click", () => document.body.classList.toggle("sidebar-collapsed"));
   $("conversationSearch").addEventListener("input", onConversationSearchInput);
   $("exportJsonButton").addEventListener("click", exportConversationJson);

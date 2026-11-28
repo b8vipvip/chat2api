@@ -649,6 +649,18 @@ class WebChatConversationStoreV1:
                 ).fetchone()
             return int(row["count"] or 0) if row else 0
 
+    def list_file_references_for_user(self, user_id: str, after: str, limit: int) -> list[dict[str, Any]]:
+        if not 1 <= limit <= 100 or (after and not _FILE_ID_RE.fullmatch(after)):
+            raise ValueError("invalid library page")
+        with self.lock, closing(self._connect()) as connection:
+            rows = connection.execute(
+                """SELECT file_id, ref_count FROM web_chat_file_references
+                   WHERE user_id=? AND ref_count>0 AND file_id>?
+                   ORDER BY file_id ASC LIMIT ?""",
+                (user_id, after, limit + 1),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
     def referenced_file_ids(self) -> set[str]:
         with self.lock, closing(self._connect()) as connection:
             rows = connection.execute(
@@ -851,6 +863,33 @@ def install_web_chat_conversations_v1(app: FastAPI) -> None:
         _, user = current_user(request)
         rows = store.list_for_user(str(user["user_id"]))
         return JSONResponse({"data": rows}, headers=_PRIVATE_HEADERS)
+
+    @app.get("/api/user/chat/library")
+    async def list_user_chat_library(request: Request):
+        accounts, user = current_user(request)
+        user_id = str(user["user_id"])
+        try:
+            limit = int(request.query_params.get("limit") or "50")
+            after = str(request.query_params.get("after") or "")
+            refs = store.list_file_references_for_user(user_id, after, limit)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="invalid library page", headers=_PRIVATE_HEADERS)
+        file_store = getattr(request.app.state, "file_store", None)
+        if file_store is None:
+            raise HTTPException(status_code=503, detail="file service unavailable", headers=_PRIVATE_HEADERS)
+        data = []
+        for ref in refs[:limit]:
+            item = file_store.get(ref["file_id"])
+            if (item is None or item.pending_delete
+                    or not accounts.owns_key(user_id, str(item.owner_key_id))):
+                continue
+            data.append({**item.public(), "reference_count": int(ref["ref_count"])})
+        # Advance by the index cursor, even when a missing or unauthorized
+        # storage row was omitted. The next page must never repeat a gap.
+        return JSONResponse({
+            "data": data,
+            "next_cursor": refs[limit - 1]["file_id"] if len(refs) > limit else None,
+        }, headers=_PRIVATE_HEADERS)
 
     @app.get("/api/user/chat/conversations/search")
     async def search_user_chat_conversations(request: Request):
