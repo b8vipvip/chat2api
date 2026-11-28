@@ -15,6 +15,8 @@ of falsely marked verified; public backward compatibility is preserved.
 from __future__ import annotations
 
 from typing import Any
+import hashlib
+import json
 import re
 
 TERMINAL = frozenset({"completed", "error", "cancelled", "stalled"})
@@ -186,6 +188,11 @@ def native_diagram_coverage(row: dict[str, Any] | None) -> str:
     return "no-proven-loss"
 
 
+def native_interaction_digest(snapshot: dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(snapshot, sort_keys=True, ensure_ascii=False,
+        separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
 def native_finality_decision(
     row: dict[str, Any] | None,
     snapshot: dict[str, Any] | None,
@@ -291,6 +298,17 @@ def native_finality_decision(
                 and large > delivered >= 0):
             return decide("rejected-final", "same-request-large-image-loss")
 
+    # The original terminal revision remains immutable. Only a server-owned
+    # interaction commit (bound to the exact validated tree digest) may
+    # authorize a successor revision. All coverage and failure gates remain.
+    revision = snapshot.get("revision")
+    proof = row.get("native_interaction_proof")
+    if (isinstance(proof, dict) and type(proof.get("base_revision")) is int
+            and type(revision) is int and 1 <= proof["base_revision"] < revision
+            and proof.get("revision") == revision
+            and proof.get("sha256") == native_interaction_digest(snapshot)):
+        revision = proof["base_revision"]
+
     layout = diag.get("native_layout_summary")
     if isinstance(layout, dict):
         # A final ACK cannot validate counters from a previous native revision.
@@ -298,7 +316,7 @@ def native_finality_decision(
         # that exact revision whenever it includes a revision field.
         if ("revision" in layout
                 and (type(layout["revision"]) is not int
-                     or layout["revision"] != snapshot.get("revision"))):
+                     or layout["revision"] != revision)):
             return decide("rejected-final", "revision-conflict-native-layout-summary")
         slots = layout.get("images")
         archived = layout.get("archived_assets")
@@ -366,7 +384,6 @@ def native_finality_decision(
         if key in diag and diag[key] is False:
             return decide("rejected-final", "failed-proof-" + key)
 
-    revision = snapshot.get("revision")
     for name in ("native_capture_revision", "native_snapshot_received_revision"):
         value = diag.get(name)
         if value is not None and (type(value) is not int or value != revision):
