@@ -9,6 +9,7 @@ citation targets cross this protocol.
 from __future__ import annotations
 
 import json
+import io
 import base64
 import hashlib
 import ipaddress
@@ -22,6 +23,8 @@ from contextlib import contextmanager
 from collections import OrderedDict
 from pathlib import Path
 from urllib.parse import urlsplit
+
+from PIL import Image
 
 @contextmanager
 def _native_crossprocess_commit_lock(root: Path):
@@ -428,6 +431,57 @@ def _validate_native_control(tag: str, control: object) -> dict:
     return dict(control)
 
 
+def _validate_canvas_raster(value: dict) -> dict:
+    if set(value) != {"tag", "png", "width", "height"}:
+        raise ValueError("Invalid canvas raster envelope")
+    png, width, height = value["png"], value["width"], value["height"]
+    if (not isinstance(png, str) or len(png) > 699052
+            or type(width) is not int or type(height) is not int
+            or not 1 <= width <= 1024 or not 1 <= height <= 1024):
+        raise ValueError("Invalid canvas raster bounds")
+    try:
+        raw = base64.b64decode(png, validate=True)
+        if len(raw) > 524288 or not raw.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise ValueError("Invalid PNG raster")
+        # Reject metadata, embedded text, animated PNG and other non-pixel
+        # payloads before any decoder runs. Browser canvas PNG may contain
+        # only basic color/physical resolution chunks besides its pixels.
+        pos, ended = 8, False
+        while pos + 12 <= len(raw):
+            size = int.from_bytes(raw[pos:pos+4], "big")
+            kind = raw[pos+4:pos+8]
+            if size > len(raw) - pos - 12 or kind not in {
+                b"IHDR", b"IDAT", b"IEND", b"sRGB", b"gAMA", b"pHYs", b"cHRM", b"PLTE", b"tRNS"
+            }:
+                raise ValueError("Unexpected PNG chunk")
+            pos += size + 12
+            if kind == b"IEND":
+                ended = size == 0 and pos == len(raw)
+                break
+        if not ended:
+            raise ValueError("Incomplete PNG raster")
+        with Image.open(io.BytesIO(raw), formats=["PNG"]) as image:
+            if image.size != (width, height) or getattr(image, "n_frames", 1) != 1:
+                raise ValueError("PNG dimensions mismatch")
+            image.verify()
+        with Image.open(io.BytesIO(raw), formats=["PNG"]) as image:
+            pixels = image.convert("RGBA")
+            extrema = pixels.getextrema()
+            if extrema[3][1] == 0 or not any(lo != hi for lo, hi in extrema):
+                raise ValueError("Blank canvas raster")
+            # Normalize to pixels only, stripping all optional metadata.
+            canonical = Image.frombytes("RGBA", pixels.size, pixels.tobytes())
+            out = io.BytesIO()
+            canonical.save(out, format="PNG")
+            encoded = out.getvalue()
+            if len(encoded) > 524288:
+                raise ValueError("Canvas raster exceeds archive budget")
+    except (OSError, SyntaxError, ValueError, OverflowError, Image.DecompressionBombError) as exc:
+        raise ValueError("Invalid canvas raster") from exc
+    return {"tag": "canvas_raster", "png": base64.b64encode(encoded).decode("ascii"),
+            "width": width, "height": height}
+
+
 def validate_native_snapshot(payload: object) -> dict:
     if not isinstance(payload, dict):
         raise ValueError("Native snapshot must be an object")
@@ -436,7 +490,7 @@ def validate_native_snapshot(payload: object) -> dict:
     revision = payload["revision"]
     if type(revision) is not int or not 1 <= revision <= 1000000:
         raise ValueError("Invalid revision")
-    count, chars = 0, 0
+    count, chars, raster_count = 0, 0, 0
     interaction_ids: set[str] = set()
     tablist_groups: set[str] = set()
     tab_control_groups: set[str] = set()
@@ -444,11 +498,16 @@ def validate_native_snapshot(payload: object) -> dict:
 
     def node(value: object, depth: int, parent_tag: str | None = None,
              parent_tab_group: str | None = None) -> dict:
-        nonlocal count, chars
+        nonlocal count, chars, raster_count
         if depth > MAX_DEPTH or count >= MAX_NODES or not isinstance(value, dict):
             raise ValueError("Native tree exceeds limit")
         count += 1
         tag = value.get("tag")
+        if tag == "canvas_raster":
+            raster_count += 1
+            if raster_count > 4 or parent_tag in MATH_TAGS | SVG_TAGS | {"select", "option", "input", "button", "img"}:
+                raise ValueError("Canvas raster exceeds scope or count")
+            return _validate_canvas_raster(value)
         if not isinstance(tag, str) or tag not in SAFE_TAGS:
             raise ValueError("Unsupported native element")
         # Rolling-upgrade compatibility: older Worker builds and durable
@@ -1264,6 +1323,8 @@ def native_public_v1_tree(root: dict) -> dict:
     Private admin layout evidence retains dimension hints for candidate
     display; old MV3C clients accept only the original five safe node keys.
     """
+    if root.get("tag") == "canvas_raster":
+        return {"tag": "span", "text": "[Canvas preview available in Web Chat]"}
     result = {key: value for key,value in root.items()
               if key not in ("intrinsic_width", "intrinsic_height", "source_sha256",
                              "attrs", "math_attrs", "children", "col_span", "row_span", "control", "interaction_id")}

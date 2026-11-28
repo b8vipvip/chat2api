@@ -248,6 +248,15 @@
     if (!value || typeof value !== "object" || Array.isArray(value) || depth > 64 || counts.nodes >= MAX_NODES) return false;
     counts.nodes += 1;
     const tag = value.tag;
+    if (tag === "canvas_raster") {
+      counts.rasters = (counts.rasters || 0) + 1;
+      return counts.rasters <= 4 && !MATH_TAGS.has(parentTag) && !SVG_TAGS.has(parentTag) &&
+        !["select","option","input","button","img"].includes(parentTag) &&
+        Object.keys(value).length === 4 && Number.isInteger(value.width) && value.width >= 1 && value.width <= 1024 &&
+        Number.isInteger(value.height) && value.height >= 1 && value.height <= 1024 &&
+        typeof value.png === "string" && value.png.length <= 699052 &&
+        value.png.startsWith("iVBORw0KGgo") && /^[A-Za-z0-9+/]+={0,2}$/.test(value.png);
+    }
     if (typeof tag !== "string" || !SAFE_TAGS.has(tag)) return false;
     if (SVG_TAGS.has(parentTag) && !SVG_TAGS.has(tag)) return false;
     if (SVG_TAGS.has(tag) && !SVG_TAGS.has(parentTag) && tag !== "svg") return false;
@@ -540,6 +549,19 @@
     if (depth > 64) throw new Error("native tree depth exceeded");
     const tag = value.tag;
     let element;
+    if (tag === "canvas_raster") {
+      element = document.createElement("img");
+      element.className = "native-canvas-preview";
+      element.src = "data:image/png;base64," + value.png;
+      element.alt = "ChatGPT 原生 Canvas 静态快照";
+      element.width = value.width;
+      element.height = value.height;
+      element.style.maxWidth = "100%";
+      element.style.height = "auto";
+      element.loading = "lazy";
+      element.decoding = "async";
+      return element;
+    }
     if (SVG_TAGS.has(tag)) element = document.createElementNS(SVG_NS,tag === "clippath" ? "clipPath" : tag);
     else if (tag==="button" && value.control?.kind==="copy") {
       element=document.createElement("button");

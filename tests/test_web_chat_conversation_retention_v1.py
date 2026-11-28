@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
+from threading import RLock
 
 from fastapi.testclient import TestClient
 
@@ -79,6 +80,7 @@ def test_expiring_conversation_releases_attachment_reference_transactionally(tmp
     store = WebChatConversationStoreV1(tmp_path)
     (tmp_path / "attachment.bin").write_bytes(b"image")
     fake_file_store = SimpleNamespace(
+        lock=RLock(),
         root=tmp_path,
         get=lambda file_id: SimpleNamespace(path="attachment.bin", size=5) if file_id == "file_retention1234" else None,
     )

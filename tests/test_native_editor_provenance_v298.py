@@ -192,9 +192,11 @@ def test_v311_frozen_same_message_editor_proof_survives_native_ack_without_code_
     assert "active.nativePreparedEditorMerge={" in native
     assert "prepareVerifiedEditorMarkdown(root,docs)" in native
     assert 'messageId,' in native
-    assert "const tree = snapshot(active);" in native
+    # Canvas re-sampling may replace the initial capture; preserve the
+    # actual ordering invariant rather than requiring a const declaration.
+    assert "tree = snapshot(active);" in native
     assert native.index("prepareVerifiedEditorMarkdown(root,docs)") < native.index(
-        "const tree = snapshot(active);")
+        "tree = snapshot(active);")
     assert "prepared?.requestId===active.requestId" in request
     assert "prepared.messageId===currentId" in request
     assert "active.nativeMessageIdentityBound===true" in request

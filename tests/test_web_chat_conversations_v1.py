@@ -540,8 +540,8 @@ def test_conversation_attachment_references_protect_files_until_last_cross_devic
 
         @contextmanager
         def checked_reference_guard():
-            # The reference database must be locked before the file store.
-            assert not app.state.file_store.lock._is_owned()
+            # Save, delete, retention and library listing all take FileStore first.
+            assert app.state.file_store.lock._is_owned()
             guard_calls.append(True)
             with original_guard() as referenced:
                 yield referenced
@@ -625,7 +625,7 @@ def test_conversation_attachment_reference_migration_backfills_legacy_rows(tmp_p
     assert migrated.file_reference_count(file_id, "legacy-user") == 2
     assert migrated.referenced_file_ids() == {file_id}
     with sqlite3.connect(database) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
 
 
 def test_conversation_tool_events_preserve_unknown_and_missing_status_as_unknown() -> None:
@@ -808,10 +808,242 @@ def test_generated_library_pagination_and_session_download_are_owner_scoped(tmp_
         assert "attachment" in download.headers["content-disposition"]
         assert download.headers["cache-control"] == "private, no-store"
         assert client.get(f"/api/user/chat/generated-files/{foreign['id']}/download").status_code == 404
+        conversation = _conversation("c2a_generated_api_ref")
+        conversation["messages"][1]["content"] = f"[file](/api/user/chat/generated-files/{first['id']}/download)"
+        owner_id = app.state.user_accounts.owner_for_key(owner_key)
+        assert owner_id
+        store = app.state.web_chat_conversations
+        assert store.upsert(owner_id, conversation, 0)[0]
+        rows = client.get(library, params={"scope": "generated"}).json()["data"]
+        assert next(row for row in rows if row["id"] == first["id"])["reference_count"] == 1
+        admin_url = f"/api/admin/media-storage/generated-files/{first['id']}"
+        assert client.delete(admin_url, headers={"Authorization": "Bearer generated-library-master-key"}).status_code == 409
+        assert client.get(url).status_code == 200
+        assert store.delete(owner_id, conversation["id"], 1)[0]
+        assert client.delete(admin_url, headers={"Authorization": "Bearer generated-library-master-key"}).status_code == 200
+        assert client.get(url).status_code == 404
+        third = archive.store(b"%PDF-1.7\nthird", "three.pdf", "application/pdf", owner_key, "req_three")
+        delete_url = f"/api/user/chat/generated-files/{third['id']}"
+        assert client.delete(delete_url).status_code == 409
+        assert client.delete(f"/api/user/chat/generated-files/{foreign['id']}").status_code == 404
+        with sqlite3.connect(archive.db_path) as connection:
+            connection.execute("UPDATE generated_files SET created_at=? WHERE id=?",
+                               ("2020-01-01T00:00:00+00:00", third["id"]))
+        assert client.delete(delete_url, headers={"Origin":"https://evil.example"}).status_code == 403
+        assert client.delete(delete_url, headers={"X-Chat2API-User-ID":"old-user"}).status_code == 409
+        rows = client.get(library, params={"scope": "generated"}).json()["data"]
+        assert next(row for row in rows if row["id"] == third["id"])["deletable"] is True
+        linked = _conversation("c2a_generated_guard_02")
+        linked["messages"][1]["content"] = f"[file](/api/user/chat/generated-files/{third['id']}/download)"
+        assert store.upsert(owner_id, linked, 0)[0]
+        assert client.delete(delete_url).status_code == 409
+        assert store.delete(owner_id, linked["id"], 1)[0]
+        assert client.delete(delete_url).json()["deleted"] is True
+        assert client.get(delete_url + "/download").status_code == 404
         client.cookies.clear()
         assert client.get(url).status_code == 401
         assert client.post("/api/user/register", json={
             "email": "generated-library-other@example.test", "password": "generated-library-password",
         }).status_code == 200
         assert client.get(library, params={"scope": "generated"}).json()["data"] == []
-        assert client.get(url).status_code == 404
+        assert client.get(f"/api/user/chat/generated-files/{second['id']}/download").status_code == 404
+
+
+def test_generated_references_count_by_request_and_link_and_backfill(tmp_path: Path):
+    store = WebChatConversationStoreV1(tmp_path)
+    file_id = "gen_abcdefghijk123"
+    request_id = "req_generated_12345"
+    first = _conversation("c2a_generated_ref_01")
+    first["messages"][1]["requestId"] = request_id
+    first["messages"][1]["content"] = f"[file](/api/generated-files/{file_id}/opaque-token)"
+    second = _conversation("c2a_generated_ref_02")
+    second["messages"][1]["content"] = f"[file](/api/user/chat/generated-files/{file_id}/download)"
+    assert store.upsert("alice", first, 0)[0]
+    assert store.upsert("alice", second, 0)[0]
+    assert store.upsert("bob", first, 0)[0]
+    assert store.generated_reference_count("alice", file_id, request_id) == 2
+    assert store.generated_reference_count("bob", file_id, request_id) == 1
+    with store.generated_deletion_guard("alice", file_id, request_id) as allowed:
+        assert not allowed
+    with sqlite3.connect(store.path) as connection:
+        connection.execute("DROP TABLE web_chat_generated_references")
+        connection.execute("PRAGMA user_version=3")
+    reopened = WebChatConversationStoreV1(tmp_path)
+    assert reopened.generated_reference_count("alice", file_id, request_id) == 2
+    assert reopened.delete("alice", first["id"], 1)[0]
+    assert reopened.generated_reference_count("alice", file_id, request_id) == 1
+    assert reopened.delete("alice", second["id"], 1)[0]
+    with reopened.generated_deletion_guard("alice", file_id, request_id) as allowed:
+        assert allowed
+    assert reopened.generated_reference_count("bob", file_id, request_id) == 1
+
+
+def test_plugin_takeover_only_expired_pending_tasks_and_fences_previous_holder(tmp_path: Path, monkeypatch):
+    import app.web_chat_conversations_v1 as module
+    now = [1000.0]
+    monkeypatch.setattr(module.time, "time", lambda: now[0])
+    a = WebChatConversationStoreV1(tmp_path)
+    b = WebChatConversationStoreV1(tmp_path)
+    cid, mid = "c2a_takeover_0001", "message_assistant_01"
+    conversation = _conversation(cid)
+    conversation["messages"][1].update(pending=True, recoveryStatus="tool_planning")
+    assert a.upsert("alice", conversation, 0)[0]
+    checkpoint = {"rounds": 1, "tool_calls": 0, "tool_events": []}
+    assert a.plugin_task("alice", cid, mid, "claim", "holder_first")["granted"]
+    assert a.plugin_task("alice", cid, mid, "checkpoint", "holder_first", checkpoint)["granted"]
+    assert not b.plugin_task("alice", cid, mid, "takeover", "holder_second")["granted"]
+    now[0] += 181
+    assert not b.plugin_task("bob", cid, mid, "takeover", "holder_second")["granted"]
+    assert not b.plugin_task("alice", cid, mid, "takeover", "holder_first")["granted"]
+    resumed = b.plugin_task("alice", cid, mid, "takeover", "holder_second")
+    assert resumed == {"state": "running", "granted": True, "checkpoint": checkpoint}
+    assert not a.plugin_task("alice", cid, mid, "renew", "holder_first")["granted"]
+    assert not a.plugin_task("alice", cid, mid, "completed", "holder_first")["granted"]
+    assert not a.plugin_task("alice", cid, mid, "takeover", "holder_third")["granted"]
+    assert b.plugin_task("alice", cid, mid, "interrupted", "holder_second")["granted"]
+    now[0] += 181
+    assert not a.plugin_task("alice", cid, mid, "takeover", "holder_third")["granted"]
+
+
+def test_plugin_takeover_retry_budget_survives_restart(tmp_path: Path, monkeypatch):
+    import app.web_chat_conversations_v1 as module
+    now = [1000.0]
+    monkeypatch.setattr(module.time, "time", lambda: now[0])
+    store = WebChatConversationStoreV1(tmp_path)
+    cid, mid = "c2a_takeover_0002", "message_assistant_01"
+    conversation = _conversation(cid)
+    conversation["messages"][1].update(pending=True, recoveryStatus="tool_planning")
+    assert store.upsert("alice", conversation, 0)[0]
+    assert store.plugin_task("alice", cid, mid, "claim", "holder_first")["granted"]
+    assert store.plugin_task("alice", cid, mid, "checkpoint", "holder_first",
+        {"rounds": 1, "tool_calls": 0, "tool_events": []})["granted"]
+    for attempt in range(3):
+        now[0] += 181
+        store = WebChatConversationStoreV1(tmp_path)
+        assert not store.plugin_task("alice", cid, mid, "takeover", "holder_first")["granted"]
+        assert store.plugin_task("alice", cid, mid, "takeover", f"holder_{attempt:04d}")["granted"]
+    now[0] += 181
+    assert not store.plugin_task("alice", cid, mid, "takeover", "holder_fourth")["granted"]
+
+
+def test_plugin_expired_holder_stop_before_takeover_is_terminal(tmp_path: Path, monkeypatch):
+    import app.web_chat_conversations_v1 as module
+    now = [1000.0]
+    monkeypatch.setattr(module.time, "time", lambda: now[0])
+    store = WebChatConversationStoreV1(tmp_path)
+    cid, mid = "c2a_takeover_0003", "message_assistant_01"
+    conversation = _conversation(cid)
+    conversation["messages"][1].update(pending=True, recoveryStatus="tool_planning")
+    assert store.upsert("alice", conversation, 0)[0]
+    assert store.plugin_task("alice", cid, mid, "claim", "holder_first")["granted"]
+    assert store.plugin_task("alice", cid, mid, "checkpoint", "holder_first",
+        {"rounds": 1, "tool_calls": 0, "tool_events": []})["granted"]
+    now[0] += 181
+    assert store.plugin_task("alice", cid, mid, "interrupted", "holder_first")["granted"]
+    assert not store.plugin_task("alice", cid, mid, "takeover", "holder_second")["granted"]
+
+def test_generated_retention_only_removes_aged_unreferenced_internal_web_chat_files(tmp_path: Path):
+    settings = Settings(CHAT2API_API_KEY="generated-retention-master-key", CHAT2API_DATA_DIR=str(tmp_path))
+    app = create_app(settings)
+    _install_web_chat_test_features(app)
+    with TestClient(app) as client:
+        client.headers.update({"Origin": "http://testserver"})
+        assert client.post("/api/user/register", json={
+            "email":"generated-retention-owner@example.test", "password":"generated-retention-password",
+        }).status_code == 200
+        session = client.get("/api/user/chat/session")
+        assert session.status_code == 200, session.text
+        internal_key = session.json()["key_id"]
+        owner_id = app.state.user_accounts.owner_for_key(internal_key)
+        mode2 = client.post("/api/user/keys", json={"name":"Mode 2 key"}).json()["key"]["key_id"]
+        archive = app.state.generated_files
+        def generated(name, key):
+            return archive.store(b"%PDF-1.7\nexample", name + ".pdf", "application/pdf", key, "req_" + name + "_archive")
+        orphan = generated("orphan", internal_key)
+        referenced = generated("referenced", internal_key)
+        external = generated("external", mode2)
+        recent = generated("recent", internal_key)
+        with sqlite3.connect(archive.db_path) as connection:
+            connection.executemany("UPDATE generated_files SET created_at=? WHERE id=?",
+                [("2020-01-01T00:00:00+00:00", row["id"]) for row in (orphan,referenced,external)])
+        conversation = _conversation("c2a_generated_retention_ref")
+        conversation["messages"][1]["requestId"] = "req_referenced_archive"
+        assert app.state.web_chat_conversations.upsert(owner_id, conversation, 0)[0]
+        app.state.web_chat_conversations.set_retention_days(30)
+    # Fresh process startup invokes the real retention path against durable rows.
+    reopened = create_app(settings)
+    # The test installer creates a service key before lifespan loads keys.
+    # Load persisted keys first so that creation cannot overwrite them.
+    asyncio.run(reopened.state.api_keys.load())
+    _install_web_chat_test_features(reopened)
+    with TestClient(reopened):
+        archive = reopened.state.generated_files
+        assert archive.deletion_identity(orphan["id"]) is None
+        assert archive.deletion_identity(referenced["id"]) is not None
+        assert archive.deletion_identity(external["id"]) is not None
+        assert archive.deletion_identity(recent["id"]) is not None
+
+def test_plugin_checkpoint_preserves_normalized_plan_across_takeover(tmp_path: Path, monkeypatch):
+    import app.web_chat_conversations_v1 as module
+    import pytest
+    now = [1000.0]
+    monkeypatch.setattr(module.time, "time", lambda: now[0])
+    store = WebChatConversationStoreV1(tmp_path)
+    cid, mid = "c2a_durable_plan_0001", "message_assistant_01"
+    conversation = _conversation(cid)
+    conversation["messages"][1].update(pending=True, recoveryStatus="tool_planning")
+    assert store.upsert("alice", conversation, 0)[0]
+    assert store.plugin_task("alice", cid, mid, "claim", "holder_first")["granted"]
+    plan = {"request_id": "req_planner_1234", "model": "gpt-6", "start_tool_calls": 0,
+            "calls": [{"name": "github.list_issues", "arguments": {"repository":"owner/repo","page":1}}]}
+    checkpoint = {"rounds":1,"tool_calls":0,"tool_events":[],"plan":plan}
+    assert store.plugin_task("alice", cid, mid, "checkpoint", "holder_first", checkpoint)["granted"]
+    bad = {**checkpoint,"plan":{**plan,"calls":[{"name":"unknown.write","arguments":{}}]}}
+    with pytest.raises(ValueError):
+        store.plugin_task("alice", cid, mid, "checkpoint", "holder_first", bad)
+    now[0] += 181
+    reopened = WebChatConversationStoreV1(tmp_path)
+    resumed = reopened.plugin_task("alice", cid, mid, "takeover", "holder_second")
+    assert resumed["granted"] and resumed["checkpoint"]["plan"] == plan
+
+def test_plugin_provider_result_journal_recovers_full_response_and_fences_old_holder(tmp_path: Path, monkeypatch):
+    import app.web_chat_conversations_v1 as module
+    now = [1000.0]
+    monkeypatch.setattr(module.time, "time", lambda: now[0])
+    store = WebChatConversationStoreV1(tmp_path)
+    cid, mid = "c2a_result_journal_001", "message_assistant_01"
+    conversation = _conversation(cid)
+    conversation["messages"][1].update(pending=True, recoveryStatus="tool_planning")
+    assert store.upsert("alice", conversation, 0)[0]
+    assert store.plugin_task("alice", cid, mid, "claim", "holder_first")["granted"]
+    args = {"repository": "owner/repo", "page": 1}
+    tool = "github.list_issues"
+    second = {"repository": "owner/repo", "page": 2}
+    checkpoint = {"rounds": 1, "tool_calls": 0, "tool_events": [],
+        "plan": {"request_id": "req_planner_1234", "model": "gpt-6", "start_tool_calls": 0,
+                 "calls": [{"name":tool,"arguments":args},{"name":tool,"arguments":second}]}}
+    assert store.plugin_task("alice", cid, mid, "checkpoint", "holder_first", checkpoint)["granted"]
+    first = ("alice", cid, mid, "holder_first", 1, tool)
+    assert store.plugin_result(*first, {"repository":"other/repo"})["state"] == "denied"
+    assert store.plugin_result(*first, args)["state"] == "claimed"
+    assert store.plugin_result(*first, args)["state"] == "running"
+    result = {"status": 200, "body": {"data":[{"body":"x"*12000}], "pagination":{"has_more":True}}}
+    assert store.plugin_result(*first, args, result)["result"] == result
+    assert store.plugin_result(*first, args)["result"] == result
+    assert store.plugin_result(*first, second)["state"] == "claimed"
+    now[0] += 181
+    reopened = WebChatConversationStoreV1(tmp_path)
+    assert reopened.plugin_result(*first, second, result)["state"] == "denied"
+    assert not reopened.plugin_task("bob", cid, mid, "takeover", "holder_other")["granted"]
+    resumed = reopened.plugin_task("alice", cid, mid, "takeover", "holder_second")
+    assert resumed["granted"]
+    assert resumed["tool_results"] == [{"round":1,"tool":tool,"arguments":args,"result":result}]
+    successor = ("alice", cid, mid, "holder_second", 1, tool)
+    assert reopened.plugin_result(*successor, args)["result"] == result
+    assert reopened.plugin_result(*successor, second)["state"] == "claimed"
+    assert reopened.plugin_result(*first, second, result)["state"] == "denied"
+    assert reopened.plugin_result(*successor, second, result)["state"] == "completed"
+    assert reopened.delete("alice", cid, 1)[0]
+    with sqlite3.connect(reopened.path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM web_chat_plugin_results").fetchone()[0] == 0
+    assert reopened.plugin_result(*successor, second)["state"] == "denied"

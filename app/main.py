@@ -58,7 +58,8 @@ from .native_content_v1 import (NativeContentStore, NativeChunkAssembler, native
                                 native_public_v1_tree)
 from .native_dom_evidence_v1 import NativeDomEvidenceStore
 from .native_capture_audit_v281 import capture_comparison
-from .native_snapshot_finality_v282 import native_snapshot_finality, native_terminal_view
+from .native_snapshot_finality_v282 import native_snapshot_finality, native_terminal_view, native_interaction_digest
+from .native_dynamic_media_v1 import interaction_image_projection
 from .media_public_origin_v187 import effective_media_base_url, media_base_for_request
 from .response_history_media_v188 import history_safe_response_text
 from .responses_multimodal_input_v183 import (
@@ -371,6 +372,49 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
             return await asyncio.to_thread(cleanup_under_file_lock)
 
+        generated_cleanup_cursor = ""
+
+        async def cleanup_web_chat_generated_files() -> int:
+            nonlocal generated_cleanup_cursor
+            if conversation_files is None:
+                return 0
+            # Automatic generated-file deletion is opt-in via the existing
+            # conversation retention policy, and never touches Mode 2 keys.
+            days = int(conversation_files.retention_policy()["retention_days"])
+            accounts = getattr(app.state, "user_accounts", None)
+            if days <= 0 or accounts is None:
+                return 0
+            cutoff = datetime.now(timezone.utc) - timedelta(days=max(90, days))
+            owners = {key_id: item.internal_owner_user_id
+                      for key_id, item in list(api_keys.keys.items())
+                      if item.internal_owner_user_id}
+
+            def scan(after: str):
+                removed = 0
+                rows = generated_files.aged_candidates(cutoff, after, limit=500)
+                for row in rows:
+                    user_id = owners.get(row["owner"])
+                    if not user_id or not accounts.owns_key(user_id, row["owner"]):
+                        continue
+                    request = telemetry.get(row["request_id"]) or {}
+                    if request and (request.get("api_key_id") != row["owner"]
+                                    or str(request.get("status") or "").lower()
+                                    not in {"completed", "error", "cancelled", "stalled"}):
+                        continue
+                    with conversation_files.generated_deletion_guard(
+                        user_id, row["id"], row["request_id"]
+                    ) as allowed:
+                        if allowed:
+                            try:
+                                removed += int(generated_files.delete(
+                                    row["id"], owner=row["owner"], cutoff=cutoff))
+                            except (PermissionError, ValueError, OSError):
+                                logger.warning("Skipped unavailable generated archive object during retention")
+                return removed, rows[-1]["id"] if len(rows) == 500 else ""
+
+            removed, generated_cleanup_cursor = await asyncio.to_thread(scan, generated_cleanup_cursor)
+            return removed
+
         try:
             expired_conversations = await expire_web_chat_conversations()
             if expired_conversations:
@@ -384,6 +428,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "Expired %s unreferenced Web Chat attachment(s)",
                     removed_web_chat_files,
                 )
+            removed_generated = await cleanup_web_chat_generated_files()
+            if removed_generated:
+                logger.info("Expired %s unreferenced Web Chat generated file(s)", removed_generated)
         except Exception:
             # Retention is best-effort maintenance. A failed scan must not
             # affect chat startup or delete files with uncertain references.
@@ -399,6 +446,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     removed = await cleanup_web_chat_orphan_files()
                     if removed:
                         logger.info("Expired %s unreferenced Web Chat attachment(s)", removed)
+                    removed_generated = await cleanup_web_chat_generated_files()
+                    if removed_generated:
+                        logger.info("Expired %s unreferenced Web Chat generated file(s)", removed_generated)
                 except Exception:
                     logger.exception("Web Chat attachment retention scan failed")
 
@@ -428,11 +478,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         recovery_watchdog = asyncio.create_task(expire_lost_web_chat_leases())
         file_retention_task = asyncio.create_task(expire_web_chat_orphan_files())
+        plugin_recovery_task = None
+        if getattr(app.state,"web_chat_conversations",None) is not None:
+            from .web_chat_plugin_recovery_v1 import run_plugin_recovery_scheduler
+            plugin_recovery_task = asyncio.create_task(run_plugin_recovery_scheduler(app))
         try:
             yield
         finally:
             recovery_watchdog.cancel()
             file_retention_task.cancel()
+            if plugin_recovery_task is not None:
+                plugin_recovery_task.cancel()
+                await asyncio.gather(plugin_recovery_task,return_exceptions=True)
             try:
                 await recovery_watchdog
             except asyncio.CancelledError:
@@ -719,8 +776,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.delete("/api/admin/media-storage/generated-files/{file_id}", dependencies=[Depends(require_admin_key)])
     async def delete_generated_file(file_id: str) -> dict[str, bool]:
+        def delete_with_reference_guard():
+            identity = generated_files.deletion_identity(file_id)
+            if identity is None:
+                return False
+            owner_key, request_id = identity
+            accounts = getattr(app.state, "user_accounts", None)
+            conversations = getattr(app.state, "web_chat_conversations", None)
+            user_id = accounts.owner_for_key(owner_key) if accounts is not None else None
+            if conversations is not None and user_id:
+                with conversations.generated_deletion_guard(user_id, file_id, request_id) as allowed:
+                    if not allowed:
+                        raise HTTPException(status_code=409, detail="Generated file is referenced by a saved Web Chat conversation")
+                    return generated_files.delete(file_id)
+            return generated_files.delete(file_id)
+
         try:
-            deleted = await asyncio.to_thread(generated_files.delete, file_id)
+            deleted = await asyncio.to_thread(delete_with_reference_guard)
         except (ValueError, OSError) as error:
             raise HTTPException(status_code=503, detail="Cannot remove generated file from storage") from error
         if not deleted:
@@ -902,6 +974,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                            "height":media.get("height"),
                                            "sha256":media.get("sha256")})
                     break
+        # Only an exact server-committed successor may replace the original
+        # media slot inventory. Keep canonical response_media and Mode 2
+        # output immutable; interaction-only URLs are same-origin routes.
+        proof = row.get("native_interaction_proof")
+        if (preserve_native_tree and isinstance(proof,dict)
+                and proof.get("revision")==snapshot.get("revision")
+                and proof.get("sha256")==native_interaction_digest(snapshot)
+                and "image_manifest" in proof):
+            try:
+                assets,asset_metadata = await asyncio.to_thread(
+                    interaction_image_projection,media_archive,owner,request_id,snapshot,proof["image_manifest"])
+            except (ValueError,KeyError,OSError,sqlite3.Error):
+                assets,asset_metadata = [],[]
         # Files are derived only from this request's archived final reply.
         # Never forward unverified model-provided or upstream temporary URLs.
         files = []

@@ -18,7 +18,13 @@ def test_v230_stop_during_live_start_is_not_orphaned():
 def test_v230_file_handoff_is_single_sqlite_transaction():
     source = (ROOT / "app/generated_files_v196.py").read_text(encoding="utf-8")
     assert "BEGIN IMMEDIATE" in source
-    assert source.count('conn.execute("BEGIN IMMEDIATE")') == 2
+    # Archive handoff and guarded deletion are independent transactions.
+    import ast
+    methods = {node.name: ast.get_source_segment(source, node)
+               for node in ast.walk(ast.parse(source)) if isinstance(node, ast.FunctionDef)}
+    assert sum(body.count('conn.execute("BEGIN IMMEDIATE")') for name, body in methods.items()
+               if name != "delete") >= 2
+    assert 'conn.execute("BEGIN IMMEDIATE")' in methods["delete"]
     assert "def _store_in_transaction" in source
     assert "def _rollback_unpublished_objects" in source
     assert 'marker_positions != {m.start() for m in matches}' in source

@@ -180,4 +180,40 @@ assert.equal(target.nativeFinality,"verified-final");
 assert.equal(applyNativeSnapshot("native-race",v2WithMedia),false,"same-revision provisional replay cannot downgrade finality");
 assert.equal(JSON.stringify(raceState.nativeSnapshots.get("native-race")),JSON.stringify(v2Final));
 
+// A fetch from the old account must not populate the new account's cache.
+raceState.user = {user_id:"old-owner"};
+raceState.storageKey = "old-storage";
+hydration = refreshNativeSnapshot("native-race");
+raceState.user = {user_id:"new-owner"};
+raceState.storageKey = "new-storage";
+finishFetch({ok:true,status:200,json:async()=>snapshot(99)});
+assert.equal(await hydration,false);
+assert.equal(raceState.nativeSnapshots.get("native-race").revision,2);
+
+const pollStart = source.indexOf("  async function refreshInteractiveNativeSnapshots(");
+const pollEnd = source.indexOf("  async function hydrateNativeSnapshots(",pollStart);
+const pollMessages = Array.from({length:6},(_,index)=>({role:"assistant",requestId:"poll-"+index}));
+const pollConversation = {id:"poll-chat",messages:pollMessages};
+const pollState = {user:{user_id:"owner"},nativeSnapshots:new Map(pollMessages.map(message=>[
+  message.requestId,{finality:"verified-final",root:{tag:"input",interaction_id:"nc_1_1"}}
+]))};
+const polled = [],canvasPolled=[];
+const poll = vm.runInNewContext(source.slice(pollStart,pollEnd)+"\nrefreshInteractiveNativeSnapshots",{
+  state:pollState,currentConversation:()=>pollConversation,document:{hidden:false},
+  refreshNativeSnapshot:async id=>{polled.push(id);},
+  submitNativeInteraction:async (id,action)=>{canvasPolled.push([id,action]);},
+});
+await poll();
+assert.deepEqual(polled,["poll-5","poll-4","poll-3"]);
+pollState.streaming = true;
+await poll();
+assert.equal(polled.length,3);
+pollState.streaming=false;
+for(const message of pollMessages) pollState.nativeSnapshots.set(message.requestId,{
+  finality:"verified-final",revision:1,root:{tag:"canvas_raster"}});
+await poll();
+assert.equal(canvasPolled.length,1);
+assert.equal(canvasPolled[0][0],"poll-5");
+assert.equal(canvasPolled[0][1].action,"refresh_canvas");
+
 console.log("web-chat-native-hydration-v1-passed");

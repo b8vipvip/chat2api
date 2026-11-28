@@ -16,7 +16,9 @@ from pydantic import ValidationError
 
 from .admin_auth import same_origin_admin_request
 from .models import FileUploadRequest
-from .native_content_v1 import native_delivery_fingerprint
+from .native_content_v1 import native_delivery_fingerprint, validate_native_snapshot
+from .native_snapshot_finality_v282 import native_interaction_digest
+from .native_dynamic_media_v1 import archive_interaction_images
 from .user_commerce import USER_SESSION_COOKIE
 
 
@@ -76,6 +78,10 @@ def install_web_chat_features_v1(app: Any) -> Any:
         user = accounts.authenticate(request.cookies.get(USER_SESSION_COOKIE))
         if not user:
             raise HTTPException(status_code=401, detail="user login required",
+                                headers=_PRIVATE_HEADERS)
+        expected = request.headers.get("X-Chat2API-User-ID")
+        if expected is not None and expected != str(user["user_id"]):
+            raise HTTPException(status_code=409, detail="Web Chat account changed; reload the page",
                                 headers=_PRIVATE_HEADERS)
         return accounts, user
 
@@ -275,6 +281,7 @@ def install_web_chat_features_v1(app: Any) -> Any:
 
     pending_native_interactions: dict[str, dict[str, Any]] = {}
     native_interaction_locks: dict[str, asyncio.Lock] = {}
+    native_canvas_refresh_at: dict[str, float] = {}
 
     async def receive_native_interaction_ack(client_id: str, websocket: Any, message: dict[str, Any]) -> None:
         action_id = str(message.get("action_id") or "")
@@ -294,6 +301,9 @@ def install_web_chat_features_v1(app: Any) -> Any:
                 "ok": message.get("ok") is True,
                 "revision": message.get("revision"),
                 "error": str(message.get("error") or "")[:120],
+                "recapture_status": message.get("recapture_status"),
+                "snapshot": message.get("snapshot"),
+                "media": message.get("media",[]),
             })
 
     app.state.native_interaction_ack_receiver = receive_native_interaction_ack
@@ -427,11 +437,12 @@ def install_web_chat_features_v1(app: Any) -> Any:
         interaction_id = body.get("interaction_id")
         action = body.get("action")
         value = body.get("value")
+        canvas_refresh = interaction_id == "native_refresh" and action == "refresh_canvas" and value is None
         if (
             type(revision) is not int or not 1 <= revision < 1000000
             or not isinstance(interaction_id, str)
-            or not re.fullmatch(r"nc_[1-9][0-9]{0,6}_[1-9][0-9]{0,3}", interaction_id)
-            or not isinstance(action, str) or action not in {"set_open", "set_checked", "set_value", "set_selected", "set_pressed"}
+            or (not canvas_refresh and not re.fullmatch(r"nc_[1-9][0-9]{0,6}_[1-9][0-9]{0,3}", interaction_id))
+            or not isinstance(action, str) or (not canvas_refresh and action not in {"set_open", "set_checked", "set_value", "set_selected", "set_pressed"})
         ):
             raise HTTPException(status_code=422, detail="invalid interaction envelope", headers=_PRIVATE_HEADERS)
 
@@ -454,10 +465,29 @@ def install_web_chat_features_v1(app: Any) -> Any:
                 raise HTTPException(status_code=409, detail="verified native snapshot is not ready", headers=_PRIVATE_HEADERS)
             if snapshot.get("revision") != revision:
                 raise HTTPException(status_code=409, detail="native snapshot revision changed; refresh and retry", headers=_PRIVATE_HEADERS)
+            def canvas_count(root):
+                stack, count = [root], 0
+                while stack:
+                    node = stack.pop()
+                    if not isinstance(node,dict):
+                        continue
+                    count += int(node.get("tag") == "canvas_raster")
+                    stack.extend(node.get("children") or [])
+                return count
             target = find_native_interaction(snapshot.get("root"), interaction_id)
-            if target is None:
-                raise HTTPException(status_code=404, detail="native control not found", headers=_PRIVATE_HEADERS)
-            validate_native_interaction(target, action, value)
+            if canvas_refresh:
+                if not canvas_count(snapshot.get("root")):
+                    raise HTTPException(status_code=404, detail="native canvas not found", headers=_PRIVATE_HEADERS)
+                now = asyncio.get_running_loop().time()
+                if now - native_canvas_refresh_at.get(request_id, -1000) < 15:
+                    raise HTTPException(status_code=429, detail="canvas refresh rate limit", headers=_PRIVATE_HEADERS)
+                native_canvas_refresh_at[request_id] = now
+                if len(native_canvas_refresh_at)>128:
+                    native_canvas_refresh_at.pop(next(iter(native_canvas_refresh_at)))
+            else:
+                if target is None:
+                    raise HTTPException(status_code=404, detail="native control not found", headers=_PRIVATE_HEADERS)
+                validate_native_interaction(target, action, value)
             store = getattr(request.app.state, "native_content", None)
             stored_before = store.get(request_id, owner) if store is not None else None
             stored_target = (
@@ -467,9 +497,11 @@ def install_web_chat_features_v1(app: Any) -> Any:
             if (
                 not isinstance(stored_before, dict)
                 or stored_before.get("revision") != revision
-                or not isinstance(stored_target, dict)
-                or stored_target.get("tag") != target.get("tag")
-                or stored_target.get("control") != target.get("control")
+                or (not canvas_refresh and (
+                    not isinstance(stored_target, dict)
+                    or stored_target.get("tag") != target.get("tag")
+                    or stored_target.get("control") != target.get("control")
+                ))
             ):
                 raise HTTPException(status_code=409, detail="native snapshot changed; refresh and retry",
                                     headers=_PRIVATE_HEADERS)
@@ -533,18 +565,82 @@ def install_web_chat_features_v1(app: Any) -> Any:
             if not isinstance(stored, dict) or stored.get("revision") != revision:
                 raise HTTPException(status_code=409, detail="native snapshot changed during interaction; reload the conversation",
                                     headers=_PRIVATE_HEADERS)
-            updated = copy.deepcopy(stored)
-            apply_native_interaction(updated, interaction_id, action, value)
-            updated["revision"] = revision + 1
+            recaptured = acknowledgement.get("recapture_status") == "verified"
+            image_manifest = None
+            if canvas_refresh and acknowledgement.get("recapture_status") == "unchanged":
+                return JSONResponse({"ok":True,"revision":revision,"persisted":True,"unchanged":True},
+                                    headers=_PRIVATE_HEADERS)
+            if canvas_refresh and not recaptured:
+                raise HTTPException(status_code=409, detail="fresh canvas pixels unavailable", headers=_PRIVATE_HEADERS)
+            if recaptured:
+                try:
+                    raw = acknowledgement.get("snapshot")
+                    media = acknowledgement.get("media",[])
+                    if len(json.dumps({"snapshot":raw,"media":media},ensure_ascii=False).encode("utf-8")) > 768 * 1024:
+                        raise ValueError("interaction snapshot is too large")
+                    updated = validate_native_snapshot(raw)
+                    if updated["revision"] != revision + 1:
+                        raise ValueError("interaction snapshot revision mismatch")
+                    if canvas_refresh and canvas_count(updated["root"]) != canvas_count(stored["root"]):
+                        raise ValueError("canvas refresh lost a verified raster")
+                    # Validate every current image slot against exact archived
+                    # originals, and archive newly observed bytes first. Never
+                    # remap by ordinal, dimensions or an upstream source URL.
+                    def has_images(root):
+                        stack=[root]
+                        while stack:
+                            node=stack.pop()
+                            if node.get("tag")=="img":
+                                return True
+                            stack.extend(node.get("children") or [])
+                        return False
+                    if media or has_images(stored["root"]) or has_images(updated["root"]):
+                        image_manifest = await asyncio.to_thread(
+                            archive_interaction_images,request.app.state.media_archive,
+                            owner,request_id,updated,media)
+                except (ValueError, TypeError, KeyError, OSError, AttributeError):
+                    raise HTTPException(status_code=409, detail="Worker action applied but recaptured DOM could not be validated",
+                                        headers=_PRIVATE_HEADERS) from None
+            else:
+                updated = copy.deepcopy(stored)
+                apply_native_interaction(updated, interaction_id, action, value)
+                updated["revision"] = revision + 1
             if not store.publish(request_id, owner, updated):
                 raise HTTPException(status_code=409, detail="native interaction state could not be committed",
                                     headers=_PRIVATE_HEADERS)
             persisted = bool(store.persist(request_id, owner))
+            if persisted:
+                try:
+                    # Retain the original terminal evidence rather than rewriting
+                    # Worker completion diagnostics with an interactive revision.
+                    previous = row.get("native_interaction_proof")
+                    base = revision
+                    if (isinstance(previous, dict)
+                            and previous.get("revision") == revision
+                            and previous.get("sha256") == native_interaction_digest(stored)
+                            and type(previous.get("base_revision")) is int
+                            and 1 <= previous["base_revision"] < revision):
+                        base = previous["base_revision"]
+                        if not recaptured and isinstance(previous.get("image_manifest"),list):
+                            image_manifest = previous["image_manifest"]
+                    await request.app.state.telemetry.update(request_id, {
+                        "native_interaction_proof": {
+                            "base_revision": base, "revision": revision + 1,
+                            "sha256": native_interaction_digest(updated),
+                            "recaptured": recaptured,
+                            **({"image_manifest":image_manifest} if image_manifest is not None else {}),
+                        }
+                    })
+                except (KeyError, ValueError, OSError):
+                    persisted = False
             return JSONResponse({
                 "ok": True,
                 "revision": revision + 1,
                 "persisted": persisted,
-                **({"warning": "interaction applied but durable snapshot persistence is pending"} if not persisted else {}),
+                **({"recaptured": recaptured} if acknowledgement.get("recapture_status") else {}),
+                **({"warning": "interaction applied but durable snapshot persistence is pending"} if not persisted else
+                   {"warning": "interaction applied; full DOM recapture unavailable"}
+                   if acknowledgement.get("recapture_status") == "unavailable" else {}),
             }, headers={**_PRIVATE_HEADERS, "X-Content-Type-Options": "nosniff"})
 
     @app.get("/api/user/chat/requests/{request_id}/native-content/events")
@@ -654,7 +750,7 @@ def install_web_chat_features_v1(app: Any) -> Any:
     async def web_chat_private_cache_boundary(request, call_next):
         response = await call_next(request)
         path = request.url.path
-        if path.startswith(("/api/user/chat/dot", "/chat/dot", "/api/user/chat/completions", "/api/user/chat/conversations", "/api/user/chat/requests/", "/api/user/chat/files/", "/api/user/chat/library", "/api/user/files/")):
+        if path.startswith(("/api/user/chat/dot", "/chat/dot", "/api/user/chat/completions", "/api/user/chat/conversations", "/api/user/chat/requests/", "/api/user/chat/files/", "/api/user/chat/generated-files/", "/api/user/chat/library", "/api/user/files/")):
             response.headers["Cache-Control"] = "private, no-store"
             vary_values = [value.strip() for value in response.headers.get("Vary", "").split(",") if value.strip()]
             if not any(value.lower() == "cookie" for value in vary_values):

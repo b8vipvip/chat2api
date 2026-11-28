@@ -5,6 +5,7 @@ encrypted with the installation data secret and are never returned to browsers.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import html
@@ -484,6 +485,24 @@ def _gmail_body_text(payload: Any) -> str:
     return ""
 
 
+def plugin_connection_binding(store, user_id: str, provider_id: str) -> str | None:
+    if store is None:
+        return None
+    config = store.provider(provider_id)
+    connection = store.connection(user_id,provider_id)
+    if not config or not config.get("enabled") or not connection:
+        return None
+    if provider_id == "github" and _github_scope_mismatch(bool(config.get("private_repos")),connection.get("scopes")):
+        return None
+    subject = str(connection.get("provider_subject") or "")
+    if not subject:
+        return None
+    # Stable over ordinary OAuth refresh; changes when the connected account
+    # or scope changes. Never use or expose access/refresh tokens.
+    return hashlib.sha256(json.dumps([provider_id,subject,connection.get("created_at"),
+        sorted(connection.get("scopes") or [])],separators=(",",":")).encode()).hexdigest()
+
+
 def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
     if getattr(app.state, "plugin_connections_v1_installed", False):
         return app
@@ -902,6 +921,58 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
         if not isinstance(payload, dict):
             raise HTTPException(422, "Invalid plugin tool input", headers=_PRIVATE_HEADERS)
         user_id = str(user["user_id"])
+        lease_headers = [request.headers.get(name) for name in (
+            "X-Chat2API-Plugin-Conversation", "X-Chat2API-Plugin-Message",
+            "X-Chat2API-Plugin-Holder", "X-Chat2API-Plugin-Round")]
+        if not any(value is not None for value in lease_headers):
+            return await execute_provider_tool(user, provider_id, tool_name, payload)
+        cid, mid, holder, round_text = lease_headers
+        if (not all(isinstance(value, str) and 1 <= len(value) <= 128 for value in (cid, mid, holder))
+                or round_text not in {"1", "2", "3"}):
+            raise HTTPException(422, "Invalid plugin execution lease", headers=_PRIVATE_HEADERS)
+        conversations = getattr(request.app.state, "web_chat_conversations", None)
+        if conversations is None:
+            raise HTTPException(503, "Plugin result journal unavailable", headers=_PRIVATE_HEADERS)
+        # Cached results are still gated by a currently authorized connection.
+        connection = store.connection(user_id, provider_id)
+        if not connection or (provider_id == "github" and _github_scope_mismatch(
+                bool(config.get("private_repos")), connection.get("scopes"))):
+            raise HTTPException(409, "请重新连接插件账户", headers=_PRIVATE_HEADERS)
+        key = (user_id, cid, mid, holder, int(round_text), provider_id + "." + tool_name, payload)
+        try:
+            claimed = await asyncio.to_thread(conversations.plugin_result, *key)
+        except ValueError as exc:
+            raise HTTPException(422, "Invalid durable tool arguments", headers=_PRIVATE_HEADERS) from exc
+        binding = plugin_connection_binding(store,user_id,provider_id)
+        if claimed["state"] == "completed":
+            saved = claimed["result"]
+            if saved.get("connection_binding") != binding or not binding:
+                raise HTTPException(409, "插件账户已改变；请重新发起查询", headers=_PRIVATE_HEADERS)
+            return JSONResponse(saved["body"], status_code=saved["status"], headers=_PRIVATE_HEADERS)
+        if claimed["state"] != "claimed":
+            raise HTTPException(409, "Plugin execution lease is stale or call is already running", headers=_PRIVATE_HEADERS)
+        try:
+            response = await execute_provider_tool(user, provider_id, tool_name, payload)
+            result = {"status": response.status_code, "body": json.loads(response.body)}
+        except HTTPException as exc:
+            result = {"status": exc.status_code, "body": {"detail": str(exc.detail)[:1000]}}
+        try:
+            if not binding or plugin_connection_binding(store,user_id,provider_id) != binding:
+                raise HTTPException(409, "插件账户已改变；请重新发起查询", headers=_PRIVATE_HEADERS)
+            result["connection_binding"] = binding
+            committed = await asyncio.to_thread(conversations.plugin_result, *key, result)
+        except ValueError as exc:
+            raise HTTPException(503, "Plugin result exceeds durable limit", headers=_PRIVATE_HEADERS) from exc
+        if committed["state"] != "completed":
+            raise HTTPException(409, "Plugin execution lease was superseded", headers=_PRIVATE_HEADERS)
+        return JSONResponse(committed["result"]["body"], status_code=committed["result"]["status"], headers=_PRIVATE_HEADERS)
+
+    async def execute_provider_tool(user: dict[str, Any], provider_id: str, tool_name: str,
+                                    payload: dict[str, Any]) -> JSONResponse:
+        user_id = str(user["user_id"])
+        config = store.provider(provider_id)
+        if not config or not config.get("enabled"):
+            raise HTTPException(403, "插件当前不可用", headers=_PRIVATE_HEADERS)
         connection = store.connection(user_id, provider_id)
         if provider_id == "github" and connection:
             scope_transition = _github_scope_mismatch(
@@ -1658,6 +1729,9 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
             response_payload["pagination"] = pagination
         return JSONResponse(response_payload, headers=_PRIVATE_HEADERS)
 
+    # Internal only; the scheduler supplies the authenticated account record
+    # and rechecks the saved OAuth binding before and after dispatch.
+    app.state.execute_plugin_provider_tool = execute_provider_tool
     app.state.plugin_connections_v1_installed = True
     app.state.plugin_connections_v1_version = 1
     return app

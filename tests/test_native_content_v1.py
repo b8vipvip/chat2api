@@ -1144,3 +1144,41 @@ def test_svg_chart_titles_and_descriptions_survive_native_and_legacy_validation(
     legacy = native_public_v1_tree(value["root"])
     assert legacy["tag"] == "span"
     assert legacy["children"][0] == {"tag": "span", "text": "季度收入趋势"}
+
+def test_canvas_raster_is_pixel_only_bounded_and_private_to_web_chat(tmp_path):
+    import base64
+    import io
+    from PIL import Image, PngImagePlugin
+    from app.native_content_v1 import native_public_v1_tree, native_image_identity_candidates
+
+    image = Image.new("RGBA", (2, 2), "white")
+    image.putpixel((0, 0), (255, 0, 0, 255))
+    def encode(image, **kwargs):
+        stream = io.BytesIO()
+        image.save(stream, "PNG", **kwargs)
+        return base64.b64encode(stream.getvalue()).decode()
+    raster = {"tag": "canvas_raster", "width": 2, "height": 2, "png": encode(image)}
+    payload = {"version": 1, "revision": 1, "root": {"tag": "div", "children": [raster]}}
+    validated = validate_native_snapshot(payload)
+    assert validate_native_snapshot(validated) == validated
+    assert "png" not in json.dumps(native_public_v1_tree(validated["root"]))
+    assert native_image_identity_candidates(validated, [])["status"] != "verified-sha256"
+    store = NativeContentStore(tmp_path)
+    assert store.publish("req_canvas_raster_12345", "owner-key", validated)
+    assert store.persist("req_canvas_raster_12345", "owner-key")
+    reopened = NativeContentStore(tmp_path)
+    assert reopened.get("req_canvas_raster_12345", "owner-key") == validated
+    assert reopened.get("req_canvas_raster_12345", "other-key") is None
+    text = PngImagePlugin.PngInfo()
+    text.add_text("secret", "private metadata")
+    for bad in (
+        {**raster, "width": 3},
+        {**raster, "png": encode(Image.new("RGBA", (2, 2), "white"))},
+        {**raster, "png": encode(image, pnginfo=text)},
+        {**raster, "png": base64.b64encode(b"<svg/>").decode()},
+        {**raster, "url": "https://example.invalid"},
+    ):
+        with pytest.raises(ValueError):
+            validate_native_snapshot({**payload, "root": bad})
+    with pytest.raises(ValueError):
+        validate_native_snapshot({**payload, "root": {"tag": "div", "children": [raster]*5}})

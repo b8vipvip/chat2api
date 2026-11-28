@@ -100,7 +100,8 @@
   // hashing (the byte relay to a page retains its existing 4 MiB limit).
   const MAX_IDENTITY_BYTES = 20 * 1024 * 1024;
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message?.type !== "chat2api.media.hash-v2") return false;
+    if (!["chat2api.media.hash-v2","chat2api.media.interaction-v1"].includes(message?.type)) return false;
+    const captureOriginal = message.type === "chat2api.media.interaction-v1";
     let senderHost = "";
     try { senderHost = new URL(String(sender?.url || "")).hostname.toLowerCase(); }
     catch (_) {}
@@ -165,8 +166,18 @@
             throw new Error("raster-size-limit");
         }
         const digest = new Uint8Array(await crypto.subtle.digest("SHA-256",bytes));
-        sendResponse({ok:true,sha256:[...digest].map(x=>x.toString(16).padStart(2,"0")).join(""),
-                      bytes:bytes.byteLength});
+        const result={ok:true,sha256:[...digest].map(x=>x.toString(16).padStart(2,"0")).join(""),
+                      bytes:bytes.byteLength};
+        // Only the new interaction relay can return bounded original bytes.
+        // The existing hash-v2 contract still returns digest/size only.
+        if(captureOriginal && bytes.byteLength<=256*1024){
+          const chunks=[];
+          for(let index=0;index<bytes.length;index+=16384)
+            chunks.push(String.fromCharCode(...bytes.subarray(index,index+16384)));
+          result.mime=mime;
+          result.base64=btoa(chunks.join(""));
+        }
+        sendResponse(result);
       } catch (_) { sendResponse({ok:false,error:"identity-bytes-unavailable"}); }
       finally { clearTimeout(timer); }
     })();

@@ -16,7 +16,8 @@ async function send(chunks, close = true, onCancel = () => {}, scenario = {}) {
   const conversation = {id: "conversation-test", messages: []};
   const messages = [];
   const leaseOperations = [];
-  let plannerCalls = 0;
+  let plannerCalls = 0, queued = null, completionPosts = 0;
+  const pluginScenario=Boolean(scenario.serverPlugin || scenario.pluginFailure || scenario.cancelDuringClaim);
   const body = new ReadableStream({
     start(controller) {
       const encoder = new TextEncoder();
@@ -37,7 +38,9 @@ async function send(chunks, close = true, onCancel = () => {}, scenario = {}) {
       selectedModel: "test-model",
       models: [{id:"test-model",capabilities:["text"]}],
       streaming: false,
-      selectedPlugins: scenario.pluginFailure || scenario.cancelDuringClaim ? ["github"] : [],
+      selectedPlugins: pluginScenario ? ["github"] : [],
+      remoteSyncReady:pluginScenario,storageKey:"user-a",
+      remoteSyncInFlight:new Map(),remoteSyncTimers:new Map(),remoteSyncFingerprints:new Map(),
       recoveryInFlight: new Set(),
       pendingImages: [],
       pendingImagesConversationId: "",
@@ -57,19 +60,29 @@ async function send(chunks, close = true, onCancel = () => {}, scenario = {}) {
     id: () => String(conversation.messages.length),
     apiJson: async () => ({user: {user_id: "user-a"}}),
     fetch: async () => {
+      completionPosts+=1;
       if (scenario.networkFailure) throw new Error("connection lost before headers");
       return {ok: true, body};
     },
     // Exercise the actual lease wrapper declared inside the extracted source.
+    serverConversationPayload: row=>({...row,messages:row.messages.map(m=>({...m}))}),
+    persistHistorySnapshot(){},
+    pullConversationDelta:async()=>{},
     fetchConversationMutation: async (_url, options) => {
-      const operation = JSON.parse(options.body).operation;
-      leaseOperations.push(operation);
-      if (operation === "claim" && scenario.cancelDuringClaim) {
-        context.state.abortController.abort();
+      const body=JSON.parse(options.body);
+      if(body.plugin_start){
+        queued=body.plugin_start;
+        leaseOperations.push("enqueue");
+        if(scenario.pluginFailure) throw new Error("atomic queue acknowledgement lost");
+        if(scenario.cancelDuringClaim) context.state.abortController.abort();
+        return {response:{ok:true,status:200},result:{plugin_queued:true,
+          conversation:{id:conversation.id,revision:1,updatedAt:conversation.updatedAt}}};
       }
+      const operation = body.operation;
+      leaseOperations.push(operation);
       return {response:{ok:true},result:{
         state: operation === "claim" || operation === "renew" ? "running" : operation,
-        granted:true,
+        granted:true,server_finalized:operation==="cancel",
       }};
     },
     runAutonomousPluginToolLoop: async (_messages,assistant) => {
@@ -111,11 +124,12 @@ async function send(chunks, close = true, onCancel = () => {}, scenario = {}) {
     messages,
     replies: conversation.messages.filter(({role}) => role === "assistant").map(({content}) => content),
     locked: body.locked,
-    ...(scenario.networkFailure || scenario.pluginFailure || scenario.cancelDuringClaim ? {
+    ...(scenario.networkFailure || pluginScenario ? {
       pending:conversation.messages.find(row=>row.role==="assistant")?.pending,
       status:conversation.messages.find(row=>row.role==="assistant")?.recoveryStatus,
       leaseOperations,
       plannerCalls,
+      ...(pluginScenario ? {queued,completionPosts} : {}),
     } : {}),
   };
 }
@@ -732,19 +746,30 @@ test("a POST transport failure before headers retains the durable request for re
   assert.equal(result.replies.length,1);
 });
 
-test("a failed plugin planning round preserves evidence but unblocks the conversation", async () => {
-  const result = await send([],true,()=>{},{pluginFailure:true});
-  assert.equal(result.pending,false);
-  assert.equal(result.status,"error");
-  assert.match(result.replies[0],/已保留取得的插件查询证据/);
-  assert.deepEqual(result.leaseOperations,["claim","interrupted"]);
+test("selected plugin sends a single atomic queue mutation and no browser planner or completion", async () => {
+  const result = await send([],true,()=>{},{serverPlugin:true});
+  assert.equal(result.pending,true);
+  assert.equal(result.status,"tool_planning");
+  assert.deepEqual(result.leaseOperations,["enqueue"]);
+  assert.deepEqual(result.queued.providers,["github"]);
+  assert.equal(result.plannerCalls,0);
+  assert.equal(result.completionPosts,0);
 });
 
-test("stop during lease acquisition releases the lease without starting a planner", async () => {
+test("lost plugin queue ACK preserves pending turn without replaying it", async () => {
+  const result = await send([],true,()=>{},{pluginFailure:true});
+  assert.equal(result.pending,true);
+  assert.equal(result.status,"tool_planning");
+  assert.deepEqual(result.leaseOperations,["enqueue"]);
+  assert.equal(result.completionPosts,0);
+  assert.match(result.messages.join(" "),/提交状态待确认/);
+});
+
+test("stop during atomic queue submission cancels the confirmed server turn", async () => {
   const result = await send([],true,()=>{},{cancelDuringClaim:true});
   assert.equal(result.plannerCalls,0);
-  assert.deepEqual(result.leaseOperations,["claim","interrupted"]);
-  assert.equal(result.replies.length,0);
+  assert.deepEqual(result.leaseOperations,["enqueue","cancel"]);
+  assert.equal(result.completionPosts,0);
 });
 
 

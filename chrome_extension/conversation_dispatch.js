@@ -259,7 +259,8 @@
       target && target.expiresAt > Date.now()
       && /^[a-f0-9]{32}$/.test(actionId)
       && Number.isInteger(revision) && revision >= 1
-      && /^nc_[1-9][0-9]{0,6}_[1-9][0-9]{0,3}$/.test(interactionId)
+      && (/^nc_[1-9][0-9]{0,6}_[1-9][0-9]{0,3}$/.test(interactionId) ||
+          (interactionId==="native_refresh" && message.action==="refresh_canvas" && message.value===null))
     ) {
       try {
         const tab = await chrome.tabs.get(target.tabId);
@@ -293,6 +294,11 @@
       interaction_id:interactionId,
       ok:result?.ok===true,
       error:String(result?.error || "").slice(0,120),
+      ...(result?.ok===true && result?.recapture_status ? {
+        recapture_status:result.recapture_status,
+        ...(result.snapshot ? {snapshot:result.snapshot} : {}),
+        ...(Array.isArray(result.media) && result.media.length ? {media:result.media} : {}),
+      } : {}),
     });
     return result;
   }

@@ -10,6 +10,7 @@
   const nativeControlTargetsByRequest = new Map();
   const nativeControlLatestRevision = new Map();
   const nativeControlAppliedActions = new Map();
+  const nativeControlCaptureContexts = new Map();
   const tags = new Set("div p span strong em h1 h2 h3 h4 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br a details summary input select option button".split(" "));
   // Do not serialize MathML as HTML div/span descendants; its parent structure
   // and unit labels require the MathML namespace through the server and UI.
@@ -342,7 +343,44 @@
     const reply = candidate.closest?.("[data-message-author-role='assistant'],[data-testid^='conversation-turn']")
       || candidate;
     if (reply.matches?.("[data-message-author-role='user']") || reply.closest?.("nav,aside")) return null;
-    let nodes = 0, chars = 0, images = 0;
+    let nodes = 0, chars = 0, images = 0, canvasRasters = 0;
+    // Sample only the already-proven reply subtree. Never request a context
+    // from the original canvas (which could mutate WebGL/2D state).
+    const captureCanvas = element => {
+      if (!scopedRoots?.length || canvasRasters >= 4 || typeof document === "undefined" ||
+          element.closest?.("form,nav,aside,header,footer,[data-message-author-role='user']")) return null;
+      const rect = element.getBoundingClientRect?.();
+      const width = Number(element.width), height = Number(element.height);
+      if (!rect || rect.width < 40 || rect.height < 40 || !Number.isInteger(width) ||
+          !Number.isInteger(height) || width < 1 || height < 1 || width > 16384 || height > 16384) return null;
+      const style = getComputedStyle(element);
+      if (style.display==="none" || style.visibility==="hidden" || style.opacity==="0") return null;
+      try {
+        const output = document.createElement("canvas");
+        const scale = Math.min(1,1024/width,1024/height);
+        output.width = Math.max(1,Math.round(width*scale));
+        output.height = Math.max(1,Math.round(height*scale));
+        const ctx = output.getContext("2d",{willReadFrequently:true});
+        if (!ctx) return null;
+        ctx.drawImage(element,0,0,output.width,output.height);
+        // A cleared WebGL drawing buffer can produce transparent/blank
+        // pixels. Never certify a uniform image as captured content.
+        const pixels = ctx.getImageData(0,0,output.width,output.height).data;
+        let visible = false, varied = false;
+        for (let i=0;i<pixels.length;i+=4) {
+          if (pixels[i+3]) visible=true;
+          if (pixels[i]!==pixels[0] || pixels[i+1]!==pixels[1] ||
+              pixels[i+2]!==pixels[2] || pixels[i+3]!==pixels[3]) varied=true;
+          if (visible && varied) break;
+        }
+        if (!visible || !varied) return null;
+        const uri = output.toDataURL("image/png");
+        const png = uri.startsWith("data:image/png;base64,") ? uri.slice(22) : "";
+        if (!png || png.length > 699052 || !/^[A-Za-z0-9+/]+={0,2}$/.test(png)) return null;
+        canvasRasters++;
+        return {tag:"canvas_raster",png,width:output.width,height:output.height};
+      } catch (_) { return null; } // tainted canvas, inaccessible or lost context
+    };
     let truncated = false;
     const revision = Math.max(active.nativeRevision || 0, active.nativeSentRevision || 0) + 1;
     const controlTargets = new Map();
@@ -468,7 +506,7 @@
         }
         const graphical = composedFind(element,node=>{
           const type=node.tagName?.toLowerCase();
-          const raster=type==="img" && !node.closest?.("svg");
+          const raster=(type==="img" || type==="canvas") && !node.closest?.("svg");
           const vector=type==="svg" && node.namespaceURI===svgNS
             && !node.parentElement?.closest?.("svg");
           if (!raster && !vector) return false;
@@ -484,16 +522,20 @@
           truncated=true;
           return null;
         }
-        // Canvas pixels are still unsupported. Count canvases nested in a
-        // button as missing media, rather than silently reporting no gaps.
+        // Keep accounting for omitted canvases even when their wrapper
+        // is not a recognized graphical button (hidden/tiny/unsafe).
         const canvases=composedFind(element,node=>
           node.tagName?.toLowerCase()==="canvas",41);
-        active.nativeCanvasOmitted+=canvases.length;
-        active.nativeGraphicsUnsupported+=canvases.length;
         if (canvases.length>40) {
           active.nativeStructuralFailure="button-canvas-cap";
           truncated=true;
           return null;
+        }
+        for (const canvas of canvases) {
+          if (!graphical.includes(canvas)) {
+            active.nativeCanvasOmitted++;
+            active.nativeGraphicsUnsupported++;
+          }
         }
         if (!graphical.length) return null;
         const children=[];
@@ -507,7 +549,11 @@
         return {tag:"figure",children};
       }
       if(tag==="canvas"||tag==="iframe"){
-        if(tag==="canvas")active.nativeCanvasOmitted++;
+        if(tag==="canvas"){
+          const raster=captureCanvas(element);
+          if (raster) { nodes++; return raster; }
+          active.nativeCanvasOmitted++;
+        }
         active.nativeGraphicsUnsupported++;
         return null;
       }
@@ -822,10 +868,14 @@
     while (revisions.size > 8) revisions.delete(revisions.keys().next().value);
     nativeControlTargetsByRequest.set(active.requestId, revisions);
     nativeControlLatestRevision.set(active.requestId, revision);
+    if (scopedRoots?.length && (controlTargets.size || canvasRasters) && !active.nativeGraphicsUnsupported) {
+      nativeControlCaptureContexts.set(active.requestId,{active,revision,roots:[...scopedRoots],root,canvasRasters,imageCount:images});
+    } else nativeControlCaptureContexts.delete(active.requestId);
     while (nativeControlTargetsByRequest.size > 24) {
       const oldest = nativeControlTargetsByRequest.keys().next().value;
       nativeControlTargetsByRequest.delete(oldest);
       nativeControlLatestRevision.delete(oldest);
+      nativeControlCaptureContexts.delete(oldest);
     }
     return {version:1, revision, root};
   }
@@ -1182,7 +1232,21 @@
           }
         }
       }
-      const tree = snapshot(active);
+      let tree = snapshot(active);
+      // Transiently cleared WebGL buffers may be readable on a later frame.
+      // Do not alter the upstream context or accept a blank raster as proof.
+      if (final && active.nativeCanvasOmitted && typeof requestAnimationFrame === "function") {
+        for (let attempt=0;attempt<2 && active.nativeCanvasOmitted;attempt++) {
+          if (active.nativeTransferInFlight !== transfer) return;
+          await new Promise(resolve=>{
+            let done=false;
+            const finish=()=>{if(!done){done=true;resolve();}};
+            requestAnimationFrame(finish);
+            setTimeout(finish,100);
+          });
+          tree = snapshot(active);
+        }
+      }
       if (!tree) {
         active.nativeCaptureFailure = "structural-" +
           String(active.nativeStructuralFailure || "unavailable").slice(0,60);
@@ -1343,9 +1407,213 @@
     }
   }
 
+  // Read only the actual visible raster originals in the same verified
+  // reply. New bytes are bounded independently of canvas pixel previews.
+  async function interactionImageEvidence(active,context) {
+    const eligible=node=>{
+      if (!(node instanceof Element) || node.tagName?.toLowerCase()!=="img" ||
+          node.closest?.("form,nav,aside,footer,header,[role='dialog'],[role='menu'],[data-message-author-role='user']")) return false;
+      const box=node.getBoundingClientRect?.(),style=getComputedStyle(node);
+      return box && box.width>=40 && box.height>=40 && style.display!=="none" && style.visibility!=="hidden";
+    };
+    const images=[];
+    for(const root of context.roots){
+      for(const image of composedFind(root,eligible,5)){
+        if(!images.includes(image))images.push(image);
+        if(images.length>4)return null;
+      }
+    }
+    const digests=new Map(),media=[];
+    if(!images.length){active.nativeImageDigests=digests;return media;}
+    const prior=new Set(),stack=[context.root];
+    while(stack.length){
+      const node=stack.pop();
+      if(node?.tag==="img" && HASH_HEX.test(node.source_sha256||""))prior.add(node.source_sha256);
+      if(Array.isArray(node?.children))stack.push(...node.children);
+    }
+    const controller=typeof AbortController==="function"?new AbortController():null;
+    let timer, accepting=true,total=0;
+    const work=Promise.all(images.map(async image=>{
+      try{
+        const source=String(image.currentSrc || image.getAttribute?.("src") || "");
+        if(!source)return false;
+        let result;
+        if(/^https:\/\//i.test(source)){
+          result=await chrome.runtime.sendMessage({type:"chat2api.media.interaction-v1",url:source});
+        }else if(/^(blob:|data:image\/)/i.test(source) && globalThis.crypto?.subtle){
+          if(/^data:image\//i.test(source) && source.length>4*Math.ceil(MAX_IDENTITY_BYTES/3)+128)return false;
+          const response=await fetch(source,{credentials:"omit",redirect:"error",...(controller?{signal:controller.signal}:{})});
+          if(!response.ok || Number(response.headers.get("content-length")||0)>MAX_IDENTITY_BYTES)return false;
+          const blob=await response.blob();
+          const mime=blob.type.toLowerCase();
+          if(!IDENTITY_MIMES.has(mime) || !blob.size || blob.size>MAX_IDENTITY_BYTES)return false;
+          const bytes=new Uint8Array(await blob.arrayBuffer());
+          const hash=new Uint8Array(await crypto.subtle.digest("SHA-256",bytes));
+          result={ok:true,sha256:[...hash].map(x=>x.toString(16).padStart(2,"0")).join(""),bytes:bytes.length};
+          if(bytes.length<=256*1024 && globalThis.btoa){
+            const parts=[];
+            for(let i=0;i<bytes.length;i+=16384)parts.push(String.fromCharCode(...bytes.subarray(i,i+16384)));
+            result.mime=mime;result.base64=btoa(parts.join(""));
+          }
+        }
+        if(!accepting || !result?.ok || !HASH_HEX.test(result.sha256) || !image.isConnected ||
+            source!==String(image.currentSrc || image.getAttribute?.("src") || ""))return false;
+        digests.set(image,result.sha256);
+        if(!prior.has(result.sha256) && typeof result.base64==="string" && IDENTITY_MIMES.has(result.mime) &&
+            Number.isInteger(result.bytes) && result.bytes<=256*1024 &&
+            total+result.bytes<=384*1024 && !media.some(m=>m.sha256===result.sha256)){
+          total+=result.bytes;
+          media.push({sha256:result.sha256,mime:result.mime,base64:result.base64});
+        }
+        return true;
+      }catch(_){return false;}
+    }));
+    try{
+      const results=await Promise.race([work,new Promise(resolve=>{timer=setTimeout(()=>resolve(null),1800);})]);
+      accepting=false;
+      if(!results || results.some(ok=>!ok) || digests.size!==images.length)return null;
+      active.nativeImageDigests=digests;
+      return media;
+    }finally{
+      accepting=false;
+      if(timer!==undefined)clearTimeout(timer);
+      controller?.abort();
+    }
+  }
+
+  async function recaptureAfterInteraction(message, response, context) {
+    const requestId = String(message.request_id);
+    const revision = Number(message.revision);
+    // Allow the upstream UI to settle, then re-prove the exact original
+    // assistant boundary. Never use a newly selected/latest reply.
+    await new Promise(resolve=>setTimeout(resolve,180));
+    if (nativeControlLatestRevision.get(requestId)!==revision+1 ||
+        nativeControlCaptureContexts.get(requestId)!==context) return;
+    const region = globalThis.__CHAT2API_NATIVE_DOM_EVIDENCE_V1__?.replyRoots?.(context.active);
+    if (!Array.isArray(region?.roots) || region.roots.length!==context.roots.length ||
+        region.roots.some((root,index)=>root!==context.roots[index] || !root.isConnected)) return;
+    const revisions = nativeControlTargetsByRequest.get(requestId);
+    const fallbackTargets = revisions?.get(revision+1);
+    const replay = {...context.active,nativeRevision:revision,nativeSentRevision:revision};
+    let tree,media=null;
+    try {
+      media=await interactionImageEvidence(replay,context);
+      const latest=globalThis.__CHAT2API_NATIVE_DOM_EVIDENCE_V1__?.replyRoots?.(context.active);
+      if(media!==null && Array.isArray(latest?.roots) && latest.roots.length===context.roots.length &&
+          latest.roots.every((root,index)=>root===context.roots[index] && root.isConnected) &&
+          nativeControlLatestRevision.get(requestId)===revision+1 &&
+          nativeControlCaptureContexts.get(requestId)===context) tree=snapshot(replay);
+    } catch (_) {}
+    if (!tree || tree.revision!==revision+1 || media===null ||
+        replay.nativeGraphicsUnsupported ||
+        new TextEncoder().encode(JSON.stringify({snapshot:tree,media})).length>768*1024) {
+      if (fallbackTargets) revisions?.set(revision+1,fallbackTargets);
+      nativeControlLatestRevision.set(requestId,revision+1);
+      nativeControlCaptureContexts.set(requestId,{...context,revision:revision+1});
+      return;
+    }
+    response.snapshot=tree;
+    if(media.length)response.media=media;
+    response.recapture_status="verified";
+  }
+
+  async function refreshCanvasSnapshot(message) {
+    const requestId=String(message.request_id || ""), revision=Number(message.revision);
+    const actionId=String(message.action_id || "");
+    if (!/^req_[A-Za-z0-9_-]{8,120}$/.test(requestId) ||
+        !Number.isInteger(revision) || revision<1 || revision>=1000000 ||
+        !/^[a-f0-9]{32}$/.test(actionId) ||
+        message.interaction_id!=="native_refresh" || message.value!==null)
+      return {ok:false,error:"invalid-native-refresh"};
+    const previous=nativeControlAppliedActions.get(actionId);
+    if (previous) return previous.requestId===requestId && previous.revision===revision &&
+      previous.action==="refresh_canvas" ? {...previous.response,duplicate:true} :
+      {ok:false,error:"native-interaction-action-id-reused"};
+    const context=nativeControlCaptureContexts.get(requestId);
+    if (!context?.canvasRasters || context.revision!==revision ||
+        nativeControlLatestRevision.get(requestId)!==revision)
+      return {ok:false,error:"canvas-refresh-context-unavailable"};
+    const sameRoots=()=>{
+      const region=globalThis.__CHAT2API_NATIVE_DOM_EVIDENCE_V1__?.replyRoots?.(context.active);
+      return Array.isArray(region?.roots) && region.roots.length===context.roots.length &&
+        region.roots.every((root,index)=>root===context.roots[index] && root.isConnected);
+    };
+    if (!sameRoots()) return {ok:false,error:"native-interaction-reply-scope-changed"};
+    const oldTargets=nativeControlTargetsByRequest.get(requestId);
+    const before=new Map(oldTargets || []);
+    const replay={...context.active,nativeRevision:revision,nativeSentRevision:revision};
+    const restore=()=>{
+      nativeControlTargetsByRequest.set(requestId,before);
+      nativeControlLatestRevision.set(requestId,revision);
+      nativeControlCaptureContexts.set(requestId,context);
+    };
+    let tree=null,media=null;
+    for(let attempt=0;attempt<3;attempt++){
+      if (!sameRoots()) return {ok:false,error:"native-interaction-reply-scope-changed"};
+      try {
+        media=await interactionImageEvidence(replay,context);
+        if(!sameRoots() || nativeControlLatestRevision.get(requestId)!==revision ||
+            nativeControlCaptureContexts.get(requestId)!==context)
+          return {ok:false,error:"native-refresh-superseded"};
+        tree=media!==null?snapshot(replay):null;
+      } catch (_) {}
+      if (tree && !replay.nativeGraphicsUnsupported) break;
+      restore();
+      await new Promise(resolve=>setTimeout(resolve,40));
+      if (nativeControlLatestRevision.get(requestId)!==revision ||
+          nativeControlCaptureContexts.get(requestId)!==context)
+        return {ok:false,error:"native-refresh-superseded"};
+    }
+    const next=nativeControlCaptureContexts.get(requestId);
+    if (!tree || tree.revision!==revision+1 || replay.nativeGraphicsUnsupported ||
+        !next || next.canvasRasters!==context.canvasRasters || media===null ||
+        new TextEncoder().encode(JSON.stringify({snapshot:tree,media})).length>768*1024) {
+      restore();
+      return {ok:false,error:"canvas-refresh-pixels-unavailable"};
+    }
+    // Interaction IDs are revision-local, so ignore only their revision
+    // prefix when deciding whether an unchanged frame needs a new commit.
+    const stable=root=>JSON.stringify(root,(key,value)=>
+      key==="interaction_id" && typeof value==="string" ? value.replace(/^nc_\d+_/,"nc_") : value);
+    let response;
+    if(stable(tree.root)===stable(context.root)){
+      restore();
+      response={ok:true,revision,recapture_status:"unchanged"};
+    }else response={ok:true,revision:revision+1,recapture_status:"verified",snapshot:tree,
+      ...(media.length?{media}:{})};
+    nativeControlAppliedActions.set(actionId,{requestId,revision,action:"refresh_canvas",response});
+    while(nativeControlAppliedActions.size>64)
+      nativeControlAppliedActions.delete(nativeControlAppliedActions.keys().next().value);
+    return response;
+  }
+
   chrome.runtime.onMessage?.addListener?.((message, _sender, sendResponse) => {
     if (message?.type !== "chat2api.native.interaction") return false;
-    sendResponse(applyNativeInteraction(message));
+    if (message.action==="refresh_canvas") {
+      void refreshCanvasSnapshot(message).then(sendResponse,()=>sendResponse({ok:false,error:"canvas-refresh-failed"}));
+      return true;
+    }
+    const requestId=String(message.request_id || "");
+    const context=nativeControlCaptureContexts.get(requestId);
+    if (context?.revision===Number(message.revision)) {
+      const current=globalThis.__CHAT2API_NATIVE_DOM_EVIDENCE_V1__?.replyRoots?.(context.active);
+      const target=nativeControlTargetsByRequest.get(requestId)?.get(context.revision)
+        ?.get(String(message.interaction_id || ""))?.element;
+      if (!Array.isArray(current?.roots) || current.roots.length!==context.roots.length ||
+          current.roots.some((root,index)=>root!==context.roots[index] || !root.isConnected) ||
+          !target || !context.roots.some(root=>root===target || root.contains?.(target))) {
+        sendResponse({ok:false,error:"native-interaction-reply-scope-changed"});
+        return false;
+      }
+    }
+    const response=applyNativeInteraction(message);
+    if (response.ok && !response.duplicate && context?.revision===Number(message.revision)) {
+      response.recapture_status="unavailable";
+      void recaptureAfterInteraction(message,response,context)
+        .catch(()=>{}).finally(()=>sendResponse(response));
+      return true;
+    }
+    sendResponse(response);
     return false;
   });
 

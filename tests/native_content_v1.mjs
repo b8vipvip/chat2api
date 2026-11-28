@@ -1334,3 +1334,101 @@ assert.equal(lateFormToggle.dispatchedEvents.includes("click"),false);
 
 console.log("native-content-request-scoped-interaction-actions-passed");
 
+// Production-shaped verified assistant scope: a click changes another
+// visible node and the ACK must carry a new immutable tree, not just value.
+let recaptureListener=null;
+const dynamicCheckbox=new Element("INPUT",[],{"aria-label":"Show result"});
+dynamicCheckbox.type="checkbox";dynamicCheckbox.checked=false;dynamicCheckbox.disabled=false;
+const dynamicText={nodeType:3,nodeValue:"Before action"};
+const dynamicRoot=new Element("DIV",[dynamicCheckbox,dynamicText]);
+dynamicRoot.contains=element=>element===dynamicCheckbox;
+dynamicCheckbox.click=()=>{dynamicCheckbox.checked=true;dynamicText.nodeValue="After action";};
+let currentRoot=dynamicRoot;
+const recaptureCtx={...interactionCtx,
+  __CHAT2API_NATIVE_DOM_EVIDENCE_V1__:{replyRoots:()=>({
+    scope:"verified_reply_container",roots:[currentRoot],
+  })},
+  chrome:{runtime:{onMessage:{addListener:fn=>{recaptureListener=fn;}},
+    sendMessage:async()=>({ok:true,committed:true})}},
+};
+delete recaptureCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,recaptureCtx);
+const dynamicRequestId="req_native_recapture123";
+const original=recaptureCtx.__CHAT2API_NATIVE_CONTENT_V1__.snapshot({
+  requestId:dynamicRequestId,submitStartedAt:Date.now(),lastCandidateNode:dynamicRoot,
+});
+const originalId=original.root.children[0].children[0].interaction_id;
+const envelope={type:"chat2api.native.interaction",request_id:dynamicRequestId,
+  revision:1,interaction_id:originalId,action_id:"a".repeat(32),action:"set_checked",value:true};
+const reply=await new Promise(resolve=>{
+  assert.equal(recaptureListener(envelope,{},resolve),true);
+});
+assert.equal(reply.ok,true);
+assert.equal(reply.recapture_status,"verified");
+assert.equal(reply.snapshot.revision,2);
+assert.equal(reply.snapshot.root.children[0].children[0].interaction_id,"nc_2_1");
+assert.equal(reply.snapshot.root.children[0].children[1].text,"After action");
+const duplicate=await new Promise(resolve=>recaptureListener(envelope,{},resolve));
+assert.equal(duplicate.duplicate,true);
+assert.equal(duplicate.snapshot.revision,2);
+currentRoot=new Element("DIV");
+const movedReply=await new Promise(resolve=>recaptureListener({...envelope,
+  revision:2,interaction_id:"nc_2_1",action_id:"b".repeat(32),value:false}, {},resolve));
+assert.equal(movedReply.error,"native-interaction-reply-scope-changed");
+
+// Verified reply-only pixel capture. The original canvas context must not
+// be requested; copy the pixels into an isolated temporary 2D canvas.
+{
+  const png = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAGElEQVR4nAXBAQEAAAjDIG7/zhMWKafAA0LzBf5cKv1OAAAAAElFTkSuQmCC";
+  const originalCanvas = new Element("CANVAS");
+  originalCanvas.width=2; originalCanvas.height=2;
+  originalCanvas.getContext=()=>{throw new Error("original context must not be accessed");};
+  const canvasRoot=new Element("DIV",[originalCanvas]);
+  let tainted=false, blank=false, pngFrame=png, canvasRefreshListener;
+  const ctxCanvas={...ctx,
+    chrome:{runtime:{onMessage:{addListener:listener=>{canvasRefreshListener=listener;}}}},
+    __CHAT2API_NATIVE_DOM_EVIDENCE_V1__:{replyRoots:()=>({
+      scope:"verified_reply_container",roots:[canvasRoot],
+    })},
+    document:{createElement:tag=>{
+      assert.equal(tag,"canvas");
+      return {getContext:()=>({
+        drawImage(source){assert.equal(source,originalCanvas);},
+        getImageData(){
+          if(tainted)throw new Error("SecurityError");
+          return {data:blank?new Uint8Array(16):new Uint8Array([255,0,0,255,255,255,255,255,255,255,255,255,255,255,255,255])};
+        },
+      }),toDataURL:()=>"data:image/png;base64,"+pngFrame};
+    }},
+  };
+  delete ctxCanvas.__CHAT2API_NATIVE_CONTENT_V1__;
+  runInNewContext(code,ctxCanvas);
+  const canvasApi=ctxCanvas.__CHAT2API_NATIVE_CONTENT_V1__;
+  const activeCanvas={requestId:"req_canvas_verified123",submitStartedAt:Date.now(),lastCandidateNode:canvasRoot};
+  const resultCanvas=canvasApi.snapshot(activeCanvas);
+  assert.equal(resultCanvas.root.children[0].children[0].tag,"canvas_raster");
+  assert.equal(resultCanvas.root.children[0].children[0].png,png);
+  assert.equal(activeCanvas.nativeCanvasOmitted,0);
+  const refresh={type:"chat2api.native.interaction",request_id:activeCanvas.requestId,
+    action:"refresh_canvas",interaction_id:"native_refresh",revision:1,value:null,action_id:"c".repeat(32)};
+  const unchanged=await new Promise(resolve=>canvasRefreshListener(refresh,{},resolve));
+  assert.equal(unchanged.recapture_status,"unchanged");
+  assert.equal(unchanged.revision,1);
+  pngFrame=png.slice(0,-4)+"AAAA";
+  const changed=await new Promise(resolve=>canvasRefreshListener({...refresh,action_id:"d".repeat(32)}, {},resolve));
+  assert.equal(changed.recapture_status,"verified");
+  assert.equal(changed.snapshot.revision,2);
+  assert.equal(changed.snapshot.root.children[0].children[0].png,pngFrame);
+  const repeated=await new Promise(resolve=>canvasRefreshListener({...refresh,action_id:"d".repeat(32)}, {},resolve));
+  assert.equal(repeated.duplicate,true);
+  blank=true;
+  const blankRefresh=await new Promise(resolve=>canvasRefreshListener({...refresh,revision:2,action_id:"e".repeat(32)}, {},resolve));
+  assert.equal(blankRefresh.ok,false);
+  blank=false;
+  tainted=true;
+  canvasApi.snapshot(activeCanvas);
+  assert.equal(activeCanvas.nativeCanvasOmitted,1);
+  tainted=false;blank=true;
+  canvasApi.snapshot(activeCanvas);
+  assert.equal(activeCanvas.nativeCanvasOmitted,1);
+}
