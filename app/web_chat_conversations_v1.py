@@ -460,6 +460,12 @@ class WebChatConversationStoreV1:
             """)
 
             connection.execute("""
+                CREATE TABLE IF NOT EXISTS web_chat_plugin_takeovers (
+                    user_id TEXT NOT NULL, conversation_id TEXT NOT NULL, message_id TEXT NOT NULL,
+                    attempts INTEGER NOT NULL, PRIMARY KEY(user_id,conversation_id,message_id)
+                )
+            """)
+            connection.execute("""
                 CREATE TABLE IF NOT EXISTS web_chat_plugin_checkpoints (
                     user_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
                     message_id TEXT NOT NULL, sequence INTEGER NOT NULL,
@@ -477,6 +483,19 @@ class WebChatConversationStoreV1:
                     AFTER {operation} ON web_chat_conversations {condition}
                     BEGIN
                         DELETE FROM web_chat_plugin_checkpoints
+                        WHERE user_id={owner}.user_id AND conversation_id={owner}.conversation_id;
+                    END
+                """)
+
+            for operation, owner, condition in (
+                ("UPDATE", "NEW", "WHEN NEW.deleted=1"),
+                ("DELETE", "OLD", ""),
+            ):
+                connection.execute(f"""
+                    CREATE TRIGGER IF NOT EXISTS web_chat_plugin_takeover_{operation.lower()}
+                    AFTER {operation} ON web_chat_conversations {condition}
+                    BEGIN
+                        DELETE FROM web_chat_plugin_takeovers
                         WHERE user_id={owner}.user_id AND conversation_id={owner}.conversation_id;
                     END
                 """)
@@ -600,8 +619,15 @@ class WebChatConversationStoreV1:
                 active = connection.execute(
                     "SELECT COUNT(*) FROM web_chat_plugin_tasks WHERE user_id=? AND state='running' AND expires_at>?",
                     (user_id, now)).fetchone()[0]
-                if saved and pending and active < 20:
+                attempts = connection.execute(
+                    "SELECT attempts FROM web_chat_plugin_takeovers WHERE user_id=? AND conversation_id=? AND message_id=?",
+                    key).fetchone()
+                if saved and pending and active < 20 and (not attempts or int(attempts["attempts"]) < 3):
                     resumed_checkpoint = json.loads(saved["payload"])
+                    connection.execute("""
+                        INSERT INTO web_chat_plugin_takeovers VALUES (?,?,?,1)
+                        ON CONFLICT(user_id,conversation_id,message_id) DO UPDATE SET attempts=attempts+1
+                    """, key)
                     connection.execute(
                         "UPDATE web_chat_plugin_tasks SET holder=?,state='running',expires_at=? "
                         "WHERE user_id=? AND conversation_id=? AND message_id=?",
