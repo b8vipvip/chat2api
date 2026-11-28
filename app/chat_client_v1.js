@@ -1003,7 +1003,7 @@
       }
       if (localCompleted || (!localPending && serverPending)) {
         const merged = {...message};
-        if (!localCompleted && messageBodyWeight(existing) > messageBodyWeight(message)) {
+        if ((!localCompleted || !serverPending) && messageBodyWeight(existing) > messageBodyWeight(message)) {
           merged.content = existing.content;
         }
         if (serverToolWeight > localToolWeight) merged.toolEvents = existing.toolEvents;
