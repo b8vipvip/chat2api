@@ -30,6 +30,7 @@ _TOOL_EVENT_STATUSES = frozenset({"running", "completed", "failed", "cancelled",
 _MAX_TOOL_EVENTS_PER_MESSAGE = 6
 _MAX_TOOL_EVENT_TEXT = 1200
 _FILE_ID_RE = re.compile(r"^file_[A-Za-z0-9]{8,64}$")
+_GENERATED_FILE_ID_RE = re.compile(r"^gen_[A-Za-z0-9]{8,64}$")
 _ALLOWED_DOCUMENT_MIME_TYPES = frozenset({
     "application/pdf",
     "text/plain",
@@ -1133,11 +1134,25 @@ def install_web_chat_conversations_v1(app: FastAPI) -> None:
             limit = int(request.query_params.get("limit") or "50")
             after = str(request.query_params.get("after") or "")
             scope = str(request.query_params.get("scope") or "referenced")
-            if scope not in {"referenced", "unreferenced"} or not 1 <= limit <= 100 or (after and not _FILE_ID_RE.fullmatch(after)):
+            if scope not in {"referenced", "unreferenced", "generated"} or not 1 <= limit <= 100:
                 raise ValueError("invalid library page")
+            cursor_pattern = _GENERATED_FILE_ID_RE if scope == "generated" else _FILE_ID_RE
+            if after and not cursor_pattern.fullmatch(after):
+                raise ValueError("invalid library cursor")
             refs = store.list_file_references_for_user(user_id, after, limit) if scope == "referenced" else []
         except (TypeError, ValueError):
             raise HTTPException(status_code=422, detail="invalid library page", headers=_PRIVATE_HEADERS)
+        if scope == "generated":
+            archive = getattr(request.app.state, "generated_files", None)
+            if archive is None:
+                raise HTTPException(status_code=503, detail="generated file archive unavailable", headers=_PRIVATE_HEADERS)
+            rows = await asyncio.to_thread(archive.list_owned, accounts.key_ids(user_id), after, limit)
+            return JSONResponse({
+                "data": [{"id": row["id"], "filename": row["filename"], "mime_type": row["mime"],
+                          "bytes": row["size"], "created_at": row["created_at"], "source": "generated"}
+                         for row in rows[:limit]],
+                "next_cursor": rows[limit-1]["id"] if len(rows) > limit else None,
+            }, headers=_PRIVATE_HEADERS)
         file_store = getattr(request.app.state, "file_store", None)
         if file_store is None:
             raise HTTPException(status_code=503, detail="file service unavailable", headers=_PRIVATE_HEADERS)
