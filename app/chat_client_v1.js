@@ -46,6 +46,7 @@
     voiceClient: null,
     voiceStarting: false,
     voiceStopping: false,
+    voiceStartEpoch: 0,
     voiceActive: false,
     voicePanelVisible: false,
     voiceAssistantLine: null,
@@ -431,6 +432,7 @@
     $("voiceTranscript").replaceChildren();
     state.voiceAssistantLine = null;
     const ownerId = String(state.user?.user_id || "");
+    const startEpoch = state.voiceStartEpoch = Number(state.voiceStartEpoch || 0) + 1;
     const client = voiceApi.create({
       sessionEndpoint:"/api/user/chat/voice-session",
       fileUploadEndpoint:"/api/user/chat/files",
@@ -489,11 +491,11 @@
         await stopVoiceCall();
       },60000);
     } catch (error) {
-      if (state.voiceClient !== client || state.voiceStopping) return;
+      if (state.voiceStartEpoch !== startEpoch || (state.voiceClient && state.voiceClient !== client)) return;
       recordClientDiagnostic("voice.start_failed", {feature: "voice", phase: "connect", error_name: error?.name || "Error"}, "error");
       try { await client.stop(); } catch {}
-      if (state.voiceClient && state.voiceClient !== client) return;
-      if (state.voiceClient === client) setVoiceUi("closed","实时语音启动失败：" + String(error?.message || error));
+      if (state.voiceStartEpoch !== startEpoch || (state.voiceClient && state.voiceClient !== client)) return;
+      setVoiceUi("closed","实时语音启动失败：" + String(error?.message || error));
       toast("无法启动实时语音：" + String(error?.message || error));
     }
   }
@@ -502,6 +504,7 @@
     const client = state.voiceClient;
     if (!client) { setVoiceUi("closed"); return; }
     if (state.voiceStopping) return;
+    state.voiceStartEpoch = Number(state.voiceStartEpoch || 0) + 1;
     setVoiceUi("stopping","正在结束实时语音…");
     recordClientDiagnostic("voice.stop_requested", {feature: "voice", phase: "stop"});
     try { await client.stop(); recordClientDiagnostic("voice.stopped", {feature: "voice", phase: "closed"}); }
