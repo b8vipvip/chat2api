@@ -3362,9 +3362,11 @@
           phase:"plugin_tool_planning",code:"invalid_plan",
         },"warning");
         plannerRequests += 1;
+        if (state.pluginPlanningLease) await state.pluginPlanningLease.checkpoint(plannerRequests,toolCalls);
         break;
       }
       plannerRequests += 1;
+      if (state.pluginPlanningLease) await state.pluginPlanningLease.checkpoint(plannerRequests,toolCalls);
       if (!calls.length) break;
 
       messages.push({
@@ -3502,6 +3504,9 @@
           }),
         });
         toolCalls += 1;
+        // The next planning round must not depend solely on a debounced PUT.
+        // Persist completed evidence before another provider call is launched.
+        if (state.pluginPlanningLease) await state.pluginPlanningLease.checkpoint(plannerRequests,toolCalls);
         if (toolCalls >= maxToolCalls) {
           limitReached = true;
           break;
@@ -4994,13 +4999,14 @@
       await refreshNativeSnapshot(item.requestId);
     }));
   }
-  async function pluginTaskOperation(conversation, message, operation, holder = "") {
+  async function pluginTaskOperation(conversation, message, operation, holder = "", checkpoint = null) {
     const owner = String(state.user?.user_id || "");
     if (!owner) throw new Error("账户已失效");
     const {response,result} = await fetchConversationMutation("/api/user/chat/conversations/plugin-task", {
       method:"POST",credentials:"same-origin",
       headers:{"Content-Type":"application/json","Accept":"application/json","X-Chat2API-User-ID":owner},
-      body:JSON.stringify({conversation_id:conversation.id,message_id:message.id,operation,holder}),
+      body:JSON.stringify({conversation_id:conversation.id,message_id:message.id,operation,holder,
+        ...(checkpoint ? {checkpoint} : {})}),
     });
     if (String(state.user?.user_id || "") !== owner || !response.ok || typeof result.state !== "string")
       throw new Error(result.detail || "无法确认插件执行租约");
@@ -5021,6 +5027,16 @@
       }
     };
     const lease = {
+      async checkpoint(rounds, toolCalls) {
+        assertTransport();
+        const toolEvents = normalizeToolEvents(assistant.toolEvents,"assistant")
+          .filter(event => ["completed","failed"].includes(event.status));
+        const result = await pluginTaskOperation(conversation,assistant,"checkpoint",holder,{
+          rounds,tool_calls:toolCalls,tool_events:toolEvents,
+        });
+        assertTransport();
+        if (!result.granted) throw new Error("插件检查点未获确认");
+      },
       renew() {
         if (finished) return Promise.reject(new Error("插件执行租约已结束"));
         try { assertTransport(); } catch (error) { return Promise.reject(error); }
@@ -5085,6 +5101,24 @@
             if (now - firstSeen < 30000) continue;
           } else if (!["interrupted","completed","deleted"].includes(task.state)) {
             continue;
+          }
+          // Restore independently committed evidence before the normal
+          // conversation snapshot catches up. A terminal local event may
+          // already contain newer data; never replace it with an older one.
+          if (Array.isArray(task.checkpoint?.tool_events)) {
+            const local = normalizeToolEvents(message.toolEvents,"assistant");
+            const merged = new Map(normalizeToolEvents(task.checkpoint.tool_events,"assistant")
+              .map(event=>[event.callId || event.resultId,event]));
+            for (const event of local) {
+              const key = event.callId || event.resultId;
+              if (!merged.has(key) || ["completed","failed"].includes(event.status))
+                merged.set(key,event);
+            }
+            message.toolEvents = [...merged.values()].slice(-6);
+            message.references = normalizeToolReferences([
+              ...(message.references || []),
+              ...message.toolEvents.flatMap(event=>event.references || []),
+            ]);
           }
           // Only terminalize a task after the persisted lease is gone.
           message.pending = false;
