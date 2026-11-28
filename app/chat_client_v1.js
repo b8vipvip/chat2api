@@ -3871,7 +3871,8 @@
         conversation:state.libraryScope === "generated" ? "模型生成文件 · 引用于 " + Number(row.reference_count || 0) + " 个会话" :
           Number(row.reference_count || 0) > 0 ? "引用于 " + Number(row.reference_count) + " 个会话" : "未引用 · 上传超过 24 小时",
         generated:state.libraryScope === "generated",
-        removable:state.libraryScope === "unreferenced" && row.reference_count === 0,
+        removable:row.reference_count === 0 && (state.libraryScope === "unreferenced" ||
+          (state.libraryScope === "generated" && row.deletable === true)),
         createdAt:String(row.created_at || ""),
       });
     }
@@ -3914,7 +3915,7 @@
         const remove = document.createElement("button");
         remove.className = "attach-button";
         remove.type = "button";
-        remove.textContent = "删除未引用附件";
+        remove.textContent = item.generated ? "删除未引用生成文件" : "删除未引用附件";
         remove.disabled = state.libraryLoading || Boolean(state.libraryDeleting);
         remove.addEventListener("click", () => { void deleteUnusedLibraryFile(item.id); });
         wrapper.appendChild(remove);
@@ -3925,13 +3926,16 @@
 
   async function deleteUnusedLibraryFile(fileId) {
     const owner = String(state.user?.user_id || "");
-    if (!owner || state.libraryScope !== "unreferenced" || state.libraryLoading || state.libraryDeleting ||
-        !state.libraryRows.some(row=>row.id === fileId && row.reference_count === 0)) return;
-    if (!window.confirm("永久删除此未引用附件？此操作无法撤销。")) return;
+    const generated = state.libraryScope === "generated";
+    if (!owner || (!generated && state.libraryScope !== "unreferenced") || state.libraryLoading || state.libraryDeleting ||
+        !state.libraryRows.some(row=>row.id === fileId && row.reference_count === 0 &&
+          (!generated || row.deletable === true))) return;
+    if (!window.confirm(generated ? "永久删除此未引用生成文件？此操作无法撤销。" : "永久删除此未引用附件？此操作无法撤销。")) return;
     state.libraryDeleting = fileId;
     renderLibrary();
     try {
-      const {response,result} = await fetchConversationMutation("/api/user/files/" + encodeURIComponent(fileId), {
+      const endpoint = generated ? "/api/user/chat/generated-files/" : "/api/user/files/";
+      const {response,result} = await fetchConversationMutation(endpoint + encodeURIComponent(fileId), {
         method:"DELETE",credentials:"same-origin",
         headers:{"Accept":"application/json","X-Chat2API-User-ID":owner},
       });
