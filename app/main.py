@@ -371,6 +371,49 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
             return await asyncio.to_thread(cleanup_under_file_lock)
 
+        generated_cleanup_cursor = ""
+
+        async def cleanup_web_chat_generated_files() -> int:
+            nonlocal generated_cleanup_cursor
+            if conversation_files is None:
+                return 0
+            # Automatic generated-file deletion is opt-in via the existing
+            # conversation retention policy, and never touches Mode 2 keys.
+            days = int(conversation_files.retention_policy()["retention_days"])
+            accounts = getattr(app.state, "user_accounts", None)
+            if days <= 0 or accounts is None:
+                return 0
+            cutoff = datetime.now(timezone.utc) - timedelta(days=max(90, days))
+            owners = {key_id: item.internal_owner_user_id
+                      for key_id, item in list(api_keys.keys.items())
+                      if item.internal_owner_user_id}
+
+            def scan(after: str):
+                removed = 0
+                rows = generated_files.aged_candidates(cutoff, after, limit=500)
+                for row in rows:
+                    user_id = owners.get(row["owner"])
+                    if not user_id or not accounts.owns_key(user_id, row["owner"]):
+                        continue
+                    request = telemetry.get(row["request_id"]) or {}
+                    if request and (request.get("api_key_id") != row["owner"]
+                                    or str(request.get("status") or "").lower()
+                                    not in {"completed", "error", "cancelled", "stalled"}):
+                        continue
+                    with conversation_files.generated_deletion_guard(
+                        user_id, row["id"], row["request_id"]
+                    ) as allowed:
+                        if allowed:
+                            try:
+                                removed += int(generated_files.delete(
+                                    row["id"], owner=row["owner"], cutoff=cutoff))
+                            except (PermissionError, ValueError, OSError):
+                                logger.warning("Skipped unavailable generated archive object during retention")
+                return removed, rows[-1]["id"] if len(rows) == 500 else ""
+
+            removed, generated_cleanup_cursor = await asyncio.to_thread(scan, generated_cleanup_cursor)
+            return removed
+
         try:
             expired_conversations = await expire_web_chat_conversations()
             if expired_conversations:
@@ -384,6 +427,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "Expired %s unreferenced Web Chat attachment(s)",
                     removed_web_chat_files,
                 )
+            removed_generated = await cleanup_web_chat_generated_files()
+            if removed_generated:
+                logger.info("Expired %s unreferenced Web Chat generated file(s)", removed_generated)
         except Exception:
             # Retention is best-effort maintenance. A failed scan must not
             # affect chat startup or delete files with uncertain references.
@@ -399,6 +445,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     removed = await cleanup_web_chat_orphan_files()
                     if removed:
                         logger.info("Expired %s unreferenced Web Chat attachment(s)", removed)
+                    removed_generated = await cleanup_web_chat_generated_files()
+                    if removed_generated:
+                        logger.info("Expired %s unreferenced Web Chat generated file(s)", removed_generated)
                 except Exception:
                     logger.exception("Web Chat attachment retention scan failed")
 
