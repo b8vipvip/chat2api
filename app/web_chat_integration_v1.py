@@ -280,6 +280,7 @@ def install_web_chat_features_v1(app: Any) -> Any:
 
     pending_native_interactions: dict[str, dict[str, Any]] = {}
     native_interaction_locks: dict[str, asyncio.Lock] = {}
+    native_canvas_refresh_at: dict[str, float] = {}
 
     async def receive_native_interaction_ack(client_id: str, websocket: Any, message: dict[str, Any]) -> None:
         action_id = str(message.get("action_id") or "")
@@ -434,11 +435,12 @@ def install_web_chat_features_v1(app: Any) -> Any:
         interaction_id = body.get("interaction_id")
         action = body.get("action")
         value = body.get("value")
+        canvas_refresh = interaction_id == "native_refresh" and action == "refresh_canvas" and value is None
         if (
             type(revision) is not int or not 1 <= revision < 1000000
             or not isinstance(interaction_id, str)
-            or not re.fullmatch(r"nc_[1-9][0-9]{0,6}_[1-9][0-9]{0,3}", interaction_id)
-            or not isinstance(action, str) or action not in {"set_open", "set_checked", "set_value", "set_selected", "set_pressed"}
+            or (not canvas_refresh and not re.fullmatch(r"nc_[1-9][0-9]{0,6}_[1-9][0-9]{0,3}", interaction_id))
+            or not isinstance(action, str) or (not canvas_refresh and action not in {"set_open", "set_checked", "set_value", "set_selected", "set_pressed"})
         ):
             raise HTTPException(status_code=422, detail="invalid interaction envelope", headers=_PRIVATE_HEADERS)
 
@@ -461,10 +463,29 @@ def install_web_chat_features_v1(app: Any) -> Any:
                 raise HTTPException(status_code=409, detail="verified native snapshot is not ready", headers=_PRIVATE_HEADERS)
             if snapshot.get("revision") != revision:
                 raise HTTPException(status_code=409, detail="native snapshot revision changed; refresh and retry", headers=_PRIVATE_HEADERS)
+            def canvas_count(root):
+                stack, count = [root], 0
+                while stack:
+                    node = stack.pop()
+                    if not isinstance(node,dict):
+                        continue
+                    count += int(node.get("tag") == "canvas_raster")
+                    stack.extend(node.get("children") or [])
+                return count
             target = find_native_interaction(snapshot.get("root"), interaction_id)
-            if target is None:
-                raise HTTPException(status_code=404, detail="native control not found", headers=_PRIVATE_HEADERS)
-            validate_native_interaction(target, action, value)
+            if canvas_refresh:
+                if not canvas_count(snapshot.get("root")):
+                    raise HTTPException(status_code=404, detail="native canvas not found", headers=_PRIVATE_HEADERS)
+                now = asyncio.get_running_loop().time()
+                if now - native_canvas_refresh_at.get(request_id, -1000) < 15:
+                    raise HTTPException(status_code=429, detail="canvas refresh rate limit", headers=_PRIVATE_HEADERS)
+                native_canvas_refresh_at[request_id] = now
+                if len(native_canvas_refresh_at)>128:
+                    native_canvas_refresh_at.pop(next(iter(native_canvas_refresh_at)))
+            else:
+                if target is None:
+                    raise HTTPException(status_code=404, detail="native control not found", headers=_PRIVATE_HEADERS)
+                validate_native_interaction(target, action, value)
             store = getattr(request.app.state, "native_content", None)
             stored_before = store.get(request_id, owner) if store is not None else None
             stored_target = (
@@ -474,9 +495,11 @@ def install_web_chat_features_v1(app: Any) -> Any:
             if (
                 not isinstance(stored_before, dict)
                 or stored_before.get("revision") != revision
-                or not isinstance(stored_target, dict)
-                or stored_target.get("tag") != target.get("tag")
-                or stored_target.get("control") != target.get("control")
+                or (not canvas_refresh and (
+                    not isinstance(stored_target, dict)
+                    or stored_target.get("tag") != target.get("tag")
+                    or stored_target.get("control") != target.get("control")
+                ))
             ):
                 raise HTTPException(status_code=409, detail="native snapshot changed; refresh and retry",
                                     headers=_PRIVATE_HEADERS)
@@ -541,14 +564,21 @@ def install_web_chat_features_v1(app: Any) -> Any:
                 raise HTTPException(status_code=409, detail="native snapshot changed during interaction; reload the conversation",
                                     headers=_PRIVATE_HEADERS)
             recaptured = acknowledgement.get("recapture_status") == "verified"
+            if canvas_refresh and acknowledgement.get("recapture_status") == "unchanged":
+                return JSONResponse({"ok":True,"revision":revision,"persisted":True,"unchanged":True},
+                                    headers=_PRIVATE_HEADERS)
+            if canvas_refresh and not recaptured:
+                raise HTTPException(status_code=409, detail="fresh canvas pixels unavailable", headers=_PRIVATE_HEADERS)
             if recaptured:
                 try:
                     raw = acknowledgement.get("snapshot")
-                    if len(json.dumps(raw, ensure_ascii=False).encode("utf-8")) > 256 * 1024:
+                    if len(json.dumps(raw, ensure_ascii=False).encode("utf-8")) > 768 * 1024:
                         raise ValueError("interaction snapshot is too large")
                     updated = validate_native_snapshot(raw)
                     if updated["revision"] != revision + 1:
                         raise ValueError("interaction snapshot revision mismatch")
+                    if canvas_refresh and canvas_count(updated["root"]) != canvas_count(stored["root"]):
+                        raise ValueError("canvas refresh lost a verified raster")
                     # Image indices are request archive bindings. A dynamic
                     # recapture cannot invent or reorder those bindings.
                     for root in (stored["root"], updated["root"]):
