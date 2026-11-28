@@ -485,6 +485,24 @@ def _gmail_body_text(payload: Any) -> str:
     return ""
 
 
+def plugin_connection_binding(store, user_id: str, provider_id: str) -> str | None:
+    if store is None:
+        return None
+    config = store.provider(provider_id)
+    connection = store.connection(user_id,provider_id)
+    if not config or not config.get("enabled") or not connection:
+        return None
+    if provider_id == "github" and _github_scope_mismatch(bool(config.get("private_repos")),connection.get("scopes")):
+        return None
+    subject = str(connection.get("provider_subject") or "")
+    if not subject:
+        return None
+    # Stable over ordinary OAuth refresh; changes when the connected account
+    # or scope changes. Never use or expose access/refresh tokens.
+    return hashlib.sha256(json.dumps([provider_id,subject,connection.get("created_at"),
+        sorted(connection.get("scopes") or [])],separators=(",",":")).encode()).hexdigest()
+
+
 def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
     if getattr(app.state, "plugin_connections_v1_installed", False):
         return app
@@ -925,8 +943,12 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
             claimed = await asyncio.to_thread(conversations.plugin_result, *key)
         except ValueError as exc:
             raise HTTPException(422, "Invalid durable tool arguments", headers=_PRIVATE_HEADERS) from exc
+        binding = plugin_connection_binding(store,user_id,provider_id)
         if claimed["state"] == "completed":
-            return JSONResponse(claimed["result"]["body"], status_code=claimed["result"]["status"], headers=_PRIVATE_HEADERS)
+            saved = claimed["result"]
+            if saved.get("connection_binding") != binding or not binding:
+                raise HTTPException(409, "插件账户已改变；请重新发起查询", headers=_PRIVATE_HEADERS)
+            return JSONResponse(saved["body"], status_code=saved["status"], headers=_PRIVATE_HEADERS)
         if claimed["state"] != "claimed":
             raise HTTPException(409, "Plugin execution lease is stale or call is already running", headers=_PRIVATE_HEADERS)
         try:
@@ -935,6 +957,9 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
         except HTTPException as exc:
             result = {"status": exc.status_code, "body": {"detail": str(exc.detail)[:1000]}}
         try:
+            if not binding or plugin_connection_binding(store,user_id,provider_id) != binding:
+                raise HTTPException(409, "插件账户已改变；请重新发起查询", headers=_PRIVATE_HEADERS)
+            result["connection_binding"] = binding
             committed = await asyncio.to_thread(conversations.plugin_result, *key, result)
         except ValueError as exc:
             raise HTTPException(503, "Plugin result exceeds durable limit", headers=_PRIVATE_HEADERS) from exc
@@ -1704,6 +1729,9 @@ def install_plugin_connections_v1(app: FastAPI) -> FastAPI:
             response_payload["pagination"] = pagination
         return JSONResponse(response_payload, headers=_PRIVATE_HEADERS)
 
+    # Internal only; the scheduler supplies the authenticated account record
+    # and rechecks the saved OAuth binding before and after dispatch.
+    app.state.execute_plugin_provider_tool = execute_provider_tool
     app.state.plugin_connections_v1_installed = True
     app.state.plugin_connections_v1_version = 1
     return app
