@@ -5141,7 +5141,10 @@
       }
     };
     let durableRound = 0;
-    const selectedProviders = [...new Set(selectedPluginToolDefinitions().map(item=>item.provider))];
+    // Snapshot only the selected provider IDs; the server rechecks OAuth.
+    // Do not call a fallible tool-definition builder outside lease cleanup.
+    const selectedProviders = [...new Set((state.selectedPlugins || []).filter(
+      provider=>["github","gmail"].includes(provider)))];
     const lease = {
       durableToolHeaders() {
         assertTransport();
