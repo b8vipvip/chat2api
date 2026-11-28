@@ -4677,7 +4677,11 @@
   async function sendMessage(text) {
     if (state.voiceActive) { toast("请先结束实时语音，再发送普通聊天消息。"); return; }
     const requestModelId = selectAvailableTextModel(currentConversation());
-    if (!requestModelId) { toast("当前账户或服务端统一 API Key 没有可用模型。"); return; }
+    if (!requestModelId) {
+      void loadModels(true);
+      toast("当前账户或服务端统一 API Key 没有可用模型，正在重新同步模型目录。");
+      return;
+    }
     if (!selectedKeyHasScope("chat")) { toast("服务端统一 API Key 缺少 chat 权限。"); return; }
     const clean = String(text || "").trim();
     if (state.streaming) return;
@@ -4980,6 +4984,13 @@
   // may retain a retired model (or gpt-image from an older client), but must
   // never overwrite the active text route after a model refresh or switch.
   function selectAvailableTextModel(conversation = currentConversation()) {
+    // History hydration, delete and import can change the active identity
+    // without a click on the sidebar. Never use a previous key's model list.
+    if (state.modelCatalogScope && state.modelCatalogScope !==
+        JSON.stringify([String(state.user?.user_id || ""), selectedKeyId()])) {
+      state.selectedModel = "";
+      return "";
+    }
     const textRows = Array.isArray(state.models) ? state.models : [];
     const preferred = conversation?.model || state.selectedModel;
     const preferredRow = textRows.find(row => row.id === preferred) ||
@@ -5007,14 +5018,16 @@
     const flight = {scope,promise:null};
     modelCatalogLoadPromise = flight;
     flight.promise = (async () => {
-      let rows = [];
+      let rows = [], catalogFailed = false;
       try {
         const payload = await apiJson("/api/user/chat/models", {
           headers: {"X-Chat2API-User-Key-ID": keyId},
         });
-        rows = Array.isArray(payload.data) ? payload.data : [];
+        if (!Array.isArray(payload.data)) throw new Error("模型目录格式无效");
+        rows = payload.data;
       } catch (error) {
         if (!stillCurrent() || modelCatalogLoadPromise !== flight) return;
+        catalogFailed = true;
         recordClientDiagnostic("webchat.models.load_failed", {
           phase: "model_catalog", error_name: error?.name || "ModelCatalogError",
         }, "warning");
@@ -5037,7 +5050,8 @@
       state.models = textRows;
       const ids = textRows.map(row => row.id);
       selectAvailableTextModel(currentConversation());
-      state.modelCatalogLoadedAt = Date.now();
+      // A transport failure must not become a successful 20s cache hit.
+      state.modelCatalogLoadedAt = catalogFailed ? 0 : Date.now();
       recordClientDiagnostic("webchat.models.catalog_loaded", {
         model_count: ids.length, model_id: state.selectedModel, phase: "model_catalog",
       }, ids.length ? "info" : "warning");
@@ -5230,6 +5244,7 @@
     resumePendingMessages();
     void hydrateNativeSnapshots();
     if (!ready) return;
+    await loadModels();
     selectAvailableTextModel(currentConversation());
     renderAll();
   }

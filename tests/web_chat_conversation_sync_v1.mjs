@@ -622,3 +622,31 @@ test("failed initial history hydration retries once at a time and waits for an i
   await run();
   assert.equal(calls,2);
 });
+
+
+test("model selector rejects a catalog from another history identity and retries failed loads", async () => {
+  const state={user:{user_id:"owner"},webChatKeyId:"a",models:[],selectedModel:""};
+  let calls=0;
+  const ctx=vm.createContext({
+    state,currentConversation:()=>null,selectedKeyId:()=>state.webChatKeyId,
+    apiJson:async()=>{
+      calls++;
+      if(calls===2) throw Error("offline");
+      return {data:[{id:"default",capabilities:["text"]}]};
+    },
+    resizeComposer(){},setConnection(){},recordClientDiagnostic(){},
+  });
+  const start=source.indexOf("  function selectAvailableTextModel(");
+  const end=source.indexOf("  function exportConversation(",start);
+  const api=vm.runInContext("let modelCatalogLoadPromise=null;\n"+source.slice(start,end)+"\n({loadModels,selectAvailableTextModel})",ctx);
+  await api.loadModels();
+  assert.equal(state.selectedModel,"default");
+  state.webChatKeyId="b";
+  assert.equal(api.selectAvailableTextModel(null),"");
+  await api.loadModels();
+  assert.equal(state.modelCatalogLoadedAt,0);
+  assert.equal(state.selectedModel,"");
+  await api.loadModels();
+  assert.equal(calls,3);
+  assert.equal(state.selectedModel,"default");
+});

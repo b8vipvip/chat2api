@@ -202,3 +202,47 @@ def test_web_chat_ready_page_default_survives_failed_manual_model_sync(tmp_path:
         sync_rows.append({"id": "default"})
         ready_workers.clear()
         assert models() == []
+
+
+def test_production_web_chat_catalog_uses_live_concrete_models_not_sync_history(tmp_path: Path):
+    app = create_app(Settings(CHAT2API_DATA_DIR=str(tmp_path)))
+    install_control_plane_v1(app)
+    app.state.control_plane.update_client({"web_chat_enabled": True})
+    install_user_console_v104_patch(app)
+    app.state.tenant_memberships = TenantMembershipStore(tmp_path)
+    install_model_entitlements(app)
+    install_web_chat_features_v1(app)
+    shared, _ = asyncio.run(app.state.api_keys.create("web-chat-live"))
+    app.state.control_plane.update_client({"api_key_id": shared["key_id"]})
+    app.state.worker_text_model_management_v146_snapshot = lambda: {
+        "data": [], "disabled": [], "legacy_minimum_model": "gpt-5.6-sol",
+    }
+
+    # A broken historical task store cannot suppress live picker choices.
+    async def broken_sync():
+        raise RuntimeError("historical model sync unavailable")
+    app.state.worker_model_tasks_v147_snapshot = broken_sync
+    live = [
+        {"id":"gpt-6-sol","clients":["paid"],"capabilities":["text"],"selectable":True},
+        {"id":"gpt-5.5","clients":[],"capabilities":["text"],"validated":True},
+        {"id":"gpt-5.6-sol","clients":["free"],"capabilities":["text"],"selectable":False,"validated":False},
+        {"id":"gpt-image","clients":["paid"],"capabilities":["image-generation"]},
+    ]
+    app.state.registry.model_catalog = lambda online_only=True: live
+    with TestClient(app) as client:
+        registered = client.post("/api/user/register", json={
+            "email":"live-model-catalog@example.com","password":"web-chat-password-123",
+        })
+        assert registered.status_code == 200, registered.text
+        def ids():
+            response = client.get("/api/user/chat/models")
+            assert response.status_code == 200, response.text
+            return [row["id"] for row in response.json()["data"]]
+        assert ids() == ["gpt-6-sol"]
+        app.state.model_entitlements.upsert("key", shared["key_id"], "deny", ["gpt-6-sol"])
+        assert ids() == []
+        async def stale_sync():
+            return {"available_models":[{"id":"gpt-5.5"},{"id":"gpt-6-sol"}]}
+        app.state.worker_model_tasks_v147_snapshot = stale_sync
+        live.clear()
+        assert ids() == []
