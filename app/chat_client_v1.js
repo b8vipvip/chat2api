@@ -998,7 +998,7 @@
       }
       if (localCompleted || (!localPending && serverPending)) {
         const merged = {...message};
-        if (messageBodyWeight(existing) > messageBodyWeight(message)) {
+        if (!localCompleted && messageBodyWeight(existing) > messageBodyWeight(message)) {
           merged.content = existing.content;
         }
         if (serverToolWeight > localToolWeight) merged.toolEvents = existing.toolEvents;
@@ -1011,8 +1011,8 @@
         // Preserve newer call/result state without replacing an authoritative
         // completed answer with a stale local text snapshot.
         messages.set(message.id, withMergedReferences({...existing,toolEvents:message.toolEvents}));
-      } else if (mergedReferences.length || combinedToolEvents.length) {
-        // A newer text snapshot must not erase server-side citations.
+      } else {
+        // Even a text-only snapshot can carry a newer durable replay cursor.
         messages.set(message.id, withMergedReferences(existing));
       }
     });
@@ -1028,14 +1028,16 @@
   }
 
   async function syncServerConversations() {
-    const response = await fetch("/api/user/chat/conversations", {
+    const owner = String(state.user?.user_id || "");
+    const storageKey = state.storageKey;
+    const {response,result:payload} = await fetchConversationMutation("/api/user/chat/conversations", {
       credentials: "same-origin",
-      headers: {"Accept":"application/json"},
+      headers: {"Accept":"application/json","X-Chat2API-User-ID":owner},
     });
-    let payload = {};
-    try { payload = await response.json(); } catch {}
+    if (state.storageKey !== storageKey || String(state.user?.user_id || "") !== owner) return;
     if (!response.ok) throw new Error(payload.detail || "HTTP " + response.status);
-    const serverRows = Array.isArray(payload.data) ? payload.data : [];
+    if (!Array.isArray(payload.data)) throw new Error("服务端会话目录格式无效");
+    const serverRows = payload.data;
     const serverActive = new Map();
     const deletedIds = new Set();
     state.remoteSyncFingerprints.clear();
@@ -1107,9 +1109,14 @@
       state.remoteSyncAgain.add(conversationId);
       return;
     }
+    const owner = String(state.user?.user_id || "");
+    const storageKey = state.storageKey;
+    const inFlight = state.remoteSyncInFlight;
+    const sameAccount = () => state.storageKey === storageKey &&
+      String(state.user?.user_id || "") === owner && state.remoteSyncInFlight === inFlight;
     const task = (async () => {
       for (let attempt = 0; attempt < 3; attempt += 1) {
-        if (state.pendingConversationDeletes?.has(conversationId)) return;
+        if (!sameAccount() || state.pendingConversationDeletes?.has(conversationId)) return;
         const conversation = state.conversations.find((row) => row.id === conversationId);
         if (!conversation) return;
         const body = serverConversationPayload(conversation);
@@ -1118,12 +1125,13 @@
         const {response,result} = await fetchConversationMutation("/api/user/chat/conversations/" + encodeURIComponent(conversationId), {
           method: "PUT",
           credentials: "same-origin",
-          headers: {"Content-Type":"application/json", "Accept":"application/json"},
+          headers: {"Content-Type":"application/json", "Accept":"application/json","X-Chat2API-User-ID":owner},
           body: JSON.stringify({
             expected_revision: Number(conversation.serverRevision || 0),
             conversation: body,
           }),
         });
+        if (!sameAccount()) return;
         if (response.status === 409 && result.conversation) {
           if (result.conversation.deleted === true) {
             state.conversations = state.conversations.filter((row) => row.id !== conversationId);
@@ -1167,6 +1175,7 @@
     try {
       await task;
     } catch (error) {
+      if (!sameAccount()) return;
       if (!state.remoteSyncWarned) {
         state.remoteSyncWarned = true;
         toast("服务端会话同步暂时失败，已保留本地记录：" + error.message);
@@ -1181,16 +1190,18 @@
         scheduleConversationSync(conversationId, delay);
       }
     } finally {
-      state.remoteSyncInFlight.delete(conversationId);
-      if (state.remoteSyncAgain.delete(conversationId)) scheduleConversationSync(conversationId, 150);
+      inFlight.delete(conversationId);
+      if (sameAccount() && state.remoteSyncAgain.delete(conversationId)) scheduleConversationSync(conversationId, 150);
     }
   }
 
   async function deleteConversationFromServer(conversation) {
     const conversationId = conversation.id;
     const storageKey = state.storageKey;
+    const owner = String(state.user?.user_id || "");
     const pendingDeletes = state.pendingConversationDeletes;
-    const sameAccount = () => state.storageKey === storageKey && state.pendingConversationDeletes === pendingDeletes;
+    const sameAccount = () => state.storageKey === storageKey && state.pendingConversationDeletes === pendingDeletes &&
+      String(state.user?.user_id || "") === owner;
     const restore = (row) => {
       const index = state.conversations.findIndex(item => item.id === conversationId);
       if (index >= 0) state.conversations[index] = row;
@@ -1216,7 +1227,7 @@
         "?expected_revision=" + encodeURIComponent(String(expectedRevision)), {
         method: "DELETE",
         credentials: "same-origin",
-        headers: {"Accept":"application/json"},
+        headers: {"Accept":"application/json","X-Chat2API-User-ID":owner},
       });
       if (!sameAccount()) return;
       const row = result.conversation;
@@ -1380,8 +1391,11 @@
   function hydrateSearchConversation(row) {
     const existing = state.conversations.find((item) => item.id === row.id);
     if (existing) {
-      Object.assign(existing, mergeConversation(row, existing));
-      existing.serverRevision = row.serverRevision;
+      // Search responses are snapshots, not revision authority. A PUT may
+      // have already acknowledged a newer revision since this search started.
+      if (Number(row.serverRevision || 0) >= Number(existing.serverRevision || 0)) {
+        Object.assign(existing, mergeConversation(row, existing));
+      }
       if (Array.isArray(state.searchResults)) {
         state.searchResults = state.searchResults.map((item) => item.id === row.id ? existing : item);
       }
@@ -1405,16 +1419,17 @@
     const normalized = query.toLocaleLowerCase();
     if (!query) return;
     const controller = new AbortController();
+    const owner = String(state.user?.user_id || "");
     state.searchController = controller;
     try {
       const response = await fetch(
         "/api/user/chat/conversations/search?q=" + encodeURIComponent(query),
-        {credentials:"same-origin", headers:{"Accept":"application/json"}, signal:controller.signal},
+        {credentials:"same-origin", headers:{"Accept":"application/json","X-Chat2API-User-ID":owner}, signal:controller.signal},
       );
       let payload = {};
       try { payload = await response.json(); } catch {}
       if (!response.ok) throw new Error(payload.detail || "HTTP " + response.status);
-      if (controller.signal.aborted || state.searchController !== controller ||
+      if (String(state.user?.user_id || "") !== owner || controller.signal.aborted || state.searchController !== controller ||
           $("conversationSearch").value.trim().toLocaleLowerCase() !== normalized) return;
       const rows = Array.isArray(payload.data) ? payload.data : [];
       state.searchResults = rows.map((row) => normalizeConversationRow(row)).filter(Boolean);
@@ -1425,7 +1440,7 @@
       renderSidebar();
     } catch (error) {
       if (error.name === "AbortError") return;
-      if (controller.signal.aborted || state.searchController !== controller ||
+      if (String(state.user?.user_id || "") !== owner || controller.signal.aborted || state.searchController !== controller ||
           $("conversationSearch").value.trim().toLocaleLowerCase() !== normalized) return;
       state.searchResults = null;
       state.searchQuery = normalized;
@@ -1472,7 +1487,8 @@
     const serverRows = query && state.searchQuery === query && Array.isArray(state.searchResults)
       ? state.searchResults.map((row) => {
           const local = state.conversations.find((item) => item.id === row.id);
-          return local ? mergeConversation(row, local) : row;
+          return local && Number(local.serverRevision || 0) > Number(row.serverRevision || 0)
+            ? local : local ? mergeConversation(row, local) : row;
         }).concat(localRows.filter((row) => !serverIds.has(row.id)))
       : localRows;
     const rows = serverRows.filter(row => !state.pendingConversationDeletes?.has(row.id));
@@ -4916,16 +4932,30 @@
   }
 
   async function loadModels(force = false) {
-    if (modelCatalogLoadPromise) return modelCatalogLoadPromise;
+    const owner = String(state.user?.user_id || "");
+    const keyId = selectedKeyId();
+    const scope = JSON.stringify([owner,keyId]);
+    const stillCurrent = () => String(state.user?.user_id || "") === owner && selectedKeyId() === keyId;
+    if (modelCatalogLoadPromise?.scope === scope) return modelCatalogLoadPromise.promise;
+    if (state.modelCatalogScope !== scope) {
+      state.modelCatalogScope = scope;
+      state.modelCatalogLoadedAt = 0;
+      state.models = [];
+      state.selectedModel = "";
+      resizeComposer();
+    }
     if (!force && state.modelCatalogLoadedAt && Date.now() - state.modelCatalogLoadedAt < 20_000) return;
-    modelCatalogLoadPromise = (async () => {
+    const flight = {scope,promise:null};
+    modelCatalogLoadPromise = flight;
+    flight.promise = (async () => {
       let rows = [];
       try {
         const payload = await apiJson("/api/user/chat/models", {
-          headers: {"X-Chat2API-User-Key-ID": selectedKeyId()},
+          headers: {"X-Chat2API-User-Key-ID": keyId},
         });
         rows = Array.isArray(payload.data) ? payload.data : [];
       } catch (error) {
+        if (!stillCurrent() || modelCatalogLoadPromise !== flight) return;
         recordClientDiagnostic("webchat.models.load_failed", {
           phase: "model_catalog", error_name: error?.name || "ModelCatalogError",
         }, "warning");
@@ -4933,6 +4963,7 @@
         // carries the shared service-key entitlement context.
         rows = [];
       }
+      if (!stillCurrent() || modelCatalogLoadPromise !== flight) return;
       const uniqueRows = [];
       const seen = new Set();
       rows.forEach(row => {
@@ -4955,8 +4986,8 @@
       else setConnection("已连接", "ready");
       resizeComposer();
     })();
-    try { return await modelCatalogLoadPromise; }
-    finally { modelCatalogLoadPromise = null; }
+    try { return await flight.promise; }
+    finally { if (modelCatalogLoadPromise === flight) modelCatalogLoadPromise = null; }
   }
 
   function exportConversation() {
@@ -5016,6 +5047,7 @@
 
   async function importConversationJson(file) {
     if (!file) return;
+    const owner = String(state.user?.user_id || "");
     const canSwitch = () => !state.streaming && !state.voiceActive &&
       !state.pendingImages.length && !state.pendingFiles.length;
     if (!canSwitch()) throw new Error("请先结束生成或实时语音，并发送或移除待发送附件。");
@@ -5026,15 +5058,17 @@
     } catch {
       throw new Error("JSON 会话文件格式无效");
     }
+    if (String(state.user?.user_id || "") !== owner) throw new Error("账户已切换，请重新导入。");
     if (!canSwitch()) throw new Error("当前对话正在使用，请稍后导入。");
     const response = await fetch("/api/user/chat/conversations/import", {
       method: "POST",
       credentials: "same-origin",
-      headers: {"Content-Type":"application/json", "Accept":"application/json"},
+      headers: {"Content-Type":"application/json", "Accept":"application/json","X-Chat2API-User-ID":owner},
       body: JSON.stringify(payload),
     });
     let result = {};
     try { result = await response.json(); } catch {}
+    if (String(state.user?.user_id || "") !== owner) throw new Error("账户已切换，请重新导入。");
     if (!response.ok || !result.conversation) {
       throw new Error(result.detail || "导入失败，HTTP " + response.status);
     }
