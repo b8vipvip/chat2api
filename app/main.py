@@ -719,8 +719,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.delete("/api/admin/media-storage/generated-files/{file_id}", dependencies=[Depends(require_admin_key)])
     async def delete_generated_file(file_id: str) -> dict[str, bool]:
+        def delete_with_reference_guard():
+            identity = generated_files.deletion_identity(file_id)
+            if identity is None:
+                return False
+            owner_key, request_id = identity
+            accounts = getattr(app.state, "user_accounts", None)
+            conversations = getattr(app.state, "web_chat_conversations", None)
+            user_id = accounts.owner_for_key(owner_key) if accounts is not None else None
+            if conversations is not None and user_id:
+                with conversations.generated_deletion_guard(user_id, file_id, request_id) as allowed:
+                    if not allowed:
+                        raise HTTPException(status_code=409, detail="Generated file is referenced by a saved Web Chat conversation")
+                    return generated_files.delete(file_id)
+            return generated_files.delete(file_id)
+
         try:
-            deleted = await asyncio.to_thread(generated_files.delete, file_id)
+            deleted = await asyncio.to_thread(delete_with_reference_guard)
         except (ValueError, OSError) as error:
             raise HTTPException(status_code=503, detail="Cannot remove generated file from storage") from error
         if not deleted:
