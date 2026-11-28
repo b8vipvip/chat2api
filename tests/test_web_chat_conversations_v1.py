@@ -738,3 +738,34 @@ def test_plugin_task_lease_is_fenced_across_processes_and_restart(tmp_path: Path
     assert a.plugin_task("alice", cid, "message_task_0002", "claim", "holder_first")["granted"]
     assert b.plugin_task("alice", cid, "message_task_0002", "completed", "holder_first")["granted"]
     assert WebChatConversationStoreV1(tmp_path).plugin_task("alice", cid, "message_task_0002", "status")["state"] == "completed"
+
+def test_plugin_checkpoint_survives_restart_and_is_fenced_and_deleted(tmp_path: Path, monkeypatch):
+    import app.web_chat_conversations_v1 as module
+    now = [1000.0]
+    monkeypatch.setattr(module.time, "time", lambda: now[0])
+    a = WebChatConversationStoreV1(tmp_path)
+    cid, mid = "c2a_checkpoint_0001", "message_assistant_01"
+    assert a.upsert("alice", _conversation(cid), 0)[0]
+    assert a.plugin_task("alice", cid, mid, "claim", "holder_first")["granted"]
+    first = {"rounds": 1, "tool_calls": 0, "tool_events": []}
+    evidence = {"toolName": "GitHub", "callId": "call_1", "resultId": "call_1_result",
+                "status": "completed", "arguments": "{}", "output": "done",
+                "resultPreview": '{"tool":"github.list_issues","results":[{"number":42}]}'}
+    second = {"rounds": 1, "tool_calls": 1, "tool_events": [evidence]}
+    assert a.plugin_task("alice", cid, mid, "checkpoint", "holder_first", first)["granted"]
+    assert a.plugin_task("alice", cid, mid, "checkpoint", "holder_first", second)["granted"]
+    b = WebChatConversationStoreV1(tmp_path)
+    assert not b.plugin_task("alice", cid, mid, "checkpoint", "holder_second", second)["granted"]
+    assert not b.plugin_task("alice", cid, mid, "checkpoint", "holder_first", first)["granted"]
+    assert b.plugin_task("alice", cid, mid, "checkpoint", "holder_first", second)["granted"]
+    assert "checkpoint" not in b.plugin_task("alice", cid, mid, "status")
+    assert "checkpoint" not in b.plugin_task("bob", cid, mid, "status")
+    now[0] += 181
+    saved = b.plugin_task("alice", cid, mid, "status")
+    assert saved["state"] == "interrupted"
+    assert saved["checkpoint"] == second
+    assert not a.plugin_task("alice", cid, mid, "checkpoint", "holder_first", second)["granted"]
+    assert b.delete("alice", cid, 1)[0]
+    assert b.plugin_task("alice", cid, mid, "status")["state"] == "deleted"
+    with sqlite3.connect(b.path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM web_chat_plugin_checkpoints").fetchone()[0] == 0
