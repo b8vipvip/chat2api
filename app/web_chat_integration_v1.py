@@ -96,6 +96,7 @@ def install_web_chat_features_v1(app: Any) -> Any:
     @app.get("/api/user/chat/models")
     async def user_chat_models(request: Request) -> Response:
         _, principal = await resolve_chat_identity(request)
+        from .web_chat_identity_v1 import web_chat_model_decision
         if "models" not in principal.scopes:
             raise HTTPException(status_code=403, detail="Web Chat shared API Key lacks models permission",
                                 headers=_PRIVATE_HEADERS)
@@ -138,6 +139,10 @@ def install_web_chat_features_v1(app: Any) -> Any:
                     or model_id in disabled_models
                 ):
                     continue
+                # Missing from the filtered registry catalog does not mean
+                # unrestricted. The admin snapshot is not user-scoped.
+                if web_chat_model_decision(request.app, principal, model_id).get("allowed") is not True:
+                    continue
                 if model_id == "default":
                     if default_mapping and default_mapping in disabled_models:
                         continue
@@ -168,6 +173,8 @@ def install_web_chat_features_v1(app: Any) -> Any:
                     continue
                 model_id = str(source.get("id") or "")
                 if model_id in {"chatgpt-web", "gpt-image", "gpt-live", "gpt-live-mini"}:
+                    continue
+                if web_chat_model_decision(request.app, principal, model_id).get("allowed") is not True:
                     continue
                 row = dict(source)
                 if model_id == "default":

@@ -29,7 +29,7 @@ def test_v48_javascript_assets_parse():
 
 def test_manifest_requires_request_v6_terminal_owner_and_passive_recovery():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION == "0.22.302"
+    assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION == "0.22.303"
     main_scripts = manifest["content_scripts"][0]["js"]
     scripts = manifest["content_scripts"][1]["js"]
     assert "network_stream_main_v55.js" in main_scripts
@@ -58,7 +58,7 @@ def test_background_preflight_requires_canonical_terminal_path_only():
     preflight = (ROOT / "chrome_extension" / "background_runtime_preflight_v48.js").read_text(encoding="utf-8")
     legacy_contract = (ROOT / "chrome_extension" / "content_runtime_contract_v48.js").read_text(encoding="utf-8")
     contract = (ROOT / "chrome_extension" / "content_runtime_contract_v71.js").read_text(encoding="utf-8")
-    assert 'REQUIRED_BUNDLE = "0.22.302"' in preflight
+    assert 'REQUIRED_BUNDLE = "0.22.303"' in preflight
     assert "tool_isolation_v49" in preflight
     assert "worker_tool_isolation_preflight_failed" in preflight
     assert "safe_to_dispatch === true" in preflight
@@ -66,8 +66,8 @@ def test_background_preflight_requires_canonical_terminal_path_only():
         assert token in preflight
     assert '"content_response_stream_recovery_v49.js"' not in preflight
     assert '"content_response_stream_recovery_v69.js"' not in preflight
-    assert 'REQUIRED_BUNDLE = "0.22.302"' in legacy_contract
-    assert 'REQUIRED_BUNDLE = "0.22.302"' in contract
+    assert 'REQUIRED_BUNDLE = "0.22.303"' in legacy_contract
+    assert 'REQUIRED_BUNDLE = "0.22.303"' in contract
     assert 'response_terminal_owner: "request-v6"' in contract
     assert "__CHAT2API_REQUEST_CONTENT_V6__" in contract
     assert "__CHAT2API_NETWORK_STREAM_RECOVERY_V55__" in contract
@@ -125,7 +125,7 @@ def test_runtime_contract_still_exposes_supported_features():
     app = FastAPI(version=SERVER_RUNTIME_VERSION)
     payload = version_contract_payload(app)
     assert payload["server"]["runtime_version"] == SERVER_RUNTIME_VERSION
-    assert payload["chrome_bridge"]["bundle_version"] == "0.22.302"
+    assert payload["chrome_bridge"]["bundle_version"] == "0.22.303"
     assert payload["features"]["network_response_recovery"] is True
     assert payload["features"]["single_response_observer"] is True
     assert payload["features"]["external_account_tool_isolation_fail_closed_v49"] is True

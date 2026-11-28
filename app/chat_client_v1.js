@@ -4949,7 +4949,7 @@
       selectAvailableTextModel(currentConversation());
       state.modelCatalogLoadedAt = Date.now();
       recordClientDiagnostic("webchat.models.catalog_loaded", {
-        model_count: ids.length, phase: "model_catalog",
+        model_count: ids.length, model_id: state.selectedModel, phase: "model_catalog",
       }, ids.length ? "info" : "warning");
       if (!textRows.length) setConnection("已连接 · 当前没有可用的文本模型", "error");
       else setConnection("已连接", "ready");

@@ -11,6 +11,7 @@ from typing import Any
 from fastapi import HTTPException
 
 from .api_keys import ApiPrincipal
+from .model_catalog import normalize_model_id
 from .user_commerce import USER_SESSION_COOKIE
 
 
@@ -42,6 +43,34 @@ def web_chat_session_policy_allows(app: Any, user: dict[str, Any]) -> bool:
         policy.get("web_chat_enabled") is True
         and (not user.get("is_guest") or policy.get("guest_enabled") is True)
     )
+
+
+def web_chat_model_decision(app: Any, principal: ApiPrincipal, model_id: str) -> dict[str, Any]:
+    """Apply the same user/shared-key entitlement and administrator toggle.
+
+    A configured Free default mapping is display metadata, not proof of a
+    concrete upstream model. Evaluate the requested alias as-is (restricted
+    unresolved aliases remain denied by the existing entitlement policy).
+    """
+    normalized = normalize_model_id(model_id)
+    if not normalized:
+        return {"allowed": False, "reason": "invalid_model", "model": model_id}
+    management = getattr(app.state, "worker_text_model_management_v146_snapshot", None)
+    if callable(management):
+        snapshot = management()
+        if not isinstance(snapshot, dict):
+            raise _private_error(503, "Web Chat 模型管理状态不可用")
+        disabled = {normalize_model_id(item) for item in snapshot.get("disabled", [])}
+        minimum = normalize_model_id(snapshot.get("legacy_minimum_model"))
+        if normalized in disabled or (normalized == "default" and minimum in disabled):
+            return {"allowed": False, "reason": "admin_model_disabled", "model": normalized}
+    check = getattr(app.state, "web_chat_model_entitlement_decision", None)
+    if callable(check):
+        return check(principal.key_id, normalized)
+    if getattr(app.state, "model_entitlements_installed", False):
+        raise _private_error(503, "Web Chat 模型权限状态不可用")
+    # Older, focused composition roots may omit the entitlement subsystem.
+    return {"allowed": True, "reason": "no_policy_subsystem", "model": normalized}
 
 
 async def resolve_web_chat_principal(
