@@ -1334,3 +1334,44 @@ assert.equal(lateFormToggle.dispatchedEvents.includes("click"),false);
 
 console.log("native-content-request-scoped-interaction-actions-passed");
 
+// Production-shaped verified assistant scope: a click changes another
+// visible node and the ACK must carry a new immutable tree, not just value.
+let recaptureListener=null;
+const dynamicCheckbox=new Element("INPUT",[],{"aria-label":"Show result"});
+dynamicCheckbox.type="checkbox";dynamicCheckbox.checked=false;dynamicCheckbox.disabled=false;
+const dynamicText={nodeType:3,nodeValue:"Before action"};
+const dynamicRoot=new Element("DIV",[dynamicCheckbox,dynamicText]);
+dynamicRoot.contains=element=>element===dynamicCheckbox;
+dynamicCheckbox.click=()=>{dynamicCheckbox.checked=true;dynamicText.nodeValue="After action";};
+let currentRoot=dynamicRoot;
+const recaptureCtx={...interactionCtx,
+  __CHAT2API_NATIVE_DOM_EVIDENCE_V1__:{replyRoots:()=>({
+    scope:"verified_reply_container",roots:[currentRoot],
+  })},
+  chrome:{runtime:{onMessage:{addListener:fn=>{recaptureListener=fn;}},
+    sendMessage:async()=>({ok:true,committed:true})}},
+};
+delete recaptureCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,recaptureCtx);
+const dynamicRequestId="req_native_recapture123";
+const original=recaptureCtx.__CHAT2API_NATIVE_CONTENT_V1__.snapshot({
+  requestId:dynamicRequestId,submitStartedAt:Date.now(),lastCandidateNode:dynamicRoot,
+});
+const originalId=original.root.children[0].children[0].interaction_id;
+const envelope={type:"chat2api.native.interaction",request_id:dynamicRequestId,
+  revision:1,interaction_id:originalId,action_id:"a".repeat(32),action:"set_checked",value:true};
+const reply=await new Promise(resolve=>{
+  assert.equal(recaptureListener(envelope,{},resolve),true);
+});
+assert.equal(reply.ok,true);
+assert.equal(reply.recapture_status,"verified");
+assert.equal(reply.snapshot.revision,2);
+assert.equal(reply.snapshot.root.children[0].children[0].interaction_id,"nc_2_1");
+assert.equal(reply.snapshot.root.children[0].children[1].text,"After action");
+const duplicate=await new Promise(resolve=>recaptureListener(envelope,{},resolve));
+assert.equal(duplicate.duplicate,true);
+assert.equal(duplicate.snapshot.revision,2);
+currentRoot=new Element("DIV");
+const moved=await new Promise(resolve=>recaptureListener({...envelope,
+  revision:2,interaction_id:"nc_2_1",action_id:"b".repeat(32),value:false}, {},resolve));
+assert.equal(moved.error,"native-interaction-reply-scope-changed");
