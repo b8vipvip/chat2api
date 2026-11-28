@@ -1338,7 +1338,8 @@
       let payload = {};
       try { payload = await response.json(); } catch {}
       if (!response.ok) throw new Error(payload.detail || "HTTP " + response.status);
-      if ($("conversationSearch").value.trim().toLocaleLowerCase() !== normalized) return;
+      if (controller.signal.aborted || state.searchController !== controller ||
+          $("conversationSearch").value.trim().toLocaleLowerCase() !== normalized) return;
       const rows = Array.isArray(payload.data) ? payload.data : [];
       state.searchResults = rows.map((row) => normalizeConversationRow(row)).filter(Boolean);
       state.searchQuery = normalized;
@@ -1348,7 +1349,8 @@
       renderSidebar();
     } catch (error) {
       if (error.name === "AbortError") return;
-      if ($("conversationSearch").value.trim().toLocaleLowerCase() !== normalized) return;
+      if (controller.signal.aborted || state.searchController !== controller ||
+          $("conversationSearch").value.trim().toLocaleLowerCase() !== normalized) return;
       state.searchResults = null;
       state.searchQuery = normalized;
       if (!state.searchWarned) {
