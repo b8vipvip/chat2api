@@ -264,6 +264,7 @@ const sandbox = vm.createContext({
   URL,
   Blob,
   ArrayBuffer,
+  AbortController,
   DataView,
   Uint8Array,
   Float32Array,
@@ -999,4 +1000,76 @@ console.log("web-chat-voice-client-v1-passed");
   current.resolveStart();
   await newStart;
   assert.equal(timers.size,1);
+}
+
+
+// Production Web Chat uses the signed-in cookie plus an opaque ownership ID,
+// never the configured server API secret. Test the actual Voice module,
+// not a stubbed create() implementation.
+{
+  const calls=[];
+  const browserVoice=api.create({
+    sessionEndpoint:"/api/user/chat/voice-session",fileUploadEndpoint:"/api/user/chat/files",
+    userKeyId:"key_owner_123",WebSocketImpl:FakeWebSocket,AudioContextImpl:FakeAudioContext,
+    mediaDevices,location:window.location,timers,now:()=>clock,
+    fetcher:async(url,options)=>{
+      calls.push({url,options});
+      assert.equal(options.credentials,"same-origin");
+      assert.equal(options.headers.Authorization,undefined);
+      assert.equal(options.headers["X-Chat2API-User-Key-ID"],"key_owner_123");
+      if(url==="/api/user/chat/voice-session") return {
+        ok:true,status:200,json:async()=>({websocket_path:"/v1/audio/realtime?session_token=one-time-cookie-session"})
+      };
+      assert.equal(url,"/api/user/chat/files");
+      return {ok:true,status:200,json:async()=>({id:"file_abcdefgh"})};
+    }
+  });
+  await browserVoice.start();
+  assert.equal(browserVoice.isActive(),true);
+  await browserVoice.startCamera(video);
+  await new Promise(r=>setTimeout(r,10));
+  assert.equal(calls.length,2);
+  await browserVoice.stop();
+  assert.equal(browserVoice.isActive(),false);
+
+  const missing=api.create({fetcher:async()=>{throw Error("must not dispatch");},
+    WebSocketImpl:FakeWebSocket,AudioContextImpl:FakeAudioContext,mediaDevices,location:window.location,timers});
+  await assert.rejects(missing.start(),/API Key/);
+  const wrongFiles=api.create({sessionEndpoint:"/api/user/chat/voice-session",userKeyId:"key_owner_123",
+    fetcher:async()=>{throw Error("must not dispatch");},WebSocketImpl:FakeWebSocket,
+    AudioContextImpl:FakeAudioContext,mediaDevices,location:window.location,timers});
+  await assert.rejects(wrongFiles.start(),/上传端点/);
+}
+
+// Bound both response headers and body; stopping aborts the same HTTP request.
+for (const mode of ["headers","body","stop"]) {
+  let expire, signal, reached;
+  const fetching=new Promise(r=>{reached=r;});
+  const stall=signal=>new Promise((_resolve,reject)=>{
+    const abort=()=>reject(Object.assign(new Error("aborted"),{name:"AbortError"}));
+    if(signal.aborted) abort(); else signal.addEventListener("abort",abort,{once:true});
+  });
+  const timeoutClient=api.create({
+    sessionEndpoint:"/api/user/chat/voice-session",fileUploadEndpoint:"/api/user/chat/files",
+    userKeyId:"key_owner_123",WebSocketImpl:FakeWebSocket,AudioContextImpl:FakeAudioContext,
+    mediaDevices,location:window.location,
+    timers:{...timers,setTimeout(fn,ms){
+      if(ms===20000){expire=fn;return -1;}
+      return timers.setTimeout(fn,ms);
+    },clearTimeout(id){if(id!==-1)timers.clearTimeout(id);}},
+    fetcher:async(_url,options)=>{
+      signal=options.signal;
+      if(mode==="body") return {ok:true,status:200,json:()=>{reached();return stall(signal);}};
+      reached();return stall(signal);
+    }
+  });
+  const oldSocket=FakeWebSocket.last;
+  const start=timeoutClient.start();
+  const failed=assert.rejects(start,mode==="stop"?/cancelled/i:/超时/);
+  await fetching;
+  if(mode==="stop") await timeoutClient.stop(); else expire();
+  await failed;
+  assert.equal(signal.aborted,true);
+  assert.equal(timeoutClient.isActive(),false);
+  assert.equal(FakeWebSocket.last,oldSocket);
 }
