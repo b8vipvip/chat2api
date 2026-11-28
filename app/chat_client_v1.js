@@ -1355,7 +1355,7 @@
     return conversation;
   }
 
-  function setActiveConversation(conversationId) {
+  function setActiveConversation(conversationId, searchRow = null) {
     if (state.pendingConversationDeletes.has(conversationId)) return;
     if (state.voiceActive) {
       toast("请先结束实时语音，再切换对话。");
@@ -1370,6 +1370,10 @@
       toast("请先发送或移除待发送附件，再切换对话。");
       return;
     }
+    // Do not hydrate (and potentially evict) a search result until the
+    // active generation/Voice/attachment switch guards have passed.
+    if (searchRow && !hydrateSearchConversation(searchRow)) return;
+    if (!state.conversations.some(row => row.id === conversationId)) return;
     state.activeConversationId = conversationId;
     state.sidebarPage = "";
     state.forceScrollToBottom = true;
@@ -1427,11 +1431,15 @@
   }
 
   function hydrateSearchConversation(row) {
+    const live = state.streaming || state.voiceActive || state.recoveryInFlight?.size ||
+      state.pendingImages?.length || state.pendingFiles?.length;
     const existing = state.conversations.find((item) => item.id === row.id);
     if (existing) {
       // Search responses are snapshots, not revision authority. A PUT may
       // have already acknowledged a newer revision since this search started.
-      if (Number(row.serverRevision || 0) >= Number(existing.serverRevision || 0)) {
+      // Replacing the messages array can orphan the live assistant object
+      // still held by SSE/Voice/recovery callbacks. Defer snapshot merging.
+      if (!live && Number(row.serverRevision || 0) >= Number(existing.serverRevision || 0)) {
         Object.assign(existing, mergeConversation(row, existing));
       }
       if (Array.isArray(state.searchResults)) {
@@ -1442,6 +1450,10 @@
     // Opening an older server-side search result promotes it into the local
     // recent window without mutating the server revision. A read must not race
     // a subsequent delete/rename with an unnecessary background PUT.
+    if (live) {
+      toast("请先结束当前生成、语音、恢复或附件操作，再操作较早的搜索结果。");
+      return null;
+    }
     const opened = {...row};
     state.conversations.unshift(opened);
     state.conversations = state.conversations.slice(0, MAX_CONVERSATIONS);
@@ -1546,12 +1558,11 @@
       open.textContent = conversation.title || "新对话";
       open.title = "打开对话；双击重命名";
       open.addEventListener("click", () => {
-        const selected = query ? hydrateSearchConversation(conversation) : conversation;
-        setActiveConversation(selected.id);
+        setActiveConversation(conversation.id, query ? conversation : null);
       });
       open.addEventListener("dblclick", () => {
         const selected = query ? hydrateSearchConversation(conversation) : conversation;
-        renameConversation(selected.id);
+        if (selected) renameConversation(selected.id);
       });
       const remove = document.createElement("button");
       remove.type = "button";
@@ -1561,7 +1572,7 @@
       remove.setAttribute("aria-label", "删除对话");
       remove.addEventListener("click", () => {
         const selected = query ? hydrateSearchConversation(conversation) : conversation;
-        deleteConversation(selected.id);
+        if (selected) deleteConversation(selected.id);
       });
       item.append(open, remove);
       root.appendChild(item);
@@ -3589,6 +3600,13 @@
   }
 
   function renderAll() {
+    // Delete/import/recovery can select another owner key without going
+    // through setActiveConversation. Refresh immediately instead of leaving
+    // the composer disabled until the next focus or periodic model refresh.
+    if (state.user && state.webChatKeyId && state.modelCatalogScope &&
+        state.modelCatalogScope !== JSON.stringify([String(state.user.user_id || ""), selectedKeyId()])) {
+      void loadModels();
+    }
     if (typeof updatePluginPickerButton === "function") updatePluginPickerButton();
     renderSidebar();
     syncSidebarNav();
@@ -5449,7 +5467,10 @@
       void retryInitialConversationSync();
     }
   });
-  window.addEventListener("online", () => { void retryInitialConversationSync(); });
+  window.addEventListener("online", () => {
+    if (state.user) void loadModels(true);
+    void retryInitialConversationSync();
+  });
   window.setInterval(() => {
     if (state.user && document.visibilityState === "visible" && !state.streaming && !state.voiceActive) {
       void loadModels(true);
