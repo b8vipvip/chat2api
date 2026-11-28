@@ -1005,3 +1005,45 @@ def test_plugin_checkpoint_preserves_normalized_plan_across_takeover(tmp_path: P
     reopened = WebChatConversationStoreV1(tmp_path)
     resumed = reopened.plugin_task("alice", cid, mid, "takeover", "holder_second")
     assert resumed["granted"] and resumed["checkpoint"]["plan"] == plan
+
+def test_plugin_provider_result_journal_recovers_full_response_and_fences_old_holder(tmp_path: Path, monkeypatch):
+    import app.web_chat_conversations_v1 as module
+    now = [1000.0]
+    monkeypatch.setattr(module.time, "time", lambda: now[0])
+    store = WebChatConversationStoreV1(tmp_path)
+    cid, mid = "c2a_result_journal_001", "message_assistant_01"
+    conversation = _conversation(cid)
+    conversation["messages"][1].update(pending=True, recoveryStatus="tool_planning")
+    assert store.upsert("alice", conversation, 0)[0]
+    assert store.plugin_task("alice", cid, mid, "claim", "holder_first")["granted"]
+    args = {"repository": "owner/repo", "page": 1}
+    tool = "github.list_issues"
+    second = {"repository": "owner/repo", "page": 2}
+    checkpoint = {"rounds": 1, "tool_calls": 0, "tool_events": [],
+        "plan": {"request_id": "req_planner_1234", "model": "gpt-6", "start_tool_calls": 0,
+                 "calls": [{"name":tool,"arguments":args},{"name":tool,"arguments":second}]}}
+    assert store.plugin_task("alice", cid, mid, "checkpoint", "holder_first", checkpoint)["granted"]
+    first = ("alice", cid, mid, "holder_first", 1, tool)
+    assert store.plugin_result(*first, {"repository":"other/repo"})["state"] == "denied"
+    assert store.plugin_result(*first, args)["state"] == "claimed"
+    assert store.plugin_result(*first, args)["state"] == "running"
+    result = {"status": 200, "body": {"data":[{"body":"x"*12000}], "pagination":{"has_more":True}}}
+    assert store.plugin_result(*first, args, result)["result"] == result
+    assert store.plugin_result(*first, args)["result"] == result
+    assert store.plugin_result(*first, second)["state"] == "claimed"
+    now[0] += 181
+    reopened = WebChatConversationStoreV1(tmp_path)
+    assert reopened.plugin_result(*first, second, result)["state"] == "denied"
+    assert not reopened.plugin_task("bob", cid, mid, "takeover", "holder_other")["granted"]
+    resumed = reopened.plugin_task("alice", cid, mid, "takeover", "holder_second")
+    assert resumed["granted"]
+    assert resumed["tool_results"] == [{"round":1,"tool":tool,"arguments":args,"result":result}]
+    successor = ("alice", cid, mid, "holder_second", 1, tool)
+    assert reopened.plugin_result(*successor, args)["result"] == result
+    assert reopened.plugin_result(*successor, second)["state"] == "claimed"
+    assert reopened.plugin_result(*first, second, result)["state"] == "denied"
+    assert reopened.plugin_result(*successor, second, result)["state"] == "completed"
+    assert reopened.delete("alice", cid, 1)[0]
+    with sqlite3.connect(reopened.path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM web_chat_plugin_results").fetchone()[0] == 0
+    assert reopened.plugin_result(*successor, second)["state"] == "denied"
