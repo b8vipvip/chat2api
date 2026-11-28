@@ -151,3 +151,68 @@ def test_schedule_pause_resume_stop_and_restart(tmp_path, monkeypatch):
     store.finish("a", tid, running["request_id"], "cancelled")
     assert store.list("a")[0]["status"] == "cancelled"
     assert store.due() == []
+
+
+def test_global_capacity_and_original_terminal_recovery(tmp_path, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    import app.dot_v1 as module
+
+    store = DotStore(tmp_path)
+    first = store.create("a", goal())
+    second = store.create("b", goal())
+    store.schedule("a", first["id"])
+    store.schedule("b", second["id"])
+    running = store.claim("a", first["id"], scheduled=True)
+    with pytest.raises(ValueError, match="capacity"):
+        DotStore(tmp_path).claim("b", second["id"], scheduled=True)
+    rid = running["request_id"]
+
+    class Telemetry:
+        def get(self, request_id):
+            return None
+
+        def get_many_persisted(self, ids):
+            assert ids == {rid}
+            return {rid: {"status": "completed", "api_key_id": "a-key",
+                          "web_chat_mode": True, "response_text": "persisted response"}}
+
+    class Journal:
+        async def snapshot(self, request_id, owner):
+            assert request_id == rid and owner == "a-key"
+            return {"terminal_status": "completed", "delivered_text": "exact delivered response"}
+
+    app = SimpleNamespace(state=SimpleNamespace(
+        telemetry=Telemetry(),
+        user_accounts=SimpleNamespace(owns_key=lambda owner, key: owner == "a" and key == "a-key"),
+        web_chat_event_journal=Journal(),
+    ))
+    runtime = module.DotRuntime(app, DotStore(tmp_path))
+    assert asyncio.run(runtime.reconcile(running)) is True
+    final = store.list("a")[0]
+    assert final["status"] == "completed"
+    assert final["result"] == "exact delivered response"
+    assert final["request_id"] == rid
+    assert store.claim("b", second["id"], scheduled=True)["status"] == "running"
+
+
+def test_runtime_rejects_other_owner_terminal(tmp_path, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    import app.dot_v1 as module
+
+    store = DotStore(tmp_path)
+    task = store.create("a", goal())
+    store.schedule("a", task["id"])
+    running = store.claim("a", task["id"], scheduled=True)
+    telemetry = SimpleNamespace(get=lambda rid: {"status": "completed", "api_key_id": "b-key",
+                                                "web_chat_mode": True, "response_text": "private"})
+    app = SimpleNamespace(state=SimpleNamespace(telemetry=telemetry,
+                          user_accounts=SimpleNamespace(owns_key=lambda owner, key: False)))
+    runtime = module.DotRuntime(app, store)
+    assert asyncio.run(runtime.reconcile(running)) is False
+    assert store.list("a")[0]["result"] == ""
+    monkeypatch.setattr(module.time, "time", lambda: running["lease_until"] + 1)
+    assert asyncio.run(runtime.reconcile(running)) is True
+    assert store.list("a")[0]["status"] == "interrupted"
+    assert store.list("a")[0]["result"] == ""

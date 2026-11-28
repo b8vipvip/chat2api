@@ -94,11 +94,6 @@ class DotStore:
             row = db.execute("SELECT name,instructions FROM dot_profiles WHERE owner=?", (owner,)).fetchone()
             return dict(row) if row else {"name": "我的 Dot", "instructions": ""}
 
-    def _expire(self, db, owner, now):
-        db.execute("""UPDATE dot_tasks SET status='interrupted', updated=?,
-            error='执行租约已过期；请核对原请求记录，不会自动重复执行'
-            WHERE owner=? AND status='running' AND lease_until<=?""", (now, owner, now))
-
     def list(self, owner):
         with self.tx() as db:
             return [dict(row) for row in db.execute(
@@ -131,6 +126,8 @@ class DotStore:
                 raise ValueError("task is not queued")
             if db.execute("SELECT 1 FROM dot_tasks WHERE owner=? AND status='running'", (owner,)).fetchone():
                 raise ValueError("another task is running")
+            if scheduled and db.execute("SELECT 1 FROM dot_tasks WHERE status=\'running\' LIMIT 1").fetchone():
+                raise ValueError("Dot executor capacity reached")
             request_id = "req_" + uuid.uuid4().hex
             db.execute("""UPDATE dot_tasks SET status='running', request_id=?, updated=?, lease_until=?
                 WHERE owner=? AND id=?""", (request_id, now, now + LEASE_SECONDS, owner, task_id))
