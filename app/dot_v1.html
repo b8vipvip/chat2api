@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>我的 Dot · Chat2API</title>
+<link rel="stylesheet" href="/assets/chat2api-chat-client-v1.css">
+<script defer src="/assets/chat2api-dot-v1.js"></script>
+</head>
+<body>
+<main class="utility-page">
+<div class="utility-page-header"><h1>我的 Dot</h1><a href="/chat">返回聊天</a></div>
+<p>基础版本：配置职责、保存任务、手动调用现有 Worker 模型。暂不支持后台自动续跑、插件或云电脑。</p>
+<p id="dotStatus" role="status" aria-live="polite"></p>
+<section><h2>助手配置</h2>
+<form id="dotProfile"><label>名称 <input id="dotName" maxlength="80" required></label>
+<label>长期职责 <textarea id="dotInstructions" maxlength="4000" rows="4"></textarea></label>
+<button class="attach-button" type="submit" disabled>保存配置</button></form></section>
+<section><h2>新建任务</h2>
+<form id="dotGoalForm"><label>目标 <textarea id="dotGoal" maxlength="8000" rows="4" required></textarea></label>
+<label>模型 <select id="dotModel" required></select></label>
+<button class="attach-button" type="submit" disabled>保存任务</button></form></section>
+<section><h2>任务记录</h2><button id="dotRefresh" class="attach-button" type="button">刷新</button>
+<div id="dotTasks" class="utility-list"></div></section>
+</main>
+</body></html>
