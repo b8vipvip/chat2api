@@ -426,3 +426,21 @@ acknowledge({ok:true,persisted:true});
 await firstSelection;
 assert.equal(siblings[1].attributes["aria-selected"],"true");
 assert.equal(siblings[2].attributes["aria-selected"],"false");
+
+{
+  const png = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAGElEQVR4nAXBAQEAAAjDIG7/zhMWKafAA0LzBf5cKv1OAAAAAElFTkSuQmCC";
+  const raster = {tag:"canvas_raster",png,width:2,height:2};
+  const snap = {version:1,revision:21,finality:"verified-final",assets:[],files:[],
+    root:{tag:"div",children:[raster]}};
+  assert.equal(renderer.validateSnapshot(snap),true);
+  const host = new FakeElement("host");
+  assert.equal(renderer.renderNativeSnapshot(host,snap),true);
+  const rendered = findTag(host,"img");
+  assert.equal(rendered.src,"data:image/png;base64,"+png);
+  assert.equal(rendered.width,2);
+  assert.equal(rendered.style.maxWidth,"100%");
+  assert.equal(renderer.validateSnapshot({...snap,root:{...raster,png:"data:text/html,attack"}}),false);
+  assert.equal(renderer.validateSnapshot({...snap,root:{...raster,url:"https://evil.example"}}),false);
+  assert.equal(renderer.validateSnapshot({...snap,root:{...raster,width:4096}}),false);
+  assert.equal(renderer.validateSnapshot({...snap,root:{tag:"div",children:Array(5).fill(raster)}}),false);
+}
