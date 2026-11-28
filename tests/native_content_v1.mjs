@@ -1384,8 +1384,9 @@ assert.equal(movedReply.error,"native-interaction-reply-scope-changed");
   originalCanvas.width=2; originalCanvas.height=2;
   originalCanvas.getContext=()=>{throw new Error("original context must not be accessed");};
   const canvasRoot=new Element("DIV",[originalCanvas]);
-  let tainted=false, blank=false;
+  let tainted=false, blank=false, pngFrame=png, canvasRefreshListener;
   const ctxCanvas={...ctx,
+    chrome:{runtime:{onMessage:{addListener:listener=>{canvasRefreshListener=listener;}}}},
     __CHAT2API_NATIVE_DOM_EVIDENCE_V1__:{replyRoots:()=>({
       scope:"verified_reply_container",roots:[canvasRoot],
     })},
@@ -1397,7 +1398,7 @@ assert.equal(movedReply.error,"native-interaction-reply-scope-changed");
           if(tainted)throw new Error("SecurityError");
           return {data:blank?new Uint8Array(16):new Uint8Array([255,0,0,255,255,255,255,255,255,255,255,255,255,255,255,255])};
         },
-      }),toDataURL:()=>"data:image/png;base64,"+png};
+      }),toDataURL:()=>"data:image/png;base64,"+pngFrame};
     }},
   };
   delete ctxCanvas.__CHAT2API_NATIVE_CONTENT_V1__;
@@ -1408,6 +1409,22 @@ assert.equal(movedReply.error,"native-interaction-reply-scope-changed");
   assert.equal(resultCanvas.root.children[0].children[0].tag,"canvas_raster");
   assert.equal(resultCanvas.root.children[0].children[0].png,png);
   assert.equal(activeCanvas.nativeCanvasOmitted,0);
+  const refresh={type:"chat2api.native.interaction",request_id:activeCanvas.requestId,
+    action:"refresh_canvas",interaction_id:"native_refresh",revision:1,value:null,action_id:"c".repeat(32)};
+  const unchanged=await new Promise(resolve=>canvasRefreshListener(refresh,{},resolve));
+  assert.equal(unchanged.recapture_status,"unchanged");
+  assert.equal(unchanged.revision,1);
+  pngFrame=png.slice(0,-4)+"AAAA";
+  const changed=await new Promise(resolve=>canvasRefreshListener({...refresh,action_id:"d".repeat(32)}, {},resolve));
+  assert.equal(changed.recapture_status,"verified");
+  assert.equal(changed.snapshot.revision,2);
+  assert.equal(changed.snapshot.root.children[0].children[0].png,pngFrame);
+  const repeated=await new Promise(resolve=>canvasRefreshListener({...refresh,action_id:"d".repeat(32)}, {},resolve));
+  assert.equal(repeated.duplicate,true);
+  blank=true;
+  const blankRefresh=await new Promise(resolve=>canvasRefreshListener({...refresh,revision:2,action_id:"e".repeat(32)}, {},resolve));
+  assert.equal(blankRefresh.ok,false);
+  blank=false;
   tainted=true;
   canvasApi.snapshot(activeCanvas);
   assert.equal(activeCanvas.nativeCanvasOmitted,1);

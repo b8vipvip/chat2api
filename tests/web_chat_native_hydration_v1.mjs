@@ -197,15 +197,23 @@ const pollConversation = {id:"poll-chat",messages:pollMessages};
 const pollState = {user:{user_id:"owner"},nativeSnapshots:new Map(pollMessages.map(message=>[
   message.requestId,{finality:"verified-final",root:{tag:"input",interaction_id:"nc_1_1"}}
 ]))};
-const polled = [];
+const polled = [],canvasPolled=[];
 const poll = vm.runInNewContext(source.slice(pollStart,pollEnd)+"\nrefreshInteractiveNativeSnapshots",{
-  state:pollState,currentConversation:()=>pollConversation,
+  state:pollState,currentConversation:()=>pollConversation,document:{hidden:false},
   refreshNativeSnapshot:async id=>{polled.push(id);},
+  submitNativeInteraction:async (id,action)=>{canvasPolled.push([id,action]);},
 });
 await poll();
 assert.deepEqual(polled,["poll-5","poll-4","poll-3"]);
 pollState.streaming = true;
 await poll();
 assert.equal(polled.length,3);
+pollState.streaming=false;
+for(const message of pollMessages) pollState.nativeSnapshots.set(message.requestId,{
+  finality:"verified-final",revision:1,root:{tag:"canvas_raster"}});
+await poll();
+assert.equal(canvasPolled.length,1);
+assert.equal(canvasPolled[0][0],"poll-5");
+assert.equal(canvasPolled[0][1].action,"refresh_canvas");
 
 console.log("web-chat-native-hydration-v1-passed");
