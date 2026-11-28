@@ -86,6 +86,7 @@
   });
   const ALLOWED_DOCUMENT_MIME_TYPES = new Set(Object.values(DOCUMENT_MIME_BY_EXTENSION));
   const FILE_ID_PATTERN = /^file_[A-Za-z0-9]{8,64}$/;
+  const GENERATED_FILE_ID_PATTERN = /^gen_[A-Za-z0-9]{8,64}$/;
   let modelCatalogLoadPromise = null;
   let clientDiagnosticFlushPromise = null;
   let clientDiagnosticFlushTimer = null;
@@ -3808,7 +3809,8 @@
       if (!response.ok || !Array.isArray(result.data)) throw new Error(result.detail || "资料库暂不可用");
       const byId = new Map(state.libraryRows.map(row => [row.id,row]));
       result.data.forEach(row => {
-        if (FILE_ID_PATTERN.test(String(row?.id || ""))) byId.set(row.id,row);
+        const pattern = scope === "generated" ? GENERATED_FILE_ID_PATTERN : FILE_ID_PATTERN;
+        if (pattern.test(String(row?.id || ""))) byId.set(row.id,row);
       });
       state.libraryRows = [...byId.values()];
       state.libraryCursor = typeof result.next_cursor === "string" && result.next_cursor !== cursor
@@ -3843,7 +3845,7 @@
     const seen = new Map();
     // Local cache is only a fallback when server loading has not succeeded.
     // After a successful load, the owner-scoped durable reference index wins.
-    if (!state.libraryLoaded && state.libraryScope !== "unreferenced") state.conversations.forEach(conversation => {
+    if (!state.libraryLoaded && state.libraryScope === "referenced") state.conversations.forEach(conversation => {
       (conversation.messages || []).forEach(message => {
         messageFileAttachments(message).forEach(file => {
           if (!seen.has(file.file_id)) seen.set(file.file_id, {
@@ -3866,7 +3868,9 @@
       seen.set(row.id, {
         id:row.id,type:mime.startsWith("image/") ? "image" : "file",
         name:String(row.filename || "附件"),size:Number(row.bytes || 0),mime,
-        conversation:Number(row.reference_count || 0) > 0 ? "引用于 " + Number(row.reference_count) + " 个会话" : "未引用 · 上传超过 24 小时",
+        conversation:state.libraryScope === "generated" ? "模型生成文件" :
+          Number(row.reference_count || 0) > 0 ? "引用于 " + Number(row.reference_count) + " 个会话" : "未引用 · 上传超过 24 小时",
+        generated:state.libraryScope === "generated",
         removable:state.libraryScope === "unreferenced" && row.reference_count === 0,
         createdAt:String(row.created_at || ""),
       });
@@ -3877,14 +3881,15 @@
       empty.className = "utility-empty";
       empty.textContent = state.libraryLoading ? "正在加载文件…" :
         state.libraryError ? "暂时无法读取服务端文件索引，请重试。" :
-        "当前已加载范围内没有图片或文档附件。";
+        state.libraryScope === "generated" ? "暂无已归档的模型生成文件。" : "当前已加载范围内没有图片或文档附件。";
       root.appendChild(empty);
       return;
     }
     items.forEach(item => {
       const card = document.createElement("a");
       card.className = "library-item";
-      card.href = "/api/user/chat/files/" + encodeURIComponent(item.id) + "/download";
+      card.href = (item.generated ? "/api/user/chat/generated-files/" : "/api/user/chat/files/") +
+        encodeURIComponent(item.id) + "/download";
       card.target = "_blank";
       card.rel = "noopener noreferrer";
       const icon = document.createElement("span");
@@ -5835,7 +5840,7 @@
   $("libraryButton").addEventListener("click", () => openSidebarPage("library"));
   $("libraryRefreshButton").addEventListener("click", () => { void loadLibraryPage(true); });
   $("libraryScope").addEventListener("change", event => {
-    state.libraryScope = event.target.value === "unreferenced" ? "unreferenced" : "referenced";
+    state.libraryScope = ["unreferenced","generated"].includes(event.target.value) ? event.target.value : "referenced";
     void loadLibraryPage(true);
   });
   $("libraryMoreButton").addEventListener("click", () => { void loadLibraryPage(); });
