@@ -508,6 +508,28 @@ class WebChatConversationStoreV1:
                     PRIMARY KEY(user_id, conversation_id, message_id)
                 )
             """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS web_chat_plugin_results (
+                    user_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
+                    message_id TEXT NOT NULL, round INTEGER NOT NULL,
+                    tool TEXT NOT NULL, arguments TEXT NOT NULL,
+                    holder TEXT NOT NULL, state TEXT NOT NULL,
+                    payload TEXT NOT NULL, updated_at REAL NOT NULL,
+                    PRIMARY KEY(user_id,conversation_id,message_id,round,tool,arguments)
+                )
+            """)
+            for operation, owner, condition in (
+                ("UPDATE", "NEW", "WHEN NEW.deleted=1"),
+                ("DELETE", "OLD", ""),
+            ):
+                connection.execute(f"""
+                    CREATE TRIGGER IF NOT EXISTS web_chat_plugin_result_{operation.lower()}
+                    AFTER {operation} ON web_chat_conversations {condition}
+                    BEGIN
+                        DELETE FROM web_chat_plugin_results
+                        WHERE user_id={owner}.user_id AND conversation_id={owner}.conversation_id;
+                    END
+                """)
             # Conversation deletion/retention and evidence removal are atomic.
             for operation, owner, condition in (
                 ("UPDATE", "NEW", "WHEN NEW.deleted=1"),
@@ -619,6 +641,66 @@ class WebChatConversationStoreV1:
                 connection.rollback()
                 raise
 
+    def plugin_result(self, user_id: str, conversation_id: str, message_id: str,
+                      holder: str, round_number: int, tool: str, arguments: dict,
+                      result: dict | None = None) -> dict:
+        """Lease-fenced journal of actual server provider responses, not client previews."""
+        key = (user_id, conversation_id, message_id)
+        args = json.dumps(arguments, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        if not 1 <= round_number <= 3 or len(args.encode("utf-8")) > 8192:
+            raise ValueError("invalid plugin result key")
+        call = (*key, round_number, tool, args)
+        now = time.time()
+        with self.lock, closing(self._connect()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            task = conn.execute(
+                "SELECT holder,state,expires_at FROM web_chat_plugin_tasks WHERE user_id=? AND conversation_id=? AND message_id=?",
+                key).fetchone()
+            conversation = conn.execute(
+                "SELECT deleted FROM web_chat_conversations WHERE user_id=? AND conversation_id=?", key[:2]).fetchone()
+            checkpoint = conn.execute(
+                "SELECT payload FROM web_chat_plugin_checkpoints WHERE user_id=? AND conversation_id=? AND message_id=?", key).fetchone()
+            if (not task or task["holder"] != holder or task["state"] != "running"
+                    or task["expires_at"] <= now or (conversation and conversation["deleted"])
+                    or not checkpoint):
+                return {"state": "denied"}
+            progress = json.loads(checkpoint["payload"])
+            plan = progress.get("plan") or {}
+            if progress.get("rounds") != round_number or not any(
+                item["name"] == tool and json.dumps(item["arguments"], sort_keys=True,
+                    ensure_ascii=False, separators=(",", ":")) == args for item in plan.get("calls", [])
+            ):
+                return {"state": "denied"}
+            prior = conn.execute(
+                "SELECT holder,state,payload FROM web_chat_plugin_results WHERE user_id=? AND conversation_id=? AND message_id=? AND round=? AND tool=? AND arguments=?", call).fetchone()
+            if prior and prior["state"] == "completed":
+                return {"state": "completed", "result": json.loads(prior["payload"])}
+            if result is None:
+                if prior and prior["holder"] == holder:
+                    return {"state": "running"}
+                if not prior and conn.execute(
+                    "SELECT COUNT(*) FROM web_chat_plugin_results WHERE user_id=? AND conversation_id=? AND message_id=?", key
+                ).fetchone()[0] >= 6:
+                    return {"state": "denied"}
+                conn.execute("""
+                    INSERT INTO web_chat_plugin_results VALUES (?,?,?,?,?,?,?,'running','',?)
+                    ON CONFLICT(user_id,conversation_id,message_id,round,tool,arguments)
+                    DO UPDATE SET holder=excluded.holder,state='running',payload='',updated_at=excluded.updated_at
+                """, (*call, holder, now))
+                conn.commit()
+                return {"state": "claimed"}
+            if not prior or prior["holder"] != holder or prior["state"] != "running":
+                return {"state": "denied"}
+            payload = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+            if len(payload.encode("utf-8")) > 524288:
+                raise ValueError("plugin provider result exceeds durable limit")
+            conn.execute("""
+                UPDATE web_chat_plugin_results SET state='completed',payload=?,updated_at=?
+                WHERE user_id=? AND conversation_id=? AND message_id=? AND round=? AND tool=? AND arguments=?
+            """, (payload, now, *call))
+            conn.commit()
+            return {"state": "completed", "result": result}
+
     def plugin_task(self, user_id: str, conversation_id: str, message_id: str,
                     operation: str, holder: str = "",
                     checkpoint: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -707,6 +789,14 @@ class WebChatConversationStoreV1:
                           AND c.conversation_id=web_chat_plugin_checkpoints.conversation_id
                     )
                 """, (user_id, now - 86400))
+                connection.execute("""
+                    DELETE FROM web_chat_plugin_results
+                    WHERE user_id=? AND updated_at<? AND NOT EXISTS (
+                        SELECT 1 FROM web_chat_conversations c
+                        WHERE c.user_id=web_chat_plugin_results.user_id
+                          AND c.conversation_id=web_chat_plugin_results.conversation_id
+                    )
+                """, (user_id, now - 86400))
                 active = connection.execute(
                     "SELECT COUNT(*) FROM web_chat_plugin_tasks WHERE user_id=? "
                     "AND state='running' AND expires_at>?", (user_id, now),
@@ -754,6 +844,15 @@ class WebChatConversationStoreV1:
             result = {"state": state, "granted": granted}
             if resumed_checkpoint is not None:
                 result["checkpoint"] = resumed_checkpoint
+                journal = connection.execute("""
+                    SELECT round,tool,arguments,payload FROM web_chat_plugin_results
+                    WHERE user_id=? AND conversation_id=? AND message_id=? AND state='completed'
+                    ORDER BY round,updated_at
+                """, key).fetchall()
+                if journal:
+                    result["tool_results"] = [{"round": row["round"], "tool": row["tool"],
+                        "arguments": json.loads(row["arguments"]), "result": json.loads(row["payload"])}
+                        for row in journal]
             if operation == "status" and state != "running":
                 saved = connection.execute(
                     "SELECT payload FROM web_chat_plugin_checkpoints "
