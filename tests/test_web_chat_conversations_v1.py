@@ -844,3 +844,50 @@ def test_generated_references_count_by_request_and_link_and_backfill(tmp_path: P
     with reopened.generated_deletion_guard("alice", file_id, request_id) as allowed:
         assert allowed
     assert reopened.generated_reference_count("bob", file_id, request_id) == 1
+
+
+def test_plugin_takeover_only_expired_pending_tasks_and_fences_previous_holder(tmp_path: Path, monkeypatch):
+    import app.web_chat_conversations_v1 as module
+    now = [1000.0]
+    monkeypatch.setattr(module.time, "time", lambda: now[0])
+    a = WebChatConversationStoreV1(tmp_path)
+    b = WebChatConversationStoreV1(tmp_path)
+    cid, mid = "c2a_takeover_0001", "message_assistant_01"
+    conversation = _conversation(cid)
+    conversation["messages"][1].update(pending=True, recoveryStatus="tool_planning")
+    assert a.upsert("alice", conversation, 0)[0]
+    checkpoint = {"rounds": 1, "tool_calls": 0, "tool_events": []}
+    assert a.plugin_task("alice", cid, mid, "claim", "holder_first")["granted"]
+    assert a.plugin_task("alice", cid, mid, "checkpoint", "holder_first", checkpoint)["granted"]
+    assert not b.plugin_task("alice", cid, mid, "takeover", "holder_second")["granted"]
+    now[0] += 181
+    assert not b.plugin_task("bob", cid, mid, "takeover", "holder_second")["granted"]
+    assert not b.plugin_task("alice", cid, mid, "takeover", "holder_first")["granted"]
+    resumed = b.plugin_task("alice", cid, mid, "takeover", "holder_second")
+    assert resumed == {"state": "running", "granted": True, "checkpoint": checkpoint}
+    assert not a.plugin_task("alice", cid, mid, "renew", "holder_first")["granted"]
+    assert not a.plugin_task("alice", cid, mid, "completed", "holder_first")["granted"]
+    assert not a.plugin_task("alice", cid, mid, "takeover", "holder_third")["granted"]
+    assert b.plugin_task("alice", cid, mid, "interrupted", "holder_second")["granted"]
+    now[0] += 181
+    assert not a.plugin_task("alice", cid, mid, "takeover", "holder_third")["granted"]
+
+
+def test_plugin_takeover_retry_budget_survives_restart(tmp_path: Path, monkeypatch):
+    import app.web_chat_conversations_v1 as module
+    now = [1000.0]
+    monkeypatch.setattr(module.time, "time", lambda: now[0])
+    store = WebChatConversationStoreV1(tmp_path)
+    cid, mid = "c2a_takeover_0002", "message_assistant_01"
+    conversation = _conversation(cid)
+    conversation["messages"][1].update(pending=True, recoveryStatus="tool_planning")
+    assert store.upsert("alice", conversation, 0)[0]
+    assert store.plugin_task("alice", cid, mid, "claim", "holder_first")["granted"]
+    assert store.plugin_task("alice", cid, mid, "checkpoint", "holder_first",
+        {"rounds": 1, "tool_calls": 0, "tool_events": []})["granted"]
+    for attempt in range(3):
+        now[0] += 181
+        store = WebChatConversationStoreV1(tmp_path)
+        assert store.plugin_task("alice", cid, mid, "takeover", f"holder_{attempt:04d}")["granted"]
+    now[0] += 181
+    assert not store.plugin_task("alice", cid, mid, "takeover", "holder_fourth")["granted"]
