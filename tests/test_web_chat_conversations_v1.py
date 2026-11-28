@@ -664,3 +664,20 @@ def test_stale_tab_account_header_cannot_write_to_replacement_session(tmp_path: 
         deleted = client.delete(base + "/" + conversation["id"] + "?expected_revision=0", headers=headers)
         assert deleted.status_code == 409, deleted.text
         assert client.get(base).json()["data"] == []
+
+
+def test_delta_returns_only_changed_owner_rows_and_old_tombstones(tmp_path: Path):
+    store = WebChatConversationStoreV1(tmp_path)
+    old = _conversation("c2a_delta_old_0001")
+    assert store.upsert("owner", old, 0)[0]
+    for index in range(20):
+        assert store.upsert("owner", _conversation(f"c2a_delta_new_{index:04d}"), 0)[0]
+    assert store.upsert("other", _conversation("c2a_delta_foreign_0001"), 0)[0]
+    known = {row["id"]: row["revision"] for row in store.delta_for_user("owner", {})}
+    known[old["id"]] = 1
+    assert store.delta_for_user("owner", known) == []
+    assert store.delete("owner", old["id"], 1)[0]
+    changed = store.delta_for_user("owner", known)
+    assert len(changed) == 1
+    assert changed[0]["id"] == old["id"] and changed[0]["deleted"]
+    assert not any(row["id"] == old["id"] for row in store.delta_for_user("other", known))

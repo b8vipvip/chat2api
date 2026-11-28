@@ -719,3 +719,37 @@ test("a revision conflict or tombstone cannot detach a live assistant from the c
     assert.equal([...timers.values()][0].delay,2000);
   }
 });
+
+
+test("incremental conversation pull applies tombstones and rejects an in-flight stale snapshot", async () => {
+  const a={id:"old",serverRevision:1,messages:[],updatedAt:"1"};
+  const b={id:"new",serverRevision:1,messages:[],updatedAt:"2"};
+  const state={user:{user_id:"u"},storageKey:"u",remoteSyncReady:true,conversations:[a,b],
+    activeConversationId:"old",pendingImages:[],pendingFiles:[],recoveryInFlight:new Set(),
+    pendingConversationDeletes:new Set(),remoteSyncInFlight:new Map(),remoteSyncTimers:new Map(),
+    remoteSyncFingerprints:new Map(),remoteSyncRetryCounts:new Map()};
+  let reply, sent, renders=0;
+  const ctx=vm.createContext({state,MAX_CONVERSATIONS:15,
+    fetchConversationMutation:(_url,opts)=>{sent=JSON.parse(opts.body);return new Promise(r=>reply=r);},
+    normalizeConversationRow:row=>({...row}),mergeConversation:(remote)=>remote,
+    serverConversationPayload:row=>row,persistHistorySnapshot(){},scheduleConversationSync(){},
+    selectAvailableTextModel(){},currentConversation(){},renderAll(){renders++;},
+    hydrateNativeSnapshots(){},recordClientDiagnostic(){},
+  });
+  const start=source.indexOf("  function canPullConversationDelta(");
+  const end=source.indexOf("  function scheduleConversationSync(",start);
+  const pull=vm.runInContext(source.slice(start,end)+"\npullConversationDelta",ctx);
+  const stale=pull();
+  assert.equal(sent.known.old,1);
+  state.streaming=true;
+  reply({response:{ok:true},result:{data:[{id:"old",revision:2,deleted:true}]}});
+  await stale;
+  assert.equal(state.conversations.length,2);
+  state.streaming=false;
+  const fresh=pull();
+  reply({response:{ok:true},result:{data:[{id:"old",revision:2,deleted:true}]}});
+  await fresh;
+  assert.equal(state.conversations.length,1);
+  assert.equal(state.activeConversationId,"new");
+  assert.equal(renders,1);
+});

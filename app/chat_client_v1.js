@@ -1117,6 +1117,90 @@
     }
   }
 
+  function canPullConversationDelta() {
+    return Boolean(state.user && state.remoteSyncReady && !state.streaming && !state.voiceActive &&
+      !state.pendingImages.length && !state.pendingFiles.length && !state.recoveryInFlight.size &&
+      !state.pendingConversationDeletes.size && !state.remoteSyncInFlight.size && !state.remoteSyncTimers.size);
+  }
+
+  async function pullConversationDelta() {
+    if (state.remoteDeltaInFlight || !canPullConversationDelta()) return;
+    const owner = String(state.user.user_id);
+    const storageKey = state.storageKey;
+    const known = Object.fromEntries(state.conversations.map(row => [row.id, Number(row.serverRevision || 0)]));
+    const baseline = JSON.stringify(state.conversations);
+    state.remoteDeltaInFlight = true;
+    try {
+      const {response,result} = await fetchConversationMutation("/api/user/chat/conversations/delta", {
+        method:"POST",credentials:"same-origin",
+        headers:{"Content-Type":"application/json","Accept":"application/json","X-Chat2API-User-ID":owner},
+        body:JSON.stringify({known}),
+      });
+      // Never apply an old snapshot over a local edit, in-flight save or turn
+      // that started while this request was on the network.
+      if (state.storageKey !== storageKey || String(state.user?.user_id || "") !== owner ||
+          !canPullConversationDelta() || JSON.stringify(state.conversations) !== baseline) return;
+      if (!response.ok || !Array.isArray(result.data)) throw new Error("invalid conversation delta");
+      const byId = new Map(state.conversations.map(row => [row.id,row]));
+      const deleted = new Set();
+      const changed = new Set();
+      for (const row of result.data) {
+        if (!row || typeof row.id !== "string" || !Number.isSafeInteger(row.revision)) continue;
+        const local = byId.get(row.id);
+        if (local && Number(local.serverRevision || 0) > row.revision) continue;
+        if (row.deleted === true) {
+          byId.delete(row.id);
+          state.remoteSyncFingerprints.delete(row.id);
+          state.remoteSyncRetryCounts.delete(row.id);
+          deleted.add(row.id);
+          continue;
+        }
+        const remote = normalizeConversationRow(row);
+        if (!remote) continue;
+        remote.serverRevision = row.revision;
+        const merged = mergeConversation(remote,local);
+        byId.set(row.id,merged);
+        state.remoteSyncFingerprints.set(row.id,JSON.stringify(serverConversationPayload(remote)));
+        changed.add(row.id);
+      }
+      if (!deleted.size && !changed.size) return;
+      state.conversations = [...byId.values()].sort((a,b)=>
+        String(b.updatedAt || "").localeCompare(String(a.updatedAt || ""))).slice(0,MAX_CONVERSATIONS);
+      if (!state.conversations.some(row=>row.id===state.activeConversationId)) {
+        state.activeConversationId = state.conversations[0]?.id || "";
+      }
+      if (state.searchController) state.searchController.abort();
+      state.searchController = null;
+      if (Array.isArray(state.searchResults)) {
+        state.searchResults = state.searchResults.filter(row=>!deleted.has(row.id))
+          .map(row=>byId.get(row.id) || row);
+      }
+      persistHistorySnapshot();
+      state.conversations.forEach(row=>{
+        if (changed.has(row.id) && state.remoteSyncFingerprints.get(row.id) !==
+            JSON.stringify(serverConversationPayload(row))) scheduleConversationSync(row.id);
+      });
+      selectAvailableTextModel(currentConversation());
+      renderAll();
+      // Another device may still own an active plugin planner. Do not
+      // terminalize its planning state merely because we observed a delta.
+      for (const row of state.conversations) {
+        if (!changed.has(row.id)) continue;
+        for (const message of row.messages || []) {
+          if (message.pending && message.requestId && message.recoveryStatus !== "tool_planning") {
+            void recoverPendingMessage(row,message);
+          }
+        }
+      }
+      void hydrateNativeSnapshots();
+      if (state.sidebarPage === "library") void loadLibraryPage(true);
+    } catch (error) {
+      recordClientDiagnostic("webchat.conversations.delta_failed", {phase:"conversation_sync"}, "warning");
+    } finally {
+      state.remoteDeltaInFlight = false;
+    }
+  }
+
   function scheduleConversationSync(conversationId, delay = 450) {
     if (!state.remoteSyncReady || !conversationId || state.pendingConversationDeletes?.has(conversationId)) return;
     if (!state.conversations.some((row) => row.id === conversationId)) return;
@@ -5562,18 +5646,24 @@
     else if (state.user) {
       void loadModels();
       void retryInitialConversationSync();
+      void pullConversationDelta();
     }
   });
   window.addEventListener("focus", () => {
     if (state.user) {
       void loadModels();
       void retryInitialConversationSync();
+      void pullConversationDelta();
     }
   });
   window.addEventListener("online", () => {
     if (state.user) void loadModels(true);
     void retryInitialConversationSync();
+    void pullConversationDelta();
   });
+  window.setInterval(() => {
+    if (document.visibilityState === "visible") void pullConversationDelta();
+  }, 5000);
   window.setInterval(() => {
     if (state.user && document.visibilityState === "visible" && !state.streaming && !state.voiceActive) {
       void loadModels(true);

@@ -464,6 +464,32 @@ class WebChatConversationStoreV1:
             ).fetchall()
             return [self._decode(row) for row in rows if row is not None]
 
+    def delta_for_user(self, user_id: str, known: dict[str, int]) -> list[dict[str, Any]]:
+        """Return changed recent rows and changes to any client-known ID.
+
+        A single SQLite read transaction keeps the recent window and explicit
+        tombstones consistent, including deleted rows outside that window.
+        """
+        with self.lock, closing(self._connect()) as connection:
+            connection.execute("BEGIN")
+            candidates = connection.execute(
+                """SELECT conversation_id, revision, deleted, payload
+                   FROM web_chat_conversations WHERE user_id=? AND deleted=0
+                   ORDER BY updated_at DESC, conversation_id ASC LIMIT 15""",
+                (user_id,),
+            ).fetchall()
+            if known:
+                placeholders = ",".join("?" for _ in known)
+                candidates += connection.execute(
+                    f"""SELECT conversation_id, revision, deleted, payload
+                        FROM web_chat_conversations WHERE user_id=?
+                          AND conversation_id IN ({placeholders})""",
+                    (user_id, *known),
+                ).fetchall()
+            unique = {row["conversation_id"]: row for row in candidates}
+            return [self._decode(row) for cid, row in unique.items()
+                    if known.get(cid) != int(row["revision"]) or bool(row["deleted"])]
+
     def retention_policy(self) -> dict[str, Any]:
         with self.lock, closing(self._connect()) as connection:
             row = connection.execute(
@@ -863,6 +889,25 @@ def install_web_chat_conversations_v1(app: FastAPI) -> None:
         _, user = current_user(request)
         rows = store.list_for_user(str(user["user_id"]))
         return JSONResponse({"data": rows}, headers=_PRIVATE_HEADERS)
+
+    @app.post("/api/user/chat/conversations/delta")
+    async def delta_user_chat_conversations(request: Request):
+        _, user = current_user(request)
+        if not same_origin_admin_request(request):
+            raise HTTPException(status_code=403, detail="same-origin request required", headers=_PRIVATE_HEADERS)
+        raw = await _read_bounded_request_body(request, 16384)
+        try:
+            payload = json.loads(raw)
+            known = payload.get("known") if isinstance(payload, dict) else None
+            if (not isinstance(known, dict) or len(known) > 50
+                    or any(not _CONVERSATION_ID_RE.fullmatch(cid)
+                           or type(revision) is not int or not 0 <= revision <= 2**53 - 1
+                           for cid, revision in known.items())):
+                raise ValueError("invalid revision manifest")
+        except (ValueError, TypeError, UnicodeDecodeError):
+            raise HTTPException(status_code=422, detail="invalid revision manifest", headers=_PRIVATE_HEADERS)
+        return JSONResponse({"data": store.delta_for_user(str(user["user_id"]), known)},
+                            headers=_PRIVATE_HEADERS)
 
     @app.get("/api/user/chat/library")
     async def list_user_chat_library(request: Request):

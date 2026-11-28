@@ -1137,7 +1137,7 @@ for (const mode of ["headers","body","stop"]) {
 {
   const events=[];
   const watchdog=api.create({
-    token:"managed-key",fetcher,WebSocketImpl:FakeWebSocket,AudioContextImpl:FakeAudioContext,
+    apiToken:"managed-key",fetcher,WebSocketImpl:FakeWebSocket,AudioContextImpl:FakeAudioContext,
     mediaDevices,location:window.location,timers,now:()=>clock,onEvent:event=>events.push(event),
   });
   await watchdog.start();
