@@ -16,6 +16,7 @@ async function send(chunks, close = true, onCancel = () => {}, scenario = {}) {
   const conversation = {id: "conversation-test", messages: []};
   const messages = [];
   const leaseOperations = [];
+  let plannerCalls = 0;
   const body = new ReadableStream({
     start(controller) {
       const encoder = new TextEncoder();
@@ -36,7 +37,7 @@ async function send(chunks, close = true, onCancel = () => {}, scenario = {}) {
       selectedModel: "test-model",
       models: [{id:"test-model",capabilities:["text"]}],
       streaming: false,
-      selectedPlugins: scenario.pluginFailure ? ["github"] : [],
+      selectedPlugins: scenario.pluginFailure || scenario.cancelDuringClaim ? ["github"] : [],
       recoveryInFlight: new Set(),
       pendingImages: [],
       pendingImagesConversationId: "",
@@ -63,12 +64,16 @@ async function send(chunks, close = true, onCancel = () => {}, scenario = {}) {
     fetchConversationMutation: async (_url, options) => {
       const operation = JSON.parse(options.body).operation;
       leaseOperations.push(operation);
+      if (operation === "claim" && scenario.cancelDuringClaim) {
+        context.state.abortController.abort();
+      }
       return {response:{ok:true},result:{
         state: operation === "claim" || operation === "renew" ? "running" : operation,
         granted:true,
       }};
     },
     runAutonomousPluginToolLoop: async (_messages,assistant) => {
+      plannerCalls += 1;
       assistant.toolEvents.push({callId:"plugin-call",status:"completed"});
       throw new Error("planner interrupted");
     },
@@ -106,10 +111,11 @@ async function send(chunks, close = true, onCancel = () => {}, scenario = {}) {
     messages,
     replies: conversation.messages.filter(({role}) => role === "assistant").map(({content}) => content),
     locked: body.locked,
-    ...(scenario.networkFailure || scenario.pluginFailure ? {
+    ...(scenario.networkFailure || scenario.pluginFailure || scenario.cancelDuringClaim ? {
       pending:conversation.messages.find(row=>row.role==="assistant")?.pending,
       status:conversation.messages.find(row=>row.role==="assistant")?.recoveryStatus,
       leaseOperations,
+      plannerCalls,
     } : {}),
   };
 }
@@ -732,6 +738,13 @@ test("a failed plugin planning round preserves evidence but unblocks the convers
   assert.equal(result.status,"error");
   assert.match(result.replies[0],/已保留取得的插件查询证据/);
   assert.deepEqual(result.leaseOperations,["claim","interrupted"]);
+});
+
+test("stop during lease acquisition releases the lease without starting a planner", async () => {
+  const result = await send([],true,()=>{},{cancelDuringClaim:true});
+  assert.equal(result.plannerCalls,0);
+  assert.deepEqual(result.leaseOperations,["claim","interrupted"]);
+  assert.equal(result.replies.length,0);
 });
 
 
