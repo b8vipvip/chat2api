@@ -5119,6 +5119,7 @@
       }
     };
     let durableRound = 0;
+    const selectedProviders = [...new Set(selectedPluginToolDefinitions().map(item=>item.provider))];
     const lease = {
       durableToolHeaders() {
         assertTransport();
@@ -5133,7 +5134,7 @@
         const toolEvents = normalizeToolEvents(assistant.toolEvents,"assistant")
           .filter(event => ["completed","failed"].includes(event.status));
         const result = await pluginTaskOperation(conversation,assistant,"checkpoint",holder,{
-          rounds,tool_calls:toolCalls,tool_events:toolEvents,...(plan ? {plan,auto_resume:true} : {}),
+          rounds,tool_calls:toolCalls,tool_events:toolEvents,...(plan ? {plan,auto_resume:true,selected_providers:selectedProviders} : {}),
         });
         assertTransport();
         if (!result.granted) throw new Error("插件检查点未获确认");
