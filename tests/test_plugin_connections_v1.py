@@ -1317,3 +1317,54 @@ def test_stale_tab_cannot_access_replacement_accounts_plugins(tmp_path: Path):
         assert client.get("/api/user/plugins", headers={
             "X-Chat2API-User-ID": new["user_id"]
         }).status_code == 200
+
+def test_leased_plugin_tool_response_is_committed_before_http_ack(tmp_path: Path, monkeypatch):
+    from app.web_chat_conversations_v1 import install_web_chat_conversations_v1
+
+    app = make_app(tmp_path)
+    install_web_chat_conversations_v1(app)
+    oauth = app.state.plugin_oauth_store
+    oauth.save_provider("github", enabled=True, client_id="gh-client",
+                        client_secret="gh-secret", private_repos=False)
+    calls = []
+    class FakeResponse:
+        headers = {}
+        def raise_for_status(self): pass
+        def json(self):
+            return {"items": [{"full_name":"owner/repo", "html_url":"https://github.com/owner/repo",
+                               "description":"full result"}]}
+    class FakeClient:
+        def __init__(self, *args, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): return False
+        async def get(self, url, **kwargs):
+            calls.append(url)
+            return FakeResponse()
+    monkeypatch.setattr("app.plugin_connections_v1.httpx.AsyncClient", FakeClient)
+    with TestClient(app) as client:
+        user = register(client, "plugin-durable@example.com")
+        uid = user["user_id"]
+        oauth.save_connection(uid, "github", "42", "octocat", "token", "", ["read:user"], None)
+        store = app.state.web_chat_conversations
+        cid, mid, holder = "c2a_durable_plugin_123", "message_assistant_01", "holder_first"
+        assert store.plugin_task(uid, cid, mid, "claim", holder)["granted"]
+        args = {"query":"repo"}
+        checkpoint = {"rounds":1,"tool_calls":0,"tool_events":[],
+                      "plan":{"request_id":"req_plugin_plan_123","model":"gpt-6",
+                              "start_tool_calls":0,"calls":[{"name":"github.search_repositories","arguments":args}]}}
+        assert store.plugin_task(uid,cid,mid,"checkpoint",holder,checkpoint)["granted"]
+        headers = {**ORIGIN,"X-Chat2API-Plugin-Conversation":cid,
+                   "X-Chat2API-Plugin-Message":mid,"X-Chat2API-Plugin-Holder":holder,
+                   "X-Chat2API-Plugin-Round":"1"}
+        url = "/api/user/plugins/github/tools/search_repositories"
+        result = client.post(url,json=args,headers=headers)
+        assert result.status_code == 200, result.text
+        assert result.json()["data"][0]["description"] == "full result"
+        assert store.plugin_result(uid,cid,mid,holder,1,"github.search_repositories",args)["result"]["body"] == result.json()
+        assert client.post(url,json=args,headers=headers).json() == result.json()
+        assert len(calls) == 1
+        assert client.post(url,json={"query":"unplanned"},headers=headers).status_code == 409
+        assert client.post(url,json=args,headers={**headers,"X-Chat2API-Plugin-Holder":"stale_holder"}).status_code == 409
+        assert len(calls) == 1
+        oauth.disconnect(uid,"github")
+        assert client.post(url,json=args,headers=headers).status_code == 409
