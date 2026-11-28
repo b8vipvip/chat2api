@@ -1391,6 +1391,17 @@
     if (message?.type !== "chat2api.native.interaction") return false;
     const requestId=String(message.request_id || "");
     const context=nativeControlCaptureContexts.get(requestId);
+    if (context?.revision===Number(message.revision)) {
+      const current=globalThis.__CHAT2API_NATIVE_DOM_EVIDENCE_V1__?.replyRoots?.(context.active);
+      const target=nativeControlTargetsByRequest.get(requestId)?.get(context.revision)
+        ?.get(String(message.interaction_id || ""))?.element;
+      if (!Array.isArray(current?.roots) || current.roots.length!==context.roots.length ||
+          current.roots.some((root,index)=>root!==context.roots[index] || !root.isConnected) ||
+          !target || !context.roots.some(root=>root===target || root.contains?.(target))) {
+        sendResponse({ok:false,error:"native-interaction-reply-scope-changed"});
+        return false;
+      }
+    }
     const response=applyNativeInteraction(message);
     if (response.ok && !response.duplicate && context?.revision===Number(message.revision)) {
       response.recapture_status="unavailable";
