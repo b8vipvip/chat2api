@@ -37,6 +37,7 @@
     remoteSyncFingerprints: new Map(),
     remoteSyncRetryCounts: new Map(),
     remoteSyncWarned: false,
+    pendingConversationDeletes: new Set(),
     searchResults: null,
     searchQuery: "",
     searchController: null,
@@ -44,6 +45,8 @@
     searchWarned: false,
     voiceClient: null,
     voiceStarting: false,
+    voiceStopping: false,
+    voiceStartEpoch: 0,
     voiceActive: false,
     voicePanelVisible: false,
     voiceAssistantLine: null,
@@ -190,7 +193,7 @@
     start.disabled = state.streaming || state.voiceActive || !state.webChatKeyId || (!selectedKeyHasScope("audio") && !selectedKeyHasScope("chat"));
     start.classList.toggle("hidden", state.voiceActive);
     stop.classList.toggle("hidden", !state.voiceActive);
-    stop.disabled = !state.voiceActive || state.voiceStarting;
+    stop.disabled = !state.voiceActive || state.voiceStopping;
     camera.classList.toggle("hidden", !state.voiceActive || state.voiceStarting);
     camera.disabled = !state.voiceActive || state.voiceStarting || !selectedKeyHasScope("files");
     if (!selectedKeyHasScope("files")) camera.title = "服务端统一 API Key 缺少 files 权限";
@@ -202,6 +205,11 @@
   }
 
   function setVoiceUi(status, detail = "") {
+    // Camera cleanup can emit idle/ready before the actual call closes.
+    // Keep the UI bound to the stopping call until its terminal callback.
+    if (state.voiceStopping && status !== "closed" && status !== "stopping") return;
+    if (status === "idle" && state.voiceActive) return;
+    state.voiceStopping = status === "stopping";
     state.voiceStarting = status === "requesting_microphone" || status === "camera_starting";
     state.voiceActive = ["requesting_microphone","ready","camera_starting","camera_ready","stopping"].includes(status);
     if (status !== "idle") state.voicePanelVisible = true;
@@ -423,6 +431,8 @@
     $("voicePanel").classList.remove("hidden");
     $("voiceTranscript").replaceChildren();
     state.voiceAssistantLine = null;
+    const ownerId = String(state.user?.user_id || "");
+    const startEpoch = state.voiceStartEpoch = Number(state.voiceStartEpoch || 0) + 1;
     const client = voiceApi.create({
       sessionEndpoint:"/api/user/chat/voice-session",
       fileUploadEndpoint:"/api/user/chat/files",
@@ -432,8 +442,11 @@
       beforeConnect:async () => {
         try {
           const session = await apiJson("/api/user/me");
-          if (String(session.user?.user_id || "") === String(state.user?.user_id || "")) return;
+          if (state.voiceClient !== client || state.voiceStopping) throw new Error("语音启动已取消");
+          if (ownerId && String(session.user?.user_id || "") === ownerId &&
+              String(state.user?.user_id || "") === ownerId) return;
         } catch {}
+        if (state.voiceClient !== client || state.voiceStopping) throw new Error("语音启动已取消");
         state.user = null;
         $("sidebarAccount").hidden = true;
         state.voicePanelVisible = false;
@@ -445,20 +458,28 @@
         openLoginDialog();
         throw new Error("用户登录状态已失效，请重新登录后再使用实时语音");
       },
-      onState:(status,detail) => setVoiceUi(status,detail),
-      onEvent:handleVoiceEvent,
+      onState:(status,detail) => {
+        if (state.voiceClient === client) setVoiceUi(status,detail);
+      },
+      onEvent:payload => {
+        if (state.voiceClient === client) handleVoiceEvent(payload);
+      },
     });
     state.voiceClient = client;
     setVoiceUi("requesting_microphone","正在请求麦克风权限…");
     try {
       recordClientDiagnostic("voice.start_requested", {feature: "voice", phase: "connect"});
       await client.start();
+      if (state.voiceClient !== client || state.voiceStopping) return;
       recordClientDiagnostic("voice.started", {feature: "voice", phase: "connected"});
       state.voiceAuthTimer = window.setInterval(async () => {
+        if (state.voiceClient !== client || state.voiceStopping) return;
         try {
           const current = await apiJson("/api/user/me");
-          if (String(current.user?.user_id || "") === String(state.user?.user_id || "")) return;
+          if (ownerId && String(current.user?.user_id || "") === ownerId &&
+              String(state.user?.user_id || "") === ownerId) return;
         } catch {}
+        if (state.voiceClient !== client || state.voiceStopping) return;
         state.user = null;
         $("sidebarAccount").hidden = true;
         showOnly("authRequired");
@@ -470,9 +491,10 @@
         await stopVoiceCall();
       },60000);
     } catch (error) {
+      if (state.voiceStartEpoch !== startEpoch || (state.voiceClient && state.voiceClient !== client)) return;
       recordClientDiagnostic("voice.start_failed", {feature: "voice", phase: "connect", error_name: error?.name || "Error"}, "error");
-      await client.stop();
-      if (state.voiceClient === client) state.voiceClient = null;
+      try { await client.stop(); } catch {}
+      if (state.voiceStartEpoch !== startEpoch || (state.voiceClient && state.voiceClient !== client)) return;
       setVoiceUi("closed","实时语音启动失败：" + String(error?.message || error));
       toast("无法启动实时语音：" + String(error?.message || error));
     }
@@ -481,12 +503,13 @@
   async function stopVoiceCall() {
     const client = state.voiceClient;
     if (!client) { setVoiceUi("closed"); return; }
+    if (state.voiceStopping) return;
+    state.voiceStartEpoch = Number(state.voiceStartEpoch || 0) + 1;
     setVoiceUi("stopping","正在结束实时语音…");
     recordClientDiagnostic("voice.stop_requested", {feature: "voice", phase: "stop"});
     try { await client.stop(); recordClientDiagnostic("voice.stopped", {feature: "voice", phase: "closed"}); }
     catch (error) { recordClientDiagnostic("voice.stop_failed", {feature: "voice", phase: "stop", error_name: error?.name || "Error"}, "warning"); toast("结束语音时发生错误：" + String(error?.message || error)); }
-    if (state.voiceClient === client) state.voiceClient = null;
-    setVoiceUi("closed");
+    if (state.voiceClient === client) setVoiceUi("closed");
   }
 
   async function toggleVoiceCamera() {
@@ -505,8 +528,10 @@
     try {
       $("voiceCameraPreview").classList.remove("hidden");
       await client.startCamera($("voiceCameraPreview"));
+      if (state.voiceClient !== client || state.voiceStopping) return;
       $("voiceCameraButton").textContent = "关闭摄像头";
     } catch (error) {
+      if (state.voiceClient !== client || state.voiceStopping) return;
       $("voiceCameraPreview").classList.add("hidden");
       toast("无法开启摄像头：" + String(error?.message || error));
     }
@@ -1044,7 +1069,7 @@
   }
 
   function scheduleConversationSync(conversationId, delay = 450) {
-    if (!state.remoteSyncReady || !conversationId) return;
+    if (!state.remoteSyncReady || !conversationId || state.pendingConversationDeletes?.has(conversationId)) return;
     if (!state.conversations.some((row) => row.id === conversationId)) return;
     // A fresh user edit starts a new retry budget; automatic backoff calls use
     // a distinct delay and preserve the accumulated retry count.
@@ -1058,20 +1083,35 @@
     state.remoteSyncTimers.set(conversationId, timer);
   }
 
+  async function fetchConversationMutation(url, options) {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 20000);
+    try {
+      const response = await fetch(url, {...options, signal:controller.signal});
+      let result = {};
+      try { result = await response.json(); }
+      catch (error) { if (controller.signal.aborted) throw error; }
+      return {response,result};
+    } finally {
+      window.clearTimeout(timer);
+    }
+  }
+
   async function syncConversationToServer(conversationId) {
-    if (!state.remoteSyncReady) return;
+    if (!state.remoteSyncReady || state.pendingConversationDeletes?.has(conversationId)) return;
     if (state.remoteSyncInFlight.has(conversationId)) {
       state.remoteSyncAgain.add(conversationId);
       return;
     }
     const task = (async () => {
       for (let attempt = 0; attempt < 3; attempt += 1) {
+        if (state.pendingConversationDeletes?.has(conversationId)) return;
         const conversation = state.conversations.find((row) => row.id === conversationId);
         if (!conversation) return;
         const body = serverConversationPayload(conversation);
         const fingerprint = JSON.stringify(body);
         if (state.remoteSyncFingerprints.get(conversationId) === fingerprint) return;
-        const response = await fetch("/api/user/chat/conversations/" + encodeURIComponent(conversationId), {
+        const {response,result} = await fetchConversationMutation("/api/user/chat/conversations/" + encodeURIComponent(conversationId), {
           method: "PUT",
           credentials: "same-origin",
           headers: {"Content-Type":"application/json", "Accept":"application/json"},
@@ -1080,8 +1120,6 @@
             conversation: body,
           }),
         });
-        let result = {};
-        try { result = await response.json(); } catch {}
         if (response.status === 409 && result.conversation) {
           if (result.conversation.deleted === true) {
             state.conversations = state.conversations.filter((row) => row.id !== conversationId);
@@ -1146,43 +1184,72 @@
 
   async function deleteConversationFromServer(conversation) {
     const conversationId = conversation.id;
+    const storageKey = state.storageKey;
+    const pendingDeletes = state.pendingConversationDeletes;
+    const sameAccount = () => state.storageKey === storageKey && state.pendingConversationDeletes === pendingDeletes;
+    const restore = (row) => {
+      const index = state.conversations.findIndex(item => item.id === conversationId);
+      if (index >= 0) state.conversations[index] = row;
+      else state.conversations.unshift(row);
+      // Preserve the restored conversation even if another chat was created
+      // while DELETE was pending and evicted it from the recent window.
+      state.conversations = state.conversations.slice(0, MAX_CONVERSATIONS);
+      if (!state.activeConversationId) state.activeConversationId = row.id;
+      persistHistorySnapshot();
+    };
     const timer = state.remoteSyncTimers.get(conversationId);
     if (timer) window.clearTimeout(timer);
     state.remoteSyncTimers.delete(conversationId);
     state.remoteSyncRetryCounts.delete(conversationId);
-    const inFlight = state.remoteSyncInFlight.get(conversationId);
-    if (inFlight) {
-      try { await inFlight; } catch {}
-    }
-    const expectedRevision = Number(conversation.serverRevision || 0);
     try {
-      const response = await fetch("/api/user/chat/conversations/" + encodeURIComponent(conversationId) +
+      const inFlight = state.remoteSyncInFlight.get(conversationId);
+      if (inFlight) {
+        try { await inFlight; } catch {}
+      }
+      if (!sameAccount()) return;
+      const expectedRevision = Number(conversation.serverRevision || 0);
+      const {response,result} = await fetchConversationMutation("/api/user/chat/conversations/" + encodeURIComponent(conversationId) +
         "?expected_revision=" + encodeURIComponent(String(expectedRevision)), {
         method: "DELETE",
         credentials: "same-origin",
         headers: {"Accept":"application/json"},
       });
-      let result = {};
-      try { result = await response.json(); } catch {}
-      if (response.status === 409 && result.conversation && result.conversation.deleted !== true) {
-        const latest = normalizeConversationRow(result.conversation);
+      if (!sameAccount()) return;
+      const row = result.conversation;
+      if (response.status === 409 && row?.id === conversationId && row.deleted !== true) {
+        const latest = normalizeConversationRow(row);
         if (latest) {
           const restored = mergeConversation(latest, conversation);
-          if (!state.conversations.some((row) => row.id === conversationId)) {
-            state.conversations.unshift(restored);
-            state.conversations.sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
-            state.conversations = state.conversations.slice(0, MAX_CONVERSATIONS);
-          }
-          saveHistory();
-          renderAll();
+          restored.serverRevision = latest.serverRevision;
+          restore(restored);
           toast("该对话已在其他设备更新，已恢复最新版本；请再次确认删除。");
+          return;
         }
-        return;
       }
-      if (!response.ok) throw new Error(result.detail || "HTTP " + response.status);
+      // HTTP success alone is not proof of deletion (e.g. a proxy login page).
+      if (!response.ok || row?.id !== conversationId || row.deleted !== true) {
+        throw new Error(result.detail || "服务器未确认删除（HTTP " + response.status + "）");
+      }
+      state.conversations = state.conversations.filter(item => item.id !== conversationId);
+      // An older in-flight search can otherwise resurrect a just-deleted row.
+      if (state.searchController) state.searchController.abort();
+      state.searchController = null;
+      if (Array.isArray(state.searchResults)) {
+        state.searchResults = state.searchResults.filter(item => item.id !== conversationId);
+      }
       state.remoteSyncFingerprints.delete(conversationId);
+      state.remoteSyncAgain.delete(conversationId);
+      if (state.activeConversationId === conversationId) {
+        state.activeConversationId = state.conversations.find(item => !pendingDeletes.has(item.id))?.id || "";
+      }
+      persistHistorySnapshot();
     } catch (error) {
-      toast("对话已从当前设备移除，但服务器删除同步失败：" + error.message);
+      if (!sameAccount()) return;
+      restore(conversation);
+      toast("服务器未确认删除，已保留对话；请稍后重试：" + error.message);
+    } finally {
+      pendingDeletes.delete(conversationId);
+      if (sameAccount()) renderAll();
     }
   }
 
@@ -1201,6 +1268,10 @@
   }
 
   function createConversation() {
+    if (state.voiceActive) {
+      toast("请先结束实时语音，再新建对话。");
+      return currentConversation();
+    }
     if (state.streaming) {
       toast("请先停止当前生成，再新建对话。");
       return currentConversation();
@@ -1232,6 +1303,7 @@
   }
 
   function setActiveConversation(conversationId) {
+    if (state.pendingConversationDeletes.has(conversationId)) return;
     if (state.voiceActive) {
       toast("请先结束实时语音，再切换对话。");
       return;
@@ -1260,6 +1332,7 @@
   }
 
   function deleteConversation(conversationId) {
+    if (state.pendingConversationDeletes.has(conversationId)) return;
     if (state.voiceActive && conversationId === state.voiceConversationId) {
       toast("请先结束实时语音，再删除当前语音会话。");
       return;
@@ -1276,19 +1349,18 @@
       return;
     }
     if (!window.confirm("删除这段对话？删除会同步到你的其他设备。附件文件暂时保留，避免误删其他对话仍在使用的文件。")) return;
-    state.conversations = state.conversations.filter((row) => row.id !== conversationId);
-    if (Array.isArray(state.searchResults)) {
-      state.searchResults = state.searchResults.filter((row) => row.id !== conversationId);
-    }
+    // Hide the pending row from the interactive sidebar, but keep its
+    // persisted history until an owner-scoped server tombstone is confirmed.
+    state.pendingConversationDeletes.add(conversationId);
     if (state.activeConversationId === conversationId) {
-      state.activeConversationId = state.conversations[0]?.id || "";
+      state.activeConversationId = state.conversations.find(row => !state.pendingConversationDeletes.has(row.id))?.id || "";
     }
-    saveHistory();
     void deleteConversationFromServer(conversation);
     renderAll();
   }
 
   function renameConversation(conversationId) {
+    if (state.pendingConversationDeletes.has(conversationId)) return;
     const conversation = state.conversations.find((row) => row.id === conversationId);
     if (!conversation) return;
     const title = window.prompt("重命名对话", conversation.title);
@@ -1399,7 +1471,7 @@
           return local ? mergeConversation(row, local) : row;
         }).concat(localRows.filter((row) => !serverIds.has(row.id)))
       : localRows;
-    const rows = serverRows;
+    const rows = serverRows.filter(row => !state.pendingConversationDeletes?.has(row.id));
     if (!rows.length) {
       const empty = document.createElement("div");
       empty.className = "muted-empty";
@@ -4930,6 +5002,9 @@
 
   async function importConversationJson(file) {
     if (!file) return;
+    const canSwitch = () => !state.streaming && !state.voiceActive &&
+      !state.pendingImages.length && !state.pendingFiles.length;
+    if (!canSwitch()) throw new Error("请先结束生成或实时语音，并发送或移除待发送附件。");
     if (file.size > 5 * 1024 * 1024) throw new Error("JSON 会话文件超过 5 MiB 限制");
     let payload;
     try {
@@ -4937,6 +5012,7 @@
     } catch {
       throw new Error("JSON 会话文件格式无效");
     }
+    if (!canSwitch()) throw new Error("当前对话正在使用，请稍后导入。");
     const response = await fetch("/api/user/chat/conversations/import", {
       method: "POST",
       credentials: "same-origin",
@@ -4951,14 +5027,23 @@
     const imported = normalizeConversationRow(result.conversation);
     if (!imported) throw new Error("服务端返回的导入会话无效");
     imported.serverRevision = Number(result.conversation.revision || 0);
+    const active = currentConversation();
     state.conversations = [imported, ...state.conversations.filter((row) => row.id !== imported.id)]
       .slice(0, MAX_CONVERSATIONS);
-    state.activeConversationId = imported.id;
-    state.sidebarPage = "";
-    state.forceScrollToBottom = true;
-    state.searchResults = null;
-    state.searchQuery = "";
-    $("conversationSearch").value = "";
+    if (!canSwitch() && active && !state.conversations.some(row => row.id === active.id)) {
+      // A full recent window must not evict a conversation with a live turn.
+      state.conversations[MAX_CONVERSATIONS - 1] = active;
+    }
+    // If Voice/generation or an attachment started during the import request,
+    // retain the imported history without stealing the active conversation.
+    if (canSwitch()) {
+      state.activeConversationId = imported.id;
+      state.sidebarPage = "";
+      state.forceScrollToBottom = true;
+      state.searchResults = null;
+      state.searchQuery = "";
+      $("conversationSearch").value = "";
+    }
     state.remoteSyncFingerprints.set(imported.id, JSON.stringify(serverConversationPayload(imported)));
     persistHistorySnapshot();
     renderAll();

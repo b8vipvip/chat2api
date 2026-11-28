@@ -950,3 +950,53 @@ await budgetClient.stop();
 }
 
 console.log("web-chat-voice-client-v1-passed");
+
+
+// The outer Web Chat lifecycle must not let an old permission prompt or
+// asynchronous stop overwrite the UI or transcript of a new Voice client.
+{
+  const state={user:{user_id:"owner"},voiceActive:false,voiceStarting:false,voiceStopping:false,
+    webChatKeyId:"shared",voiceAuthTimer:null};
+  const calls=[], timers=new Map();
+  let nextTimer=0;
+  const element={classList:{add(){},remove(){},toggle(){}},replaceChildren(){},textContent:""};
+  const context=vm.createContext({
+    state,$:()=>element,
+    currentConversation:()=>({id:"chat",messages:[]}),selectedKeyHasScope:()=>true,
+    DEFAULT_VOICE_INSTRUCTIONS:"test",buildVoiceContext:()=>"",
+    apiJson:async()=>({user:{user_id:"owner"}}),
+    recordClientDiagnostic(){},toast(){},handleVoiceEvent:p=>calls.push(p),
+    setVoiceUi(status){
+      state.voiceActive=status!=="closed";
+      state.voiceStopping=status==="stopping";
+      if(status==="closed"){state.voiceClient=null;state.voiceAuthTimer=null;}
+    },
+    window:{
+      setInterval(fn){const id=++nextTimer;timers.set(id,fn);return id;},
+      Chat2APIVoiceClientV1:{create(options){
+        let resolveStart,rejectStart;
+        const startPromise=new Promise((resolve,reject)=>{resolveStart=resolve;rejectStart=reject;});
+        const client={options,resolveStart,rejectStart,start:()=>startPromise,stop:async()=>options.onState("closed")};
+        calls.push(client);return client;
+      }},
+    },
+  });
+  const start=chatClientSource.indexOf("  async function startVoiceCall(");
+  const end=chatClientSource.indexOf("  async function toggleVoiceCamera(",start);
+  const api=vm.runInContext(chatClientSource.slice(start,end)+"\n({startVoiceCall,stopVoiceCall})",context);
+  const oldStart=api.startVoiceCall();
+  const old=state.voiceClient;
+  await api.stopVoiceCall();
+  const newStart=api.startVoiceCall();
+  const current=state.voiceClient;
+  old.options.onState("closed");
+  old.options.onEvent({type:"stale"});
+  old.rejectStart(new Error("late permission rejection"));
+  await oldStart;
+  assert.equal(state.voiceClient,current);
+  assert.equal(state.voiceActive,true);
+  assert.equal(calls.some(x=>x.type==="stale"),false);
+  current.resolveStart();
+  await newStart;
+  assert.equal(timers.size,1);
+}

@@ -153,7 +153,7 @@ test("conversation sync retries transient transport failures with bounded backof
   let nextTimerId = 0;
   let calls = 0;
   const context = vm.createContext({
-    state,
+    state, AbortController,
     window:{
       setTimeout(callback,delay) {
         const id = ++nextTimerId;
@@ -230,7 +230,7 @@ test("conversation sync does not retry permanent client errors", async () => {
   const timers = new Map();
   let nextTimerId = 0;
   const context = vm.createContext({
-    state,
+    state, AbortController,
     window:{
       setTimeout(callback,delay) { const id=++nextTimerId;timers.set(id,{callback,delay});return id; },
       clearTimeout(id) { timers.delete(id); },
@@ -297,4 +297,135 @@ test("stale same-query search responses cannot overwrite a newer search", async 
   assert.equal(state.searchResults[0].id,"newer");
   assert.equal(warnings,0);
   assert.equal(renders,2);
+});
+
+
+function deleteHarness(fetcher) {
+  const row = {id:"c2a_delete_test_001",title:"original",serverRevision:3,messages:[{id:"m1",content:"unsynced text"}]};
+  const other = {id:"c2a_delete_test_002",title:"other",serverRevision:1,messages:[]};
+  const searchController = new AbortController();
+  const state = {
+    storageKey:"owner-a",conversations:[row,other],activeConversationId:row.id,
+    pendingConversationDeletes:new Set(),remoteSyncTimers:new Map(),remoteSyncRetryCounts:new Map(),
+    remoteSyncInFlight:new Map(),remoteSyncAgain:new Set(),remoteSyncFingerprints:new Map(),
+    searchResults:[row,other],searchController,pendingImages:[],pendingFiles:[],
+  };
+  const saves = [], warnings = [];
+  const context = vm.createContext({
+    state,MAX_CONVERSATIONS:15,AbortController,
+    window:{confirm:()=>true,setTimeout,clearTimeout},
+    fetch:fetcher,
+    normalizeConversationRow:value=>({...value,serverRevision:value.revision}),
+    mergeConversation:(server,local)=>({...local,...server}),
+    persistHistorySnapshot:()=>saves.push(state.conversations.map(item=>item.id)),
+    renderAll(){},toast:value=>warnings.push(value),
+  });
+  const deleteStart=source.indexOf("  async function deleteConversationFromServer(");
+  const deleteEnd=source.indexOf("  function saveHistory(",deleteStart);
+  const uiStart=source.indexOf("  function deleteConversation(");
+  const uiEnd=source.indexOf("  function renameConversation(",uiStart);
+  const mutationStart=source.indexOf("  async function fetchConversationMutation(");
+  const mutationEnd=source.indexOf("  async function syncConversationToServer(",mutationStart);
+  const api=vm.runInContext(source.slice(mutationStart,mutationEnd)+source.slice(deleteStart,deleteEnd)+source.slice(uiStart,uiEnd)+
+    "\n({deleteConversation,deleteConversationFromServer})",context);
+  return {state,row,other,api,saves,warnings,searchController};
+}
+
+test("conversation deletion retains local history until a verified server tombstone", async () => {
+  let resolve;
+  const h=deleteHarness(()=>new Promise(r=>{resolve=r;}));
+  h.api.deleteConversation(h.row.id);
+  assert.equal(h.state.pendingConversationDeletes.has(h.row.id),true);
+  assert.equal(h.state.conversations[0],h.row);
+  assert.equal(h.state.activeConversationId,h.other.id);
+  h.api.deleteConversation(h.row.id); // duplicate click must not dispatch again
+  resolve({ok:true,status:200,json:async()=>({conversation:{id:h.row.id,deleted:true,revision:4}})});
+  await new Promise(r=>setImmediate(r));
+  assert.equal(h.state.pendingConversationDeletes.size,0);
+  assert.equal(h.state.conversations.some(row=>row.id===h.row.id),false);
+  assert.equal(h.state.searchResults.some(row=>row.id===h.row.id),false);
+  assert.equal(h.searchController.signal.aborted,true);
+  assert.deepEqual(Array.from(h.saves.at(-1)),[h.other.id]);
+});
+
+test("failed or unconfirmed DELETE keeps the original conversation and clears the pending state", async () => {
+  for (const fetcher of [
+    async()=>{throw new Error("offline");},
+    async()=>({ok:true,status:200,json:async()=>({})}),
+    async()=>({ok:false,status:409,json:async()=>({conversation:null})}),
+  ]) {
+    const h=deleteHarness(fetcher);
+    h.api.deleteConversation(h.row.id);
+    await new Promise(r=>setImmediate(r));
+    assert.equal(h.state.pendingConversationDeletes.size,0);
+    assert.equal(h.state.conversations[0].messages[0].content,"unsynced text");
+    assert.equal(h.warnings.length,1);
+    assert.ok(h.saves.at(-1).includes(h.row.id));
+  }
+});
+
+test("delete conflict keeps the latest server revision for explicit reconfirmation", async () => {
+  const h=deleteHarness(async()=>({ok:false,status:409,json:async()=>({
+    conversation:{id:"c2a_delete_test_001",revision:7,title:"remote edit",messages:[]}
+  })}));
+  h.api.deleteConversation(h.row.id);
+  await new Promise(r=>setImmediate(r));
+  assert.equal(h.state.pendingConversationDeletes.size,0);
+  assert.equal(h.state.conversations[0].title,"remote edit");
+  assert.equal(h.state.conversations[0].serverRevision,7);
+  assert.match(h.warnings[0],/再次确认删除/);
+});
+
+test("import does not switch away from a Voice session started while import was in flight", async () => {
+  const state={streaming:false,voiceActive:false,pendingImages:[],pendingFiles:[],
+    activeConversationId:"voice-chat",conversations:[
+      ...Array.from({length:14},(_,i)=>({id:"older-"+i})),{id:"voice-chat"}
+    ],remoteSyncFingerprints:new Map()};
+  let resolve;
+  const context=vm.createContext({state,MAX_CONVERSATIONS:15,
+    fetch:()=>new Promise(r=>{resolve=r;}),
+    normalizeConversationRow:row=>({...row}),serverConversationPayload:row=>row,
+    currentConversation:()=>state.conversations.find(row=>row.id===state.activeConversationId),
+    persistHistorySnapshot(){},renderAll(){},toast(){},
+    $:()=>({value:""}),
+  });
+  const start=source.indexOf("  async function importConversationJson(");
+  const end=source.indexOf("  async function bootstrap(",start);
+  const run=vm.runInContext(source.slice(start,end)+"\nimportConversationJson",context);
+  const file={size:2,text:async()=>"{}"};
+  state.voiceActive=true;
+  await assert.rejects(run(file),/实时语音/);
+  state.voiceActive=false;
+  const task=run(file);
+  await new Promise(r=>setImmediate(r));
+  state.voiceActive=true;
+  resolve({ok:true,json:async()=>({conversation:{id:"imported",revision:1}})});
+  await task;
+  assert.equal(state.activeConversationId,"voice-chat");
+  assert.equal(state.conversations[0].id,"imported");
+  assert.equal(state.conversations.length,15);
+  assert.ok(state.conversations.some(row=>row.id==="voice-chat"));
+});
+
+
+test("conversation mutation timeout covers the response body and releases the timer", async () => {
+  let expire, cleared=0, signal;
+  const context=vm.createContext({
+    AbortController,window:{setTimeout(fn){expire=fn;return 1;},clearTimeout(){cleared++;}},
+    fetch:async(_url,options)=>{
+      signal=options.signal;
+      return {ok:true,json:()=>new Promise((_resolve,reject)=>{
+        signal.addEventListener("abort",()=>reject(new Error("aborted")),{once:true});
+      })};
+    },
+  });
+  const start=source.indexOf("  async function fetchConversationMutation(");
+  const end=source.indexOf("  async function syncConversationToServer(",start);
+  const mutate=vm.runInContext(source.slice(start,end)+"\nfetchConversationMutation",context);
+  const pending=mutate("/test",{method:"DELETE"});
+  await new Promise(r=>setImmediate(r));
+  expire();
+  await assert.rejects(pending,/aborted/);
+  assert.equal(signal.aborted,true);
+  assert.equal(cleared,1);
 });
