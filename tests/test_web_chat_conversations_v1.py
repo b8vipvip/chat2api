@@ -941,3 +941,41 @@ def test_plugin_expired_holder_stop_before_takeover_is_terminal(tmp_path: Path, 
     now[0] += 181
     assert store.plugin_task("alice", cid, mid, "interrupted", "holder_first")["granted"]
     assert not store.plugin_task("alice", cid, mid, "takeover", "holder_second")["granted"]
+
+def test_generated_retention_only_removes_aged_unreferenced_internal_web_chat_files(tmp_path: Path):
+    settings = Settings(CHAT2API_API_KEY="generated-retention-master-key", CHAT2API_DATA_DIR=str(tmp_path))
+    app = create_app(settings)
+    _install_web_chat_test_features(app)
+    with TestClient(app) as client:
+        client.headers.update({"Origin": "http://testserver"})
+        assert client.post("/api/user/register", json={
+            "email":"generated-retention-owner@example.test", "password":"generated-retention-password",
+        }).status_code == 200
+        session = client.get("/api/user/chat/session")
+        assert session.status_code == 200, session.text
+        internal_key = session.json()["key_id"]
+        owner_id = app.state.user_accounts.owner_for_key(internal_key)
+        mode2 = client.post("/api/user/keys", json={"name":"Mode 2 key"}).json()["key"]["key_id"]
+        archive = app.state.generated_files
+        def generated(name, key):
+            return archive.store(b"%PDF-1.7\nexample", name + ".pdf", "application/pdf", key, "req_" + name + "_archive")
+        orphan = generated("orphan", internal_key)
+        referenced = generated("referenced", internal_key)
+        external = generated("external", mode2)
+        recent = generated("recent", internal_key)
+        with sqlite3.connect(archive.db_path) as connection:
+            connection.executemany("UPDATE generated_files SET created_at=? WHERE id=?",
+                [("2020-01-01T00:00:00+00:00", row["id"]) for row in (orphan,referenced,external)])
+        conversation = _conversation("c2a_generated_retention_ref")
+        conversation["messages"][1]["requestId"] = "req_referenced_archive"
+        assert app.state.web_chat_conversations.upsert(owner_id, conversation, 0)[0]
+        app.state.web_chat_conversations.set_retention_days(30)
+    # Fresh process startup invokes the real retention path against durable rows.
+    reopened = create_app(settings)
+    _install_web_chat_test_features(reopened)
+    with TestClient(reopened):
+        archive = reopened.state.generated_files
+        assert archive.deletion_identity(orphan["id"]) is None
+        assert archive.deletion_identity(referenced["id"]) is not None
+        assert archive.deletion_identity(external["id"]) is not None
+        assert archive.deletion_identity(recent["id"]) is not None
