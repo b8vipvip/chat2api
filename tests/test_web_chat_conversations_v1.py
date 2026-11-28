@@ -540,8 +540,8 @@ def test_conversation_attachment_references_protect_files_until_last_cross_devic
 
         @contextmanager
         def checked_reference_guard():
-            # The reference database must be locked before the file store.
-            assert not app.state.file_store.lock._is_owned()
+            # Save, delete, retention and library listing all take FileStore first.
+            assert app.state.file_store.lock._is_owned()
             guard_calls.append(True)
             with original_guard() as referenced:
                 yield referenced
