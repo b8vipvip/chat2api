@@ -5133,7 +5133,7 @@
         const toolEvents = normalizeToolEvents(assistant.toolEvents,"assistant")
           .filter(event => ["completed","failed"].includes(event.status));
         const result = await pluginTaskOperation(conversation,assistant,"checkpoint",holder,{
-          rounds,tool_calls:toolCalls,tool_events:toolEvents,...(plan ? {plan} : {}),
+          rounds,tool_calls:toolCalls,tool_events:toolEvents,...(plan ? {plan,auto_resume:true} : {}),
         });
         assertTransport();
         if (!result.granted) throw new Error("插件检查点未获确认");
@@ -5192,7 +5192,7 @@
           if (String(state.user?.user_id || "") !== owner || state.streaming || state.voiceActive ||
               !state.conversations.includes(conversation) || !conversation.messages.includes(message) ||
               !message.pending || message.recoveryStatus !== "tool_planning") return;
-          if (task.state === "running") continue;
+          if (task.state === "running" || task.recoverable === true) continue;
           if (task.state === "missing") {
             const key = JSON.stringify([owner,conversation.id,message.id]);
             const now = Date.now();
