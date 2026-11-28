@@ -15,6 +15,8 @@
   const SESSION_READY_TIMEOUT_MS = 90000;
   const SESSION_CREATE_TIMEOUT_MS = 20000;
   const VIDEO_UPLOAD_TIMEOUT_MS = 15000;
+  const HEARTBEAT_INTERVAL_MS = 20000;
+  const HEARTBEAT_TIMEOUT_MS = 40000;
   const DEFAULT_SESSION_INSTRUCTIONS = "请用自然、清晰、简洁的中文与用户进行实时语音对话。需要时结合用户提供的摄像头画面回答。";
   const MAX_SESSION_INSTRUCTIONS_CHARS = 4000;
   const MAX_SESSION_CONTEXT_CHARS = 8000;
@@ -135,6 +137,8 @@
     let cameraStream = null;
     let cameraTimer = null;
     let heartbeatTimer = null;
+    let heartbeatPending = null;
+    let heartbeatSequence = 0;
     let videoElement = null;
     let canvas = null;
     let nextPlaybackTime = 0;
@@ -323,6 +327,7 @@
         if (readyTimeoutId !== null) timers.clearTimeout(readyTimeoutId);
         if (closeTimeoutId !== null) timers.clearTimeout(closeTimeoutId);
         heartbeatTimer = null;
+        heartbeatPending = null;
         readyTimeoutId = null;
         closeTimeoutId = null;
         stopCamera();
@@ -349,6 +354,10 @@
     }
     function handleJson(payload) {
       if (!payload || typeof payload !== "object") return;
+      if (payload.type === "pong") {
+        if (heartbeatPending && payload.timestamp === heartbeatPending.id) heartbeatPending = null;
+        return;
+      }
       if (payload.type === "session.ready") {
         if (cleaned || stopping) {
           // A late ready frame must not resurrect a session that the user has
@@ -565,6 +574,10 @@
         };
         currentSocket.onclose = () => {
           if (!isCurrentSocket()) return;
+          if (ready && !stopping && !cleaned) {
+            event({type:"client.error",code:"GPT_LIVE_TRANSPORT_LOST",retryable:true,
+              message:"实时语音连接意外关闭。"});
+          }
           if (readyReject) {
             readyReject(new Error("GPT-Live 连接在就绪前关闭"));
             readyReject = null;
@@ -584,8 +597,24 @@
       if (!ready) throw new Error("GPT-Live 会话未能保持连接");
       startMicrophonePipeline();
       heartbeatTimer = timers.setInterval(() => {
-        sendJson({type:"ping",timestamp:Date.now()});
-      },20000);
+        if (cleaned || stopping || !ready) return;
+        const at = monotonicNow();
+        if (heartbeatPending && at - heartbeatPending.sentAt < HEARTBEAT_TIMEOUT_MS) return;
+        try {
+          if (!heartbeatPending) {
+            const id = ++heartbeatSequence;
+            if (sendJson({type:"ping",timestamp:id})) {
+              heartbeatPending = {id,sentAt:at};
+              return;
+            }
+          }
+        } catch {}
+        // No response from the server: stop capture and preserve transcript
+        // rather than silently pretending the original upstream call survived.
+        event({type:"client.error",code:"GPT_LIVE_TRANSPORT_LOST",retryable:true,
+          message:"实时语音连接超时，已停止采集；请重新开始通话以继续。"});
+        void cleanup();
+      },HEARTBEAT_INTERVAL_MS);
       started = true;
       state("ready","麦克风已连接");
       } catch (error) {

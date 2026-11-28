@@ -400,10 +400,11 @@
     const group=String(control.group || "");
     if (control.selected && group) context.tabSelection.set(group,element);
     if (!interactionId || typeof context?.onInteraction!=="function") return false;
-    let pending=false;
     element.addEventListener("click",async()=>{
-      if (pending || element.getAttribute("aria-selected")==="true") return;
-      pending=true;
+      // All siblings share one upstream selected tab and snapshot revision.
+      // Do not dispatch a second selection until the first ACK settles.
+      if (context.pendingTabGroups.has(group) || element.getAttribute("aria-selected")==="true") return;
+      context.pendingTabGroups.add(group);
       element.setAttribute("aria-busy","true");
       try {
         const result=await context.onInteraction({
@@ -431,7 +432,7 @@
         element.setAttribute("aria-invalid","true");
         element.setAttribute("title","标签切换同步失败，请重试");
       } finally {
-        pending=false;
+        context.pendingTabGroups.delete(group);
         element.removeAttribute?.("aria-busy");
       }
     });
@@ -659,7 +660,7 @@
       state.textContent = (snapshot.finality === "verified-final" ? "ChatGPT 原生内容 · 已验证完成" : "ChatGPT 原生内容 · 实时更新，最终校验中") +
         (hasLocalOnlyControls(snapshot.root,onInteraction) ? " · 部分控件仅在本地预览" : "");
       const root = document.createElement("div"); root.className = "native-rich-root";
-      root.appendChild(createNode(snapshot.root,snapshot,0,{radioGroups:new Map(),radioSelection:new Map(),radioIndex:0,tabSelection:new Map(),prefix:"native-"+(++renderSequence),onInteraction,revision:snapshot.revision}));
+      root.appendChild(createNode(snapshot.root,snapshot,0,{radioGroups:new Map(),radioSelection:new Map(),radioIndex:0,tabSelection:new Map(),pendingTabGroups:new Set(),prefix:"native-"+(++renderSequence),onInteraction,revision:snapshot.revision}));
       const files = document.createElement("div"); files.className = "native-generated-files";
       for (const item of snapshot.files) {
         if (!item || typeof item !== "object" || typeof item.filename !== "string") continue;

@@ -624,7 +624,7 @@ const historyContext = vm.createContext({
   Date,
 });
 const historyUi = vm.runInContext(
-  chatClientSource.slice(appendStart,appendEnd) + "\n({persistVoiceTranscript,handleVoiceEvent})",
+  chatClientSource.slice(appendStart,appendEnd) + "\n({persistVoiceTranscript,handleVoiceEvent,checkpointVoiceTranscript})",
   historyContext,
 );
 historyUi.handleVoiceEvent({type:"transcript.final",text:"请帮我总结今天的会议"});
@@ -669,6 +669,25 @@ assert.equal(voiceConversation.messages[4].content,"最后一个未被轮询捕�
 assert.equal(voiceConversation.messages[4].recoveryStatus,"voice_partial");
 assert.equal(historyState.voiceAssistantPersisted,false,
   "the persistence guard must reset after a completed turn before the next interruption");
+
+historyState.voiceActive = true;
+historyUi.handleVoiceEvent({type:"response.created"});
+historyUi.handleVoiceEvent({type:"response.text.delta",delta:"保存中的部分回复"});
+historyUi.checkpointVoiceTranscript();
+const checkpoint = voiceConversation.messages.at(-1);
+assert.equal(checkpoint.recoveryStatus,"voice_checkpoint");
+assert.equal(voiceConversation.messages.length,6);
+historyUi.handleVoiceEvent({type:"response.text.replace",text:"较新的部分回复"});
+historyUi.checkpointVoiceTranscript();
+assert.equal(voiceConversation.messages.at(-1).id,checkpoint.id);
+assert.equal(voiceConversation.messages.at(-1).content,"较新的部分回复");
+assert.equal(voiceConversation.messages.length,6);
+historyUi.handleVoiceEvent({type:"response.done",text:"最终语音回复"});
+assert.equal(voiceConversation.messages.at(-1).id,checkpoint.id);
+assert.equal(voiceConversation.messages.at(-1).content,"最终语音回复");
+assert.equal(voiceConversation.messages.at(-1).recoveryStatus,"completed");
+assert.equal(voiceConversation.messages.length,6);
+assert.match(buildVoiceContext({messages:[{role:"assistant",content:"partial",recoveryStatus:"voice_checkpoint"}]}),/未确认完整的语音转录/);
 
 const setVoiceUiStart = chatClientSource.indexOf("  function setVoiceUi(");
 const setVoiceUiEnd = chatClientSource.indexOf("  function appendVoiceTranscript(",setVoiceUiStart);
@@ -1128,4 +1147,63 @@ for (const mode of ["headers","body","stop"]) {
   await new Promise(r=>setTimeout(r,10));
   assert.equal(socket.sent.filter(x=>typeof x==="string" && JSON.parse(x).type==="input_video.frame").length,1);
   await cameraClient.stop();
+}
+
+
+// A half-open public WebSocket must not leave the microphone recording
+// indefinitely after a broker/transport outage; only a matching pong clears
+// the outstanding heartbeat.
+{
+  const events=[];
+  const watchdog=api.create({
+    apiToken:"managed-key",fetcher,WebSocketImpl:FakeWebSocket,AudioContextImpl:FakeAudioContext,
+    mediaDevices,location:window.location,timers,now:()=>clock,onEvent:event=>events.push(event),
+  });
+  await watchdog.start();
+  const ws=FakeWebSocket.last;
+  const tick=[...intervalCallbacks.values()].find(value=>value.ms===20000);
+  assert.ok(tick);
+  tick.fn();
+  const first=JSON.parse(ws.sent.at(-1));
+  assert.equal(first.type,"ping");
+  ws.onmessage({data:JSON.stringify({type:"pong",timestamp:first.timestamp})});
+  clock+=20000;
+  tick.fn();
+  const second=JSON.parse(ws.sent.at(-1));
+  assert.notEqual(second.timestamp,first.timestamp);
+  ws.onmessage({data:JSON.stringify({type:"pong",timestamp:first.timestamp})});
+  clock+=40000;
+  tick.fn();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(watchdog.isActive(),false);
+  assert.ok(events.some(event=>event.type==="client.error" && /连接超时/.test(event.message)));
+}
+
+
+// Only an existing call can schedule a bounded reconnect.
+{
+  const state={user:{user_id:"owner"},voiceStartEpoch:7,voiceActive:false};
+  const conversation={id:"chat"};
+  const timers=new Map();let serial=0,starts=0;
+  const ctx=vm.createContext({state,currentConversation:()=>conversation,
+    window:{document:{visibilityState:"visible"},setTimeout(fn){timers.set(++serial,fn);return serial;},
+      clearTimeout(id){timers.delete(id);}},
+    $:()=>({textContent:""}),updateVoiceControls(){},apiJson:async()=>({user:{user_id:"owner"}}),
+    startVoiceCall:async()=>{starts++;},
+  });
+  const start=chatClientSource.indexOf("  function cancelVoiceReconnect(");
+  const end=chatClientSource.indexOf("  async function toggleVoiceCamera(",start);
+  const api=vm.runInContext(chatClientSource.slice(start,end)+"\n({scheduleVoiceReconnect,cancelVoiceReconnect})",ctx);
+  api.scheduleVoiceReconnect("owner","chat",7,1);
+  assert.equal(timers.size,1);
+  const stale=[...timers.values()][0];
+  api.cancelVoiceReconnect();
+  await stale();
+  assert.equal(starts,0);
+  api.scheduleVoiceReconnect("owner","chat",7,4);
+  assert.equal(state.voiceReconnectTicket,null);
+  api.scheduleVoiceReconnect("owner","chat",7,1);
+  const next=[...timers.values()][0];
+  await next();
+  assert.equal(starts,1);
 }

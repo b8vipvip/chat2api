@@ -722,6 +722,9 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
         ):
             raise HTTPException(status_code=403, detail="附件删除必须使用同源用户会话请求")
         user = current_user(request)
+        expected_owner = request.headers.get("X-Chat2API-User-ID")
+        if expected_owner is not None and expected_owner != str(user["user_id"]):
+            raise HTTPException(status_code=409, detail="Web Chat 账户已切换，请刷新页面")
         file_store = app.state.file_store
         item = file_store.get(file_id)
         allowed_image_types = {"image/png", "image/jpeg", "image/webp", "image/gif"}

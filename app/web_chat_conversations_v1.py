@@ -1,18 +1,20 @@
 """Durable, owner-scoped persistence for the Mode 1 Web Chat conversation list."""
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import sqlite3
 import stat
 import threading
+import time
 from contextlib import closing, contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from .admin_auth import same_origin_admin_request
 from .private_storage import secure_private_sqlite_files
@@ -158,7 +160,7 @@ def _normalize_tool_events(value: Any, role: str) -> list[dict[str, Any]]:
             "toolName": tool_name, "callId": call_id, "resultId": result_id,
             "status": status, "arguments": arguments, "output": output,
         }
-        preview = _bounded_string(item.get("resultPreview", ""), "tool result preview", 2000)
+        preview = _bounded_string(item.get("resultPreview", ""), "tool result preview", 6000)
         if preview:
             normalized["resultPreview"] = preview
         references = normalize_tool_references(item.get("references"))
@@ -419,6 +421,93 @@ class WebChatConversationStoreV1:
                 (_now(),),
             )
             connection.execute("PRAGMA user_version=3")
+            # Additive schema: triggers participate in the same transaction
+            # as conversation writes, including retention and other processes.
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS web_chat_change_generations (
+                    user_id TEXT PRIMARY KEY, generation INTEGER NOT NULL
+                )
+            """)
+            for operation, owner in (("INSERT", "NEW"), ("UPDATE", "NEW"), ("DELETE", "OLD")):
+                connection.execute(f"""
+                    CREATE TRIGGER IF NOT EXISTS web_chat_change_{operation.lower()}
+                    AFTER {operation} ON web_chat_conversations
+                    BEGIN
+                        INSERT INTO web_chat_change_generations(user_id, generation)
+                        VALUES ({owner}.user_id, 1)
+                        ON CONFLICT(user_id) DO UPDATE SET generation=generation+1;
+                    END
+                """)
+
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS web_chat_plugin_tasks (
+                    user_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
+                    message_id TEXT NOT NULL, holder TEXT NOT NULL,
+                    state TEXT NOT NULL, expires_at REAL NOT NULL,
+                    PRIMARY KEY(user_id, conversation_id, message_id)
+                )
+            """)
+
+    def plugin_task(self, user_id: str, conversation_id: str, message_id: str,
+                    operation: str, holder: str = "") -> dict[str, Any]:
+        # Lease authority is persisted in SQLite, never in browser localStorage.
+        # An expired holder cannot renew or complete its old task.
+        with self.lock, closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            now = time.time()
+            key = (user_id, conversation_id, message_id)
+            deleted = connection.execute(
+                "SELECT deleted FROM web_chat_conversations WHERE user_id=? AND conversation_id=?",
+                key[:2],
+            ).fetchone()
+            if deleted and deleted["deleted"]:
+                connection.rollback()
+                return {"state": "deleted", "granted": False}
+            row = connection.execute(
+                "SELECT holder, state, expires_at FROM web_chat_plugin_tasks "
+                "WHERE user_id=? AND conversation_id=? AND message_id=?", key,
+            ).fetchone()
+            state = str(row["state"]) if row else "missing"
+            if state == "running" and float(row["expires_at"]) <= now:
+                state = "interrupted"
+                connection.execute(
+                    "UPDATE web_chat_plugin_tasks SET state='interrupted' "
+                    "WHERE user_id=? AND conversation_id=? AND message_id=?", key,
+                )
+            granted = False
+            if operation == "claim" and not row:
+                active = connection.execute(
+                    "SELECT COUNT(*) FROM web_chat_plugin_tasks WHERE user_id=? "
+                    "AND state='running' AND expires_at>?", (user_id, now),
+                ).fetchone()[0]
+                if active < 20:
+                    connection.execute(
+                        "INSERT INTO web_chat_plugin_tasks VALUES (?,?,?,?,'running',?)",
+                        (*key, holder, now + 180),
+                    )
+                    state, granted = "running", True
+            elif row and state == "running" and holder and row["holder"] == holder:
+                if operation in {"claim", "renew"}:
+                    connection.execute(
+                        "UPDATE web_chat_plugin_tasks SET expires_at=? "
+                        "WHERE user_id=? AND conversation_id=? AND message_id=?", (now + 180, *key),
+                    )
+                    granted = True
+                elif operation in {"completed", "interrupted"}:
+                    state, granted = operation, True
+                    connection.execute(
+                        "UPDATE web_chat_plugin_tasks SET state=?,expires_at=0 "
+                        "WHERE user_id=? AND conversation_id=? AND message_id=?", (state, *key),
+                    )
+            connection.commit()
+            return {"state": state, "granted": granted}
+
+    def change_generation(self, user_id: str) -> int:
+        with self.lock, closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT generation FROM web_chat_change_generations WHERE user_id=?", (user_id,)
+            ).fetchone()
+            return int(row["generation"]) if row else 0
 
     def _connect(self) -> sqlite3.Connection:
         self._secure_sqlite_files(create_database=True)
@@ -463,6 +552,32 @@ class WebChatConversationStoreV1:
                 (user_id, _MAX_CONVERSATIONS_RETURNED),
             ).fetchall()
             return [self._decode(row) for row in rows if row is not None]
+
+    def delta_for_user(self, user_id: str, known: dict[str, int]) -> list[dict[str, Any]]:
+        """Return changed recent rows and changes to any client-known ID.
+
+        A single SQLite read transaction keeps the recent window and explicit
+        tombstones consistent, including deleted rows outside that window.
+        """
+        with self.lock, closing(self._connect()) as connection:
+            connection.execute("BEGIN")
+            candidates = connection.execute(
+                """SELECT conversation_id, revision, deleted, payload
+                   FROM web_chat_conversations WHERE user_id=? AND deleted=0
+                   ORDER BY updated_at DESC, conversation_id ASC LIMIT 15""",
+                (user_id,),
+            ).fetchall()
+            if known:
+                placeholders = ",".join("?" for _ in known)
+                candidates += connection.execute(
+                    f"""SELECT conversation_id, revision, deleted, payload
+                        FROM web_chat_conversations WHERE user_id=?
+                          AND conversation_id IN ({placeholders})""",
+                    (user_id, *known),
+                ).fetchall()
+            unique = {row["conversation_id"]: row for row in candidates}
+            return [self._decode(row) for cid, row in unique.items()
+                    if known.get(cid) != int(row["revision"]) or bool(row["deleted"])]
 
     def retention_policy(self) -> dict[str, Any]:
         with self.lock, closing(self._connect()) as connection:
@@ -648,6 +763,18 @@ class WebChatConversationStoreV1:
                     (user_id, file_id),
                 ).fetchone()
             return int(row["count"] or 0) if row else 0
+
+    def list_file_references_for_user(self, user_id: str, after: str, limit: int) -> list[dict[str, Any]]:
+        if not 1 <= limit <= 100 or (after and not _FILE_ID_RE.fullmatch(after)):
+            raise ValueError("invalid library page")
+        with self.lock, closing(self._connect()) as connection:
+            rows = connection.execute(
+                """SELECT file_id, ref_count FROM web_chat_file_references
+                   WHERE user_id=? AND ref_count>0 AND file_id>?
+                   ORDER BY file_id ASC LIMIT ?""",
+                (user_id, after, limit + 1),
+            ).fetchall()
+            return [dict(row) for row in rows]
 
     def referenced_file_ids(self) -> set[str]:
         with self.lock, closing(self._connect()) as connection:
@@ -851,6 +978,128 @@ def install_web_chat_conversations_v1(app: FastAPI) -> None:
         _, user = current_user(request)
         rows = store.list_for_user(str(user["user_id"]))
         return JSONResponse({"data": rows}, headers=_PRIVATE_HEADERS)
+
+    @app.post("/api/user/chat/conversations/plugin-task")
+    async def user_chat_plugin_task(request: Request):
+        _, user = current_user(request)
+        if user.get("is_guest") or not same_origin_admin_request(request):
+            raise HTTPException(status_code=403, detail="authenticated same-origin request required", headers=_PRIVATE_HEADERS)
+        try:
+            body = json.loads(await _read_bounded_request_body(request, 4096))
+            cid, mid = body["conversation_id"], body["message_id"]
+            operation, holder = body["operation"], body.get("holder", "")
+            if (not _CONVERSATION_ID_RE.fullmatch(cid) or not _MESSAGE_ID_RE.fullmatch(mid)
+                    or operation not in {"claim", "renew", "completed", "interrupted", "status"}
+                    or (operation != "status" and not _MESSAGE_ID_RE.fullmatch(holder))):
+                raise ValueError("invalid task")
+        except (ValueError, KeyError, TypeError, AttributeError, UnicodeDecodeError):
+            raise HTTPException(status_code=422, detail="invalid plugin task", headers=_PRIVATE_HEADERS)
+        result = store.plugin_task(str(user["user_id"]), cid, mid, operation, holder)
+        return JSONResponse(result, headers=_PRIVATE_HEADERS)
+
+    @app.get("/api/user/chat/conversations/changes")
+    async def stream_user_chat_changes(request: Request):
+        accounts, user = current_user(request)
+        owner = str(user["user_id"])
+        if request.headers.get("sec-fetch-site") not in {None, "", "same-origin", "none"}:
+            raise HTTPException(status_code=403, detail="same-origin stream required", headers=_PRIVATE_HEADERS)
+        cookie = request.cookies.get(USER_SESSION_COOKIE)
+
+        async def events():
+            previous = None
+            # No text or identifiers are streamed. Initial invalidation
+            # covers missed notifications. EventSource reconnects on EOF.
+            for tick in range(30):
+                if await request.is_disconnected():
+                    return
+                current = accounts.authenticate(cookie)
+                if not current or str(current["user_id"]) != owner:
+                    return
+                generation = await asyncio.to_thread(store.change_generation, owner)
+                if generation != previous:
+                    previous = generation
+                    yield "event: changed\ndata: {}\n\n"
+                elif tick % 10 == 0:
+                    yield ": heartbeat\n\n"
+                await asyncio.sleep(1)
+
+        return StreamingResponse(events(), media_type="text/event-stream",
+                                 headers={**_PRIVATE_HEADERS, "X-Accel-Buffering": "no"})
+
+    @app.post("/api/user/chat/conversations/delta")
+    async def delta_user_chat_conversations(request: Request):
+        _, user = current_user(request)
+        if not same_origin_admin_request(request):
+            raise HTTPException(status_code=403, detail="same-origin request required", headers=_PRIVATE_HEADERS)
+        raw = await _read_bounded_request_body(request, 16384)
+        try:
+            payload = json.loads(raw)
+            known = payload.get("known") if isinstance(payload, dict) else None
+            if (not isinstance(known, dict) or len(known) > 50
+                    or any(not _CONVERSATION_ID_RE.fullmatch(cid)
+                           or type(revision) is not int or not 0 <= revision <= 2**53 - 1
+                           for cid, revision in known.items())):
+                raise ValueError("invalid revision manifest")
+        except (ValueError, TypeError, UnicodeDecodeError):
+            raise HTTPException(status_code=422, detail="invalid revision manifest", headers=_PRIVATE_HEADERS)
+        return JSONResponse({"data": store.delta_for_user(str(user["user_id"]), known)},
+                            headers=_PRIVATE_HEADERS)
+
+    @app.get("/api/user/chat/library")
+    async def list_user_chat_library(request: Request):
+        accounts, user = current_user(request)
+        user_id = str(user["user_id"])
+        try:
+            limit = int(request.query_params.get("limit") or "50")
+            after = str(request.query_params.get("after") or "")
+            scope = str(request.query_params.get("scope") or "referenced")
+            if scope not in {"referenced", "unreferenced"} or not 1 <= limit <= 100 or (after and not _FILE_ID_RE.fullmatch(after)):
+                raise ValueError("invalid library page")
+            refs = store.list_file_references_for_user(user_id, after, limit) if scope == "referenced" else []
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="invalid library page", headers=_PRIVATE_HEADERS)
+        file_store = getattr(request.app.state, "file_store", None)
+        if file_store is None:
+            raise HTTPException(status_code=503, detail="file service unavailable", headers=_PRIVATE_HEADERS)
+        if scope == "unreferenced":
+            # Do not expose newly uploaded drafts to cleanup actions. Only
+            # older, browser-originated attachments are eligible for listing.
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+            # Match upsert/deletion lock ordering: reference DB first,
+            # then file store. The inverse order can deadlock a concurrent
+            # conversation save while the library enumerates orphan files.
+            with store.file_reference_snapshot_guard() as referenced, file_store.lock:
+                candidates = []
+                for item in sorted(file_store.items.values(), key=lambda row: row.file_id):
+                    if (item.file_id <= after or item.file_id in referenced or item.source != "web_chat"
+                            or item.pending_delete or not accounts.owns_key(user_id, str(item.owner_key_id))):
+                        continue
+                    try:
+                        created = datetime.fromisoformat(item.created_at.replace("Z", "+00:00"))
+                        if created.tzinfo is None or created > cutoff:
+                            continue
+                    except (ValueError, TypeError, OverflowError):
+                        continue
+                    candidates.append(item)
+                    if len(candidates) > limit:
+                        break
+                return JSONResponse({
+                    "data": [{**item.public(), "reference_count": 0} for item in candidates[:limit]],
+                    "next_cursor": candidates[limit-1].file_id if len(candidates) > limit else None,
+                }, headers=_PRIVATE_HEADERS)
+        data = []
+        for ref in refs[:limit]:
+            item = file_store.get(ref["file_id"])
+            if (item is None or item.pending_delete
+                    or not accounts.owns_key(user_id, str(item.owner_key_id))):
+                continue
+            data.append({**item.public(), "reference_count": int(ref["ref_count"])})
+        # Advance by the index cursor, even when a missing or unauthorized
+        # storage row was omitted. The next page must never repeat a gap.
+        return JSONResponse({
+            "data": data,
+            "next_cursor": refs[limit - 1]["file_id"] if len(refs) > limit else None,
+        }, headers=_PRIVATE_HEADERS)
 
     @app.get("/api/user/chat/conversations/search")
     async def search_user_chat_conversations(request: Request):

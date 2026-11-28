@@ -12,9 +12,11 @@ assert.ok(start >= 0 && end > start);
 const delta = (text) => "data: " + JSON.stringify({choices: [{delta: {content: text}}]});
 const terminal = "data: [DONE]";
 
-async function send(chunks, close = true, onCancel = () => {}) {
+async function send(chunks, close = true, onCancel = () => {}, scenario = {}) {
   const conversation = {id: "conversation-test", messages: []};
   const messages = [];
+  const leaseOperations = [];
+  let plannerCalls = 0;
   const body = new ReadableStream({
     start(controller) {
       const encoder = new TextEncoder();
@@ -35,6 +37,7 @@ async function send(chunks, close = true, onCancel = () => {}) {
       selectedModel: "test-model",
       models: [{id:"test-model",capabilities:["text"]}],
       streaming: false,
+      selectedPlugins: scenario.pluginFailure || scenario.cancelDuringClaim ? ["github"] : [],
       recoveryInFlight: new Set(),
       pendingImages: [],
       pendingImagesConversationId: "",
@@ -53,7 +56,27 @@ async function send(chunks, close = true, onCancel = () => {}) {
     showOnly() {},
     id: () => String(conversation.messages.length),
     apiJson: async () => ({user: {user_id: "user-a"}}),
-    fetch: async () => ({ok: true, body}),
+    fetch: async () => {
+      if (scenario.networkFailure) throw new Error("connection lost before headers");
+      return {ok: true, body};
+    },
+    // Exercise the actual lease wrapper declared inside the extracted source.
+    fetchConversationMutation: async (_url, options) => {
+      const operation = JSON.parse(options.body).operation;
+      leaseOperations.push(operation);
+      if (operation === "claim" && scenario.cancelDuringClaim) {
+        context.state.abortController.abort();
+      }
+      return {response:{ok:true},result:{
+        state: operation === "claim" || operation === "renew" ? "running" : operation,
+        granted:true,
+      }};
+    },
+    runAutonomousPluginToolLoop: async (_messages,assistant) => {
+      plannerCalls += 1;
+      assistant.toolEvents.push({callId:"plugin-call",status:"completed"});
+      throw new Error("planner interrupted");
+    },
     toast: (message) => messages.push(message),
     $: () => node,
     autoTitle() {},
@@ -68,6 +91,8 @@ async function send(chunks, close = true, onCancel = () => {}) {
     window: {
       clearTimeout() {},
       setTimeout() { return 0; },
+      setInterval() { return 1; },
+      clearInterval() {},
       Chat2APIStreamRecoveryV1: {
         createRequestId: () => "req_request_test",
         create: () => ({resume: async () => ({status: "recovery_timeout", terminal: false})}),
@@ -86,6 +111,12 @@ async function send(chunks, close = true, onCancel = () => {}) {
     messages,
     replies: conversation.messages.filter(({role}) => role === "assistant").map(({content}) => content),
     locked: body.locked,
+    ...(scenario.networkFailure || scenario.pluginFailure || scenario.cancelDuringClaim ? {
+      pending:conversation.messages.find(row=>row.role==="assistant")?.pending,
+      status:conversation.messages.find(row=>row.role==="assistant")?.recoveryStatus,
+      leaseOperations,
+      plannerCalls,
+    } : {}),
   };
 }
 
@@ -691,4 +722,122 @@ test("persists longer assistant responses while keeping user and local-cache bou
   helpers.appendDelta(assistant,"b".repeat(20000));
   assert.equal(assistant.content.length,32000);
   assert.ok(assistant.content.includes("后续内容未保存"));
+});
+
+
+test("a POST transport failure before headers retains the durable request for recovery", async () => {
+  const result = await send([],true,()=>{},{networkFailure:true});
+  assert.equal(result.pending,true);
+  assert.equal(result.status,"recovery_timeout");
+  assert.equal(result.replies.length,1);
+});
+
+test("a failed plugin planning round preserves evidence but unblocks the conversation", async () => {
+  const result = await send([],true,()=>{},{pluginFailure:true});
+  assert.equal(result.pending,false);
+  assert.equal(result.status,"error");
+  assert.match(result.replies[0],/已保留取得的插件查询证据/);
+  assert.deepEqual(result.leaseOperations,["claim","interrupted"]);
+});
+
+test("stop during lease acquisition releases the lease without starting a planner", async () => {
+  const result = await send([],true,()=>{},{cancelDuringClaim:true});
+  assert.equal(result.plannerCalls,0);
+  assert.deepEqual(result.leaseOperations,["claim","interrupted"]);
+  assert.equal(result.replies.length,0);
+});
+
+
+test("replay callbacks deliver new events before advancing the cursor", () => {
+  const assistant={id:"message-1",requestId:"req_replay_1234",content:"",lastEventId:0};
+  const conversation={id:"conversation-1",messages:[assistant]};
+  let handlers;
+  const ctx=vm.createContext({
+    window:{Chat2APIStreamRecoveryV1:{create:options=>{handlers=options;return {};}}},
+    consumeSseFrame:(frame,row)=>{
+      const eventId=Number(frame.split("\n")[0].slice(4));
+      if(eventId<=row.lastEventId)return false;
+      row.lastEventId=eventId;
+      row.content+=JSON.parse(frame.split("\n")[2].slice(6)).delta;
+      return false;
+    },
+    saveHistory(){},currentConversation:()=>conversation,renderMessages(){},
+  });
+  const start=source.indexOf("  function makeRecoveryController(");
+  const end=source.indexOf("  async function recoverPendingMessage(",start);
+  vm.runInContext(source.slice(start,end)+"\nmakeRecoveryController",ctx)(conversation,assistant);
+  const event={request_id:assistant.requestId,assistant_message_id:assistant.id,id:4,event:"delivery.delta",data:{delta:"answer"}};
+  handlers.onEvent(event);
+  handlers.onEvent(event);
+  assert.equal(assistant.content,"answer");
+  assert.equal(assistant.lastEventId,4);
+});
+
+test("a terminal replay marker without a retrievable final snapshot stays recoverable",async()=>{
+  const assistant={id:"message-1",requestId:"req_replay_1234",content:"partial",pending:true,lastEventId:4};
+  const conversation={id:"conversation-1",messages:[assistant]};
+  const ctx=vm.createContext({state:{recoveryInFlight:new Set()},currentConversation:()=>conversation,
+    saveHistory(){},renderMessages(){},resizeComposer(){},
+  });
+  const start=source.indexOf("  async function recoverPendingMessage(");
+  const end=source.indexOf("  function assistantMessageForRequest(",start);
+  const run=vm.runInContext(source.slice(start,end)+"\nrecoverPendingMessage",ctx);
+  const result=await run(conversation,assistant,{
+    replay:async()=>({status:"completed",terminal:true}),
+    resume:async()=>({status:"recovery_timeout",terminal:false}),
+  });
+  assert.equal(result.status,"recovery_unavailable");
+  assert.equal(assistant.pending,true);
+  assert.equal(assistant.content,"partial");
+});
+
+
+test("saved plugin evidence continuation accepts only completed bounded GitHub previews",()=>{
+  const ctx=vm.createContext({normalizeToolReferences:()=>[]});
+  const start=source.indexOf("  function buildPluginResumeEvidence(");
+  const end=source.indexOf("  async function sendMessage(",start);
+  const build=vm.runInContext(source.slice(start,end)+"\nbuildPluginResumeEvidence",ctx);
+  const preview=JSON.stringify({tool:"github.list_issues",results:[{number:42}]});
+  const message={role:"assistant",pending:false,recoveryStatus:"error",toolEvents:[
+    {status:"completed",resultPreview:preview,arguments:"{}"},
+    {status:"running",resultPreview:preview},
+    {status:"completed",resultPreview:"not JSON"},
+    {status:"completed",resultPreview:JSON.stringify({tool:"gmail.get_message",results:[{}]})},
+  ]};
+  assert.equal(build(message).length,1);
+  assert.equal(build(message)[0].preview.results[0].number,42);
+  assert.equal(build({...message,pending:true}).length,0);
+  assert.equal(build({...message,recoveryStatus:"completed"}).length,0);
+});
+
+test("a peer waits for an initial plugin claim before terminalizing a missing lease", async () => {
+  let now = 1000, taskState = "missing", saved = 0;
+  const message = {id:"message",role:"assistant",pending:true,recoveryStatus:"tool_planning",toolEvents:[]};
+  const conversation = {id:"conversation",messages:[message]};
+  const state = {user:{user_id:"owner"},remoteSyncReady:true,conversations:[conversation]};
+  const context = vm.createContext({
+    state, Date:{now:()=>now},
+    pluginTaskOperation:async()=>({state:taskState}),
+    saveHistory:()=>{saved+=1;}, renderAll:()=>{},
+  });
+  const start = source.indexOf("  async function reconcileInterruptedPluginTasks(");
+  const end = source.indexOf("  function resumePendingMessages(",start);
+  assert.ok(start >= 0 && end > start);
+  const reconcile = vm.runInContext(source.slice(start,end)+"\nreconcileInterruptedPluginTasks",context);
+  await reconcile();
+  assert.equal(message.pending,true);
+  now += 25000;
+  await reconcile();
+  assert.equal(message.pending,true);
+  taskState = "running";
+  await reconcile();
+  now += 40000;
+  taskState = "missing";
+  await reconcile();
+  assert.equal(message.pending,true);
+  now += 30000;
+  await reconcile();
+  assert.equal(message.pending,false);
+  assert.equal(message.recoveryStatus,"error");
+  assert.equal(saved,1);
 });

@@ -652,7 +652,7 @@ def install_web_chat_features_v1(app: Any) -> Any:
     async def web_chat_private_cache_boundary(request, call_next):
         response = await call_next(request)
         path = request.url.path
-        if path.startswith(("/api/user/chat/completions", "/api/user/chat/conversations", "/api/user/chat/requests/", "/api/user/chat/files/", "/api/user/files/")):
+        if path.startswith(("/api/user/chat/completions", "/api/user/chat/conversations", "/api/user/chat/requests/", "/api/user/chat/files/", "/api/user/chat/library", "/api/user/files/")):
             response.headers["Cache-Control"] = "private, no-store"
             vary_values = [value.strip() for value in response.headers.get("Vary", "").split(",") if value.strip()]
             if not any(value.lower() == "cookie" for value in vary_values):

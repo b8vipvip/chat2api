@@ -503,7 +503,7 @@ test("conversation switching and bootstrap cannot resurrect an image-only model"
   const bootstrap=source.slice(bootStart,bootEnd);
   assert.ok(bootstrap.includes("selectAvailableTextModel(currentConversation());"));
   assert.equal(bootstrap.includes("state.selectedModel = currentConversation().model"),false);
-  const sendStart=source.indexOf("  async function sendMessage(text) {");
+  const sendStart=source.indexOf("  async function sendMessage(");
   const sendEnd=source.indexOf("  async function loadWebChatSession(",sendStart);
   const send=source.slice(sendStart,sendEnd);
   assert.ok(send.includes("const requestModelId = selectAvailableTextModel(currentConversation());"));
@@ -688,4 +688,79 @@ test("search hydration does not replace live messages or evict the active conver
   assert.equal(hydrate({id:"older",messages:[]}),null);
   assert.equal(state.conversations[0],active);
   assert.equal(warnings,1);
+});
+
+
+test("a revision conflict or tombstone cannot detach a live assistant from the conversation", async () => {
+  for (const deleted of [false,true]) {
+    const assistant={id:"m1",requestId:"req_active",pending:true,content:"live"};
+    const conversation={id:"c2a_live_conflict",serverRevision:1,messages:[assistant]};
+    const state={remoteSyncReady:true,remoteSyncTimers:new Map(),remoteSyncInFlight:new Map(),
+      remoteSyncAgain:new Set(),remoteSyncFingerprints:new Map(),remoteSyncRetryCounts:new Map(),
+      activeConversationId:conversation.id,streaming:true,conversations:[conversation]};
+    const timers=new Map();let timerId=0;
+    const ctx=vm.createContext({state,AbortController,
+      window:{setTimeout(fn,delay){const id=++timerId;timers.set(id,{fn,delay});return id;},
+        clearTimeout(id){timers.delete(id);}},
+      serverConversationPayload:row=>row,
+      fetch:async()=>({ok:false,status:409,json:async()=>({
+        conversation:{id:conversation.id,deleted,revision:2,messages:[]}
+      })}),
+      mergeConversation(){throw Error("must defer live conflict");},
+      persistHistorySnapshot(){},renderAll(){},toast(){},
+    });
+    const start=source.indexOf("  function scheduleConversationSync(");
+    const end=source.indexOf("  async function deleteConversationFromServer(",start);
+    const sync=vm.runInContext(source.slice(start,end)+"\nsyncConversationToServer",ctx);
+    await sync(conversation.id);
+    assert.equal(state.conversations[0],conversation);
+    assert.equal(conversation.messages[0],assistant);
+    assert.equal(conversation.serverRevision,1);
+    assert.equal([...timers.values()][0].delay,2000);
+  }
+});
+
+
+test("incremental conversation pull applies tombstones and rejects an in-flight stale snapshot", async () => {
+  const a={id:"old",serverRevision:1,messages:[],updatedAt:"1"};
+  const b={id:"new",serverRevision:1,messages:[],updatedAt:"2"};
+  const state={user:{user_id:"u"},storageKey:"u",remoteSyncReady:true,conversations:[a,b],
+    activeConversationId:"old",pendingImages:[],pendingFiles:[],recoveryInFlight:new Set(),
+    pendingConversationDeletes:new Set(),remoteSyncInFlight:new Map(),remoteSyncTimers:new Map(),
+    remoteSyncFingerprints:new Map(),remoteSyncRetryCounts:new Map()};
+  let reply, sent, renders=0;
+  const ctx=vm.createContext({state,MAX_CONVERSATIONS:15,
+    fetchConversationMutation:(_url,opts)=>{sent=JSON.parse(opts.body);return new Promise(r=>reply=r);},
+    normalizeConversationRow:row=>({...row}),mergeConversation:(remote)=>remote,
+    serverConversationPayload:row=>row,persistHistorySnapshot(){},scheduleConversationSync(){},
+    selectAvailableTextModel(){},currentConversation(){},renderAll(){renders++;},
+    hydrateNativeSnapshots(){},recordClientDiagnostic(){},
+  });
+  const start=source.indexOf("  function canPullConversationDelta(");
+  const end=source.indexOf("  function scheduleConversationSync(",start);
+  const pull=vm.runInContext(source.slice(start,end)+"\npullConversationDelta",ctx);
+  const stale=pull();
+  assert.equal(sent.known.old,1);
+  state.streaming=true;
+  reply({response:{ok:true},result:{data:[{id:"old",revision:2,deleted:true}]}});
+  await stale;
+  assert.equal(state.conversations.length,2);
+  state.streaming=false;
+  const fresh=pull();
+  reply({response:{ok:true},result:{data:[{id:"old",revision:2,deleted:true}]}});
+  await fresh;
+  assert.equal(state.conversations.length,1);
+  assert.equal(state.activeConversationId,"new");
+  assert.equal(renders,1);
+});
+
+
+test("longer Voice checkpoints cannot overwrite the confirmed final transcript",()=>{
+  const checkpoint={id:"voice-id",role:"assistant",content:"a longer but unconfirmed transcript",recoveryStatus:"voice_checkpoint"};
+  const final={...checkpoint,content:"final",recoveryStatus:"completed"};
+  const row=(message,updatedAt)=>({id:"voice-conv",messages:[message],updatedAt,serverRevision:2});
+  assert.equal(mergeConversation(row(final,"1"),row(checkpoint,"2")).messages[0].content,"final");
+  assert.equal(mergeConversation(row(checkpoint,"2"),row(final,"1")).messages[0].content,"final");
+  const interrupted={...checkpoint,recoveryStatus:"voice_partial",content:"interrupted"};
+  assert.equal(mergeConversation(row(checkpoint,"2"),row(interrupted,"1")).messages[0].content,"interrupted");
 });

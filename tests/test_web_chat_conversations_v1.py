@@ -138,7 +138,8 @@ def test_web_chat_conversation_api_auth_ownership_sync_and_conflicts(tmp_path: P
             "resultId": "result-123", "status": "completed",
             "arguments": '{"query":"Mode 1"}',
             "output": "Found two relevant pages.",
-            "resultPreview": '{"tool":"github.list_issues","results":[{"number":42}]}',
+            "resultPreview": json.dumps({"tool":"github.list_pull_review_threads",
+                "results":[{"thread_id":"PRRT_42","comments_next_cursor":"x"*3000}]}),
             "references": [{
                 "id": "turn0search0",
                 "url": "https://docs.python.org/3/library/",
@@ -385,7 +386,7 @@ def test_browser_conversation_merge_conflict_resolution() -> None:
 
 
 
-def test_conversation_attachment_references_protect_files_until_last_cross_device_tombstone(tmp_path: Path) -> None:
+def test_conversation_attachment_references_protect_files_until_last_cross_device_tombstone(tmp_path: Path, monkeypatch) -> None:
     app = create_app(Settings(
         CHAT2API_API_KEY="web-chat-conversation-files-master-key",
         CHAT2API_DATA_DIR=str(tmp_path),
@@ -475,6 +476,17 @@ def test_conversation_attachment_references_protect_files_until_last_cross_devic
         assert store.file_reference_count(image_id) == 1
         assert store.file_reference_count(document_id) == 2
         assert store.referenced_file_ids() >= {image_id, document_id}
+        first_page = client.get("/api/user/chat/library?limit=1")
+        assert first_page.status_code == 200, first_page.text
+        page = first_page.json()
+        assert len(page["data"]) == 1 and page["next_cursor"]
+        second_page = client.get("/api/user/chat/library", params={"limit": 1, "after": page["next_cursor"]}).json()
+        assert second_page["next_cursor"] is None
+        indexed = {item["id"]: item for item in page["data"] + second_page["data"]}
+        assert set(indexed) == {image_id, document_id}
+        assert indexed[document_id]["reference_count"] == 2
+        assert indexed[document_id]["filename"] == "notes.txt"
+        assert client.get("/api/user/chat/library?limit=101").status_code == 422
 
         # Another signed-in account cannot attach a file owned by the first.
         client.cookies.clear()
@@ -484,6 +496,7 @@ def test_conversation_attachment_references_protect_files_until_last_cross_devic
             json={"email": "conversation-file-other@example.test", "password": "conversation-file-other-password"},
         )
         assert other.status_code == 200, other.text
+        assert client.get("/api/user/chat/library").json()["data"] == []
         foreign = _conversation("c2a_file_foreign_0001")
         foreign["messages"][0]["content"] = [
             {"type": "text", "text": "不能引用别人的文件"},
@@ -518,6 +531,27 @@ def test_conversation_attachment_references_protect_files_until_last_cross_devic
         assert deleted_first.json()["conversation"]["deleted"] is True
         assert store.file_reference_count(image_id) == 0
         assert store.file_reference_count(document_id) == 1
+        assert client.get("/api/user/chat/library?scope=unreferenced").json()["data"] == []
+        app.state.file_store.get(image_id).created_at = "2020-01-01T00:00:00+00:00"
+        app.state.file_store.get(document_id).created_at = "2020-01-01T00:00:00+00:00"
+        from contextlib import contextmanager
+        guard_calls = []
+        original_guard = store.file_reference_snapshot_guard
+
+        @contextmanager
+        def checked_reference_guard():
+            # The reference database must be locked before the file store.
+            assert not app.state.file_store.lock._is_owned()
+            guard_calls.append(True)
+            with original_guard() as referenced:
+                yield referenced
+
+        monkeypatch.setattr(store, "file_reference_snapshot_guard", checked_reference_guard)
+        unused = client.get("/api/user/chat/library?scope=unreferenced").json()["data"]
+        assert guard_calls == [True]
+        assert [(item["id"], item["reference_count"]) for item in unused] == [(image_id, 0)]
+        remaining = client.get("/api/user/chat/library").json()["data"]
+        assert [(item["id"], item["reference_count"]) for item in remaining] == [(document_id, 1)]
         synced = client.get("/api/user/chat/conversations")
         assert any(row["id"] == first["id"] and row["deleted"] for row in synced.json()["data"])
         assert client.delete(
@@ -530,6 +564,7 @@ def test_conversation_attachment_references_protect_files_until_last_cross_devic
         )
         assert deleted_second.status_code == 200, deleted_second.text
         assert store.file_reference_count(document_id) == 0
+        assert client.get("/api/user/chat/library").json()["data"] == []
         assert client.delete(
             f"/api/user/files/{document_id}",
             headers={"Origin": "http://testserver"},
@@ -649,3 +684,57 @@ def test_stale_tab_account_header_cannot_write_to_replacement_session(tmp_path: 
         deleted = client.delete(base + "/" + conversation["id"] + "?expected_revision=0", headers=headers)
         assert deleted.status_code == 409, deleted.text
         assert client.get(base).json()["data"] == []
+
+
+def test_delta_returns_only_changed_owner_rows_and_old_tombstones(tmp_path: Path):
+    store = WebChatConversationStoreV1(tmp_path)
+    old = _conversation("c2a_delta_old_0001")
+    assert store.upsert("owner", old, 0)[0]
+    for index in range(20):
+        assert store.upsert("owner", _conversation(f"c2a_delta_new_{index:04d}"), 0)[0]
+    assert store.upsert("other", _conversation("c2a_delta_foreign_0001"), 0)[0]
+    known = {row["id"]: row["revision"] for row in store.delta_for_user("owner", {})}
+    known[old["id"]] = 1
+    assert store.delta_for_user("owner", known) == []
+    assert store.delete("owner", old["id"], 1)[0]
+    changed = store.delta_for_user("owner", known)
+    assert len(changed) == 1
+    assert changed[0]["id"] == old["id"] and changed[0]["deleted"]
+    assert not any(row["id"] == old["id"] for row in store.delta_for_user("other", known))
+
+
+def test_change_generation_is_durable_and_owner_scoped(tmp_path: Path):
+    a = WebChatConversationStoreV1(tmp_path)
+    b = WebChatConversationStoreV1(tmp_path)
+    row = _conversation("c2a_changes_0001")
+    assert a.change_generation("alice") == 0
+    assert a.upsert("alice", row, 0)[0]
+    assert b.change_generation("alice") == 1
+    assert b.change_generation("bob") == 0
+    assert not b.upsert("alice", row, 0)[0]
+    assert a.change_generation("alice") == 1
+    assert b.delete("alice", row["id"], 1)[0]
+    assert WebChatConversationStoreV1(tmp_path).change_generation("alice") == 2
+    assert b.change_generation("bob") == 0
+
+
+def test_plugin_task_lease_is_fenced_across_processes_and_restart(tmp_path: Path, monkeypatch):
+    import app.web_chat_conversations_v1 as module
+    now = [1000.0]
+    monkeypatch.setattr(module.time, "time", lambda: now[0])
+    a = WebChatConversationStoreV1(tmp_path)
+    b = WebChatConversationStoreV1(tmp_path)
+    cid, mid = "c2a_task_0001", "message_task_0001"
+    assert a.plugin_task("alice", cid, mid, "claim", "holder_first")["granted"]
+    assert b.plugin_task("alice", cid, mid, "status")["state"] == "running"
+    assert not b.plugin_task("alice", cid, mid, "claim", "holder_second")["granted"]
+    assert b.plugin_task("bob", cid, mid, "status")["state"] == "missing"
+    now[0] += 100
+    assert a.plugin_task("alice", cid, mid, "renew", "holder_first")["granted"]
+    now[0] += 181
+    assert b.plugin_task("alice", cid, mid, "status")["state"] == "interrupted"
+    assert not a.plugin_task("alice", cid, mid, "renew", "holder_first")["granted"]
+    assert not b.plugin_task("alice", cid, mid, "claim", "holder_second")["granted"]
+    assert a.plugin_task("alice", cid, "message_task_0002", "claim", "holder_first")["granted"]
+    assert b.plugin_task("alice", cid, "message_task_0002", "completed", "holder_first")["granted"]
+    assert WebChatConversationStoreV1(tmp_path).plugin_task("alice", cid, "message_task_0002", "status")["state"] == "completed"
