@@ -1171,6 +1171,17 @@
         });
         if (!sameAccount()) return;
         if (response.status === 409 && result.conversation) {
+          // Do not replace live message objects still referenced by a stream,
+          // Voice call or replay callback. Keep the original revision so the
+          // next PUT must reconcile against the latest server row/tombstone.
+          const liveTurn = (state.streaming && state.activeConversationId === conversationId) ||
+            (state.voiceActive && state.voiceConversationId === conversationId) ||
+            (conversation.messages || []).some(message => message.requestId &&
+              state.recoveryInFlight?.has(message.requestId + ":" + message.id));
+          if (liveTurn) {
+            scheduleConversationSync(conversationId, 2000);
+            return;
+          }
           if (result.conversation.deleted === true) {
             state.conversations = state.conversations.filter((row) => row.id !== conversationId);
             state.remoteSyncFingerprints.delete(conversationId);
@@ -4825,6 +4836,9 @@
       assistant.recoveryStatus = "streaming";
       state.activeRequestRecord = {request_id:requestId,assistant_message_id:assistant.id};
       saveHistory();
+      // The server can accept a POST before the browser receives headers.
+      // Keep its durable ID on ambiguous transport failure; never resend it.
+      requestSubmitted = true;
       const response = await fetch("/api/user/chat/completions", {
         method: "POST",
         credentials: "same-origin",
@@ -4867,7 +4881,6 @@
         }
         throw new Error(payload?.error?.message || payload.detail || "请求失败，HTTP " + response.status);
       }
-      requestSubmitted = true;
       if (!response.body) throw new Error("当前浏览器不支持流式响应读取");
 
       // Observe native rich content for this same request ID; never dispatch twice.
@@ -4956,7 +4969,19 @@
           else toast((error.name === "AbortError" ? "停止状态：" : "请求失败，恢复状态：") + recoveryStatusLabel(result?.status));
         });
       } else {
-        if (assistant && !assistant.content.trim() && !assistant.toolEvents?.length) conversation.messages = conversation.messages.filter((message) => message.id !== assistant.id);
+        if (assistant) {
+          // No visible answer request was accepted. In particular, completed
+          // plugin evidence must not leave a permanently pending placeholder.
+          assistant.pending = false;
+          assistant.recoveryStatus = error?.name === "AbortError" ? "cancelled" : "error";
+          if (!assistant.content.trim() && !assistant.toolEvents?.length) {
+            conversation.messages = conversation.messages.filter((message) => message.id !== assistant.id);
+          } else if (!assistant.content.trim()) {
+            assistant.content = error?.name === "AbortError"
+              ? "本轮已停止，已保留取得的插件查询证据。"
+              : "本轮请求中断，已保留取得的插件查询证据；可以继续提问。";
+          }
+        }
         toast("请求失败：" + error.message);
       }
     } finally {
@@ -5328,9 +5353,14 @@
   $("stopButton").addEventListener("click", () => {
     const controller = state.recoveryController;
     const record = state.activeRequestRecord;
+    const transport = state.abortController;
     const abortGenerationTransport = () => {
-      if (state.abortController) state.abortController.abort();
+      transport?.abort();
     };
+    // Planning and plugin reads can advance to another request while a
+    // cancel handshake is pending. Stop their local execution immediately.
+    const active = currentConversation()?.messages.find(row => row.id === state.streamingMessageId);
+    if (active?.recoveryStatus === "tool_planning") abortGenerationTransport();
     if (controller && record) {
       // Complete the same-origin cancel handshake before aborting the SSE POST.
       // This lets the server finalize a queued cancellation or deliver chat.cancel

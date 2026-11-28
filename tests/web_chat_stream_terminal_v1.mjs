@@ -12,7 +12,7 @@ assert.ok(start >= 0 && end > start);
 const delta = (text) => "data: " + JSON.stringify({choices: [{delta: {content: text}}]});
 const terminal = "data: [DONE]";
 
-async function send(chunks, close = true, onCancel = () => {}) {
+async function send(chunks, close = true, onCancel = () => {}, scenario = {}) {
   const conversation = {id: "conversation-test", messages: []};
   const messages = [];
   const body = new ReadableStream({
@@ -35,6 +35,7 @@ async function send(chunks, close = true, onCancel = () => {}) {
       selectedModel: "test-model",
       models: [{id:"test-model",capabilities:["text"]}],
       streaming: false,
+      selectedPlugins: scenario.pluginFailure ? ["github"] : [],
       recoveryInFlight: new Set(),
       pendingImages: [],
       pendingImagesConversationId: "",
@@ -53,7 +54,14 @@ async function send(chunks, close = true, onCancel = () => {}) {
     showOnly() {},
     id: () => String(conversation.messages.length),
     apiJson: async () => ({user: {user_id: "user-a"}}),
-    fetch: async () => ({ok: true, body}),
+    fetch: async () => {
+      if (scenario.networkFailure) throw new Error("connection lost before headers");
+      return {ok: true, body};
+    },
+    runAutonomousPluginToolLoop: async (_messages,assistant) => {
+      assistant.toolEvents.push({callId:"plugin-call",status:"completed"});
+      throw new Error("planner interrupted");
+    },
     toast: (message) => messages.push(message),
     $: () => node,
     autoTitle() {},
@@ -86,6 +94,10 @@ async function send(chunks, close = true, onCancel = () => {}) {
     messages,
     replies: conversation.messages.filter(({role}) => role === "assistant").map(({content}) => content),
     locked: body.locked,
+    ...(scenario.networkFailure || scenario.pluginFailure ? {
+      pending:conversation.messages.find(row=>row.role==="assistant")?.pending,
+      status:conversation.messages.find(row=>row.role==="assistant")?.recoveryStatus,
+    } : {}),
   };
 }
 
@@ -691,4 +703,19 @@ test("persists longer assistant responses while keeping user and local-cache bou
   helpers.appendDelta(assistant,"b".repeat(20000));
   assert.equal(assistant.content.length,32000);
   assert.ok(assistant.content.includes("后续内容未保存"));
+});
+
+
+test("a POST transport failure before headers retains the durable request for recovery", async () => {
+  const result = await send([],true,()=>{},{networkFailure:true});
+  assert.equal(result.pending,true);
+  assert.equal(result.status,"recovery_timeout");
+  assert.equal(result.replies.length,1);
+});
+
+test("a failed plugin planning round preserves evidence but unblocks the conversation", async () => {
+  const result = await send([],true,()=>{},{pluginFailure:true});
+  assert.equal(result.pending,false);
+  assert.equal(result.status,"error");
+  assert.match(result.replies[0],/已保留取得的插件查询证据/);
 });

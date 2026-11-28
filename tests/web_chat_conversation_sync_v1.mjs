@@ -689,3 +689,33 @@ test("search hydration does not replace live messages or evict the active conver
   assert.equal(state.conversations[0],active);
   assert.equal(warnings,1);
 });
+
+
+test("a revision conflict or tombstone cannot detach a live assistant from the conversation", async () => {
+  for (const deleted of [false,true]) {
+    const assistant={id:"m1",requestId:"req_active",pending:true,content:"live"};
+    const conversation={id:"c2a_live_conflict",serverRevision:1,messages:[assistant]};
+    const state={remoteSyncReady:true,remoteSyncTimers:new Map(),remoteSyncInFlight:new Map(),
+      remoteSyncAgain:new Set(),remoteSyncFingerprints:new Map(),remoteSyncRetryCounts:new Map(),
+      activeConversationId:conversation.id,streaming:true,conversations:[conversation]};
+    const timers=new Map();let timerId=0;
+    const ctx=vm.createContext({state,AbortController,
+      window:{setTimeout(fn,delay){const id=++timerId;timers.set(id,{fn,delay});return id;},
+        clearTimeout(id){timers.delete(id);}},
+      serverConversationPayload:row=>row,
+      fetch:async()=>({ok:false,status:409,json:async()=>({
+        conversation:{id:conversation.id,deleted,revision:2,messages:[]}
+      })}),
+      mergeConversation(){throw Error("must defer live conflict");},
+      persistHistorySnapshot(){},renderAll(){},toast(){},
+    });
+    const start=source.indexOf("  function scheduleConversationSync(");
+    const end=source.indexOf("  async function deleteConversationFromServer(",start);
+    const sync=vm.runInContext(source.slice(start,end)+"\nsyncConversationToServer",ctx);
+    await sync(conversation.id);
+    assert.equal(state.conversations[0],conversation);
+    assert.equal(conversation.messages[0],assistant);
+    assert.equal(conversation.serverRevision,1);
+    assert.equal([...timers.values()][0].delay,2000);
+  }
+});
