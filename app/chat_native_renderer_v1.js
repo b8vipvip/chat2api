@@ -477,6 +477,31 @@
     return true;
   }
 
+  // A snapshot contains computed Worker styles, including inherited colors and
+  // viewport-specific dimensions. They are evidence, not the client's theme.
+  // Keep SVG drawing colors and explicit MathML attributes; project HTML
+  // surfaces onto the local theme so archived and streaming replies adapt
+  // immediately when the user switches themes.
+  const TEXT_FLOW_TAGS = new Set(["p","h1","h2","h3","h4","ul","ol","li","blockquote"]);
+  const FLOW_DIMENSIONS = new Set(["width","minWidth","maxWidth","height","minHeight","maxHeight","marginLeft","marginRight"]);
+  const TABLE_DIMENSIONS = new Set(["width","minWidth","maxWidth","height","minHeight","maxHeight","marginLeft","marginRight","whiteSpace"]);
+  function containsTable(value) {
+    return value.tag === "table" || (value.children || []).some(containsTable);
+  }
+  function applyCapturedStyle(element,value,depth) {
+    const tag=value.tag;
+    const graphic=SVG_TAGS.has(tag);
+    const flow=TEXT_FLOW_TAGS.has(tag) ||
+      (tag==="div" && (depth===0 || (!["flex","grid","inline-flex","inline-grid"].includes(value.style?.display) && containsTable(value))));
+    for (const [key,item] of Object.entries(value.style || {})) {
+      if (!validStyle(key,item,tag)) continue;
+      if (!graphic && COLOR_STYLES.has(key)) continue;
+      if (flow && FLOW_DIMENSIONS.has(key)) continue;
+      if (["table","thead","tbody","tr","th","td"].includes(tag) && TABLE_DIMENSIONS.has(key)) continue;
+      element.style[key]=item;
+    }
+  }
+
   function createNode(value,snapshot,depth,context) {
     if (depth > 64) throw new Error("native tree depth exceeded");
     const tag = value.tag;
@@ -487,9 +512,7 @@
       element.type="button";
       element.className="native-copy-control";
       element.textContent=value.control.label;
-      if (value.style) Object.entries(value.style).forEach(([key,item]) => {
-        if (validStyle(key,item,tag)) element.style[key] = item;
-      });
+      applyCapturedStyle(element,value,depth);
       element.addEventListener?.("click",()=>{
         const clipboard=globalThis.navigator?.clipboard;
         if (!clipboard?.writeText) {
@@ -515,9 +538,7 @@
       element.setAttribute("aria-selected",String(value.control.selected));
       element.setAttribute("aria-disabled",String(value.control.disabled));
       element.tabIndex=value.control.selected?0:-1;
-      if (value.style) Object.entries(value.style).forEach(([key,item])=>{
-        if(validStyle(key,item,tag))element.style[key]=item;
-      });
+      applyCapturedStyle(element,value,depth);
       bindTabInteraction(element,value,context);
       return element;
     } else if (tag==="button" && value.control?.kind==="toggle") {
@@ -529,9 +550,7 @@
       element.setAttribute("aria-label",value.control.label);
       element.setAttribute("aria-pressed",String(value.control.pressed));
       element.setAttribute("aria-disabled",String(value.control.disabled));
-      if (value.style) Object.entries(value.style).forEach(([key,item])=>{
-        if(validStyle(key,item,tag))element.style[key]=item;
-      });
+      applyCapturedStyle(element,value,depth);
       bindToggleInteraction(element,value,context);
       return element;
     } else if (tag==="input") {
@@ -561,9 +580,7 @@
       }
       // Input controls return early, so apply their validated captured styles
       // here rather than silently dropping width/layout information.
-      if (value.style) Object.entries(value.style).forEach(([key,item]) => {
-        if (validStyle(key,item,tag)) element.style[key] = item;
-      });
+      applyCapturedStyle(element,value,depth);
       if (value.control.kind==="range") {
         bindNativeInteraction(element,value,context,"change","set_value",
           ()=>Number(element.value),previous=>{element.value=String(previous);});
@@ -608,7 +625,7 @@
         element.referrerPolicy = "no-referrer";
       }
     } else element = document.createElement(tag);
-    if (value.style) Object.entries(value.style).forEach(([key,item]) => { if (validStyle(key,item,tag)) element.style[key] = item; });
+    applyCapturedStyle(element,value,depth);
     if (value.attrs) Object.entries(value.attrs).forEach(([key,item]) => { if (validSvgAttribute(key,item)) element.setAttribute(key,item); });
     if (value.math_attrs) Object.entries(value.math_attrs).forEach(([key,item]) => { if (validMathAttribute(tag,key,item)) element.setAttribute(key,item); });
     if (value.control?.kind==="disclosure") element.open=value.control.open;
@@ -636,6 +653,12 @@
     } else if (tag==="details") {
       bindNativeInteraction(element,value,context,"toggle","set_open",
         ()=>Boolean(element.open),previous=>{element.open=Boolean(previous);});
+    }
+    if (tag==="table") {
+      const wrapper=document.createElement("div");
+      wrapper.className="native-table-scroll";
+      wrapper.appendChild(element);
+      return wrapper;
     }
     return element;
   }

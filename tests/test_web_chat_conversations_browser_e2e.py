@@ -272,3 +272,46 @@ def test_web_chat_conversations_sync_between_two_browser_profiles(tmp_path: Path
     finally:
         server.should_exit = True
         server_thread.join(timeout=10)
+
+
+def test_web_chat_native_snapshot_adapts_to_client_theme() -> None:
+    """Reproduce a light Worker snapshot inside a dark, then light, client."""
+    root = Path(__file__).resolve().parents[1]
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True, args=["--no-sandbox"])
+        try:
+            page = browser.new_page(viewport={"width": 390, "height": 800})
+            page.set_content("""<html data-theme="dark"><body>
+              <main class="main-panel"><div class="message assistant">
+              <div class="message-body" id="reply"></div></div>
+              <div class="composer"><textarea></textarea></div></main>
+            </body></html>""")
+            page.add_style_tag(path=str(root / "app" / "chat_client_v1.css"))
+            page.add_script_tag(path=str(root / "app" / "chat_native_renderer_v1.js"))
+            assert page.evaluate("""() => window.Chat2APINativeRendererV1.renderNativeSnapshot(
+              document.querySelector('#reply'), {
+                version:1, revision:1, finality:'verified-final', assets:[], files:[],
+                root:{tag:'div',style:{color:'#111111',backgroundColor:'#ffffff',width:'1100px',marginLeft:'350px'},children:[
+                  {tag:'p',text:'Native text',style:{color:'#111111'}},
+                  {tag:'div',style:{display:'block',width:'900px',marginLeft:'300px'},children:[
+                    {tag:'table',style:{width:'900px'},children:[{tag:'tbody',children:[
+                      {tag:'tr',children:[{tag:'th',text:'Heading',style:{backgroundColor:'#ffffff',color:'#111111'}},
+                        {tag:'td',text:'Value',style:{color:'#111111',whiteSpace:'nowrap',width:'800px'}}]}
+                    ]}]}
+                  ]}
+                ]}
+              })""")
+            for theme, text_color, page_color, panel_color in (
+                ("dark", "rgb(236, 236, 236)", "rgb(33, 33, 33)", "rgb(47, 47, 47)"),
+                ("light", "rgb(37, 37, 37)", "rgb(255, 255, 255)", "rgb(244, 244, 244)"),
+            ):
+                page.evaluate("(theme) => document.documentElement.dataset.theme = theme", theme)
+                assert page.locator(".native-rich-root p").evaluate("(el) => getComputedStyle(el).color") == text_color
+                assert page.locator(".native-rich-root td").evaluate("(el) => getComputedStyle(el).color") == text_color
+                assert page.locator(".native-rich-root th").evaluate("(el) => getComputedStyle(el).backgroundColor") == panel_color
+                assert page.locator(".main-panel").evaluate("(el) => getComputedStyle(el).backgroundColor") == page_color
+                assert page.locator(".composer textarea").evaluate("(el) => getComputedStyle(el).color") == text_color
+                assert page.locator(".native-rich-root").evaluate("(el) => el.scrollWidth <= el.clientWidth + 1")
+                assert page.locator(".native-table-scroll").evaluate("(el) => el.getBoundingClientRect().width <= 390")
+        finally:
+            browser.close()
