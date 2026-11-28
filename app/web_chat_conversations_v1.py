@@ -1065,8 +1065,10 @@ def install_web_chat_conversations_v1(app: FastAPI) -> None:
             # Do not expose newly uploaded drafts to cleanup actions. Only
             # older, browser-originated attachments are eligible for listing.
             cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
-            with file_store.lock:
-                referenced = store.referenced_file_ids()
+            # Match upsert/deletion lock ordering: reference DB first,
+            # then file store. The inverse order can deadlock a concurrent
+            # conversation save while the library enumerates orphan files.
+            with store.file_reference_snapshot_guard() as referenced, file_store.lock:
                 candidates = []
                 for item in sorted(file_store.items.values(), key=lambda row: row.file_id):
                     if (item.file_id <= after or item.file_id in referenced or item.source != "web_chat"
