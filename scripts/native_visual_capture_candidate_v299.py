@@ -26,41 +26,79 @@ except ModuleNotFoundError:
     from native_page_diagnostic_v1 import CDP, json_get, ws_endpoint
 
 ALLOWED_HOSTS = frozenset({"chat2api.mv3.cn"})
-REQUEST = re.compile(r"^req_[a-f0-9]{32}$")
-PROBE = r"""(function(requestId){
+REQUEST = re.compile(r"^req_(?:[a-f0-9]{32}|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$")
+PROBE = r"""(function(requestId,surface){
   "use strict";
-  const node=document.getElementById("requestConversationNative");
+  const node=surface==="web-chat"
+    ? [...document.querySelectorAll("#messages .message.assistant .message-body[data-chat2api-native-render-request-id]")].find(el=>el.getAttribute("data-chat2api-native-render-request-id")===requestId)
+    : document.getElementById("requestConversationNative");
   if(!node || node.getAttribute("data-chat2api-native-render-request-id")!==requestId)
     return {ok:false,reason:"not-verified-current-request"};
   if(node.getAttribute("data-chat2api-native-render-finality")!=="verified-final")
     return {ok:false,reason:"native-final-unverified"};
-  if(node.getAttribute("data-chat2api-native-media-sha-verified")!=="true")
+  if(surface!=="web-chat" && node.getAttribute("data-chat2api-native-media-sha-verified")!=="true")
     return {ok:false,reason:"media-byte-identity-unverified"};
-  const r=node.getBoundingClientRect(), style=getComputedStyle(node);
+  const content=surface==="web-chat" ? node.querySelector(".native-rich-root") : node;
+  if(!content) return {ok:false,reason:"native-content-not-rendered"};
+  // The Web Chat path cannot assert image byte identity merely from a URL.
+  // Require separate verified media evidence before enabling visual claims.
+  if(surface==="web-chat" && node.querySelector("img,video,audio,.native-generated-file"))
+    return {ok:false,reason:"web-chat-media-proof-unavailable"};
+  const r=content.getBoundingClientRect(), style=getComputedStyle(content);
   if(style.display==="none"||style.visibility==="hidden"||
      r.width<200||r.height<80||r.width>3000||r.height>38400)
     return {ok:false,reason:"native-preview-not-visible-or-too-large"};
   // A scroll-clipped container would silently omit offscreen table/code rows.
   // Never call such a screenshot "full native reply".
-  if(node.scrollHeight>node.clientHeight+2 ||
-     node.scrollWidth>node.clientWidth+2)
+  if([content,...content.querySelectorAll("*")].some(el=>
+      el.clientWidth>0 && el.clientHeight>0 &&
+      ((["auto","scroll","hidden","clip"].includes(getComputedStyle(el).overflowX) && el.scrollWidth>el.clientWidth+2) ||
+       (["auto","scroll","hidden","clip"].includes(getComputedStyle(el).overflowY) && el.scrollHeight>el.clientHeight+2))))
     return {ok:false,reason:"native-preview-scroll-clipped"};
+  // captureBeyondViewport cannot expose an inner scroll pane. Fail
+  // closed until scroll-and-stitch is implemented.
+  for(let ancestor=content.parentElement;ancestor && ancestor!==document.body && ancestor!==document.documentElement;ancestor=ancestor.parentElement){
+    const a=ancestor.getBoundingClientRect(), s=getComputedStyle(ancestor);
+    if((["auto","scroll","hidden","clip"].includes(s.overflowX) &&
+        (r.left<a.left-2 || r.right>a.right+2)) ||
+       (["auto","scroll","hidden","clip"].includes(s.overflowY) &&
+        (r.top<a.top-2 || r.bottom>a.bottom+2)))
+      return {ok:false,reason:"native-preview-ancestor-clipped"};
+  }
+  if(surface==="web-chat"){
+    if(r.left<0 || r.top<0 || r.right>innerWidth || r.bottom>innerHeight)
+      return {ok:false,reason:"web-chat-reply-not-fully-in-viewport"};
+    for(const fx of [0.02,0.5,0.98]) for(const fy of [0.02,0.5,0.98]){
+      const top=document.elementFromPoint(r.left+r.width*fx,r.top+r.height*fy);
+      if(!top || !content.contains(top))
+        return {ok:false,reason:"web-chat-reply-obscured"};
+    }
+  }
   const x=window.scrollX + r.left, y=window.scrollY + r.top;
   const images=[...node.querySelectorAll("img")];
   if(images.some(img=>!img.complete || img.naturalWidth<=0))
     return {ok:false,reason:"native-images-not-loaded"};
   return {ok:true,rect:{x,y,w:r.width,h:r.height},
     images:images.length,tables:node.querySelectorAll("table").length,
-    code_blocks:node.querySelectorAll("pre code").length};
+    code_blocks:content.querySelectorAll("pre code").length,
+    revision:node.getAttribute("data-chat2api-native-render-revision")||""};
 })"""
 
 
-async def capture(request_id: str, path: Path, port: int) -> dict:
+async def capture(request_id: str, path: Path, port: int, *, surface: str = "admin",
+                  origin: str | None = None) -> dict:
     import websockets
     if not REQUEST.fullmatch(request_id):
         raise ValueError("invalid-request-id")
     if not (1024 <= port <= 65535):
         raise ValueError("unsafe-cdp-port")
+    if surface not in {"admin", "web-chat"}:
+        raise ValueError("invalid-capture-surface")
+    expected = urlsplit(origin or "")
+    if surface == "web-chat" and (expected.scheme != "https" or not expected.hostname
+            or expected.username or expected.password or expected.path not in ("", "/")
+            or expected.query or expected.fragment):
+        raise ValueError("explicit-https-web-chat-origin-required")
     targets = json_get(port, "/json/list")
     found = None
     report = None
@@ -68,7 +106,9 @@ async def capture(request_id: str, path: Path, port: int) -> dict:
         if item.get("type") != "page":
             continue
         url=urlsplit(str(item.get("url") or ""))
-        if (url.scheme!="https" or url.hostname not in ALLOWED_HOSTS
+        matched = (url.scheme == expected.scheme and url.netloc == expected.netloc
+                   and url.path.rstrip("/") == "/chat") if surface == "web-chat" else url.hostname in ALLOWED_HOSTS
+        if (url.scheme!="https" or not matched
                 or url.username or url.password or not item.get("webSocketDebuggerUrl")):
             continue
         socket=ws_endpoint(item["webSocketDebuggerUrl"],port)
@@ -76,7 +116,7 @@ async def capture(request_id: str, path: Path, port: int) -> dict:
             cdp=CDP(connection)
             await cdp.call("Runtime.enable")
             raw=await cdp.call("Runtime.evaluate",{
-                "expression":PROBE+"("+json.dumps(request_id)+")",
+                "expression":PROBE+"("+json.dumps(request_id)+","+json.dumps(surface)+")",
                 "returnByValue":True,"silent":True,
             })
             value=(raw.get("result") or {}).get("value")
@@ -98,6 +138,16 @@ async def capture(request_id: str, path: Path, port: int) -> dict:
     ) as connection:
         cdp=CDP(connection)
         await cdp.call("Page.enable")
+        # Recheck the live request after reconnecting and after every strip.
+        async def check_binding():
+            raw = await cdp.call("Runtime.evaluate",{
+                "expression":PROBE+"("+json.dumps(request_id)+","+json.dumps(surface)+")",
+                "returnByValue":True,"silent":True,
+            })
+            value = (raw.get("result") or {}).get("value")
+            if not isinstance(value,dict) or not value.get("ok") or value != report:
+                raise ValueError("native-capture-changed-during-screenshot")
+        await check_binding()
         with ZipFile(path,"w",ZIP_DEFLATED,compresslevel=6) as archive:
             for index in range(clips):
                 y=rect["y"]+index*1600
@@ -110,11 +160,14 @@ async def capture(request_id: str, path: Path, port: int) -> dict:
                 data=base64.b64decode(payload.get("data") or "")
                 with Image.open(io.BytesIO(data)) as screenshot:
                     screenshot.verify()
+                await check_binding()
                 archive.writestr(f"screenshots/native_{index:02d}.png",data)
                 screenshot_count+=1
             archive.writestr("manifest.json",json.dumps({
                 "request_id":request_id,"source":"native-public-renderer",
                 "request_binding":"owner-message-id-verified",
+                "capture_surface":surface,
+                "native_revision":report["revision"],
                 "native_finality":"verified-final",
                 "media_sha256_status":"verified-sha256",
                 "media_assets":report["images"],
@@ -137,8 +190,11 @@ def main():
     parser.add_argument("--request-id",required=True)
     parser.add_argument("--output",required=True,type=Path)
     parser.add_argument("--cdp-port",type=int,default=9222)
+    parser.add_argument("--surface",choices=["admin","web-chat"],default="admin")
+    parser.add_argument("--origin",help="Exact HTTPS Web Chat origin when --surface web-chat")
     args=parser.parse_args()
-    print(json.dumps(asyncio.run(capture(args.request_id,args.output,args.cdp_port))))
+    print(json.dumps(asyncio.run(capture(args.request_id,args.output,args.cdp_port,
+                                      surface=args.surface,origin=args.origin))))
 
 
 if __name__=="__main__":

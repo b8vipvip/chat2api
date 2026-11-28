@@ -17,7 +17,7 @@ from pathlib import Path
 
 from PIL import Image, ImageChops, ImageStat, UnidentifiedImageError
 
-REQUEST_ID = re.compile(r"^req_[a-f0-9]{32}$")
+REQUEST_ID = re.compile(r"^req_(?:[a-f0-9]{32}|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$")
 STRIP = re.compile(r"^screenshots/(?:assistant|native)_[0-9]{2}\.png$")
 MAX_SCREENS = 24
 MAX_PIXELS = 10_000_000
@@ -46,6 +46,8 @@ def load_capture(path: str | Path, kind: str) -> dict:
         elif kind == "native":
             if manifest.get("source") != "native-public-renderer":
                 raise ValueError("not-public-native-renderer")
+            if manifest.get("request_binding") != "owner-message-id-verified":
+                raise ValueError("native-message-identity-unverified")
             if manifest.get("native_finality") != "verified-final":
                 raise ValueError("native-final-revision-unverified")
             if manifest.get("media_assets", 0) and (
@@ -62,6 +64,8 @@ def load_capture(path: str | Path, kind: str) -> dict:
                 any(not STRIP.fullmatch(n) or
                     not n.startswith(f"screenshots/{wanted}_") for n in filenames)):
             raise ValueError("invalid-screenshot-strip-list")
+        if filenames != [f"screenshots/{wanted}_{index:02d}.png" for index in range(len(filenames))]:
+            raise ValueError("screenshot-strip-sequence-invalid")
         if manifest.get("screenshot_count") != len(filenames):
             raise ValueError("screenshot-strip-count-conflict")
         images = []
