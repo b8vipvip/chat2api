@@ -1032,14 +1032,24 @@
     };
   }
 
-  async function syncServerConversations() {
+  function canRetryInitialConversationSync() {
+    return Boolean(state.user && state.webChatKeyId && state.remoteSyncRetryNeeded &&
+      !state.remoteSyncReady && !state.streaming && !state.voiceActive &&
+      !state.pendingImages.length && !state.pendingFiles.length &&
+      !state.recoveryInFlight.size && !state.pendingConversationDeletes.size);
+  }
+
+  async function syncServerConversations(onlyIdle = false) {
     const owner = String(state.user?.user_id || "");
     const storageKey = state.storageKey;
     const {response,result:payload} = await fetchConversationMutation("/api/user/chat/conversations", {
       credentials: "same-origin",
       headers: {"Accept":"application/json","X-Chat2API-User-ID":owner},
     });
-    if (state.storageKey !== storageKey || String(state.user?.user_id || "") !== owner) return;
+    if (state.storageKey !== storageKey || String(state.user?.user_id || "") !== owner) return false;
+    // A background retry must never replace live message objects or evict
+    // an active conversation that began while the request was in flight.
+    if (onlyIdle && !canRetryInitialConversationSync()) return false;
     if (!response.ok) throw new Error(payload.detail || "HTTP " + response.status);
     if (!Array.isArray(payload.data)) throw new Error("服务端会话目录格式无效");
     const serverRows = payload.data;
@@ -1074,9 +1084,31 @@
       state.activeConversationId = state.conversations[0]?.id || "";
     }
     state.remoteSyncReady = true;
+    state.remoteSyncRetryNeeded = false;
     recordClientDiagnostic("webchat.conversations.synced", {message_count: state.conversations.length, phase: "conversation_sync"});
     persistHistorySnapshot();
     state.conversations.forEach((conversation) => scheduleConversationSync(conversation.id, 250));
+    return true;
+  }
+
+  async function retryInitialConversationSync() {
+    if (state.remoteSyncInitialRetryInFlight || !canRetryInitialConversationSync()) return;
+    state.remoteSyncInitialRetryInFlight = true;
+    try {
+      if (!await syncServerConversations(true)) return;
+      state.remoteSyncWarned = false;
+      selectAvailableTextModel(currentConversation());
+      void loadModels();
+      renderAll();
+      resumePendingMessages();
+      void hydrateNativeSnapshots();
+    } catch (error) {
+      recordClientDiagnostic("webchat.conversations.retry_failed", {
+        phase:"conversation_sync",error_name:error?.name || "Error",
+      }, "warning");
+    } finally {
+      state.remoteSyncInitialRetryInFlight = false;
+    }
   }
 
   function scheduleConversationSync(conversationId, delay = 450) {
@@ -5184,6 +5216,7 @@
       await syncServerConversations();
     } catch (error) {
       state.remoteSyncReady = false;
+      state.remoteSyncRetryNeeded = true;
       toast("暂时无法同步服务端会话，当前先显示本地历史：" + error.message);
     }
     state.conversations.forEach((conversation) => {
@@ -5389,11 +5422,23 @@
   window.addEventListener("pagehide", () => { void flushClientDiagnostics(true); });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") void flushClientDiagnostics(true);
-    else if (state.user) void loadModels();
+    else if (state.user) {
+      void loadModels();
+      void retryInitialConversationSync();
+    }
   });
-  window.addEventListener("focus", () => { if (state.user) void loadModels(); });
+  window.addEventListener("focus", () => {
+    if (state.user) {
+      void loadModels();
+      void retryInitialConversationSync();
+    }
+  });
+  window.addEventListener("online", () => { void retryInitialConversationSync(); });
   window.setInterval(() => {
-    if (state.user && document.visibilityState === "visible" && !state.streaming && !state.voiceActive) void loadModels(true);
+    if (state.user && document.visibilityState === "visible" && !state.streaming && !state.voiceActive) {
+      void loadModels(true);
+      void retryInitialConversationSync();
+    }
   }, 60_000);
   window.addEventListener("beforeunload", () => {
     void flushClientDiagnostics(true);

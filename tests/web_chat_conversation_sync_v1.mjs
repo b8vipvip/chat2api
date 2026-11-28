@@ -589,3 +589,36 @@ test("plugin catalog ignores old account responses and clears stale grants on fa
   assert.equal(state.pluginCatalog.length,0);
   assert.equal(state.pluginCatalogLoaded,false);
 });
+
+
+test("failed initial history hydration retries once at a time and waits for an idle client", async () => {
+  const state={user:{user_id:"a"},webChatKeyId:"key",remoteSyncReady:false,remoteSyncRetryNeeded:true,
+    pendingImages:[],pendingFiles:[],recoveryInFlight:new Set(),pendingConversationDeletes:new Set(),
+    streaming:true};
+  let calls=0,complete,rendered=0;
+  const ctx=vm.createContext({state,
+    syncServerConversations:()=>{calls++;return new Promise(resolve=>{complete=resolve;});},
+    currentConversation:()=>null,selectAvailableTextModel(){},loadModels(){},
+    renderAll(){rendered++;},resumePendingMessages(){},hydrateNativeSnapshots(){},recordClientDiagnostic(){},
+  });
+  const check=source.slice(source.indexOf("  function canRetryInitialConversationSync("),
+    source.indexOf("  async function syncServerConversations("));
+  const retry=source.slice(source.indexOf("  async function retryInitialConversationSync("),
+    source.indexOf("  function scheduleConversationSync("));
+  const run=vm.runInContext(check+retry+"\nretryInitialConversationSync",ctx);
+  await run();
+  assert.equal(calls,0);
+  state.streaming=false;
+  const first=run();
+  await run();
+  assert.equal(calls,1);
+  complete(false);await first;
+  assert.equal(rendered,0);
+  const next=run();
+  assert.equal(calls,2);
+  state.remoteSyncReady=true;state.remoteSyncRetryNeeded=false;
+  complete(true);await next;
+  assert.equal(rendered,1);
+  await run();
+  assert.equal(calls,2);
+});
