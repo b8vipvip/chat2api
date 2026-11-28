@@ -4993,8 +4993,13 @@
     const imported = normalizeConversationRow(result.conversation);
     if (!imported) throw new Error("服务端返回的导入会话无效");
     imported.serverRevision = Number(result.conversation.revision || 0);
+    const active = currentConversation();
     state.conversations = [imported, ...state.conversations.filter((row) => row.id !== imported.id)]
       .slice(0, MAX_CONVERSATIONS);
+    if (!canSwitch() && active && !state.conversations.some(row => row.id === active.id)) {
+      // A full recent window must not evict a conversation with a live turn.
+      state.conversations[MAX_CONVERSATIONS - 1] = active;
+    }
     // If Voice/generation or an attachment started during the import request,
     // retain the imported history without stealing the active conversation.
     if (canSwitch()) {

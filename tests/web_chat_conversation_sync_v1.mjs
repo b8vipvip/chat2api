@@ -375,11 +375,14 @@ test("delete conflict keeps the latest server revision for explicit reconfirmati
 
 test("import does not switch away from a Voice session started while import was in flight", async () => {
   const state={streaming:false,voiceActive:false,pendingImages:[],pendingFiles:[],
-    activeConversationId:"voice-chat",conversations:[{id:"voice-chat"}],remoteSyncFingerprints:new Map()};
+    activeConversationId:"voice-chat",conversations:[
+      ...Array.from({length:14},(_,i)=>({id:"older-"+i})),{id:"voice-chat"}
+    ],remoteSyncFingerprints:new Map()};
   let resolve;
   const context=vm.createContext({state,MAX_CONVERSATIONS:15,
     fetch:()=>new Promise(r=>{resolve=r;}),
     normalizeConversationRow:row=>({...row}),serverConversationPayload:row=>row,
+    currentConversation:()=>state.conversations.find(row=>row.id===state.activeConversationId),
     persistHistorySnapshot(){},renderAll(){},toast(){},
     $:()=>({value:""}),
   });
@@ -397,4 +400,6 @@ test("import does not switch away from a Voice session started while import was 
   await task;
   assert.equal(state.activeConversationId,"voice-chat");
   assert.equal(state.conversations[0].id,"imported");
+  assert.equal(state.conversations.length,15);
+  assert.ok(state.conversations.some(row=>row.id==="voice-chat"));
 });
