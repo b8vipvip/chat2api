@@ -343,7 +343,44 @@
     const reply = candidate.closest?.("[data-message-author-role='assistant'],[data-testid^='conversation-turn']")
       || candidate;
     if (reply.matches?.("[data-message-author-role='user']") || reply.closest?.("nav,aside")) return null;
-    let nodes = 0, chars = 0, images = 0;
+    let nodes = 0, chars = 0, images = 0, canvasRasters = 0;
+    // Sample only the already-proven reply subtree. Never request a context
+    // from the original canvas (which could mutate WebGL/2D state).
+    const captureCanvas = element => {
+      if (!scopedRoots?.length || canvasRasters >= 4 || typeof document === "undefined" ||
+          element.closest?.("form,nav,aside,header,footer,[data-message-author-role='user']")) return null;
+      const rect = element.getBoundingClientRect?.();
+      const width = Number(element.width), height = Number(element.height);
+      if (!rect || rect.width < 40 || rect.height < 40 || !Number.isInteger(width) ||
+          !Number.isInteger(height) || width < 1 || height < 1 || width > 16384 || height > 16384) return null;
+      const style = getComputedStyle(element);
+      if (style.display==="none" || style.visibility==="hidden" || style.opacity==="0") return null;
+      try {
+        const output = document.createElement("canvas");
+        const scale = Math.min(1,1024/width,1024/height);
+        output.width = Math.max(1,Math.round(width*scale));
+        output.height = Math.max(1,Math.round(height*scale));
+        const ctx = output.getContext("2d",{willReadFrequently:true});
+        if (!ctx) return null;
+        ctx.drawImage(element,0,0,output.width,output.height);
+        // A cleared WebGL drawing buffer can produce transparent/blank
+        // pixels. Never certify a uniform image as captured content.
+        const pixels = ctx.getImageData(0,0,output.width,output.height).data;
+        let visible = false, varied = false;
+        for (let i=0;i<pixels.length;i+=4) {
+          if (pixels[i+3]) visible=true;
+          if (pixels[i]!==pixels[0] || pixels[i+1]!==pixels[1] ||
+              pixels[i+2]!==pixels[2] || pixels[i+3]!==pixels[3]) varied=true;
+          if (visible && varied) break;
+        }
+        if (!visible || !varied) return null;
+        const uri = output.toDataURL("image/png");
+        const png = uri.startsWith("data:image/png;base64,") ? uri.slice(22) : "";
+        if (!png || png.length > 699052 || !/^[A-Za-z0-9+/]+={0,2}$/.test(png)) return null;
+        canvasRasters++;
+        return {tag:"canvas_raster",png,width:output.width,height:output.height};
+      } catch (_) { return null; } // tainted canvas, inaccessible or lost context
+    };
     let truncated = false;
     const revision = Math.max(active.nativeRevision || 0, active.nativeSentRevision || 0) + 1;
     const controlTargets = new Map();
@@ -469,7 +506,7 @@
         }
         const graphical = composedFind(element,node=>{
           const type=node.tagName?.toLowerCase();
-          const raster=type==="img" && !node.closest?.("svg");
+          const raster=(type==="img" || type==="canvas") && !node.closest?.("svg");
           const vector=type==="svg" && node.namespaceURI===svgNS
             && !node.parentElement?.closest?.("svg");
           if (!raster && !vector) return false;
@@ -485,16 +522,20 @@
           truncated=true;
           return null;
         }
-        // Canvas pixels are still unsupported. Count canvases nested in a
-        // button as missing media, rather than silently reporting no gaps.
+        // Keep accounting for omitted canvases even when their wrapper
+        // is not a recognized graphical button (hidden/tiny/unsafe).
         const canvases=composedFind(element,node=>
           node.tagName?.toLowerCase()==="canvas",41);
-        active.nativeCanvasOmitted+=canvases.length;
-        active.nativeGraphicsUnsupported+=canvases.length;
         if (canvases.length>40) {
           active.nativeStructuralFailure="button-canvas-cap";
           truncated=true;
           return null;
+        }
+        for (const canvas of canvases) {
+          if (!graphical.includes(canvas)) {
+            active.nativeCanvasOmitted++;
+            active.nativeGraphicsUnsupported++;
+          }
         }
         if (!graphical.length) return null;
         const children=[];
@@ -508,7 +549,11 @@
         return {tag:"figure",children};
       }
       if(tag==="canvas"||tag==="iframe"){
-        if(tag==="canvas")active.nativeCanvasOmitted++;
+        if(tag==="canvas"){
+          const raster=captureCanvas(element);
+          if (raster) { nodes++; return raster; }
+          active.nativeCanvasOmitted++;
+        }
         active.nativeGraphicsUnsupported++;
         return null;
       }
