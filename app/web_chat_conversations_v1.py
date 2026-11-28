@@ -650,9 +650,11 @@ class WebChatConversationStoreV1:
         if not 1 <= round_number <= 3 or len(args.encode("utf-8")) > 8192:
             raise ValueError("invalid plugin result key")
         call = (*key, round_number, tool, args)
-        now = time.time()
         with self.lock, closing(self._connect()) as conn:
             conn.execute("BEGIN IMMEDIATE")
+            # SQLite may block on another writer; check expiry only after
+            # acquiring the authoritative write transaction.
+            now = time.time()
             task = conn.execute(
                 "SELECT holder,state,expires_at FROM web_chat_plugin_tasks WHERE user_id=? AND conversation_id=? AND message_id=?",
                 key).fetchone()
